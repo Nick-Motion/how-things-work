@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Electrolysis of water</title>
+<style>#stats{display:grid;grid-template-columns:auto auto;gap:8px 18px}#stats .stat.small{grid-column:1/-1}#stats .stat.small .v{font-size:16px}</style></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   A Hofmann voltameter contains acidified water, not conducting pure water.
+   A battery drives electrons through the external leads. Ions carry charge through
+   the liquid. At the negative platinum cathode, 4 H3O+ + 4 e- -> 2 H2 + 4 H2O.
+   At the positive platinum anode, 6 H2O -> O2 + 4 H3O+ + 4 e-.
+   Net: 2 H2O -> 2 H2 + O2. Gas is colourless; equal-area graduated arms show
+   the ideal 2:1 gas volume ratio. Gas displaces liquid into the open central bulb.
+   The blue tint marks liquid only. Molecular icons are enlarged teaching overlays.
+   The clock is accelerated. Volumes are idealised, without dissolution or pressure
+   corrections. The circuit stops before either meniscus reaches an electrode.
+   Testing opens the matching tap, captures a small sample in a separate inverted
+   test tube, closes the tap, and carries the sample away before a splint is applied.
+   The lit splint gives a hydrogen pop. Oxygen rekindles a glowing splint.
+   Vent both tubes is a teaching manipulation of the two real taps. Liquid returns
+   from the central bulb. Reversal requires power off and empty gas spaces so gases
+   cannot mix. Swapping connections exchanges which platinum plate makes each gas.
+   Sources checked 2026-10-24.
+   https://spark.iop.org/electrolysis-water-and-concept-charge
+   https://demolab.chem.wisc.edu/analytical-chemistry-demonstrations/electrochemistry-and-redox-reactions-electrolysis-of-water-2/
+
+   Parts and attachments.
+   STRUCTURE: bench board; stand foot bolted to it; steel upright on foot;
+   two crossbar halves on upright; two padded clamps on crossbar around the glass.
+   GLASS: two equal-bore graduated collection arms fused to the lower U-tube;
+   central fill stem fused to the U-tube, expanding into an open reservoir bulb;
+   open fill rim; two upper stopcock barrels, their turning plugs and handles;
+   two outlet nozzles; acidified water, menisci and collected gas spaces.
+   ELECTRODES: two bottom stoppers, platinum feedthrough wires sealed in them,
+   platinum plates welded to the wires, external screw terminals on the wires.
+   POWER: battery case resting on board; positive and negative posts on its lid;
+   knife-switch base on board, pivot, blade and fixed contact; insulated leads
+   from positive post through switch to anode and negative post to cathode.
+   TESTS: two inverted sample tubes held in the bench rack; wooden lit and glowing
+   splints lying in a ceramic rest. A sample tube moves by the visitor's action.
+   Molecular water, hydronium and bisulfate icons are overlays, not machine parts.
+*/
+const eSideY = [27, 77], eX = 30, eTop = 85, eFloor = 24;
+const eGlass = matOf('#cfe9f0'), eWater = matOf('#a9dce3');
+const eRubber = matOf('#4e535a'), eBrass = matOf('#d6a44e');
+const eState = { on:false, reversed:false, gas:[0,0], clock:0, sample:null, vent:0, result:'' };
+const eCathode = st => st.reversed ? 0 : 1;
+const eGas = (st, i) => i === eCathode(st) ? 'H2' : 'O2';
+const eLevel = (st, i) => eTop - 1.1*st.gas[i];
+const eReservoirLevel = st => 80 + 1.1*3.7**2/10**2*(st.gas[0]+st.gas[1]);
+const eBounds = (pts, r=0) => [0,1].map(hi => [0,1,2].map(j => (hi ? Math.max : Math.min)(...pts.map(p => p[j])) + (hi ? r : -r)));
+const eRing = (x,y,z,r) => on(PZ(z), ellUV(x,y,r,r,24));
+const eStroke = (pts,col,w=.65) => `<path d="${pd(pts,false)}" fill="none" stroke="${col}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+function eTube(x,y,z0,z1,r,inside,k=0,closed=false){
+  const a=eRing(x,y,z0,r), b=eRing(x,y,z1,r);
+  const glass = nr => mix(toneI(nr,eGlass),'#f2efe7',.35);
+  const rim = ink(pd(a),.85)+ink(pd(b),.85);
+  return `<g opacity="${1-.68*k}">`+loft(a,b,glass,true).replaceAll('<path ','<path fill-opacity=".12" ')+`</g>`
+    +inside+`<g opacity="${1-.68*k}">`+loft(a,b,glass).replaceAll('<path ','<path fill-opacity=".14" ')
+    +rim+(closed ? fill(pd(b),'#cfe9f0','fill-opacity=".2"') : ink(pd(eRing(x,y,z1,r-.6)),.5))
+    +eStroke([[x+r*.5,y-r*.65,z0+3],[x+r*.5,y-r*.65,z1-3]],'#ffffff',.9)+`</g>`;
+}
+function eBead(p,r,col){
+  const [x,y]=P(...p);
+  return `<circle cx="${f(x)}" cy="${f(y)}" r="${f(r*1.2247)}" fill="${col}" stroke="${INK}" stroke-width=".55"/>`;
+}
+function eMolecule(p,kind,scale=1){
+  const [x,y,z]=p, oxygen='#df785d', hydrogen='#fff7e5';
+  const atom=(dx,dz,r,col)=>eBead([x+dx*scale,y,z+dz*scale],r*scale,col);
+  if(kind==='H2') return atom(-.8,0,.75,hydrogen)+atom(.8,0,.75,hydrogen);
+  if(kind==='O2') return atom(-.8,0,1,oxygen)+atom(.8,0,1,oxygen);
+  return atom(0,0,1.2,oxygen)+atom(-1.3,-.7,.7,hydrogen)+atom(1.3,-.7,.7,hydrogen)
+    +(kind==='H3O' ? atom(0,1.4,.7,hydrogen) : '');
+}
+function eCallouts(items){
+  const svg=document.getElementById('fig'), vb=svg.viewBox.baseVal, mobile=innerWidth<=560;
+  const ordered=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  const cols=[ordered.slice(0,Math.ceil(ordered.length/2)),ordered.slice(Math.ceil(ordered.length/2))];
+  return cols.map((col,side)=>{
+    col.sort((a,b)=>a.p[1]-b.p[1]);
+    const blocker=document.getElementById(side?'stats':'btns').getBoundingClientRect();
+    const top=mobile?12*INK_K:new DOMPoint(0,blocker.bottom+16).matrixTransform(svg.getScreenCTM().inverse()).y;
+    const bottom=vb.height-42*INK_K;
+    // Fit the real component labels between the controls and the zoom bar.
+    const fs=Math.min(8.6*INK_K,(bottom-top)/Math.max(1,col.length-1)/2.15), h=fs*1.8;
+    return col.map((it,i)=>{
+      const x=side?vb.width-88*INK_K:88*INK_K;
+      const y=top+(bottom-top)*i/Math.max(1,col.length-1);
+      if(mobile) return tag(it.at,(x-it.p[0])/INK_K,(y-it.p[1])/INK_K,it.text,it.on);
+      const n=((window.__ln||(window.__ln={}))[it.text]||(__ln[it.text]=Object.keys(__ln).length+1));
+      const w=it.text.length*fs*.62+fs*1.5;
+      return `<g class="tag${it.on?' on':''}" data-n="${n}" data-t="${it.text}">`
+        +`<path d="M${f(it.p[0])} ${f(it.p[1])}L${f(x)} ${f(y)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        +`<circle cx="${f(it.p[0])}" cy="${f(it.p[1])}" r="${f(1.3*INK_K)}" fill="${INK}"/>`
+        +`<rect x="${f(x-w/2)}" y="${f(y-h/2)}" width="${f(w)}" height="${f(h)}" rx="${f(h/2)}" fill="${it.on?'var(--accent,#f4b829)':'#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        +`<text x="${f(x)}" y="${f(y+fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${it.text}</text></g>`;
+    }).join('');
+  }).join('');
+}
+function eFlame(p,big){
+  const [x,y]=P(...p), r=big?3.4:1.5;
+  return `<path d="M${f(x-r)} ${f(y)}Q${f(x-r*1.7)} ${f(y-r*1.6)} ${f(x)} ${f(y-r*3.1)}Q${f(x+r*1.6)} ${f(y-r)} ${f(x+r)} ${f(y)}Z" fill="#ef8b3d" stroke="${INK}" stroke-width=".65"/>`
+    +`<path d="M${f(x-r*.5)} ${f(y)}Q${f(x-r*.8)} ${f(y-r)} ${f(x)} ${f(y-r*1.8)}Q${f(x+r*.7)} ${f(y-r*.5)} ${f(x+r*.5)} ${f(y)}Z" fill="#ffe6a1"/>`;
+}
+function eScene(st,m){
+  const parts=[], labels=[], chemistry=[], k=ease(st.xr||0);
+  const put=(pts,r,svg) => parts.push({box:eBounds(pts,r),svg});
+  const label=(at,text,on=false) => labels.push({at,text,on});
+  const bx=(a,b,mat,text) => { put([a,b],0,box(...a,...b,mat,toneI,.8)); if(text) label(avg([a,b]),text); };
+  const rd=(a,b,r,mat,text) => { put([a,b],r,rod(a,b,r,mat,toneI,.8)); if(text) label(avg([a,b]),text); };
+  let s=board(0,0,100,106,3,5,WOOD);
+  s+=castShadow([[15,20,3],[34,23,96],[30,77,96],[30,52,107],[18,82,3]],3,boardTop(0,0,100,106,3,5));
+  bx([9,19,3],[21,85,6],m,'STAND FOOT');
+  for(const y of [23,81]) put([[15,y,6],[15,y,6.8]],1,cyl(15,y,6,6.8,1,METAL,toneI,.6,6));
+  for(const [z0,z1] of [[6,48],[48,60],[60,82]]) rd([15,52,z0],[15,52,z1],1.35,METAL);
+  label([15,52,40],'SUPPORT UPRIGHT');
+  for(const y of eSideY){
+    const i=eSideY.indexOf(y), lv=eLevel(st,i), gas=eGas(st,i), active=st.sample&&st.sample.side===i;
+    rd([15,52,60],[15,y,60],.95,METAL);
+    rd([15,y,60],[26,y,60],.8,METAL);
+    put([[30,y,58.6],[30,y,61.4]],5.1,eTube(30,y,58.6,61.4,5.1,'',k));
+    if(i) label([30,y-4.8,60],'PADDED GLASS CLAMP');
+    const inside=[];
+    inside.push(`<g opacity=".5">${cyl(eX,y,eFloor,lv,3.7,eWater,toneI,.4,24)}</g>`);
+    if(st.gas[i]>.01){
+      inside.push(fill(pd(eRing(eX,y,lv,3.65)),'#f5fcfc','fill-opacity=".6"')+ink(pd(eRing(eX,y,lv,3.65)),.7));
+      if(k>.5) label([eX,y,(lv+eTop)/2],gas+' GAS',st.on);
+    }
+    if(st.on){
+      for(let j=0;j<(gas==='H2'?8:4);j++){
+        const q=(st.clock*.32+j/(gas==='H2'?8:4))%1, z=28+q*Math.max(1,lv-29), x=eX+1.3*Math.sin(j*2.1);
+        inside.push(eBead([x,y+Math.cos(j)*1.2,z],.65+q*.35,'#eff9f9'));
+        if(k>.6&&j%3===0) inside.push(eMolecule([x,y,z],gas));
+      }
+    }
+    if(k>.01){
+      const reacting=st.on&&st.clock%2.8>1.4;
+      const species=gas==='O2'?(reacting?['O2','H3O','H3O','H3O','H3O']:Array(6).fill('H2O'))
+        :(reacting?['H2','H2','H2O','H2O','H2O','H2O']:Array(4).fill('H3O'));
+      const height=Math.max(2,Math.min(18,lv-30));
+      let overlays=species.map((kind,j)=>eMolecule([30+(j%2?1.5:-1.5),y,28+Math.floor(j/2)*height/2],kind,.6)).join('');
+      const q=st.on?(st.clock*.4)%1:.5, toward=gas==='H2';
+      const ionZ=toward?42-q*13:29+q*13;
+      overlays+=eMolecule([30,y,ionZ],'H3O');
+      const ion=P(30,y,ionZ+3);
+      overlays+=`<text x="${f(ion[0])}" y="${f(ion[1])}" font-size="2.4" text-anchor="middle" fill="${INK}">+</text>`;
+      const sulfateZ=toward?29+q*12:41-q*12;
+      overlays+=eBead([30,y,sulfateZ],1.2,'#d9ad53');
+      overlays+=eStroke([[31.2,y,sulfateZ],[32.5,y,sulfateZ-1.2]],INK,.45);
+      for(const [dx,dz] of [[-1.2,0],[1.2,0],[0,-1.4],[0,1.4]]) overlays+=eBead([30+dx,y,sulfateZ+dz],.65,'#df785d');
+      overlays+=eBead([32.5,y,sulfateZ-1.2],.5,'#fff7e5');
+      const minus=P(30,y,sulfateZ+3);
+      overlays+=`<text x="${f(minus[0])}" y="${f(minus[1])}" font-size="2.4" text-anchor="middle" fill="${INK}">-</text>`;
+      chemistry.push({box:[[26,y-4,24],[34,y+4,Math.min(lv,48)]],svg:`<g data-chemistry="${reacting?'products':'reactants'}" opacity="${k}">${overlays}</g>`});
+      chemistry.push({box:[[29.7,y-2,24],[30.3,y+2,29]],svg:`<g opacity="${k}">${box(29.7,y-2,24,30.3,y+2,29,METAL,toneI,.8)}</g>`});
+    }
+    let tube=eTube(eX,y,21,eTop,4.4,inside.join(''),k,true);
+    const sideN=vis([1,0,0])?1:-1, fx=eX+sideN*4.48;
+    for(let n=0;n<=50;n+=5){
+      const z=eTop-n*1.1;
+      tube+=eStroke([[fx,y-1.4,z],[fx,y+(n%10?0:1.2),z]],INK,.45);
+      if(n%10===0&&sideN>0) tube+=tx(fx+.02,y-2.4,z-.6,String(n),1.4);
+    }
+    put([[eX,y,21],[eX,y,eTop]],4.5,tube);
+    label([30,y,72],i?'LEFT COLLECTING TUBE':'RIGHT COLLECTING TUBE');
+    if(i) label([fx,y,46],'ML GRADUATIONS');
+    if(i) label([30,y,lv],'GAS WATER MENISCUS',st.on||!!st.vent);
+    put([[30,y,18],[30,y,21]],4.6,cyl(30,y,18,21,4.6,eRubber,toneI,.8));
+    if(i) label([30,y,19],'SEALED STOPPER');
+    rd([30,y,12],[30,y,25],.45,METAL);
+    bx([29.7,y-2,24],[30.3,y+2,29],METAL,gas==='H2'?'PLATINUM CATHODE':'PLATINUM ANODE');
+    put([[30,y,12],[30,y,14]],1.4,cyl(30,y,12,14,1.4,eBrass,toneI,.7,6));
+    if(i) label([30,y,13],'ELECTRODE TERMINAL',st.on);
+    rd([30,y,85],[30,y,89],2,eGlass);
+    put([[27,y-2,88],[33,y+2,93]],0,rod([27,y,90.5],[33,y,90.5],2.4,CERAMIC,toneI,.8));
+    label([30,y,90.5],i?'LEFT TAP BARREL':'RIGHT TAP BARREL');
+    const open=active&&st.sample.t<1.3||st.vent>0;
+    rd([33,y,90.5],[35,y,90.5],1.2,eBrass);
+    rd([35,y-(open?0:3),90.5-(open?3:0)],[35,y+(open?0:3),90.5+(open?3:0)],.7,m,i?'TAP HANDLE':undefined);
+    put([[30,y,92],[30,y,99]],1.5,eTube(30,y,92,99,1.5,'',k));
+    label([30,y,97],i?'LEFT GAS OUTLET':'RIGHT GAS OUTLET');
+    if(st.vent>0) for(let j=0;j<3;j++) put([[30,y,101+j*3]],1,eBead([30,y,101+j*3+Math.sin(st.clock*5)],.65,'#f5fcfc'));
+    if(k>.6){
+      label([30,y,35],i?'OVERLAY WATER':'OVERLAY H3O IONS',st.on);
+      if(i===0) label([30,y,39],'OVERLAY BISULFATE',st.on);
+    }
+  }
+  const uRoute=[[30,27,24],[30,27,16],[30,36,14],[30,52,14],[30,68,14],[30,77,16],[30,77,24]];
+  for(let j=0;j<uRoute.length-1;j++){
+    const a=uRoute[j],b=uRoute[j+1];
+    put([a,b],2.6,`<g opacity="${.38-.18*k}">${rod(a,b,2.6,eGlass,toneI,.7)}</g>`+eStroke([a,b],'#a9dce3',1.8));
+  }
+  label([30,52,14],'GLASS U-TUBE');
+  put([[30,52,14],[30,52,70]],3.2,eTube(30,52,14,70,3.2,`<g opacity=".35">${cyl(30,52,14,70,2.6,eWater,toneI,.3)}</g>`,k));
+  label([30,52,47],'RESERVOIR STEM');
+  const r0=eRing(30,52,70,3.2),r1=eRing(30,52,80,10),r2=eRing(30,52,104,10), r3=eRing(30,52,106,11);
+  const resLv=eReservoirLevel(st);
+  const lower=loft(r0,r1,n=>toneI(n,eGlass));
+  put([[30,52,70],[30,52,80]],10,`<g opacity=".4">${loft(eRing(30,52,70,2.6),eRing(30,52,80,9.4),n=>toneI(n,eWater))}</g><g opacity="${.6-.35*k}">${lower}${hullInk([...r0,...r1],.8)}</g>`);
+  const water=`<g opacity=".4">${cyl(30,52,80,resLv,9.4,eWater,toneI,.4)}</g>`+shape(eRing(30,52,resLv,9.4),'#b4e1e6',.6);
+  put([[30,52,80],[30,52,104]],10,eTube(30,52,80,104,10,water,k));
+  put([[30,52,104],[30,52,106]],11,`<g opacity="${1-.6*k}">${loft(r2,r3,n=>toneI(n,eGlass))}${ink(pd(r3),1.2)}${ink(pd(eRing(30,52,106,10.3)),.5)}</g>`);
+  label([30,52,101],'OPEN FILL RIM'); label([30,52,90],'RESERVOIR BULB');
+  label([30,52,resLv],'ACIDIFIED WATER',st.on);
+  bx([64,67,3],[91,93,23],m,'BATTERY CASE');
+  bx([64,67,23],[91,93,25],eRubber);
+  for(const [x,t] of [[69,'POSITIVE POST'],[85,'NEGATIVE POST']]){
+    put([[x,80,25],[x,80,28]],1.4,cyl(x,80,25,28,1.4,eBrass,toneI,.7)); label([x,80,27],t,st.on);
+  }
+  if(vis([1,0,0])) put([[91.1,80,14]],0,tx(91.1,80,14,'12 V DC',3));
+  put([[69,80,28]],0,shape(on(PZ(28.05),rectUV(68,79.7,70,80.3)),'#b44735',0)+shape(on(PZ(28.05),rectUV(68.7,79,69.3,81)),'#b44735',0));
+  put([[85,80,28]],0,shape(on(PZ(28.05),rectUV(84,79.7,86,80.3)),'#333333',0));
+  bx([64,49,3],[88,61,5],CERAMIC,'SWITCH BASE');
+  rd([68,55,5],[68,55,7],1,eBrass);
+  const bladeEnd=st.on?[83,55,7]:[79,55,17];
+  rd([68,55,7],bladeEnd,.8,eBrass,'KNIFE SWITCH BLADE');
+  rd([83,55,5],[83,55,8],1,eBrass,'FIXED CONTACT');
+  rd(bladeEnd,[bladeEnd[0]+2,55,bladeEnd[2]],1.3,eRubber);
+  const cath=eCathode(st),an=1-cath;
+  const routes=[
+    {pts:[[69,80,28],[61,80,4.1],[61,55,4.1],[68,55,7]],col:'#bc5943',text:'BATTERY TO SWITCH'},
+    {pts:[[83,55,7],[94,55,4.1],[94,13,4.1],[45,13,4.1],[30,eSideY[an],13]],col:'#bc5943',text:'ANODE LEAD'},
+    {pts:[[85,80,28],[96,80,4.1],[96,99,4.1],[43,99,4.1],[30,eSideY[cath],13]],col:'#4e535a',text:'CATHODE LEAD'}
+  ];
+  for(const route of routes){
+    for(let j=0;j<route.pts.length-1;j++) put([route.pts[j],route.pts[j+1]],.65,eStroke([route.pts[j],route.pts[j+1]],INK,1.8)+eStroke([route.pts[j],route.pts[j+1]],route.col,1));
+    if(route.text!=='BATTERY TO SWITCH')label(route.pts[1],route.text,st.on);
+  }
+  bx([64,18,3],[89,44,5],CERAMIC);
+  for(const y of [24,38]){
+    rd([66,y,5],[66,y,17],.65,METAL);
+    rd([66,y,17],[76,y,17],.65,METAL);
+  }
+  const sample=st.sample;
+  for(const [i,y] of [24,38].entries()){
+    const kind=i===0?'H2':'O2', testing=sample&&sample.kind===kind;
+    let x=76, yy=y,z=18;
+    if(testing){
+      const t=sample.t;
+      let q=t<.5?ease(t/.5):t<1.3?1:t<2.3?1-ease((t-1.3)):0;
+      x=76+(30-76)*q; yy=y+(eSideY[sample.side]-y)*q; z=18+82*q;
+    }
+    let inner='';
+    if(testing&&sample.t>.6&&sample.t<2.7) inner=eMolecule([x,yy,z+7],kind);
+    put([[x,yy,z],[x,yy,z+13]],2.7,eTube(x,yy,z,z+13,2.7,inner,k,true));
+    if(testing&&sample.t>2.3){
+      const tip=[x,yy,z+1];
+      rd([x+14,yy,z-5],tip,.45,WOOD);
+      const flare=sample.t>2.65&&sample.t<3.5;
+      if(kind==='H2'){
+        put([tip],4,eFlame(tip,flare));
+        if(flare){ const [sx,sy]=P(x,yy,z+7); put([[x,yy,z+7]],3,`<text x="${f(sx)}" y="${f(sy)}" font-size="4" font-weight="800" text-anchor="middle" fill="${INK}">POP</text>`); }
+      } else put([tip],4,flare?eFlame(tip,true):eBead(tip,.7,'#eb6d3d'));
+    }
+    label([x,yy,z+10],i?'OXYGEN SAMPLE TUBE':'HYDROGEN SAMPLE TUBE',!!testing);
+  }
+  bx([78,7,3],[94,13,5],CERAMIC);
+  for(const [y,kind] of [[8,'LIT SPLINT'],[12,'GLOWING SPLINT']]){
+    rd([80,y,5.5],[93,y,5.5],.4,WOOD,kind);
+    put([[80,y,5.5]],2,kind==='LIT SPLINT'?eFlame([80,y,5.5],false):eBead([80,y,5.5],.6,'#dc6a42'));
+  }
+  s+=byDepth(parts)+byDepth(chemistry);
+  if(k>.6) s+=eCallouts(labels);
+  return s;
+}
+let eUI,eLoop=false;
+function eUpdate(st,dt){
+  st.clock+=dt;
+  if(st.on){
+    const c=eCathode(st),a=1-c, amount=Math.min(dt, (50-st.gas[c])/2,50-st.gas[a]);
+    st.gas[c]+=2*amount; st.gas[a]+=amount;
+    if(st.gas[c]>=50-1e-8||st.gas[a]>=50-1e-8){st.on=false;st.result='Tubes full';}
+  }
+  if(st.vent>0){
+    st.vent=Math.max(0,st.vent-dt);
+    st.gas=st.gas.map(v=>Math.max(0,v-30*dt));
+    if(st.vent===0) st.gas=[0,0];
+  }
+  if(st.sample){
+    const sample=st.sample;
+    sample.t+=dt;
+    if(sample.t>.5&&sample.t<1.3){ const take=Math.min(st.gas[sample.side],dt*3); st.gas[sample.side]-=take; sample.volume+=take; }
+    if(sample.t>=2.65) st.result=sample.kind==='H2'?'Hydrogen pop':'Oxygen relights';
+    if(sample.t>=4.3) st.sample=null;
+  }
+}
+function eKick(){
+  if(eLoop)return; eLoop=true;
+  eUI.animate(dt=>{eUpdate(eUI.st,dt);const busy=eUI.st.on||eUI.st.sample||eUI.st.vent>0;if(!busy)eLoop=false;return !!busy;});
+}
+function eToggle(st,ui){
+  if(st.sample||st.vent>0)return ui.flash('Finish the gas test or venting first.');
+  if(!st.on&&Math.max(...st.gas)>=49.99)return ui.flash('Vent both tubes before collecting more.');
+  st.on=!st.on; st.result=st.on?'Collecting gases':'Circuit open'; eKick();
+}
+function eTest(st,ui,kind){
+  if(st.sample||st.vent>0)return ui.flash('One gas sample at a time.');
+  if(st.on)return ui.flash('Switch off before opening a gas tap.');
+  const side=kind==='H2'?eCathode(st):1-eCathode(st);
+  if(st.gas[side]<3)return ui.flash('Collect at least 3 mL of '+(kind==='H2'?'hydrogen':'oxygen')+' first.');
+  st.sample={kind,side,t:0,volume:0};st.result='Taking '+kind+' sample';eKick();
+}
+function eSwap(st,ui){
+  if(st.on)return ui.flash('Switch off before swapping the battery connections.');
+  if(st.sample||st.vent>0)return ui.flash('Finish the gas test or venting first.');
+  if(st.gas.some(v=>v>.001))return ui.flash('Vent both tubes before reversal to keep gases separate.');
+  st.reversed=!st.reversed;st.result='Connections swapped';
+}
+function eVent(st,ui){
+  if(st.on)return ui.flash('Switch off before opening both taps.');
+  if(st.sample||st.vent>0)return ui.flash('Finish the current action first.');
+  if(st.gas.every(v=>v===0))return ui.flash('Both collecting tubes are already full of liquid.');
+  st.vent=2;st.result='Venting gas';eKick();
+}
+eUI=mountFigure({
+  fig:'E',turn:'full',title:'Electrolysis of water',size:[100,106,114],palette:'cobalt',state:eState,
+  scene:eScene,
+  stats:st=>[
+    {label:'Hydrogen',value:st.gas[eCathode(st)].toFixed(1)+' mL'},
+    {label:'Oxygen',value:st.gas[1-eCathode(st)].toFixed(1)+' mL'},
+    {label:st.on?'Circuit':'Gas test / action',value:st.on?'ON':st.result||'OFF',small:true}
+  ],
+  buttons:[
+    {label:'Switch on / off',onClick:eToggle},
+    {label:'Test hydrogen',onClick:(st,ui)=>eTest(st,ui,'H2')},
+    {label:'Test oxygen',onClick:(st,ui)=>eTest(st,ui,'O2')},
+    {label:'Swap polarity',onClick:eSwap},
+    {label:'Vent both tubes',onClick:eVent}
+  ],
+  params:(st,q)=>{
+    if(q.get('reversed')==='1')st.reversed=true;
+    for(const [key,side] of [['h2',eCathode(st)],['o2',1-eCathode(st)]]){
+      const v=Number(q.get(key));if(q.has(key)&&Number.isFinite(v))st.gas[side]=Math.max(0,Math.min(50,v));
+    }
+    if(q.get('on')==='1')st.on=true;
+  }
+});
+xrMount(()=>eUI,()=> '');
+addEventListener('resize',()=>eUI.render());
+if(eState.on)eKick();
+addEventListener('unhandledrejection',e=>{document.documentElement.dataset.errors+=' '+String(e.reason)+';';});
+</script></body></html>
