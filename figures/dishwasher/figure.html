@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dishwasher</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. A representative 60 cm built-in, with an exposed tub heater and heated drying.
+   Source https://www.whirlpool.com/blog/kitchen/how-does-a-dishwasher-work.html
+   Source https://www.whirlpool.com/blog/kitchen/parts-of-a-dishwasher.html
+   Open the bottom-hinged door. Plates move from the countertop over the cabinet, down outside
+   its front, then into lower-rack tines. A tablet moves from its carton into the door dispenser.
+   Close and latch. The inlet valve admits water through a side air break to the tub's shallow sump.
+   The circulation pump draws through the filter and drives both spray arms through a rear riser.
+   Angled jets turn the arms by reaction. The dispenser opens during wash; the tablet falls and dissolves.
+   Water returns by gravity to the sump. The drain pump sends dirty water through a check valve
+   and high drain-hose loop. Fresh rinse water follows the same spray circuit, then drains.
+   The heater and rinse heat evaporate residual water, which leaves through the door vent.
+   Parts and supports. Case: side panels, rear panel, counter, plinth, base pan, four feet.
+   Tub: stainless liner, door gasket, sump, filter, float and float switch, temperature sensor.
+   Wash: circulation motor bolted to base, impeller on its shaft, sump inlet, pump outlet,
+   rear riser clipped to liner, two spray hubs and arms, angled jet holes, heater on two standoffs.
+   Drain: separate pump on base, check valve, hose clipped up the back, high loop and outlet.
+   Fill: supply hose, inlet valve bolted to base, air break on left wall, tub inlet.
+   Structure: two rack rails on each side, rack rollers, wire racks and plate tines.
+   Door: hinge pins in chassis, spring anchors, spring links, latch, dispenser and lid,
+   rinse aid cap, vent, control board, display, wiring routed down door and along base.
+   shortcut: cycle time is compressed to seconds, use a calibrated physical model for timing comparisons.
+*/
+const dwSteel = matOf('#c6d1d2'), dwBlue = matOf('#68b4d4'), dwGreen = matOf('#43966b');
+const dwStages = [
+  {name:'Fill', duration:1.4, fill:true}, {name:'Wash', duration:4.2, spray:true, heat:true},
+  {name:'Drain', duration:1.3, drain:true}, {name:'Rinse fill', duration:1.2, fill:true},
+  {name:'Rinse', duration:2.6, spray:true, heat:true}, {name:'Final drain', duration:1.3, drain:true},
+  {name:'Dry', duration:2.6, heat:true}
+];
+const dwBusy = st => st.cycle >= 0;
+const dwPhase = st => dwStages[st.cycle] || {};
+const dwBounds = pts => [0,1,2].map(k => [Math.min(...pts.map(p=>p[k])),Math.max(...pts.map(p=>p[k]))]);
+const dwBoxOf = (pts,r=0) => { const b=dwBounds(pts); return [b.map(v=>v[0]-r),b.map(v=>v[1]+r)]; };
+const dwRodBox = (a,b,r) => { const n=norm(sub(b,a)), e=n.map(v=>r*Math.sqrt(Math.max(0,1-v*v))); return [a.map((v,i)=>Math.min(v,b[i])-e[i]),a.map((v,i)=>Math.max(v,b[i])+e[i])]; };
+function dwCallouts(items){
+  const svg=document.getElementById('fig'), vb=svg.viewBox.baseVal, matrix=svg.getScreenCTM(), btn=document.getElementById('btns').getBoundingClientRect();
+  const top=new DOMPoint(btn.right,btn.bottom+20).matrixTransform(matrix.inverse()).y;
+  const phone=innerWidth<=560, sorted=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]), half=Math.ceil(sorted.length/2);
+  return [sorted.slice(0,half),sorted.slice(half)].map((col,side)=>{
+    col.sort((a,b)=>a.p[1]-b.p[1]);
+    const start=Math.max(phone?15:55,top), gap=(vb.height-start-8)/Math.max(1,col.length-1);
+    return col.map((it,i)=>{
+      const x=phone?(side?vb.width-10:10):(side?vb.width-65:30), y=start+i*gap;
+      return tag(it.at,(x-it.p[0])/INK_K,(y-it.p[1])/INK_K,it.text,it.on);
+    }).join('');
+  }).join('');
+}
+const dwDoorPoint = (st,t,y,w=0) => { const a=ease(st.door)*Math.PI/2; return [60+t*Math.sin(a)+w*Math.cos(a),y,12+t*Math.cos(a)-w*Math.sin(a)]; };
+function dwDoorBox(st,t0,y0,w0,t1,y1,w1,m){
+  const Q=(t,y,w)=>dwDoorPoint(st,t,y,w), a=ease(st.door)*Math.PI/2;
+  const pts=[Q(t0,y0,w0),Q(t0,y1,w0),Q(t1,y1,w0),Q(t1,y0,w0),Q(t0,y0,w1),Q(t0,y1,w1),Q(t1,y1,w1),Q(t1,y0,w1)];
+  const faces=[[[Math.cos(a),0,-Math.sin(a)],[4,5,6,7]], [[-Math.cos(a),0,Math.sin(a)],[0,1,2,3]],
+    [[0,1,0],[1,5,6,2]],[[0,-1,0],[0,4,7,3]],[[Math.sin(a),0,Math.cos(a)],[3,2,6,7]], [[-Math.sin(a),0,-Math.cos(a)],[0,1,5,4]]];
+  return {box:dwBoxOf(pts),svg:faces.filter(([n])=>vis(n)).map(([n,ii])=>shape(ii.map(i=>pts[i]),tone(n,m),.7)).join('')+hullInk(pts,2.5)};
+}
+function dwPlate(p,axis,dirty){
+  let s=rod(p,p.map((v,i)=>v+axis[i]*.8),10,CERAMIC,toneI,1.1,.0+10,28);
+  const n=vis(axis)?axis:axis.map(v=>-v), cap=p.map((v,i)=>v+(vis(axis)?.85:-.05)*axis[i]);
+  const u=norm(cross(n,Math.abs(n[2])>.9?[1,0,0]:[0,0,1])), v=cross(n,u);
+  const ring=r=>Array.from({length:28},(_,i)=>cap.map((a,j)=>a+r*(Math.cos(i/28*2*Math.PI)*u[j]+Math.sin(i/28*2*Math.PI)*v[j])));
+  s+=ink(pd(ring(7.6)),.45);
+  if(dirty>.01) s+=shape(ring(4.5),mix(CERAMIC.l,'#b97d47',dirty*.7),0);
+  return {box:dwRodBox(p,p.map((v,i)=>v+axis[i]*.8),10),svg:s};
+}
+function dwScene(st,m){
+  const shells=[], parts=[], supplies=[], embedded=[], labels=[], stage=dwPhase(st);
+  const secondary=['SUMP INLET','DRIVE SHAFT','PUMP OUTLET','DRAIN PICKUP','FILL TUBE','UPPER HUB','LOWER HUB','TUB FLOOR'];
+  const put=(b,svg,name,on=false,anchor=null)=>{(name==='TUB FLOOR'||name==='STAINLESS LINER'?shells:name==='CONTROL BOARD'?embedded:b[0][2]>=87?supplies:parts).push({box:b,svg});if(name&&!secondary.includes(name)) labels.push({at:anchor||boxMid(b),text:name,on});};
+  const plate=p=>(p.box[0][2]>=87?supplies:parts).push(p);
+  const bx=(a,b,mat,name,on=false)=>put([a,b],box(...a,...b,mat,toneI,.7),name,on);
+  const rd=(a,b,r,mat,name,on=false)=>put(dwRodBox(a,b,r),rod(a,b,r,mat,toneI,.7),name,on);
+  const route=(pts,r,mat,name,on=false)=>{pts.slice(1).forEach((p,i)=>rd(pts[i],p,r,mat,i===0?name:null,on));};
+  const shell=(a,b,mat)=>shells.push({box:[a,b],svg:box(...a,...b,mat,tone,1.2)});
+  shell([0,0,10],[2,60,84],m); shell([2,0,10],[60,2,84],m); shell([2,58,10],[60,60,84],m);
+  shell([0,0,84],[62,60,87],CERAMIC); shell([0,0,2],[60,60,4],DARK); shell([57,0,4],[60,60,12],m);
+  for(const x of [7,52]) for(const y of [7,53]) bx([x-2,y-2,0],[x+2,y+2,3],DARK);
+  bx([2,2,14],[58,58,15],dwSteel,'TUB FLOOR');
+  bx([2.1,2,15],[2.6,58,81],dwSteel,'STAINLESS LINER');
+  const door=dwDoorBox(st,0,2,-1.6,70,58,1.6,m); shells.push(door);
+  const handleA=dwDoorPoint(st,61,17,4.3), handleB=dwDoorPoint(st,61,43,4.3);
+  const handle=rod(handleA,handleB,1.2,DARK,toneI,.8)+[17,43].map(y=>rod(dwDoorPoint(st,61,y,1.6),dwDoorPoint(st,61,y,4.3),1,DARK)).join('');
+  shells.push({box:dwBoxOf([handleA,handleB],1.5),svg:handle});
+  const a=ease(st.door)*Math.PI/2;
+  if(vis([Math.cos(a),0,-Math.sin(a)])){
+    const panel=[dwDoorPoint(st,63,8,1.65),dwDoorPoint(st,63,52,1.65),dwDoorPoint(st,68,52,1.65),dwDoorPoint(st,68,8,1.65)];
+    shells.push({box:dwBoxOf(panel),svg:shape(panel,DARK.m,.8)+shape([dwDoorPoint(st,64.2,12,1.7),dwDoorPoint(st,64.2,29,1.7),dwDoorPoint(st,67,29,1.7),dwDoorPoint(st,67,12,1.7)],dwBusy(st)?'#74c892':'#567769',.3)});
+  }
+  rd([8,30,7],[25,30,7],5,stage.spray?dwBlue:DARK,'CIRCULATION MOTOR',!!stage.spray);
+  rd([25,30,7],[27,30,7],1.1,METAL,'DRIVE SHAFT',!!stage.spray);
+  rd([27,30,7],[31,30,7],4,dwBlue,'PUMP IMPELLER',!!stage.spray);
+  route([[30,30,15],[30,30,11],[29,30,7]],1.7,dwBlue,'SUMP INLET',!!stage.spray);
+  rd([30,30,15],[30,30,18],7.5,DARK,'SUMP');
+  rd([30,30,18],[30,30,20],4.5,dwSteel,'FILTER',!!stage.spray);
+  for(let y=27;y<=33;y+=1.5) rd([27,y,20.1],[33,y,20.1],.12,DARK);
+  route([[30,30,7],[36,30,7],[36,30,18],[30,30,18]],1.5,dwBlue,'PUMP OUTLET',!!stage.spray);
+  route([[36,30,18],[5,30,18],[5,30,51],[30,30,51]],1.1,dwBlue,'REAR RISER',!!stage.spray);
+  for(const z of [23,51]){
+    rd([30,30,z-3],[30,30,z],2,dwSteel,z===23?'LOWER HUB':'UPPER HUB',!!stage.spray);
+    const th=st.angle+(z===51?1.2:0), ends=[-1,1].map(s=>[30+s*23*Math.cos(th),30+s*23*Math.sin(th),z]);
+    rd(ends[0],ends[1],1.25,dwBlue,z===23?'LOWER SPRAY ARM':'UPPER SPRAY ARM',!!stage.spray);
+    for(const s of [-1,1]) for(const d of [8,16,22]){
+      const p=[30+s*d*Math.cos(th),30+s*d*Math.sin(th),z+1.1];
+      const q=[p[0]-s*.7*Math.sin(th),p[1]+s*.7*Math.cos(th),p[2]+.4];
+      rd(p,q,.35,DARK,z===23&&s===1&&d===22?'ANGLED JETS':null,!!stage.spray);
+      if(stage.spray){ const len=7+3*Math.sin(st.clock*12+d), end=[q[0]-s*len*.3*Math.sin(th),q[1]+s*len*.3*Math.cos(th),q[2]+len];
+        put(dwBoxOf([q,end]),`<path d="${pd([q,end],false)}" fill="none" stroke="#55a9d4" stroke-width=".8" stroke-dasharray="1.5 1.1" stroke-dashoffset="${f(-st.clock*10)}"/>`); }
+    }
+  }
+  for(const z of [27,57]){
+    for(const y of [6,54]) rd([4,y,z],[56,y,z],.7,dwSteel,z===27&&y===6?'RACK RAIL':null);
+    for(const x of [10,49]) for(const y of [7,53]) rd([x,y-1,z],[x,y+1,z],1.4,DARK,z===27&&x===49&&y===53?'RACK ROLLER':null);
+    for(const y of [9,51]){rd([7,y,z],[53,y,z],.5,dwSteel,z===27&&y===51?'LOWER RACK':z===57&&y===51?'UPPER RACK':null);rd([7,y,z],[7,y,z+7],.45,dwSteel);rd([53,y,z],[53,y,z+7],.45,dwSteel);rd([7,y,z+7],[53,y,z+7],.5,dwSteel);}
+    for(let x=9;x<=51;x+=7) rd([x,9,z],[x,51,z],.32,dwSteel);
+    for(const y of [9,19,29,39,49]){rd([7,y,z],[53,y,z],.32,dwSteel);if(z===27) for(const x of [24,42]) rd([x,y,z],[x+1,y,z+7],.4,dwSteel,y===9&&x===24?'PLATE TINES':null);}
+  }
+  const hot=stage.heat?matOf('#e99650'):METAL;
+  route([[12,12,18],[12,48,18],[48,48,18],[48,12,18],[12,12,18]],.7,hot,'HEATER',!!stage.heat);
+  for(const p of [[12,20,15],[48,40,15]]) rd(p,[p[0],p[1],18],.8,CERAMIC,'',false);
+  rd([50,50,15],[50,50,19+st.water*.5],2.2,CERAMIC,'OVERFILL FLOAT',!!stage.fill);
+  bx([48,48,11],[52,52,14],DARK,'FLOAT SWITCH',!!stage.fill);
+  rd([43,9,13],[43,9,16],1,METAL,'TEMPERATURE SENSOR',!!stage.heat);
+  bx([4,6,4],[10,13,10],dwBlue,'INLET VALVE',!!stage.fill);
+  route([[0,9,5],[4,9,5]],1,dwBlue,'SUPPLY HOSE',!!stage.fill);
+  route([[8,10,9],[8,4,20],[8,4,62]],.8,dwBlue,'FILL TUBE',!!stage.fill);
+  bx([5,3,62],[11,5,69],CLEAR,'AIR BREAK',!!stage.fill);
+  route([[8,4,62],[15,4,33],[15,6,33]],.8,dwBlue,'TUB INLET',!!stage.fill);
+  if(stage.fill) route([[15,6,33],[15,7,22]],.6,CLEAR);
+  rd([35,42,6],[44,42,6],3,stage.drain?dwBlue:DARK,'DRAIN PUMP',!!stage.drain);
+  route([[30,30,16],[34,42,16],[35,42,6]],1.1,dwBlue,'DRAIN PICKUP',!!stage.drain);
+  rd([44,42,6],[48,42,6],1.5,DARK,'CHECK VALVE',!!stage.drain);
+  route([[48,42,6],[3,56,6],[0,56,6],[0,56,77],[-3,56,80],[-6,56,77],[-6,56,12]],1,dwBlue,'DRAIN HOSE',!!stage.drain);
+  labels.push({at:[-3,56,80],text:'HIGH DRAIN LOOP',on:!!stage.drain});
+  const gasket=[...rectUV(3,15,57,81),[3,15]].map(([y,z])=>[59,y,z]);
+  route(gasket,.65,DARK,'DOOR GASKET');
+  for(const y of [3,57]){
+    rd([57,y,12],[62,y,12],1.2,METAL,y===3?'HINGE PIN':null,st.door>0);
+    rd([13,y,6],[16,y,6],.55,METAL);
+    const coil=Array.from({length:97},(_,i)=>[16+i*18/96,y+Math.cos(i*Math.PI/3),6+Math.sin(i*Math.PI/3)]);
+    put([[16,y-1,5],[34,y+1,7]],line(coil,.65),y===3?'DOOR SPRING':null,st.door>0);
+    rd([34,y,6],[60,y,12],.55,METAL);
+  }
+  const dPart=(t0,y0,w0,t1,y1,w1,mat,name,on=false)=>{const p=dwDoorBox(st,t0,y0,w0,t1,y1,w1,mat);put(p.box,p.svg,name,on,dwDoorPoint(st,(t0+t1)/2,(y0+y1)/2,w0));};
+  dPart(41,8,-4.5,53,23,-1.7,DARK,'DETERGENT DISPENSER',st.cycle===1);
+  const lidT=st.released?54:42;
+  dPart(lidT,8,-4.8,lidT+10,23,-4.5,dwSteel,'DISPENSER LID',st.released);
+  rd(dwDoorPoint(st,47,32,-1.6),dwDoorPoint(st,47,32,-3),2.5,DARK,'RINSE AID CAP');
+  dPart(59,44,-3,65,51,-1.7,dwSteel,'DRYING VENT',st.cycle===6);
+  dPart(66,26,-2.8,70,34,-1.7,DARK,'DOOR LATCH',dwBusy(st));
+  dPart(60,7,-.7,67,49,.3,dwGreen,'CONTROL BOARD',dwBusy(st));
+  route([dwDoorPoint(st,62,10,0),dwDoorPoint(st,2,5,0),[54,5,6],[9,5,6],[8,7,8]],.35,DARK,'WIRING HARNESS',dwBusy(st));
+  const dishCount=st.loading?Math.floor(st.load):st.plates;
+  for(let i=0;i<dishCount;i++) plate(dwPlate([33,14+i*10,40],[0,1,0],st.soil));
+  for(let i=dishCount;i<4;i++){
+    if(st.loading&&i===dishCount) continue;
+    plate(dwPlate([24,30,88+(i-dishCount)*1.1],[0,0,1],.9));
+  }
+  if(st.loading){const i=Math.floor(st.load), t=st.load-i, path=[[24,30,92],[24,30,110],[84,30,110],[84,14+i*10,40],[33,14+i*10,40]], seg=Math.min(3,Math.floor(t*4)), k=ease(t*4-seg), p=path[seg].map((v,j)=>v+(path[seg+1][j]-v)*k), th=Math.min(1,t*3)*Math.PI/2;plate(dwPlate(p,[0,Math.sin(th),Math.cos(th)],.9));}
+  bx([42,9,87],[51,22,91],dwBlue,'TABLET CARTON');
+  if(!st.tablet&&!st.released) bx([43,12,91],[48,18,93],CERAMIC);
+  if(st.tablet){const p=dwDoorPoint(st,46,15,-5);put(dwBoxOf([p],2),rod(p,[p[0]+.8,p[1],p[2]],2,CERAMIC), 'DETERGENT TABLET');}
+  if(st.released&&st.cycle===1&&st.elapsed<1){const t=st.elapsed, p=[55-7*t,15,55-36*t];rd(p,[p[0]+1,p[1],p[2]],2*(1-t)+.1,CERAMIC);}
+  if(st.water>.01) put([[3,3,15],[57,57,15+st.water*.35]],`<g opacity=".28">${box(3,3,15,57,57,15+st.water*.35,dwBlue,toneI,.2)}</g>`);
+  if(st.cycle===6) for(let i=0;i<4;i++){const p=dwDoorPoint(st,62,46+i,-4), t=(st.clock*.7+i*.23)%1; put(dwBoxOf([p,[p[0],p[1],p[2]+8]]),`<path d="${pd([[p[0],p[1],p[2]+t*7],[p[0]+Math.sin(t*5),p[1],p[2]+t*7+3]],false)}" fill="none" stroke="#8aafa9" stroke-width=".6" opacity="${1-t}"/>`);}
+  const k=ease(st.xr||0), shadow=castShadow([[0,0,0],[60,0,0],[60,60,0],[0,60,0],[0,0,87],[60,60,87]]);
+  const all=k>0?`<g opacity="${f(1-.85*k)}">${byDepth(shells)}</g>`+`<g opacity="${f(k)}">${byDepth([...parts,...embedded])}</g>`:byDepth([...shells,...parts]);
+  return shadow+all+byDepth(supplies)+(k>.6?dwCallouts(labels):'');
+}
+let dwUI;
+function dwToggleDoor(st,ui){
+  if(dwBusy(st)) return ui.flash('Door locked during the cycle');
+  if(st.loading) return ui.flash('Wait for the plates to finish loading');
+  st.doorTarget=st.doorTarget?0:1;
+  if(st.doorMoving)return;
+  st.doorMoving=true;
+  ui.animate(dt=>{st.door+=Math.sign(st.doorTarget-st.door)*Math.min(Math.abs(st.doorTarget-st.door),dt/.7);if(st.door===st.doorTarget){st.doorMoving=false;return false;}return true;});
+}
+function dwLoad(st,ui){
+  if(dwBusy(st)||st.door<.99||st.doorMoving) return ui.flash('Open the door fully first');
+  if(st.loading||st.plates) return ui.flash('The lower rack already has four plates');
+  st.load=0;st.loading=true;st.soil=1;st.clean=false;
+  ui.animate(dt=>{st.load=Math.min(4,st.load+dt/1.05);if(st.load===4){st.plates=4;st.loading=false;return false;}return true;});
+}
+function dwTablet(st,ui){
+  if(dwBusy(st)||st.door<.99||st.doorMoving||st.loading) return ui.flash('Open the door and finish loading first');
+  if(st.tablet)return ui.flash('One tablet is already in the dispenser');
+  st.tablet=true;st.released=false;ui.flash('Tablet in the dispenser. Close the door.');
+}
+function dwStart(st,ui){
+  if(dwBusy(st))return ui.flash('The cycle is already running');
+  if(st.door>0||st.doorMoving)return ui.flash('Close the door first');
+  if(!st.plates)return ui.flash('Open the door and load the plates first');
+  if(!st.tablet)return ui.flash('Add a tablet before starting');
+  st.cycle=0;st.elapsed=0;st.clean=false;st.litres=0;st.soil=1;st.released=false;
+  ui.animate(dt=>dwUpdate(st,dt));
+}
+function dwUpdate(st,dt){
+  const stage=dwPhase(st);if(!dwBusy(st))return false;
+  st.elapsed+=dt;st.clock+=dt;
+  if(stage.fill){const add=Math.min(4-st.water,dt*4/stage.duration);st.water+=add;st.litres+=add;}
+  if(stage.spray){st.angle+=dt*3.3;st.soil=Math.max(0,st.soil-dt/4.2);}
+  if(stage.drain)st.water=Math.max(0,st.water-dt*4/stage.duration);
+  if(stage.heat)st.temp=Math.min(60,st.temp+dt*12);
+  if(st.cycle===1&&!st.released){st.released=true;st.tablet=false;}
+  if(st.elapsed>=stage.duration){if(stage.fill)st.water=4;if(stage.drain)st.water=0;st.cycle++;st.elapsed=0;if(st.cycle>=dwStages.length){st.cycle=-1;st.clean=true;st.soil=0;st.water=0;return false;}}
+  return true;
+}
+dwUI=mountFigure({fig:'01',turn:'full',title:'Dishwasher',size:[119,64,104],center:[56,30],palette:'mint',
+  state:{door:0,doorTarget:0,doorMoving:false,plates:0,load:0,loading:false,tablet:false,released:false,cycle:-1,elapsed:0,clock:0,angle:0,water:0,litres:0,temp:20,soil:1,clean:false},
+  scene:dwScene,
+  buttons:[{label:'Open / close door',onClick:dwToggleDoor},{label:'Load plates',onClick:dwLoad},{label:'Add tablet',onClick:dwTablet},{label:'Start cycle',onClick:dwStart}],
+  stats:st=>[{label:'Cycle',value:dwPhase(st).name||(st.clean?'Clean and dry':'Ready')},{label:'Water in tub',value:st.water.toFixed(1)+' L',small:true},{label:'Water used',value:st.litres.toFixed(1)+' L',small:true},{label:'Temperature',value:Math.round(st.temp)+' C',small:true}],
+  params:(st,q)=>{if(q.get('open')==='1')st.door=st.doorTarget=1;if(q.get('loaded')==='1')st.plates=4;if(q.get('tablet')==='1')st.tablet=true;const stage=dwStages.findIndex(s=>s.name.toLowerCase()===q.get('phase'));if(stage>=0){st.cycle=stage;st.plates=4;st.water=dwPhase(st).fill?2:dwPhase(st).drain?3:dwPhase(st).spray?4:0;st.tablet=false;st.released=true;st.temp=55;}}
+});
+xrMount(()=>dwUI,()=> '');
+if(dwBusy(dwUI.st))dwUI.animate(dt=>dwUpdate(dwUI.st,dt));
+</script></body></html>
