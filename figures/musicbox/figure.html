@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Music box</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Music box: a wooden ballerina box with an 18-note cylinder movement under a velvet-lined well.
+   Truth first (where the energy is after each step):
+   1. Wind: the key turns the winding arbor. The ratchet wheel is fixed to the arbor; the click on the barrel bridge drops
+      into each tooth so the arbor cannot turn back. The mainspring (inner end on the arbor, outer end hooked into the
+      barrel wall) coils tighter round the arbor. Energy is now in the spring.
+   2. Hold: while the lid is shut, its underside presses the lid stop pin down. The pin pushes the stop lever, whose wire tip
+      sits in the path of the fly's vanes, so the whole train is locked.
+   3. Open: the lid lifts off the pin; the pin spring pushes it up and the lever spring swings the tip clear of the fly.
+      The dancer, bent flat on her spring stem by the closed lid, springs upright.
+   4. Play: the spring turns the barrel (a going barrel: its rim is the great wheel). Great wheel -> cylinder pinion ->
+      pinned cylinder (about 3 rpm). Each steel pin, set where a note falls in the tune, lifts one tuned tooth of the
+      steel comb and lets it go: the tooth rings at its pitch (long bass teeth, weighted with lead underneath; short
+      treble teeth). The cylinder wheel at the other end drives the intermediate pinion and wheel, which turns the worm
+      on the fly arbor: the fly's two vanes beat the air, so the faster it goes the harder the air holds it, which keeps
+      the tune at a steady tempo. A crown wheel on the cylinder arbor turns a small vertical pinion: the dancer spindle
+      comes up through the floor and turns her turntable 6x as fast as the cylinder.
+   5. Close or run down: the lid presses the pin, the lever tip catches the fly and everything stops; or the spring is
+      slack and it stops by itself. Wind again.
+   Parts (each held by another):
+   CASE     body (bottom, four walls, inner floor board, velvet lining) . lid (inlaid top, mirror, velvet) . two brass
+            hinges . escutcheon . key bushing in the left wall
+   FRAME    bedplate on the case bottom . 4 bedplate screws . train bridge . intermediate cock . two cylinder bridges .
+            barrel inner bridge . barrel bridge . governor cock . stop-lever cock . spindle bracket . comb base
+   POWER    key . winding arbor . ratchet wheel . click . click spring . spring barrel . mainspring . great wheel (barrel rim)
+   PLAY     cylinder pinion . cylinder arbor . pinned cylinder . steel pins . steel comb (18 teeth) . comb screws . lead weights
+   GOVERNOR cylinder wheel . intermediate pinion . intermediate wheel . worm . fly arbor . fly (air brake)
+   CONTROL  lid stop pin . pin spring . pin sleeve . stop lever . stop tip . lever spring
+   DANCER   crown wheel . dancer pinion . dancer spindle . turntable . dancer spring stem . dancer
+   Coordinates: x = depth (front x = 80), y = width (+y = the key side), z = up; 1 unit ~ 1 mm. All arbors run along y
+   except the fly arbor, the dancer spindle and the lid stop pin, which stand upright. */
+
+/* ---------- small helpers ---------- */
+const polar = (c, d, deg) => [c[0] + d*Math.cos(deg*Math.PI/180), c[1] + d*Math.sin(deg*Math.PI/180)];
+const rot2 = (p, c, a) => { const ca = Math.cos(a), sa = Math.sin(a), dx = p[0] - c[0], dz = p[1] - c[1]; return [c[0] + dx*ca - dz*sa, c[1] + dx*sa + dz*ca]; };
+const nrm2 = v => { const l = Math.hypot(v[0], v[1]) || 1; return [v[0]/l, v[1]/l]; };
+const bx3 = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const clamp01 = v => Math.max(0, Math.min(1, v));
+
+/* ---------- dimensions (case-local) ---------- */
+const CD = 80, CW = 124, CH = 52, LT = 14, WT = 5, FZ0 = 32, FZ1 = 34, BZ = 4;
+const OUT = rectUV(0, 0, CW, CH);                         // body profile in (y, z), swept along x 0..80
+const LID_MAX = 100;                                      // the lid opens to 100 deg, leaning back on its hinges
+const CY = [46, 19], CYR = 7.5, CYL0 = 25, CYL1 = 79, NT = 18, TP = 3;   // pinned cylinder (x, z), radius, ends; 18 teeth
+const toothY = i => CYL0 + TP*(i + .5);
+const TIPX = CY[0] + CYR + .6, CZ0 = CY[1], CZ1 = CY[1] + 1;            // comb tooth tips and comb plate faces
+const toothLen = i => 14 - 7*i/(NT - 1);                                 // bass (i = 0) long, treble short
+const R_BW = 10, r_CP = 3.5, R_CG = 11, r_IP = 3, R_IW = 8, IW_N = 32, CROWN_N = 36, DP_N = 6;
+const A1 = polar(CY, R_BW + r_CP, 172);                   // barrel / winding arbor (x, z)
+const AI = polar(CY, R_CG + r_IP, 180);                   // intermediate arbor
+const FX = AI[0] - R_IW - 1.2, FY = 14.5;                 // fly arbor (upright) at (x, y), its worm in the wheel's plane
+const SPV = [14, 14];                                     // stop lever pivot (x, z), lever in the plane y 8..9
+const PLX = 10, PLY = 8.5;                                // lid stop pin (upright)
+const DX = CY[0], DY = 85.6, TT = FZ1 + 1.4, SPR_H = 3, DS = 1.5;   // dancer spindle, turntable top, spring stem height, dancer scale
+const BAR_R = 8, BAR_Y0 = 89, BAR_Y1 = 105;
+const WMAX = 3, WIND_T = .55, LID_T = .8, BEAT = .42;
+const OMEGA = 2*Math.PI/(48*BEAT);                        // the cylinder turns once per tune (48 beats)
+const GZ = 3, BOX_X = 30, BOX_Y = 8, BX1 = BOX_X + CD + 14, BY1 = BOX_Y + CW + 16;
+// slabs along y: every arbor is cut at these so each piece sorts against the flat parts it passes
+const YS = [8, 9, 9.2, 10.2, 11, 11.6, 12, 14, 15, 18.5, 19, 20, 20.5, 21.5, 23.5, 25, 79, 80.5, 82.5, 83.5, 84.5, 85, 85.3, 87, 88, 89, 105, 107, 108, 108.5, 110.5, 119, 124];
+
+/* ---------- the tune: Twinkle Twinkle Little Star on an 18-note comb ---------- */
+const MB_NOTES = ['G3','A3','B3','C4','D4','E4','F4','G4','A4','B4','C5','D5','E5','F5','G5','A5','B5','C6'];
+const MB_FREQ = [55,57,59,60,62,64,65,67,69,71,72,74,76,77,79,81,83,84].map(n => 440*Math.pow(2, (n - 69)/12));
+const PINS = (() => { const out = [], ix = nm => MB_NOTES.indexOf(nm);
+  const l1 = 'C5 C5 G5 G5 A5 A5 G5 - F5 F5 E5 E5 D5 D5 C5 -', l2 = 'G5 G5 F5 F5 E5 E5 D5 - G5 G5 F5 F5 E5 E5 D5 -';
+  const mel = [l1, l2, l1].join(' ').split(' ');
+  const ch = ['C C F C F C G C', 'C F C G C F C G', 'C C F C F C G C'].join(' ').split(' ');
+  const BASS = { C:['C4','E4'], F:['F4','A4'], G:['G3','B3'] };
+  mel.forEach((nm, b) => { if (nm !== '-') out.push({ i: ix(nm), b }); });
+  ch.forEach((c, k) => { out.push({ i: ix(BASS[c][0]), b: 2*k }, { i: ix(BASS[c][1]), b: 2*k + 1 }); });
+  return out.map(p => ({ ...p, a: -2*Math.PI*p.b/48 - .05 }));
+})();
+
+/* ---------- materials ---------- */
+const BRASS = matOf('#e2b34c'), STEEL = matOf('#c3cbcf'), COMBM = matOf('#dfe5e8'), BLUED = matOf('#7f9ab2');
+const PLATEM = matOf('#cdb36a'), LEAD = matOf('#80868c'), VELV = matOf('#b8344a'), PINK = matOf('#f3a6bb');
+const SKIN = matOf('#f6d2bd'), BODICE = matOf('#e8738f'), FLOORM = matOf('#d8b98a');
+const RINGC = { l:'#ffffff', m:'#f4f7f8', d:'#cfd8dc' };  // a comb tooth that is ringing
+
+/* ---------- shape helpers ---------- */
+// a convex profile in (x, z) extruded along y from y0 to y1: sides, the cap toward the viewer, silhouette ink
+function prismY(prof, y0, y1, M, shade = toneI, w = 1){
+  const A = on(PY(y0), prof), B = on(PY(y1), prof), up = facing([0,1,0]), cn = up ? [0,1,0] : [0,-1,0], cap = up ? B : A;
+  return { svg: loft(A, B, n => shade(n, M)) + fill(pd(cap), shade(cn, M)) + ink(pd(cap), w*.7) + hullInk([...A, ...B], w), box: bx3([...A, ...B]) };
+}
+// a convex profile in (x, y) extruded up from z0 to z1 (the viewer is always above, so the top cap shows)
+function prismZ(prof, z0, z1, M, shade = toneI, w = 1){
+  const A = on(PZ(z0), prof), B = on(PZ(z1), prof);
+  return { svg: loft(A, B, n => shade(n, M)) + fill(pd(B), shade([0,0,1], M)) + ink(pd(B), w*.7) + hullInk([...A, ...B], w), box: bx3([...A, ...B]) };
+}
+const capY = (y0, y1) => facing([0,1,0]) ? y1 + .03 : y0 - .03;
+const barUV = (p, q, wd) => { const d = nrm2([q[0] - p[0], q[1] - p[1]]), n = [-d[1]*wd/2, d[0]*wd/2];
+  return [[p[0] + n[0], p[1] + n[1]], [q[0] + n[0], q[1] + n[1]], [q[0] - n[0], q[1] - n[1]], [p[0] - n[0], p[1] - n[1]]]; };
+const discUV = (c, r, n = 18) => ellUV(c[0], c[1], r, r, n);
+// thin pins and arbors as stroked lines
+function pinSvg(a, b, r, M){
+  const A = P(...a), B = P(...b), d = `M${f(A[0])} ${f(A[1])}L${f(B[0])} ${f(B[1])}`, o = f(-r*.35);
+  return `<path d="${d}" stroke="${INK}" stroke-width="${f(2*r + .9)}" fill="none" stroke-linecap="round"/><path d="${d}" stroke="${M.m}" stroke-width="${f(2*r - .2)}" fill="none" stroke-linecap="round"/>`
+    + `<path d="${d}" transform="translate(0 ${o})" stroke="${M.l}" stroke-width="${f(r*.55)}" fill="none"/>`;
+}
+const yPin = (c, y0, y1, r, M) => ({ box:[[c[0] - r, y0, c[1] - r], [c[0] + r, y1, c[1] + r]], svg: pinSvg([c[0], y0, c[1]], [c[0], y1, c[1]], r, M) });
+const zPin = (x, y, z0, z1, r, M) => ({ box:[[x - r, y - r, z0], [x + r, y + r, z1]], svg: pinSvg([x, y, z0], [x, y, z1], r, M) });
+function yRod(c, y0, y1, r, M){
+  const cuts = [y0, ...YS.filter(v => v > y0 + 1e-6 && v < y1 - 1e-6), y1], out = [];
+  for (let i = 0; i < cuts.length - 1; i++) out.push(yPin(c, cuts[i], cuts[i+1], r, M));
+  return out;
+}
+const gearPts = (c, R, n, a, td) => { const o = [], w = Math.PI/n;
+  for (let i = 0; i < n; i++){ const t = a + i/n*2*Math.PI; for (const [da, r] of [[-w*.5, R - td], [-w*.22, R], [w*.22, R], [w*.5, R - td]]) o.push([c[0] + r*Math.cos(t + da), c[1] + r*Math.sin(t + da)]); }
+  return o; };
+const sawPts = (c, R, n, a, td) => { const o = [], p = 2*Math.PI/n;
+  for (let i = 0; i < n; i++){ const t = a + i*p; o.push([c[0] + (R - td)*Math.cos(t), c[1] + (R - td)*Math.sin(t)], [c[0] + R*Math.cos(t + p*.9), c[1] + R*Math.sin(t + p*.9)]); }
+  return o; };
+function wheel(prof, c, R, y0, y1, M, holes = 0, a = 0){
+  const A = on(PY(y0), prof), B = on(PY(y1), prof), up = facing([0,1,0]), cn = up ? [0,1,0] : [0,-1,0], cap = up ? B : A, yy = capY(y0, y1);
+  let s = loft(A, B, n => toneI(n, M)) + fill(pd(cap), toneI(cn, M)) + ink(pd(cap), .5);
+  for (let i = 0; i < holes; i++){ const h = polar(c, R*.56, a*180/Math.PI + 45 + i*360/holes); s += shape(on(PY(yy), discUV(h, R*.17, 12)), mix(M.d, '#2a2420', .35), .4); }
+  s += shape(on(PY(yy), discUV(c, Math.max(.9, R*.2), 12)), M.m, .45);
+  return { box:[[c[0] - R, y0, c[1] - R], [c[0] + R, y1, c[1] + R]], svg: s + hullInk([...A, ...B], .8) };
+}
+
+/* ---------- state helpers ---------- */
+const springW = st => Math.max(0, (st.bar - st.a1)/(2*Math.PI));      // turns stored in the mainspring
+const lidDeg = st => LID_MAX*ease(clamp01(st.lid));
+const isPlaying = st => lidDeg(st) > 15 && springW(st) > 1e-4;
+const stopAng = st => -15*Math.PI/180*clamp01(lidDeg(st)/20);           // 0 = tip in the fly, -15 deg = clear
+const ARM1 = [SPV[0] - 4, SPV[1] + 2], ARM2 = [SPV[0] + 7, SPV[1] + 15];
+const pinRise = st => rot2(ARM1, SPV, stopAng(st))[1] - ARM1[1];         // the lid stop pin rides on the lever's short arm
+const leanAng = st => 78*Math.PI/180*(1 - clamp01(lidDeg(st)/40));       // the closed lid bends the dancer flat
+const lidW = st => { const th = lidDeg(st)*Math.PI/180, c = Math.cos(th), s = Math.sin(th);
+  return (u, y, w) => [u*c - w*s, y, CH + u*s + w*c]; };                  // lid-local (u from the hinge, y, w up) -> case
+
+/* ---------- the lid ---------- */
+function lidSvg(st, m){
+  const th = lidDeg(st)*Math.PI/180, c = Math.cos(th), s = Math.sin(th), Lw = lidW(st);
+  const nT = [-s, 0, c], nB = [s, 0, -c], nF = [c, 0, s], nK = [-c, 0, -s];
+  const Q = pts => pts.map(p => Lw(...p)), plane = w => ([u, y]) => Lw(u, y, w);
+  const faces = [
+    [nK, [[0,0,0],[0,CW,0],[0,CW,LT],[0,0,LT]]], [[0,-1,0], [[0,0,0],[CD,0,0],[CD,0,LT],[0,0,LT]]],
+    [[0,1,0], [[0,CW,0],[CD,CW,0],[CD,CW,LT],[0,CW,LT]]], [nF, [[CD,0,0],[CD,CW,0],[CD,CW,LT],[CD,0,LT]]],
+    [nB, [[0,0,0],[CD,0,0],[CD,CW,0],[0,CW,0]]], [nT, [[0,0,LT],[CD,0,LT],[CD,CW,LT],[0,CW,LT]]] ];
+  let out = '';
+  for (const [n, q] of faces){ if (!facing(n)) continue;
+    out += shape(Q(q), tone(n, m), 1.3);
+    if (n === nT){ const P2 = plane(LT + .05);
+      out += ink(pd(on(P2, rectUV(5, 5, CD - 5, CW - 5))), .7);
+      out += shape(on(P2, ellUV(CD/2, CW/2, 26, 40, 32)), mix(m.l, '#ffffff', .4), 1);                      // inlaid oval
+      for (let i = 0; i < 6; i++){ const a = i*60*Math.PI/180, cx = CD/2 + 4.2*Math.cos(a), cy = CW/2 + 4.2*Math.sin(a);   // a marquetry rose
+        out += shape(on(P2, ellUV(cx, cy, 3.6, 3.6, 12)), '#d4524a', .6); }
+      out += shape(on(P2, ellUV(CD/2, CW/2, 3.4, 3.4, 12)), '#a8322f', .6);
+      for (const [du, dy] of [[-9, -12], [9, 12], [10, -11], [-10, 11]]) out += shape(on(P2, ellUV(CD/2 + du, CW/2 + dy, 3, 5.5, 12).map(([u, y]) => [CD/2 + (u - CD/2), y])), '#6f9a52', .6);
+    }
+    if (n === nB){ const P2 = plane(-.05), P3 = plane(-.1);
+      out += fill(pd(on(P2, rectUV(3, 3, CD - 3, CW - 3))), toneI(nB, VELV));
+      out += shape(on(P2, rectUV(9, 19, CD - 9, CW - 19)), BRASS.m, .9);
+      out += shape(on(P3, rectUV(10.5, 20.5, CD - 10.5, CW - 20.5)), '#dbe7eb', .8);                         // the mirror
+      for (const [a, b] of [[22, 34], [38, 44]]) out += fill(pd(on(P3, [[16, a], [16, b], [CD - 16, b - 24], [CD - 16, a - 24]].map(([u, y]) => [u, y + 30]))), '#ffffff', 'opacity=".38"');
+    }
+    if (n === nF){ out += shape(on(([y, w]) => Lw(CD + .05, y, w), rectUV(CW/2 - 4, 2, CW/2 + 4, 7)), BRASS.m, .8); }
+    if (n[1] !== 0){ const yy = n[1] > 0 ? CW + .05 : -.05;
+      let g = ''; for (const w of [4, 9]) g += pd([4, 20, 36, 52, 68, 76].map((u, i) => Lw(u, yy, w + .6*Math.sin(i*1.7 + w))), false);
+      out += `<path d="${g}" fill="none" stroke="${INK}" stroke-width=".6" opacity=".35"/>`; }
+  }
+  const corners = []; for (const u of [0, CD]) for (const y of [0, CW]) for (const w of [0, LT]) corners.push(Lw(u, y, w));
+  out += hullInk(corners, 2.4);
+  if (facing([-1,0,0])) for (const [y0, y1] of [[20, 32], [92, 104]]) out += rod([0, y0, CH], [0, y1, CH], 1.3, BRASS, toneI, .8, 1.3, 12);   // hinge knuckles
+  return out;
+}
+
+/* ---------- the case body (contents: the well's turntable, dancer, stop pin; drawn after the far walls) ---------- */
+function bodySvg(st, m, contents){
+  const FR = facing([1,0,0]), BK = facing([-1,0,0]), LF = facing([0,1,0]), RT = facing([0,-1,0]), open = lidDeg(st) > .3;
+  let s = '';
+  if (open){
+    s += shape(on(PZ(FZ1), rectUV(WT, WT, CD - WT, CW - WT)), VELV.m, .9);
+    let nap = ''; for (let x = 12; x < CD - WT; x += 9) nap += pd([[x, WT + 2, FZ1 + .03], [x, CW - WT - 2, FZ1 + .03]], false);
+    s += `<path d="${nap}" fill="none" stroke="${VELV.d}" stroke-width=".5" opacity=".5"/>`;
+    s += shape(on(PZ(FZ1 + .05), discUV([DX, DY], 1.6, 12)), '#2a2420', .4);
+    const W = [[[1,0,0], [[WT,WT,FZ1],[WT,CW-WT,FZ1],[WT,CW-WT,CH],[WT,WT,CH]]], [[-1,0,0], [[CD-WT,WT,FZ1],[CD-WT,CW-WT,FZ1],[CD-WT,CW-WT,CH],[CD-WT,WT,CH]]],
+      [[0,1,0], [[WT,WT,FZ1],[CD-WT,WT,FZ1],[CD-WT,WT,CH],[WT,WT,CH]]], [[0,-1,0], [[WT,CW-WT,FZ1],[CD-WT,CW-WT,FZ1],[CD-WT,CW-WT,CH],[WT,CW-WT,CH]]]];
+    for (const [n, q] of W) if (facing(n)) s += shape(q, toneI(n, VELV), .8);
+    s += contents;
+  }
+  const grain = (pts) => `<path d="${pts}" fill="none" stroke="${INK}" stroke-width=".6" opacity=".35"/>`;
+  if (FR){ s += shape([[CD,0,0],[CD,CW,0],[CD,CW,CH],[CD,0,CH]], tone([1,0,0], m), 1.3);
+    let g = ''; for (const z of [12, 24, 34]) g += pd([0, 22, 44, 66, 88, 110, 124].map((y, i) => [CD + .05, y, z + 1.2*Math.sin(i*1.3 + z)]), false);
+    s += grain(g) + line([[CD + .05, 0, 5], [CD + .05, CW, 5]], .8);
+    s += shape(on(PX(CD + .05), rrUV(CW/2 - 4, CH - 12, CW/2 + 4, CH - 3, 3)), BRASS.m, .8)                    // escutcheon and keyhole
+      + shape(on(PX(CD + .1), [...ellUV(CW/2, CH - 6, 1.1, 1.1, 10)]), '#2a2420', .3) + fill(pd(on(PX(CD + .1), rectUV(CW/2 - .5, CH - 10, CW/2 + .5, CH - 6))), '#2a2420'); }
+  if (BK){ s += shape([[0,0,0],[0,CW,0],[0,CW,CH],[0,0,CH]], tone([-1,0,0], m), 1.3);
+    let g = ''; for (const z of [14, 30]) g += pd([0, 30, 62, 94, 124].map((y, i) => [-.05, y, z + 1.2*Math.sin(i*1.1 + z)]), false);
+    s += grain(g) + line([[-.05, 0, 5], [-.05, CW, 5]], .8);
+    for (const [y0, y1] of [[20, 32], [92, 104]]){ s += shape(on(PX(-.08), rectUV(y0, CH - 7, y1, CH)), BRASS.m, .7);
+      for (const y of [y0 + 3, y1 - 3]) s += shape(on(PX(-.12), discUV([y, CH - 4], .7, 8)), BRASS.d, .3); } }
+  if (LF){ s += shape([[0,CW,0],[CD,CW,0],[CD,CW,CH],[0,CW,CH]], tone([0,1,0], m), 1.3);
+    let g = ''; for (const z of [12, 38]) g += pd([0, 20, 40, 60, 80].map((x, i) => [x, CW + .05, z + 1.2*Math.sin(i*1.5 + z)]), false);
+    s += grain(g) + line([[0, CW + .05, 5], [CD, CW + .05, 5]], .8);
+    s += shape(on(PY(CW + .05), discUV(A1, 3.2, 18)), BRASS.m, .8) + shape(on(PY(CW + .1), discUV(A1, 1.7, 14)), '#2a2420', .4);
+    s += txY(CD/2 + 14, CW + .05, 9.5, 'WIND', 3.2, INK, 800); }
+  if (RT){ s += shape([[0,0,0],[CD,0,0],[CD,0,CH],[0,0,CH]], tone([0,-1,0], m), 1.3);
+    let g = ''; for (const z of [16, 34]) g += pd([0, 20, 40, 60, 80].map((x, i) => [x, -.05, z + 1.2*Math.sin(i*1.5 + z)]), false);
+    s += grain(g) + line([[0, -.05, 5], [CD, -.05, 5]], .8); }
+  if (open){ const top = tone([0,0,1], m);   // the rim: the walls' top edges
+    for (const r of [[0, 0, CD, WT], [0, CW - WT, CD, CW], [0, WT, WT, CW - WT], [CD - WT, WT, CD, CW - WT]]) s += face(pd(on(PZ(CH), rectUV(...r))), top);
+    s += ink(pd(on(PZ(CH), rectUV(0, 0, CD, CW))), 1.3) + ink(pd(on(PZ(CH), rectUV(WT, WT, CD - WT, CW - WT))), 1.1); }
+  const corners = []; for (const x of [0, CD]) for (const y of [0, CW]) for (const z of [0, CH]) corners.push([x, y, z]);
+  return s + hullInk(corners, 2.6);
+}
+
+/* ---------- the dancer, her turntable and the stop pin in the well ---------- */
+function dancerPt(st, u, v, h){
+  const psi = st.cyl*CROWN_N/DP_N + .6, cp = Math.cos(psi), sp = Math.sin(psi), x = u*cp - v*sp, y = u*sp + v*cp;
+  if (h <= SPR_H) return [DX + x, DY + y, TT + h];
+  const lam = leanAng(st), cl = Math.cos(lam), sl = Math.sin(lam), X = x*DS, Y = y*DS, dz = (h - SPR_H)*DS;   // bends back on her spring stem
+  return [DX + X*cl - dz*sl, DY + Y, TT + SPR_H + X*sl + dz*cl];
+}
+function wellItems(st){
+  const items = [], D = (u, v, h) => dancerPt(st, u, v, h);
+  const limb = (pts, r0, M) => { const r = r0*DS; let s = ''; for (let i = 0; i < pts.length - 1; i++) s += pinSvg(pts[i], pts[i+1], r, M); items.push({ box: bx3(pts, r + .1), svg: s }); };
+  // turntable on the spindle, a dot on its rim shows it turning
+  { const psi = st.cyl*CROWN_N/DP_N, mk = [DX + 3.4*Math.cos(psi), DY + 3.4*Math.sin(psi)];
+    items.push({ box:[[DX - 4.5, DY - 4.5, FZ1], [DX + 4.5, DY + 4.5, TT]], svg: cyl(DX, DY, FZ1, TT, 4.5, BRASS, toneI, .9, 22) + shape(on(PZ(TT + .03), discUV(mk, .7, 8)), BRASS.d, .3) }); }
+  // spring stem (a little coil) and the dancer on it
+  { const pts = []; for (let i = 0; i <= 18; i++){ const a = i/18*6*Math.PI; pts.push(D(.7*Math.cos(a), .7*Math.sin(a), i/18*SPR_H)); }
+    items.push({ box: bx3(pts, .3), svg: `<path d="${pd(pts, false)}" fill="none" stroke="${INK}" stroke-width=".9"/><path d="${pd(pts, false)}" fill="none" stroke="#e8eef0" stroke-width=".35"/>` }); }
+  limb([D(0, 0, SPR_H), D(0, .2, 11.4)], .45, SKIN);                                   // standing leg, en pointe
+  limb([D(0, .6, 11.2), D(2.7, 1.1, 8.6), D(.3, .3, 7.6)], .42, SKIN);                // the other leg in retire
+  { const a = D(0, 0, 10.9), b = D(0, 0, 12.3);
+    items.push({ box: bx3([D(5.4, 0, 11.6), D(-5.4, 0, 11.6), D(0, 5.4, 11.6), D(0, -5.4, 11.6), a, b], .6), svg: rod(a, b, 5.4*DS, PINK, toneI, .9, 4.7*DS, 22) }); }   // tutu
+  { const a = D(0, 0, 12.3), b = D(0, 0, 17.2); items.push({ box: bx3([a, b], 1.4), svg: rod(a, b, 1.1*DS, BODICE, toneI, .8, 1.35*DS, 12) }); }
+  limb([D(0, 0, 17.2), D(0, 0, 18.3)], .45, SKIN);
+  for (const sg of [-1, 1]) limb([D(0, sg*1.3, 16.8), D(.5, sg*3.1, 20.2), D(.4, sg*1.1, 22.6)], .34, SKIN);   // arms en haut
+  { const hc = D(0, 0, 19.6), bn = D(-.6, 0, 21.1), H = P(...hc), Bn = P(...bn), k = 1.2247;
+    items.push({ box: bx3([hc, bn], 2.7), svg: `<circle cx="${f(Bn[0])}" cy="${f(Bn[1])}" r="${f(.85*k*DS)}" fill="#6b4428" stroke="${INK}" stroke-width=".6"/>`
+      + `<circle cx="${f(H[0])}" cy="${f(H[1])}" r="${f(1.6*k*DS)}" fill="${SKIN.l}" stroke="${INK}" stroke-width=".8"/>` }); }
+  // lid stop pin in its sleeve in the back corner
+  { const rise = pinRise(st);
+    items.push({ box:[[PLX - 1.6, PLY - 1.6, FZ1], [PLX + 1.6, PLY + 1.6, 47]], svg: cyl(PLX, PLY, FZ1, 47, 1.6, BRASS, toneI, .8, 14) + shape(on(PZ(47.03), discUV([PLX, PLY], .9, 10)), '#2a2420', .3) });
+    items.push({ box:[[PLX - 1, PLY - 1, 47], [PLX + 1, PLY + 1, CH + rise]], svg: pinSvg([PLX, PLY, 47], [PLX, PLY, CH + rise - .6], .55, STEEL) + cyl(PLX, PLY, CH + rise - .6, CH + rise, 1, STEEL, toneI, .6, 10) }); }
+  return items;
+}
+
+/* ---------- see-through: the movement ---------- */
+let MECH_ITEMS = [];
+function mech(st, m){
+  const parts = [], put = it => parts.push(it), add = arr => arr.forEach(put);
+  const lbl = [], Lb = (at, text, on = false) => lbl.push({ at, text, on });
+  const winding = st.windQ > 0, play = isPlaying(st), w = springW(st);
+  const ca = st.cyl, bar = st.bar, ai = -ca*R_CG/r_IP;
+  // bedplate on the case bottom, with its four screws
+  { let s = box(7, 7, BZ, 74, 117, BZ + 2, PLATEM, toneI, .8);
+    for (const [x, y] of [[9.5, 9.5], [71.5, 9.5], [9.5, 114.5], [71.5, 114.5]]) s += shape(on(PZ(BZ + 2.05), discUV([x, y], 1.2, 10)), STEEL.m, .5) + line([[x - .8, y, BZ + 2.1], [x + .8, y, BZ + 2.1]], .5);
+    put({ box:[[7, 7, BZ], [74, 117, BZ + 2]], svg: s }); }
+  Lb([74, 100, BZ + 2], 'BEDPLATE'); Lb([71.5, 114.5, BZ + 2], 'BEDPLATE SCREW');
+  // the steel comb on its base: 18 teeth, tips along the cylinder, lead weights under the bass
+  put({ box:[[69, 24.5, BZ + 2], [74, 79.5, CZ0]], svg: box(69, 24.5, BZ + 2, 74, 79.5, CZ0, PLATEM, toneI, .8) });
+  Lb([74, 40, 12], 'COMB BASE');
+  { const prof = [[TIPX + toothLen(0), 24.5], [73.5, 24.5], [73.5, 79.5], [TIPX + toothLen(NT - 1), 79.5]], it = prismZ(prof, CZ0, CZ1, COMBM, toneI, .9);
+    for (const y of [31, 52, 73]) it.svg += shape(on(PZ(CZ1 + .05), discUV([71.6, y], 1.1, 10)), STEEL.d, .5) + line([[70.9, y, CZ1 + .1], [72.3, y, CZ1 + .1]], .5);
+    put(it); }
+  Lb([69, 60, CZ1], 'STEEL COMB', play); Lb([71.6, 73, CZ1], 'COMB SCREW');
+  for (let i = 0; i < NT; i++){ const t = st.tv[i], dz = t < 1.5 ? .7*Math.exp(-t*5)*Math.sin(t*90) : 0, y = toothY(i), rx = TIPX + toothLen(i) + .6;
+    const it = prismY([[rx, CZ0], [TIPX, CZ0 + dz], [TIPX, CZ1 + dz], [rx, CZ1]], y - 1.15, y + 1.15, t < .3 ? RINGC : COMBM, toneI, .6);
+    put(it);
+    if (i < 4) put({ box:[[TIPX + 2.5, y - 1.1, CZ0 - 1.8], [TIPX + 6.5, y + 1.1, CZ0]], svg: box(TIPX + 2.5, y - 1.1, CZ0 - 1.8, TIPX + 6.5, y + 1.1, CZ0, LEAD, toneI, .5) });
+  }
+  Lb([TIPX + 8, toothY(0), CZ1], 'BASS TOOTH', st.tv[0] < .4); Lb([TIPX + 3, toothY(NT - 1), CZ1], 'TREBLE TOOTH', st.tv[NT - 1] < .4);
+  Lb([TIPX + 4.5, toothY(2), CZ0 - 1.8], 'LEAD WEIGHT');
+  // pinned cylinder: pins on the far side first, the drum, then the near pins
+  { let back = '', front = '', anchor = null;
+    for (const p of PINS){ const ph = ca + p.a, n = [Math.cos(ph), 0, Math.sin(ph)], y = toothY(p.i);
+      const a = [CY[0] + CYR*n[0], y, CY[1] + CYR*n[2]], b = [CY[0] + (CYR + .9)*n[0], y, CY[1] + (CYR + .9)*n[2]], sv = pinSvg(a, b, .3, STEEL);
+      if (facing(n)){ front += sv; if (!anchor && n[2] > .5 && n[0] > .2) anchor = b; } else back += sv; }
+    put({ box:[[CY[0] - CYR - .9, CYL0, CY[1] - CYR - .9], [TIPX, CYL1, CY[1] + CYR + .9]], svg: back + rod([CY[0], CYL0, CY[1]], [CY[0], CYL1, CY[1]], CYR, BRASS, toneI, 1, CYR, 30) + front });
+    Lb([CY[0] - 2, 40, CY[1] + CYR], 'PINNED CYLINDER', play); if (anchor) Lb(anchor, 'STEEL PIN', play); }
+  // cylinder arbor and its bridges
+  add(yRod(CY, 18.5, CYL0, .9, STEEL)); add(yRod(CY, CYL1, 89.5, .9, STEEL));
+  { const it = prismY(rrUV(AI[0] - 3, BZ + 2, CY[0] + 3, CY[1] + 3, 2), 21.5, 23.5, BRASS, toneI, .9), yy = capY(21.5, 23.5);
+    for (const c of [AI, CY]) it.svg += shape(on(PY(yy), discUV(c, 1.3, 10)), '#2a2420', .3);
+    put(it); }
+  Lb([AI[0] + 3, 23.5, CY[1] + 1], 'TRAIN BRIDGE');
+  { const it = prismY(rrUV(CY[0] - 3.5, BZ + 2, CY[0] + 3.5, 28.5, 2), 80.5, 82.5, BRASS, toneI, .9); put(it); }
+  Lb([CY[0] + 3.5, 82.5, 10], 'CYLINDER BRIDGE');
+  put({ box:[[44.2, 82.5, 27.5], [47.8, 87.2, 28.5]], svg: box(44.2, 82.5, 27.5, 47.8, 87.2, 28.5, BRASS, toneI, .7) });
+  // the governor train at the treble end: cylinder wheel -> intermediate pinion / wheel -> worm -> fly
+  put(wheel(gearPts(CY, R_CG, 48, ca, .7), CY, R_CG, 19, 20, BRASS, 5, ca));
+  { const p = polar(CY, R_CG - .5, 300); Lb([p[0], 19, p[1]], 'CYLINDER WHEEL', play); }
+  put(wheel(gearPts(AI, r_IP, 10, ai, .6), AI, r_IP, 19, 20, BRASS));
+  { const p = polar(AI, 2.4, 100); Lb([p[0], 20, p[1]], 'INTERMEDIATE PINION', play); }
+  put(wheel(gearPts(AI, R_IW, IW_N, ai, .6), AI, R_IW, 14, 15, BRASS, 4, ai));
+  { const p = polar(AI, R_IW - .6, 240); Lb([p[0], 14, p[1]], 'INTERMEDIATE WHEEL', play); }
+  add(yRod(AI, 11, 14, .6, STEEL)); add(yRod(AI, 15, 19, .6, STEEL)); add(yRod(AI, 20, 23.5, .6, STEEL));
+  put(prismY(rrUV(AI[0] - 2, BZ + 2, AI[0] + 2, AI[1] + 2, 1.5), 11, 12, BRASS, toneI, .8));
+  // fly arbor (upright): bottom boss, worm, then the fly under the governor cock
+  put({ box:[[FX - 1.3, FY - 1.3, BZ + 2], [FX + 1.3, FY + 1.3, BZ + 3]], svg: cyl(FX, FY, BZ + 2, BZ + 3, 1.3, BRASS, toneI, .6, 12) });
+  put(zPin(FX, FY, BZ + 3, 15.5, .4, STEEL)); put(zPin(FX, FY, 22.5, 26, .4, STEEL));
+  { let s = cyl(FX, FY, 15.5, 22.5, 1.2, STEEL, toneI, .7, 14); const [h0, h1] = nearHalf(), pitch = 1.15, base = Math.floor((h0*Math.PI/180 - st.fly)/(2*Math.PI));
+    for (let j = -1; j < 7; j++){ const pts = [];
+      for (let q = 0; q <= 10; q++){ const ang = (h0 + (h1 - h0)*q/10)*Math.PI/180, z = 15.5 + pitch*((ang - st.fly)/(2*Math.PI) - base + j);
+        if (z > 15.6 && z < 22.4) pts.push([FX + 1.22*Math.cos(ang), FY + 1.22*Math.sin(ang), z]); }
+      if (pts.length > 1) s += line(pts, .5); }
+    put({ box:[[FX - 1.2, FY - 1.2, 15.5], [FX + 1.2, FY + 1.2, 22.5]], svg: s }); }
+  Lb([FX - 1.2, FY, 18.5], 'WORM', play);
+  { const bl = [];
+    for (const k of [0, Math.PI]){ const a = st.fly + k, d = [Math.cos(a), Math.sin(a)], n0 = [-d[1], d[0], 0], n = facing(n0) ? n0 : n0.map(v => -v);
+      const q = [[FX + .6*d[0], FY + .6*d[1], 26.3], [FX + 4*d[0], FY + 4*d[1], 26.3], [FX + 4*d[0], FY + 4*d[1], 30.3], [FX + .6*d[0], FY + .6*d[1], 30.3]];
+      bl.push({ d: depthOf([FX + 2.3*d[0], FY + 2.3*d[1], 28.3]), svg: shape(q, toneI(n, BRASS), .6), tip: [FX + 4*d[0], FY + 4*d[1], 30.3] }); }
+    bl.sort((a, b) => a.d - b.d);
+    const ax = pinSvg([FX, FY, 26], [FX, FY, 30.6], .4, STEEL) + cyl(FX, FY, 27.4, 29.2, .9, BRASS, toneI, .5, 10);
+    put({ box:[[FX - 4, FY - 4, 26], [FX + 4, FY + 4, 30.6]], svg: bl[0].svg + ax + bl[1].svg });
+    Lb(bl[1].tip, 'FLY (AIR BRAKE)', play); }
+  put({ box:[[FX - 1, 20.5, BZ + 2], [FX + 1, 21.5, 31.6]], svg: box(FX - 1, 20.5, BZ + 2, FX + 1, 21.5, 31.6, BRASS, toneI, .7) });
+  put({ box:[[FX - 1, FY - 1, 30.6], [FX + 1, 20.5, 31.6]], svg: box(FX - 1, FY - 1, 30.6, FX + 1, 20.5, 31.6, BRASS, toneI, .7) });
+  Lb([FX + 1, 21.5, 24], 'GOVERNOR COCK');
+  // stop lever: the short arm under the lid stop pin, the long arm's tip in the fly's path while the lid is shut
+  { const b = stopAng(st), t1 = rot2(ARM1, SPV, b), t2 = rot2(ARM2, SPV, b), stopped = !play;
+    const lv = prismY(barUV(SPV, t1, 1.3), 8, 9, BLUED, toneI, .6), l2 = prismY(barUV(SPV, t2, 1.1), 8, 9, BLUED, toneI, .6), hub = prismY(discUV(SPV, 1.3, 12), 8, 9, BLUED, toneI, .5);
+    put({ box: bx3([[SPV[0] - 5.2, 8, SPV[1] - 1.5], [t2[0] + .7, 9, t2[1] + .7], [t1[0] - .7, 9, t1[1] + 1]]), svg: lv.svg + l2.svg + hub.svg });
+    put(yPin(t2, 9, 11.6, .4, STEEL)); put(yPin(SPV, 7.6, 10.2, .4, STEEL));
+    put({ box:[[13, 9.2, BZ + 2], [15, 10.2, 15.5]], svg: box(13, 9.2, BZ + 2, 15, 10.2, 15.5, BRASS, toneI, .6) });
+    { const s0 = [18, 8.5, BZ + 2.2], mid = rot2([SPV[0] + 2.5, SPV[1] + 5], SPV, b), s1 = [mid[0], 8.5, mid[1]], q = [];
+      for (let i = 0; i <= 14; i++){ const t = i/14; q.push([s0[0] + (s1[0] - s0[0])*t + .7*Math.sin(t*Math.PI*8), 8.5, s0[2] + (s1[2] - s0[2])*t]); }
+      put({ box: bx3(q, .4), svg: `<path d="${pd(q, false)}" fill="none" stroke="${INK}" stroke-width=".9"/><path d="${pd(q, false)}" fill="none" stroke="#e8eef0" stroke-width=".35"/>` }); }
+    const lm = [(SPV[0] + t2[0])/2, (SPV[1] + t2[1])/2]; Lb([lm[0], 9, lm[1]], 'STOP LEVER', stopped && w > 0);
+    Lb([t2[0], 11.6, t2[1]], 'STOP TIP', stopped && w > 0);
+    // lid stop pin: rides on the short arm, up through its spring, the floor board and the sleeve
+    const zb = t1[1] + .6, rise = pinRise(st);
+    put(zPin(PLX, PLY, zb, 26, .55, STEEL)); put(zPin(PLX, PLY, 31, FZ0, .55, STEEL)); put(zPin(PLX, PLY, FZ0, FZ1, .55, STEEL));
+    { const q = []; for (let i = 0; i <= 30; i++){ const a = i/30*10*Math.PI; q.push([PLX + 1.1*Math.cos(a), PLY + 1.1*Math.sin(a), 26 + 5*i/30]); }
+      put({ box:[[PLX - 1.2, PLY - 1.2, 26], [PLX + 1.2, PLY + 1.2, 31]], svg: pinSvg([PLX, PLY, 26], [PLX, PLY, 31], .55, STEEL) + `<path d="${pd(q, false)}" fill="none" stroke="${INK}" stroke-width=".8"/><path d="${pd(q, false)}" fill="none" stroke="#e8eef0" stroke-width=".3"/>` }); }
+    Lb([PLX + 1.1, PLY, 28.5], 'PIN SPRING', !stopped); Lb([PLX, PLY, CH + rise], 'LID STOP PIN', lidDeg(st) < 20 && lidDeg(st) > 0); }
+  // the dancer drive: crown wheel on the cylinder arbor -> upright pinion -> spindle up through the floor
+  { const it = prismY(discUV(CY, 6.5, 26), 83.5, 84.5, BRASS, toneI, .7), rimA = on(PY(84.5), discUV(CY, 6.5, 26)), rimB = on(PY(85.3), discUV(CY, 6.5, 26));
+    let s = it.svg + loft(rimA, rimB, n => toneI(n, BRASS)) + hullInk([...rimA, ...rimB], .6);
+    const yy = facing([0,1,0]) ? 85.33 : 83.47; s += shape(on(PY(yy), discUV(CY, 4.9, 20)), BRASS.d, .4);
+    for (let i = 0; i < CROWN_N; i++){ const a = ca + i*2*Math.PI/CROWN_N; s += line([[CY[0] + 5*Math.cos(a), yy, CY[1] + 5*Math.sin(a)], [CY[0] + 6.5*Math.cos(a), yy, CY[1] + 6.5*Math.sin(a)]], .35); }
+    put({ box:[[CY[0] - 6.5, 83.5, CY[1] - 6.5], [CY[0] + 6.5, 85.3, CY[1] + 6.5]], svg: s }); }
+  { const p = polar(CY, 6.3, 330); Lb([p[0], 85.3, p[1]], 'CROWN WHEEL', play); }
+  { const psi = ca*CROWN_N/DP_N, pp = []; let s = cyl(DX, DY, 23.8, 26.2, 1.25, BRASS, toneI, .6, 12);
+    for (let i = 0; i < DP_N; i++){ const a = psi + i*2*Math.PI/DP_N; if (facing([Math.cos(a), Math.sin(a), 0])) s += line([[DX + 1.27*Math.cos(a), DY + 1.27*Math.sin(a), 23.9], [DX + 1.27*Math.cos(a), DY + 1.27*Math.sin(a), 26.1]], .4); }
+    put({ box:[[DX - 1.25, DY - 1.25, 23.8], [DX + 1.25, DY + 1.25, 26.2]], svg: s }); }
+  Lb([DX + 1.25, DY, 24.6], 'DANCER PINION', play);
+  for (const [a, b] of [[26.2, 27.5], [27.5, 28.5], [28.5, FZ0], [FZ0, FZ1]]) put(zPin(DX, DY, a, b, .5, STEEL));
+  Lb([DX, DY, 30.5], 'DANCER SPINDLE', play);
+  // power at the key end: cylinder pinion <- great wheel on the spring barrel; barrel bridges; ratchet and click
+  put(wheel(gearPts(CY, r_CP, 10, ca, .6), CY, r_CP, 88, 89, BRASS));
+  { const p = polar(CY, 3, 300); Lb([p[0], 89, p[1]], 'CYLINDER PINION', play); }
+  put(wheel(gearPts(A1, R_BW, 40, bar, .6), A1, R_BW, 88, 89, BRASS, 0, bar));
+  { const p = polar(A1, R_BW - .4, 230); Lb([p[0], 88, p[1]], 'GREAT WHEEL', play); }
+  put(barrelItem(st));
+  { const p = polar(A1, BAR_R, 300); Lb([p[0], 100, p[1]], 'SPRING BARREL', play); }
+  { const sp = polar(A1, 3.4 + (1 - Math.min(1, w/WMAX))*2.6, 150); Lb([sp[0], 97, sp[1]], 'MAINSPRING', winding || play); }
+  put(prismY(rrUV(A1[0] - 3, BZ + 2, A1[0] + 3, A1[1] + 3, 2), 85, 87, BRASS, toneI, .8));
+  add(yRod(A1, 85, BAR_Y0, 1, STEEL)); add(yRod(A1, BAR_Y1, 124, 1, STEEL));
+  Lb([A1[0], 115, A1[1]], 'WINDING ARBOR', winding);
+  put(wheel(sawPts(A1, 5, 14, st.a1, 1), A1, 5, 107, 108, STEEL));
+  { const p = polar(A1, 4.6, 250); Lb([p[0], 108, p[1]], 'RATCHET WHEEL', winding); }
+  { const it = prismY(rrUV(A1[0] - 9, BZ + 2, A1[0] + 5, A1[1] + 8, 3), 108.5, 110.5, BRASS, toneI, .9); put(it); }
+  Lb([A1[0] - 8, 110.5, BZ + 6], 'BARREL BRIDGE');
+  { const per = 2*Math.PI/14, rel = ((-st.a1 % per) + per) % per / per, lift = winding ? .9*rel : 0;
+    const cp = polar(A1, 7.6, 118), tip = polar(A1, 5.0 + lift, 152);
+    const ck = prismY(barUV(cp, tip, 1.1), 107, 108, STEEL, toneI, .6); ck.svg += pinSvg([cp[0], 107, cp[1]], [cp[0], 108.5, cp[1]], .45, STEEL); put(ck);
+    const s0 = polar(A1, 8.4, 95), s1 = [(cp[0] + tip[0])/2, (cp[1] + tip[1])/2], mid = [(s0[0] + s1[0])/2 + .8, (s0[1] + s1[1])/2 + .8], q = [s0, mid, s1].map(p => [p[0], 107.5, p[1]]);
+    put({ box: bx3(q, .5), svg: `<path d="${pd(q, false)}" fill="none" stroke="${INK}" stroke-width="1.1" stroke-linecap="round"/><path d="${pd(q, false)}" fill="none" stroke="#e8eef0" stroke-width=".45" stroke-linecap="round"/>` });
+    Lb([tip[0], 108, tip[1]], 'CLICK', winding); Lb([mid[0], 107.5, mid[1]], 'CLICK SPRING', winding); }
+  // floor board between the well and the movement (kept faint), then the well's contents
+  put({ box:[[WT, WT, FZ0], [CD - WT, CW - WT, FZ1]], svg: `<g opacity=".3">${box(WT, WT, FZ0, CD - WT, CW - WT, FZ1, FLOORM, toneI, .8)}</g>` });
+  add(wellItems(st));
+  Lb([DX + 4.5, DY, TT - .7], 'TURNTABLE', play);
+  Lb(dancerPt(st, .7, 0, 1.5), 'DANCER SPRING', play);
+  Lb(dancerPt(st, 1.2, 0, 15), 'DANCER', play);
+  // key outside
+  add(keyItems(st));
+  Lb([A1[0], 130.5, A1[1] + 5.5], 'KEY', winding);
+  if (lidDeg(st) > 30 && facing([Math.sin(lidDeg(st)*Math.PI/180), 0, -Math.cos(lidDeg(st)*Math.PI/180)])) Lb(lidW(st)(CD/2, CW/2 + 20, 0), 'MIRROR');
+  const RANK = ['STEEL COMB', 'PINNED CYLINDER', 'STEEL PIN', 'MAINSPRING', 'SPRING BARREL', 'FLY (AIR BRAKE)', 'KEY', 'STOP LEVER', 'LID STOP PIN',
+    'DANCER', 'BASS TOOTH', 'TREBLE TOOTH', 'LEAD WEIGHT', 'GREAT WHEEL', 'CYLINDER PINION', 'WORM', 'CYLINDER WHEEL', 'INTERMEDIATE WHEEL',
+    'INTERMEDIATE PINION', 'RATCHET WHEEL', 'CLICK', 'WINDING ARBOR', 'CROWN WHEEL', 'DANCER PINION', 'DANCER SPINDLE', 'TURNTABLE',
+    'DANCER SPRING', 'STOP TIP', 'PIN SPRING', 'GOVERNOR COCK', 'BARREL BRIDGE', 'CYLINDER BRIDGE', 'TRAIN BRIDGE', 'COMB BASE', 'BEDPLATE',
+    'CLICK SPRING', 'COMB SCREW', 'BEDPLATE SCREW', 'MIRROR'];
+  MECH_ITEMS = lbl.sort((a, b) => (RANK.indexOf(a.text) + 99) % 99 - (RANK.indexOf(b.text) + 99) % 99);
+  return byDepth(parts);
+}
+function barrelItem(st){
+  const up = facing([0,1,0]), near = up ? BAR_Y1 : BAR_Y0, far = up ? BAR_Y0 : BAR_Y1, ring = y => on(PY(y), discUV(A1, BAR_R, 28));
+  let s = fill(pd(ring(far)), mix(BRASS.d, '#2a2420', .25)) + ink(pd(ring(far)), .6);
+  s += springSvg(st);
+  s += `<g opacity=".4">${loft(ring(BAR_Y0), ring(BAR_Y1), n => toneI(n, BRASS))}${fill(pd(ring(near)), toneI(up ? [0,1,0] : [0,-1,0], BRASS))}</g>`;
+  s += ink(pd(ring(near)), .7) + hullInk([...ring(BAR_Y0), ...ring(BAR_Y1)], 1);
+  const hk = polar(A1, BAR_R - .3, st.bar*180/Math.PI); s += pinSvg([hk[0], BAR_Y0 + 1.5, hk[1]], [hk[0], BAR_Y1 - 1.5, hk[1]], .35, STEEL);   // the hook the spring's outer end catches on
+  return { box:[[A1[0] - BAR_R, BAR_Y0, A1[1] - BAR_R], [A1[0] + BAR_R, BAR_Y1, A1[1] + BAR_R]], svg: s };
+}
+// mainspring: a flat steel spiral, inner end on the arbor (angle a1), outer end on the barrel's hook (angle bar)
+function springSvg(st){
+  const w = springW(st), turns = 5 + w, r0 = 1.9, R = 7.2 - Math.min(1, w/WMAX)*3, ya = BAR_Y0 + 1.5, yb = BAR_Y1 - 1.5, n = Math.round(turns*14), pts = [];
+  for (let i = 0; i <= n; i++){ const t = i/n, th = st.a1 + t*turns*2*Math.PI, r = r0 + (R - r0)*Math.pow(t, .9); pts.push([A1[0] + r*Math.cos(th), A1[1] + r*Math.sin(th), th]); }
+  const SPR = (st.windQ > 0 || isPlaying(st)) ? matOf('#f4a93a') : BLUED, q = [];
+  for (let i = 0; i < pts.length - 1; i++){ const a = pts[i], b = pts[i+1], nr = [Math.cos(a[2]), 0, Math.sin(a[2])];
+    q.push({ d: depthOf([(a[0] + b[0])/2, (ya + yb)/2, (a[1] + b[1])/2]), svg: face(pd([[a[0], ya, a[1]], [b[0], ya, b[1]], [b[0], yb, b[1]], [a[0], yb, a[1]]]), toneI(vis(nr) ? nr : nr.map(v => -v), SPR)) }); }
+  q.sort((u, v) => u.d - v.d);
+  const ny = facing([0,1,0]) ? yb : ya, fy = ny === yb ? ya : yb;
+  let s = rod([A1[0], ya, A1[1]], [A1[0], yb, A1[1]], 1.4, STEEL, toneI, .6, 1.4, 14);
+  s += `<path d="${pd(pts.map(p => [p[0], fy, p[1]]), false)}" fill="none" stroke="${INK}" stroke-width=".35" opacity=".6"/>` + q.map(x => x.svg).join('');
+  return s + `<path d="${pd(pts.map(p => [p[0], ny, p[1]]), false)}" fill="none" stroke="${INK}" stroke-width=".55"/>`;
+}
+// key: shaft out of the bushing in the left wall, then the butterfly bow (turns with the winding arbor)
+function keyItems(st){
+  const out = [{ box:[[A1[0] - 1.2, CW, A1[1] - 1.2], [A1[0] + 1.2, CW + 4, A1[1] + 1.2]], svg: rod([A1[0], CW, A1[1]], [A1[0], CW + 4, A1[1]], 1.2, BRASS, toneI, .9, 1.2, 12) }];
+  const a = st.a1, kp = (u, v) => rot2([A1[0] + u, A1[1] + v], A1, a), y0 = CW + 4, y1 = CW + 6.5;
+  const lobe = sg => ellUV(0, 0, 3.6, 3.1, 18).map(([u, v]) => kp(sg*5 + u, v));
+  const parts = [prismY([kp(-2.2, -1.4), kp(2.2, -1.4), kp(2.2, 1.4), kp(-2.2, 1.4)], y0, y1, BRASS, toneI, .9), prismY(lobe(-1), y0, y1, BRASS, toneI, 1), prismY(lobe(1), y0, y1, BRASS, toneI, 1)];
+  let svg = parts.map(p => p.svg).join(''); const yy = capY(y0, y1);
+  for (const sg of [-1, 1]) svg += shape(on(PY(yy), discUV(kp(sg*5, 0), 1.1, 10)), mix(BRASS.d, '#000000', .2), .4);
+  out.push({ box: bx3([...on(PY(y0), lobe(-1)), ...on(PY(y1), lobe(1)), ...on(PY(y0), lobe(1))]), svg: act('key', svg) });
+  return out;
+}
+
+/* ---------- the scene ---------- */
+// two label columns either side of the box: the left one starts under the buttons, the right one under the switches and
+// stats; pills are spread so they never overlap, leaders never leave their column's side, and when both columns are
+// full the least important (last listed) pills are left out. Same pills / phone badges as xrCallouts.
+function mbCallouts(items, B){
+  const svg = document.getElementById('fig'), vb = svg.viewBox.baseVal, k = INK_K, u = window.LBL_U ? LBL_U() : 0;
+  const fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 3*k);
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0])), cx = (xmin + xmax)/2;
+  let topL = vb.y + hgt, topR = vb.y + hgt;
+  const ctm = svg.getScreenCTM(), below = el => { const r = el.getBoundingClientRect(); return new DOMPoint(r.left, r.bottom + 8).matrixTransform(ctm.inverse()).y + hgt/2; };
+  if (ctm){ const b = document.getElementById('btns'); if (b) topL = Math.max(topL, below(b));
+    for (const el of [document.querySelector('.vset'), document.getElementById('stats')]) if (el) topR = Math.max(topR, below(el)); }
+  const bot = vb.y + vb.height - hgt/2, botR = bot - (ctm && !u ? 36/ctm.d : 0);   // the right column stops above the built page's zoom chip
+  const cap = (t, b) => Math.max(0, Math.floor((b - t)/gap) + 1), capL = cap(topL, bot), capR = cap(topR, botR);
+  const its = items.slice(0, capL + capR).map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; });
+  let Lc = its.filter(c => c.X < cx).sort((a, b) => a.X - b.X), Rc = its.filter(c => c.X >= cx).sort((a, b) => a.X - b.X);
+  while (Lc.length > capL) Rc.unshift(Lc.pop());
+  while (Rc.length > capR) Lc.push(Rc.shift());
+  let s = '';
+  for (const [col, side, top, bt] of [[Lc, -1, topL, bot], [Rc, 1, topR, botR]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top); y = c.py; }
+    let lo = bt; for (let j = col.length - 1; j >= 0; j--){ col[j].py = Math.min(col[j].py, lo); lo = col[j].py - gap; }
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1));
+      const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex - side*4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+function scene(st, m){
+  const off = [BOX_X, BOX_Y, GZ], W2 = p => [p[0] + off[0], p[1] + off[1], p[2] + off[2]], Lw = lidW(st);
+  let s = board(0, 0, BX1, BY1, GZ, 6, WOOD);
+  const sp = []; for (const x of [0, CD]) for (const y of [0, CW]) for (const z of [0, CH]) sp.push([x, y, z]);
+  for (const u of [0, CD]) for (const y of [0, CW]) for (const w of [0, LT]) sp.push(Lw(u, y, w));
+  sp.push(dancerPt(st, 0, 0, 22.6));
+  s += castShadow(sp.map(W2), GZ, boardTop(0, 0, BX1, BY1, GZ, 6));
+  const k = ease(st.xr || 0), th = lidDeg(st)*Math.PI/180, lidFirst = facing([Math.sin(th), 0, -Math.cos(th)]);
+  let inner;
+  if (k > 0){
+    const ghost = xrGhost(act('lid', bodySvg(st, m, '')), '', k, OUT, 0, CD, m), lid = `<g opacity="${f(1 - .8*k)}">${act('lid', lidSvg(st, m))}</g>`;
+    inner = (lidFirst ? lid + ghost : ghost + lid) + `<g opacity="${f(k)}">${mech(st, m)}</g>`;
+  } else {
+    const body = act('lid', bodySvg(st, m, byDepth(wellItems(st)))), lid = act('lid', lidSvg(st, m));
+    inner = byDepth([{ box:[[-LT - 2, 0, 0], [CD, CW, CH + LT + CD]], svg: lidFirst ? lid + body : body + lid }, ...keyItems(st)]);
+  }
+  const [dx, dy] = Dv(...off);
+  s += `<g transform="translate(${f(dx)} ${f(dy)})">${inner}</g>`;
+  const B = [off[0], off[0] + CD, off[1], off[1] + CW + 7, off[2], off[2] + CH + LT];
+  const open = lidDeg(st) > 30, play = isPlaying(st);
+  if (k > .6) s += mbCallouts(MECH_ITEMS.map(it => ({ ...it, at: W2(it.at) })), B);
+  else { const L2 = [{ at: W2([A1[0], CW + 6.5, A1[1] + 5.5]), text:'KEY', on: st.windQ > 0 },
+      { at: W2(Lw(CD*.75, CW*.3, LT)), text:'LID', on: false }];
+    if (open){ L2.push({ at: W2(dancerPt(st, 1.2, 0, 15)), text:'DANCER', on: play }, { at: W2([PLX, PLY, CH + pinRise(st)]), text:'LID STOP PIN', on: false });
+      if (facing([Math.sin(th), 0, -Math.cos(th)])) L2.push({ at: W2(Lw(CD/2, CW/2 + 20, 0)), text:'MIRROR', on: false }); }
+    s += mbCallouts(L2, B); }
+  return s;
+}
+
+/* ---------- sound: a plucked steel tooth (only after a press, as browsers require) ---------- */
+let mbAC = null;
+function mbAudio(){ try { const A = window.AudioContext || window.webkitAudioContext; if (!mbAC && A) mbAC = new A(); if (mbAC && mbAC.state === 'suspended') mbAC.resume(); } catch (e) { mbAC = null; } }
+function mbPluck(i){
+  if (!mbAC || mbAC.state !== 'running') return;
+  try { const t = mbAC.currentTime, fr = MB_FREQ[i];
+    for (const [mul, g0, dec] of [[1, .16, 1.6], [3, .035, .3], [5.93, .025, .14]]){
+      const o = mbAC.createOscillator(), g = mbAC.createGain(); o.type = 'sine'; o.frequency.value = fr*mul;
+      g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(g0, t + .004); g.gain.exponentialRampToValueAtTime(.0001, t + dec);
+      o.connect(g); g.connect(mbAC.destination); o.start(t); o.stop(t + dec + .05); } } catch (e) {}
+}
+
+/* ---------- behaviour (one state object, one clock) ---------- */
+let ui, loopOn = false;
+function tick(st, dt){
+  let busy = false;
+  if (st.windQ > 0){ const d = Math.min(st.windQ, dt/WIND_T); st.windQ -= d; st.a1 -= d*2*Math.PI; busy = true; }
+  if (st.lid !== st.lidGoal){ st.lid += Math.sign(st.lidGoal - st.lid)*Math.min(Math.abs(st.lidGoal - st.lid), dt/LID_T); busy = true; }
+  if (isPlaying(st)){
+    const db = Math.min(OMEGA*dt*r_CP/R_BW, springW(st)*2*Math.PI), dc = db*R_BW/r_CP, c0 = st.cyl, c1 = c0 + dc;
+    for (const p of PINS) if (Math.floor((c1 + p.a)/(2*Math.PI)) > Math.floor((c0 + p.a)/(2*Math.PI))){ st.tv[p.i] = 0; st.note = MB_NOTES[p.i]; mbPluck(p.i); }
+    st.cyl = c1; st.bar -= db; st.fly += dc*R_CG/r_IP*IW_N;
+    if (springW(st) <= 1e-4){ st.bar = st.a1; ui.flash('Run down: the mainspring is slack. Wind the key'); }
+    busy = true;
+  }
+  for (let i = 0; i < NT; i++) if (st.tv[i] < 1.5){ st.tv[i] += dt; busy = true; }
+  return busy;
+}
+function runLoop(){
+  if (loopOn) return; loopOn = true;
+  ui.animate(dt => { const busy = tick(ui.st, dt); if (!busy) loopOn = false; return busy; });
+}
+function wind(st){
+  mbAudio();
+  if (springW(st) + st.windQ >= WMAX - .01) return ui.flash('Fully wound: the key will not turn any further');
+  st.windQ += Math.min(1, WMAX - springW(st) - st.windQ); runLoop();
+}
+function openLid(st){
+  mbAudio();
+  if (st.lidGoal === 1) return ui.flash('The lid is already open');
+  st.lidGoal = 1; runLoop();
+  if (springW(st) + st.windQ <= 1e-3) ui.flash('The lid is open, but the spring is run down: wind the key');
+}
+function closeLid(st){
+  if (st.lidGoal === 0) return ui.flash('The lid is already shut');
+  st.lidGoal = 0; runLoop();
+}
+
+ui = mountFigure({
+  fig:'M1', title:'Music box', size:[BX1, BY1, GZ + CH + CD + 2], palette:'mustard', turn:'full',
+  state:{ a1:0, bar:0, cyl:0, fly:0, lid:0, lidGoal:0, windQ:0, tv: Array(NT).fill(9), note:'' },
+  scene,
+  stats: st => [{ label:'Spring', value: springW(st).toFixed(1) + ' turns' }, { label:'Note', value: isPlaying(st) && st.note ? st.note : '-' }],
+  buttons:[
+    { label:'Wind the key', onClick:(st) => wind(st) },
+    { label:'Open the lid', onClick:(st) => openLid(st) },
+    { label:'Close the lid', onClick:(st) => closeLid(st) },
+  ],
+  acts:{ key:(st) => wind(st), lid:(st) => st.lidGoal ? closeLid(st) : openLid(st) },
+  params:(st, q) => {
+    if (q.has('w')) st.a1 = -Math.max(0, Math.min(WMAX, +q.get('w')))*2*Math.PI;
+    if (q.get('open') === '1') st.lid = st.lidGoal = 1;
+    if (q.has('lid')) st.lid = st.lidGoal = clamp01(+q.get('lid'));
+    if (q.has('cyl')) st.cyl = +q.get('cyl');
+    if (q.has('fly')) st.fly = +q.get('fly');
+    if (q.has('ring')) st.tv[+q.get('ring')] = .05;
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
