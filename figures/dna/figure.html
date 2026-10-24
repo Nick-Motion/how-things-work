@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DNA replication</title></head><body>
+<script src="core.js"></script>
+<script>
+/* DNA replication, as a classroom model kit on a stand.
+   Truth first (what really happens, and where every piece is after each step):
+   1. Closed: a 10 base-pair stretch of B-DNA (one right-handed turn: 10 bp, 3.4 nm, 2 nm wide). Two antiparallel
+      sugar-phosphate backbones (strand 1 runs 5'->3' left to right, strand 2 the other way), joined by base pairs:
+      A-T with 2 hydrogen bonds, G-C with 3. The backbones sit ~150 deg apart round the axis, so there is a minor and a
+      major groove. In the kit the bases are puzzle pieces whose tabs are the hydrogen bonds (2 tabs A-T, 3 tabs G-C);
+      purines (A, G) are the longer pieces. Both strands' 5'/3' ends at the left sit in sliders in the slot of the left
+      upright; the right end is free (a cantilever), so rings can slide on and off it.
+   2. Unzip: the helicase, a closed six-subunit ring that burns ATP, starts on the left upright's middle peg round the
+      strand ends, runs left to right along the duplex and pries the pairs apart: behind it every hydrogen bond is
+      broken and the two parent strands slide apart in their slot (strand 1 up, strand 2 down), each keeping its own
+      bases. The ring slides off the free end onto the right upright's middle peg.
+   3. Copy: DNA polymerase only builds 5'->3', reading its template 3'->5'. So the polymerase on the lower template
+      (leading) runs left to right, and the one on the upper template (lagging) runs right to left. Each is a hand
+      (fingers, palm, thumb, plus a proofreading exonuclease) open toward the middle so its template drops in. For every
+      base it passes, the matching nucleotide (base + sugar, A for T, G for C) comes from the tray, goes into the active
+      site in the palm and locks onto the template base; the new backbone link closes behind it.
+   4. Done: two identical helices, each one old (purple) strand and one new (white) strand: semi-conservative.
+   5. Rewind runs it all backwards: the new nucleotides go back to their bins, the parents zip shut.
+   Parts (each held by another):
+   STAND    wooden base board . left upright with its foot, slot, two strand sliders and three docking pegs . right
+            upright (dock) with its foot and three docking pegs
+   DNA      2 parent strands: backbone tube, 10 deoxyribose sugars, 10 phosphates, phosphodiester links, 5' and 3' ends
+            . 20 base pieces (adenine, thymine, guanine, cytosine) with puzzle tabs . hydrogen bonds . major/minor groove
+            . later 2 new strands with 20 new bases
+   ENZYMES  helicase: 6 subunits, 6 ATP sites . 2 polymerases: fingers, palm, thumb, exonuclease, active site
+   TRAY     tray, 4 bins (A, T, G, C), 10 nucleotide blocks in each */
+
+/* ---------- geometry (x = depth toward the front, y = along the helix, z = up; 1 unit = 0.49 nm on the DNA) ---------- */
+const X0 = 26, YA = 14, NBP = 10, RISE = 7, LEN = NBP*RISE, YF = YA + LEN, RAD = 10, Z0 = 56, DZ = 28, SEPL = 18;
+const BH = 3, BRD = [0, 0, 72, YF + 19];
+const PS = [YA - 10, YA - 6], PF = [YF + 11, YF + 15];          // left upright (holds the strands), right upright (dock)
+const POST_TOP = Z0 + DZ + 22, SLOTX = X0 + RAD*Math.sin(15*Math.PI/180);
+const GAP = 150, RB = 1.6, FL = .12;                             // backbone angle apart, base start, block flight time
+const HEL = { ri:12.5, ro:16.5, hy:2.5 }, POL = { ri:12.5, ro:15.5, hy:3.5 };
+const TRAY = { x0:46, x1:66, y0:16, z0:BH, z1:BH + 6 };
+const BASES = {
+  A:{ c:'#e2483d', pur:true,  nH:2, pair:'T', name:'ADENINE' },
+  T:{ c:'#f4b829', pur:false, nH:2, pair:'A', name:'THYMINE' },
+  G:{ c:'#3fa860', pur:true,  nH:3, pair:'C', name:'GUANINE' },
+  C:{ c:'#4f7fd6', pur:false, nH:3, pair:'G', name:'CYTOSINE' } };
+const BIN = ['A', 'T', 'G', 'C'];
+const OLDM = matOf('#8f6fd6'), NEWM = { l:'#fbf8ef', m:'#e3ddcc', d:'#b9b29f' }, HELM = matOf('#56bcc4'), POLM = matOf('#e98ab0');
+const SUGM = matOf('#f6e3b4'), PHOS = '#ef8a3a', ATP = '#ffd84a';
+const DOM = { fingers: matOf('#f6b6cf'), palm: matOf('#c9578a'), thumb: matOf('#e0749f'), exo: matOf('#9d4fc4') };
+
+const rad = a => a*Math.PI/180, cl = (v, a, b) => Math.max(a, Math.min(b, v));
+const addv = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]], scl = (a, k) => a.map(v => v*k), neg = a => a.map(v => -v);
+const lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const bbox = (pts, e = 0) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const th = y => 15 + 360*(y - YA)/LEN;                           // strand 1's angle round the axis (right-handed)
+const hp = (a, y, zc, r = RAD) => [X0 + r*Math.sin(rad(a)), y, zc + r*Math.cos(rad(a))];
+const ybp = i => YA + (i + .5)*RISE;
+const comp = b => BASES[b].pair;
+
+/* ---------- the state as a pure function of progress p (0 closed, 1 unzipped, 2 copied) ---------- */
+function dnaGeo(st){
+  if (st._g && st._g.p === st.p && st._g.seq === st.seq) return st._g;
+  const u = cl(st.p, 0, 1), c = cl(st.p - 1, 0, 1), seq = st.seq;
+  const tip = YA - 5.5 + u*(LEN + 5.5 + SEPL);                   // the fork: pairs behind the ring's back face let go
+  const hy = Math.min(tip + 2.5, YF + 8.5);
+  const sep = y => ease(cl((tip - cl(y, YA, YF))/SEPL, 0, 1));
+  const cc = cl((c - FL)/(1 - FL - .04), 0, 1);
+  const pb = YA - 2.5 + cc*(LEN + 10), pt = YF + 7.5 - cc*(LEN + 10);   // leading (lower) and lagging (upper) polymerase
+  const ev = [];
+  for (let i = 0; i < NBP; i++){ const y = ybp(i);
+    const aB = FL + (y - (YA - 2.5))/(LEN + 10)*(1 - FL - .04), aT = FL + (YF + 7.5 - y)/(LEN + 10)*(1 - FL - .04);
+    ev.push({ s:'b', i, base: seq[i], arr: aB, dep: aB - FL }, { s:'t', i, base: comp(seq[i]), arr: aT, dep: aT - FL }); }
+  ev.sort((a, b) => a.dep - b.dep);
+  const used = { A:0, T:0, G:0, C:0 }; for (const e of ev) e.slot = 9 - used[e.base]++;
+  const placed = { b: Array(NBP).fill(false), t: Array(NBP).fill(false) };
+  for (const e of ev) if (c >= e.arr) placed[e.s][e.i] = true;
+  let hb = 0, added = 0;
+  for (let i = 0; i < NBP; i++){ const n = BASES[seq[i]].nH;
+    if (sep(ybp(i)) < .01) hb += n; if (placed.b[i]){ hb += n; added++; } if (placed.t[i]){ hb += n; added++; } }
+  return st._g = { p: st.p, seq, u, c, tip, hy, sep, pb, pt, ev, placed, hb, added };
+}
+
+/* ---------- strands ---------- */
+// old1 / old2: the parents (slide apart as they unzip); new1 pairs with old1 on top, new2 with old2 below
+function strandDefs(g){
+  return {
+    old1: { off: 0,   zc: y => Z0 + DZ*g.sep(y), M: OLDM },
+    old2: { off: GAP, zc: y => Z0 - DZ*g.sep(y), M: OLDM },
+    new1: { off: GAP, zc: () => Z0 + DZ, M: NEWM },
+    new2: { off: 0,   zc: () => Z0 - DZ, M: NEWM } };
+}
+const sPt = (sd, y) => { const yy = cl(y, YA, YF), a = th(yy) + sd.off; const p = hp(a, yy, sd.zc(yy)); p[1] = y; return p; };
+// a tube as short stroked pieces: ink, colour, then a highlight; butt ends overlap, so joins never show
+function tube(pts, r, M, op = 1, capA = false, capB = false){
+  const d = pd(pts, false), w = INK_K*.9;
+  const cap = p => { const [X, Y] = P(...p); return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r*1.2247 + w/2)}" fill="${INK}"/><circle cx="${f(X)}" cy="${f(Y)}" r="${f(r*1.2247)}" fill="${M.m}"/>`; };
+  return `<g opacity="${f(op)}">` + (capA ? cap(pts[0]) : '') + (capB ? cap(pts[pts.length - 1]) : '')
+    + `<path d="${d}" fill="none" stroke="${INK}" stroke-linejoin="round" style="stroke-width:${f(2*r*1.2247 + w)}"/>`
+    + `<path d="${d}" fill="none" stroke="${M.m}" stroke-linejoin="round" style="stroke-width:${f(2*r*1.2247)}"/>`
+    + `<path d="${d}" fill="none" stroke="${M.l}" stroke-linejoin="round" stroke-linecap="round" transform="translate(0 ${f(-r*.45)})" style="stroke-width:${f(r*.8)}"/></g>`;
+}
+const ball = (p, r, col, w = .7) => { const [X, Y] = P(...p), R = r*1.2247;
+  return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="${col}" stroke="${INK}" stroke-width="${w}"/><circle cx="${f(X - R*.35)}" cy="${f(Y - R*.35)}" r="${f(R*.3)}" fill="#ffffff" opacity=".6"/>`; };
+const stick = (a, b, col, w = .5) => { const d = pd([a, b], false);
+  return `<path d="${d}" fill="none" stroke="${INK}" stroke-linecap="round" style="stroke-width:${f(w*2 + .5*INK_K)}"/><path d="${d}" fill="none" stroke="${col}" stroke-linecap="round" style="stroke-width:${f(w*2)}"/>`; };
+// deoxyribose: a little five-sided prism lying across the strand
+function sugar(c){
+  const ring = dy => [0,1,2,3,4].map(j => [c[0] + 1.8*Math.sin(rad(j*72)), c[1] + dy, c[2] + 1.8*Math.cos(rad(j*72))]);
+  const A = ring(-.8), B = ring(.8), cap = facing([0,1,0]) ? B : A, cn = facing([0,1,0]) ? [0,1,0] : [0,-1,0];
+  return loft(A, B, n => toneI(n, SUGM)) + shape(cap, toneI(cn, SUGM), .5) + hullInk([...A, ...B], .8);
+}
+// one strand's piece per base pair (tube; in see-through the sugar, phosphate and links inside it)
+function strandItems(key, sd, g, k, have){
+  const out = [], tubeR = 2, isOld = key.startsWith('old');
+  for (let i = 0; i < NBP; i++){ if (!have(i)) continue;
+    const y0 = YA + i*RISE, y1 = y0 + RISE, pts = [];
+    for (let j = 0; j <= 6; j++) pts.push(sPt(sd, y0 - .3 + (RISE + .6)*j/6));
+    const first = !have(i - 1) || i === 0, last = !have(i + 1) || i === NBP - 1;
+    let svg = tube(pts, tubeR, sd.M, 1 - .78*k, first && !(isOld && i === 0), last);
+    if (k > .02){ const sg = sPt(sd, ybp(i)), ph = sPt(sd, y0), nx = sPt(sd, y1);
+      svg += `<g opacity="${f(k)}">` + stick(ph, sg, '#f3efe4') + (last ? '' : stick(sg, nx, '#f3efe4')) + sugar(sg) + ball(ph, 1.5, PHOS) + `</g>`; }
+    out.push({ box: bbox(pts, tubeR), svg });
+  }
+  // the left ends of the parents run straight on to their sliders in the upright's slot
+  if (isOld){ const e = sPt(sd, YA), a = [e[0], PS[1] + .8, e[2]];
+    // both boxes stop at the upright's face, so the sort never mistakes them for part of it
+    const sb = bbox([a, e], tubeR); sb[0][1] = Math.max(sb[0][1], PS[1] + .01);
+    out.push({ box: sb, svg: tube([a, [e[0], YA + .3, e[2]]], tubeR, sd.M, 1 - .78*k) });
+    out.push({ box: [[SLOTX - 2.6, PS[1] + .01, e[2] - 2.8], [SLOTX + 2.6, PS[1] + .8, e[2] + 2.8]],
+      svg: box(SLOTX - 2.6, PS[1], e[2] - 2.8, SLOTX + 2.6, PS[1] + .8, e[2] + 2.8, matOf('#d9dde0'), toneI, .8) }); }
+  return out;
+}
+
+/* ---------- bases: puzzle pieces in a frame (B on the backbone, d toward the partner, t across, Y along the helix) ---------- */
+function frameAt(zc, aOwn, aPart, y, shift = 0){
+  const B = hp(aOwn, y, zc), Bp = hp(aPart, y, zc), v = sub(Bp, B), Lc = Math.hypot(...v), d = v.map(q => q/Lc), Y = [0,1,0];
+  B[2] += shift; return { B, d, t: cross(d, Y), Y, Lc };
+}
+const LC = 2*RAD*Math.sin(rad(GAP/2));
+function pieceComps(b, puzzle){
+  const B0 = BASES[b], sJ = LC/2 + (B0.pur ? 1.1 : -1.1), M = matOf(B0.c);
+  if (!puzzle) return [{ b:[[RB, -2.5, -1.2], [sJ, 2.5, 1.2]], M }];
+  const out = [{ b:[[RB, -2.5, -1.2], [sJ - 1, 2.5, 1.2]], M }], n = 2*B0.nH + 1, sw = 5/n;
+  for (let j = 0; j < n; j++) if ((j % 2 === 1) === B0.pur) out.push({ b:[[sJ - 1, -2.5 + j*sw, -1.2], [sJ + 1, -2.5 + (j + 1)*sw, 1.2]], M });
+  return out;
+}
+const wpt = (F, s, w, h) => [0,1,2].map(i => F.B[i] + F.d[i]*s + F.t[i]*w + F.Y[i]*h);
+function obox(F, bb, M, wi = .55){
+  const [[s0, w0, h0], [s1, w1, h1]] = bb, W = (s, w, h) => wpt(F, s, w, h);
+  const fc = [[F.d, [W(s1,w0,h0), W(s1,w1,h0), W(s1,w1,h1), W(s1,w0,h1)]], [neg(F.d), [W(s0,w0,h0), W(s0,w1,h0), W(s0,w1,h1), W(s0,w0,h1)]],
+    [F.t, [W(s0,w1,h0), W(s1,w1,h0), W(s1,w1,h1), W(s0,w1,h1)]], [neg(F.t), [W(s0,w0,h0), W(s1,w0,h0), W(s1,w0,h1), W(s0,w0,h1)]],
+    [F.Y, [W(s0,w0,h1), W(s1,w0,h1), W(s1,w1,h1), W(s0,w1,h1)]], [neg(F.Y), [W(s0,w0,h0), W(s1,w0,h0), W(s1,w1,h0), W(s0,w1,h0)]]];
+  return fc.filter(([n]) => vis(n)).map(([n, q]) => shape(q, toneI(n, M), wi)).join('');
+}
+// comps all in one frame: sort them by which side of each other the viewer is on
+function drawComps(F, comps){
+  const vl = [dot(CAM_V, F.d), dot(CAM_V, F.t), dot(CAM_V, F.Y)];
+  const ord = (p, q) => { for (let k = 0; k < 3; k++){ if (p.b[1][k] <= q.b[0][k] + 1e-6) return vl[k] >= 0 ? -1 : 1; if (q.b[1][k] <= p.b[0][k] + 1e-6) return vl[k] >= 0 ? 1 : -1; } return 0; };
+  return comps.slice().sort(ord).map(c => obox(F, c.b, c.M)).join('');
+}
+const compsBox = (F, comps) => bbox(comps.flatMap(c => { const [[a,b,e],[x,y,z]] = c.b; return [wpt(F,a,b,e), wpt(F,x,y,z), wpt(F,a,y,z), wpt(F,x,b,e)]; }));
+// a locked pair: the partner's pieces turned into this piece's frame, then the hydrogen bonds across the join
+function pairItem(F, b1, b2, puzzle, k){
+  const mine = pieceComps(b1, puzzle), theirs = pieceComps(b2, puzzle).map(c => ({ b:[[F.Lc - c.b[1][0], -c.b[1][1], c.b[0][2]], [F.Lc - c.b[0][0], -c.b[0][1], c.b[1][2]]], M: c.M }));
+  const all = mine.concat(theirs);
+  let svg = drawComps(F, all);
+  if (puzzle && k > .02){ const B0 = BASES[b1], pur = B0.pur, sJ = LC/2 + (pur ? 1.1 : -1.1), n = 2*B0.nH + 1, sw = 5/n, hs = dot(CAM_V, F.Y) >= 0 ? 1.25 : -1.25;
+    let d = ''; for (let j = 1; j < n; j += 2) d += pd([wpt(F, sJ - 2, -2.5 + (j + .5)*sw, hs), wpt(F, sJ + 2, -2.5 + (j + .5)*sw, hs)], false);
+    svg += `<path d="${d}" fill="none" stroke="#ffffff" stroke-linecap="round" stroke-dasharray="${f(.7*INK_K)} ${f(.9*INK_K)}" opacity="${f(k)}" style="stroke-width:${f(.75)}"/>`; }
+  return { box: compsBox(F, all), svg };
+}
+const pieceItem = (F, b, puzzle, extra = []) => { const cs = pieceComps(b, puzzle).concat(extra); return { box: compsBox(F, cs), svg: drawComps(F, cs) }; };
+
+/* ---------- enzymes: arcs of a ring round the axis (angles from +z toward +x), each piece sorted on its own ---------- */
+function arcPiece(zc, yc, hy, ri, ro, a0, a1, M, n = 4){
+  const p = (a, r, y) => [X0 + r*Math.sin(rad(a)), y, zc + r*Math.cos(rad(a))], y0 = yc - hy, y1 = yc + hy, A = [];
+  for (let j = 0; j <= n; j++) A.push(a0 + (a1 - a0)*j/n);
+  const rn = a => [Math.sin(rad(a)), 0, Math.cos(rad(a))], tg = a => [Math.cos(rad(a)), 0, -Math.sin(rad(a))];
+  let inner = '', outer = '', ends = '', sides = '';
+  for (let j = 0; j < n; j++){ const m = (A[j] + A[j+1])/2;
+    if (vis(neg(rn(m)))) inner += face(pd([p(A[j], ri, y0), p(A[j+1], ri, y0), p(A[j+1], ri, y1), p(A[j], ri, y1)]), toneI(neg(rn(m)), M));
+    if (vis(rn(m))) outer += face(pd([p(A[j], ro, y0), p(A[j+1], ro, y0), p(A[j+1], ro, y1), p(A[j], ro, y1)]), toneI(rn(m), M)); }
+  for (const [a, nn] of [[a0, neg(tg(a0))], [a1, tg(a1)]]) if (vis(nn)) ends += shape([p(a, ri, y0), p(a, ro, y0), p(a, ro, y1), p(a, ri, y1)], toneI(nn, M), .6);
+  for (const [y, nn] of [[y0, [0,-1,0]], [y1, [0,1,0]]]) if (vis(nn)){ const q = [...A.map(a => p(a, ro, y)), ...A.slice().reverse().map(a => p(a, ri, y))]; sides += shape(q, toneI(nn, M), .8); }
+  const all = A.flatMap(a => [p(a, ri, y0), p(a, ro, y0), p(a, ri, y1), p(a, ro, y1)]);
+  return { box: bbox(all), svg: inner + ends + outer + sides + hullInk(all, 1.3), pts: all };
+}
+function helicaseItems(g, k){
+  const out = [];
+  for (let j = 0; j < 6; j++){ const c = 30 + 60*j, it = arcPiece(Z0, g.hy, HEL.hy, HEL.ri, HEL.ro, c - 27, c + 27, HELM);
+    if (k > .02){ const ga = c - 30, hs = facing([0,1,0]) ? HEL.hy + .1 : -HEL.hy - .1;
+      it.svg += `<g opacity="${f(k)}">` + ball([X0 + 14.5*Math.sin(rad(ga)), g.hy + hs, Z0 + 14.5*Math.cos(rad(ga))], 1.2, ATP, .6) + `</g>`; }
+    out.push(it); }
+  return out;
+}
+// a polymerase: a hand round its template, open toward the middle (the side its template came from)
+function polItems(zc, yc, up, k, glow){
+  const base = up ? -120 : 60, out = [], names = ['fingers', 'fingers', 'fingers', 'palm', 'palm', 'thumb', 'thumb', 'thumb'];
+  for (let j = 0; j < 8; j++){ const dm = DOM[names[j]], M = k > .02 ? { l: mix(POLM.l, dm.l, k), m: mix(POLM.m, dm.m, k), d: mix(POLM.d, dm.d, k) } : POLM;
+    out.push(arcPiece(zc, yc, POL.hy, POL.ri, POL.ro, base + 30*j, base + 30*j + 30, M, 3)); }
+  const pa = up ? 0 : 180, dir = [Math.sin(rad(pa)), 0, Math.cos(rad(pa))], c0 = [X0, yc, zc];
+  // exonuclease (proofreading) lobe on the back of the palm
+  const ea = addv(c0, scl(dir, POL.ro - .5)), eb = addv(c0, scl(dir, POL.ro + 2.2));
+  out.push({ box: bbox([ea, eb], 2.6), svg: rod(ea, eb, 2.6, k > .02 ? { l: mix(POLM.l, DOM.exo.l, k), m: mix(POLM.m, DOM.exo.m, k), d: mix(POLM.d, DOM.exo.d, k) } : POLM, toneI, .9) });
+  // active site on the inside of the palm
+  if (k > .02){ const as = addv(c0, scl(dir, POL.ri - .3));
+    out.push({ box: bbox([as], .8), svg: `<g opacity="${f(k)}">` + ball(as, 1.1 + .6*glow, glow > .05 ? '#fff27a' : '#ffd0e2', .6) + `</g>` }); }
+  return out;
+}
+
+/* ---------- stand and tray ---------- */
+function postItems(m, y0, y1, faceN){
+  const out = [];
+  out.push({ box: [[X0 - 9, y0 - 2, BH], [X0 + 9, y1 + 2, BH + 4]], svg: box(X0 - 9, y0 - 2, BH, X0 + 9, y1 + 2, BH + 4, m, tone, 1.1) });
+  let s = box(X0 - 4, y0, BH + 4, X0 + 4, y1, POST_TOP, m, tone, 1.2);
+  const fy = faceN > 0 ? y1 : y0;
+  if (faceN > 0 && facing([0,1,0])) s += shape(on(PY(fy + .05), rrUV(SLOTX - .9, 14, SLOTX + .9, POST_TOP - 5, .9)), '#2b2523', .6);
+  out.push({ box: [[X0 - 4, y0, BH + 4], [X0 + 4, y1, POST_TOP]], svg: s });
+  // docking pegs on the inner face, on the three axes
+  for (const z of [Z0 + DZ, Z0, Z0 - DZ]){ const len = faceN > 0 ? 6 : 7, a = [X0, fy, z], b = [X0, fy + faceN*len, z];
+    out.push({ box: bbox([a, b], 1.2), svg: rod(a, b, 1.2, METAL, toneI, .8) }); }
+  return out;
+}
+function trayItems(m, g, k, puzzle){
+  const out = [], T = TRAY, z1 = T.z1, wm = m;
+  const wall = (x0, y0, x1, y1, extra = '') => out.push({ box: [[x0, y0, T.z0], [x1, y1, z1]], svg: box(x0, y0, T.z0, x1, y1, z1, wm, toneI, .9) + extra });
+  out.push({ box: [[T.x0, T.y0, T.z0], [T.x1, T.y0 + 55, T.z0 + 1.2]], svg: box(T.x0, T.y0, T.z0, T.x1, T.y0 + 55, T.z0 + 1.2, wm, toneI, .9) });
+  for (let b = 0; b <= 4; b++){ const y = T.y0 + b*13.5; wall(T.x0 + 1, y, T.x1 - 1, y + 1); }
+  let lettersF = '', lettersB = '';
+  BIN.forEach((bn, b) => { const yc = T.y0 + 1 + 6.25 + b*13.5;
+    lettersF += tx(T.x1 + .05, yc, T.z0 + 1.6, bn, 3.6, mix(BASES[bn].c, '#000000', .25), 800);
+    lettersB += `<text transform="${txM(P(T.x0 - .05, yc, T.z0 + 1.6), Dv(0,1,0), Dv(0,0,-1))}" font-size="3.6" fill="${mix(BASES[bn].c, '#000000', .25)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800">${bn}</text>`; });
+  wall(T.x1 - 1, T.y0, T.x1, T.y0 + 55, facing([1,0,0]) ? lettersF : '');
+  wall(T.x0, T.y0, T.x0 + 1, T.y0 + 55, facing([-1,0,0]) ? lettersB : '');
+  // the blocks still in the bins
+  const gone = new Set(g.ev.filter(e => g.c >= e.dep).map(e => e.base + e.slot));
+  BIN.forEach(bn => { for (let j = 0; j < 10; j++) if (!gone.has(bn + j)){ const F = trayFrame(bn, j); out.push(pieceItem(F, bn, puzzle, [SUGAR_KNOB])); } });
+  return out;
+}
+const SUGAR_KNOB = { b:[[-1.4, -1.7, -1.3], [RB, 1.7, 1.3]], M: SUGM };
+function trayFrame(bn, j){
+  const b = BIN.indexOf(bn), y0 = TRAY.y0 + 1 + b*13.5, row = j % 2, col = j >> 1, B0 = BASES[bn];
+  const sEnd = LC/2 + (B0.pur ? 2.1 : -.1);
+  return { B: [47.6 + col*3.4, y0 + 3.4 + row*5.7, TRAY.z0 + 1.3 + sEnd], d: [0,0,-1], t: [0,-1,0], Y: [1,0,0], Lc: LC };
+}
+// the frame a new base ends up in
+function targetFrame(e){
+  const y = ybp(e.i), a = th(y);
+  return e.s === 'b' ? frameAt(Z0 - DZ, a, a + GAP, y) : frameAt(Z0 + DZ, a + GAP, a, y);
+}
+function flyFrame(F0, F1, t){
+  const e = ease(t);
+  const o = F1.B[2] < Z0 ? [F1.B[0] + 8, (F0.B[1] + F1.B[1])/2, F1.B[2] + 30] : [F1.B[0] + 10, (F0.B[1] + F1.B[1])/2, F1.B[2] - 34];
+  const B = [0,1,2].map(i => (1-e)*(1-e)*F0.B[i] + 2*(1-e)*e*o[i] + e*e*F1.B[i]);
+  let d = lerp3(F0.d, F1.d, e); if (Math.hypot(...d) < .3) d = addv(d, [.4, 0, 0]); d = norm(d);
+  let Y = lerp3(F0.Y, F1.Y, e); Y = norm(sub(Y, scl(d, dot(Y, d))));
+  return { B, d, t: cross(d, Y), Y, Lc: LC };
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0), g = dnaGeo(st), puzzle = k > .5, SD = strandDefs(g);
+  const BT = boardTop(BRD[0], BRD[1], BRD[2], BRD[3], BH, 5);
+  let s = board(BRD[0], BRD[1], BRD[2], BRD[3], BH, 5, WOOD);
+  // shadows: both uprights, every strand, the enzymes and the tray, falling on the board
+  const shp = [];
+  for (const [y0, y1] of [PS, PF]){ const q = []; for (const x of [X0 - 4, X0 + 4]) for (const y of [y0, y1]) for (const z of [BH, POST_TOP]) q.push([x, y, z]); shp.push(q); }
+  for (const [key, sd] of Object.entries(SD)){ if (key.startsWith('new') && g.c <= 0) continue; const q = [];
+    for (let y = YA; y <= YF; y += 3.5) q.push(sPt(sd, y)); shp.push(q.flatMap(p => [addv(p, [0,0,-4]), addv(p, [0,0,4])])); }
+  const ring = (zc, yc, r) => [0,1,2,3,4,5,6,7].flatMap(j => [hp(j*45, yc, zc, r)]);
+  shp.push(ring(Z0, g.hy, HEL.ro), ring(Z0 - DZ, g.pb, POL.ro), ring(Z0 + DZ, g.pt, POL.ro));
+  shp.push([[TRAY.x0, TRAY.y0, BH], [TRAY.x1, TRAY.y0 + 55, BH], [TRAY.x0, TRAY.y0, TRAY.z1 + 4], [TRAY.x1, TRAY.y0 + 55, TRAY.z1 + 4]]);
+  s += clipTo(BT, shp.map(q => castShadow(q, BH)).join(''));
+
+  const items = [];
+  items.push(...postItems(m, PS[0], PS[1], 1), ...postItems(m, PF[0], PF[1], -1));
+  items.push(...trayItems(m, g, k, puzzle));
+  // strands
+  items.push(...strandItems('old1', SD.old1, g, k, () => true), ...strandItems('old2', SD.old2, g, k, () => true));
+  if (g.c > 0){ items.push(...strandItems('new1', SD.new1, g, k, i => i >= 0 && i < NBP && g.placed.t[i]), ...strandItems('new2', SD.new2, g, k, i => i >= 0 && i < NBP && g.placed.b[i])); }
+  // bases
+  for (let i = 0; i < NBP; i++){ const y = ybp(i), a = th(y), sp = g.sep(y), b1 = g.seq[i], b2 = comp(b1);
+    if (sp < .01){ items.push(pairItem(frameAt(Z0, a, a + GAP, y), b1, b2, puzzle, k)); continue; }
+    const F1 = frameAt(Z0, a, a + GAP, y, DZ*sp), F2 = frameAt(Z0, a + GAP, a, y, -DZ*sp);
+    items.push(g.placed.t[i] ? pairItem(F1, b1, b2, puzzle, k) : pieceItem(F1, b1, puzzle));
+    items.push(g.placed.b[i] ? pairItem(F2, b2, b1, puzzle, k) : pieceItem(F2, b2, puzzle)); }
+  // nucleotides in flight from the tray to a polymerase
+  let glowB = 0, glowT = 0;
+  for (const e of g.ev) if (g.c >= e.dep && g.c < e.arr){ const t = (g.c - e.dep)/FL, F = flyFrame(trayFrame(e.base, e.slot), targetFrame(e), t);
+    items.push(pieceItem(F, e.base, puzzle, t < .9 ? [SUGAR_KNOB] : []));
+    if (t > .7){ if (e.s === 'b') glowB = 1; else glowT = 1; } }
+  items.push(...helicaseItems(g, k));
+  items.push(...polItems(Z0 - DZ, g.pb, false, k, glowB), ...polItems(Z0 + DZ, g.pt, true, k, glowT));
+  s += byDepthAll(items);
+  if (k > .6) s += xrCallouts(dnaLabels(st, g, SD), [BRD[0], BRD[2], BRD[1], BRD[3], 0, POST_TOP]);
+  return s;
+}
+
+/* byDepth sorts with a pairwise rule that is not transitive, so with a few hundred pieces some cleanly separated pairs
+   (helix end vs the near upright) come out in the wrong order. Here every separated pair is a hard edge and the
+   rest falls back on depth: draw the farthest piece whose blockers are all drawn. ponytail: O(n^2), fine for ~400 pieces. */
+function byDepthAll(parts){
+  parts = parts.filter(Boolean); const n = parts.length, d = parts.map(p => depthOf(p.at || boxMid(p.box)));
+  const out = Array.from({ length: n }, () => []), need = new Array(n).fill(0), done = new Array(n).fill(false);
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++){ const o = sepOrder(parts[i], parts[j]);
+    if (o < 0){ out[i].push(j); need[j]++; } else if (o > 0){ out[j].push(i); need[i]++; } }
+  let s = '';
+  for (let c = 0; c < n; c++){ let b = -1;
+    for (let i = 0; i < n; i++) if (!done[i] && !need[i] && (b < 0 || d[i] < d[b])) b = i;
+    if (b < 0) for (let i = 0; i < n; i++) if (!done[i] && (b < 0 || d[i] < d[b])) b = i;   // a cycle: break it by depth
+    done[b] = true; s += parts[b].svg; for (const j of out[b]) need[j]--; }
+  return s;
+}
+
+/* ---------- labels (see-through) ---------- */
+function dnaLabels(st, g, SD){
+  const L = [], moving = st.run, unz = moving && g.u > 0 && g.u < 1, cop = moving && g.c > 0 && g.c < 1;
+  const add = (at, text, on = false) => L.push({ at, text, on });
+  const seq = g.seq, findPair = (pred, fromStart) => { for (let j = 0; j < NBP; j++){ const i = fromStart ? j : NBP - 1 - j; if (pred(i)) return i; } return -1; };
+  // enzymes
+  add(hp(0, g.hy, Z0, HEL.ro), 'HELICASE', unz);
+  add(hp(90, g.hy, Z0, HEL.ro), 'HELICASE LOBE', unz);
+  add([X0 + 14.5*Math.sin(rad(120)), g.hy, Z0 + 14.5*Math.cos(rad(120))], 'ATP SITE', unz);
+  if (g.u > 0 && g.u < 1 && g.tip < YF) add([X0, g.tip - 6, Z0], 'UNZIP FORK', true);
+  add(hp(0, g.pt, Z0 + DZ, POL.ro + 2.2), 'LAGGING POL', cop);
+  add(hp(180, g.pb, Z0 - DZ, POL.ro + 2.2), 'LEADING POL', cop);
+  // the domains are named on whichever polymerase sits further along +y (screen left from the front, where the column has room)
+  const U = g.pt >= g.pb, dz = U ? Z0 + DZ : Z0 - DZ, dy = U ? g.pt : g.pb, o = U ? -180 : 0;
+  add(hp(105 + o, dy, dz, POL.ro), 'FINGERS', cop);
+  add(hp(165 + o, dy, dz, POL.ro), 'PALM', cop);
+  add(hp(255 + o, dy, dz, POL.ro), 'THUMB', cop);
+  // proofreader and active site on the other one, so the two columns share the polymerase names
+  const ey = U ? g.pb : g.pt, ez = U ? Z0 - DZ : Z0 + DZ, eo = U ? 0 : -180;
+  add(hp(180 + eo, ey, ez, POL.ro + 4.4), 'PROOFREADER', false);
+  add(hp(180 + eo, ey, ez, POL.ri - .3), 'ACTIVE SITE', cop);
+  // DNA
+  add(sPt(SD.old1, ybp(2) + 3.5), 'BACKBONE');
+  add(sPt(SD.old1, ybp(5)), 'DEOXYRIBOSE');
+  add(sPt(SD.old2, YA + 4*RISE), 'PHOSPHATE');
+  add(sPt(SD.old2, ybp(7) - 1.8), 'PHOSPHODIESTER');
+  add(sPt(SD.old2, YF), "5' END");
+  add(sPt(SD.old2, YA - 3), "3' END");
+  BIN.forEach((bn, b) => { const pick = (str) => b % 2 ? str.indexOf(bn) : str.lastIndexOf(bn), on1 = pick(seq), on2 = pick(seq.split('').map(comp).join(''));
+    const i = on1 >= 0 ? on1 : on2, y = ybp(i), a = th(y), sp = g.sep(y);
+    const F = on1 >= 0 ? frameAt(Z0, a, a + GAP, y, DZ*sp) : frameAt(Z0, a + GAP, a, y, -DZ*sp);
+    add(wpt(F, LC/2 - 3.5, 0, 0), BASES[bn].name); });
+  const locked = i => g.sep(ybp(i)) < .01;
+  const at = findPair(i => locked(i) && 'AT'.includes(seq[i]), true), gc = findPair(i => locked(i) && 'GC'.includes(seq[i]));
+  const joinAt = (i, zc, flip) => { const y = ybp(i), a = th(y), F = flip ? frameAt(zc, a + GAP, a, y) : frameAt(zc, a, a + GAP, y); return wpt(F, LC/2, 0, 0); };
+  if (at >= 0) add(joinAt(at, Z0), 'A-T: 2 H-BONDS', unz);
+  if (gc >= 0) add(joinAt(gc, Z0), 'G-C: 3 H-BONDS', unz);
+  const gz = g.u < .5 ? Z0 : Z0 + DZ, gy = g.u < .5 ? YF - 10 : YA + 20;
+  add(hp(th(gy) + GAP/2, gy, gz, RAD + 1), 'MINOR GROOVE');
+  add(hp(th(gy) + GAP + (360 - GAP)/2, gy, gz, RAD + 1), 'MAJOR GROOVE');
+  if (g.added > 0){ const i = findPair(i => g.placed.t[i]); if (i >= 0) add(sPt(SD.new1, ybp(i)), 'NEW STRAND', cop); }
+  // stand and tray
+  add([X0, PS[0], BH + 12], 'UPRIGHT');
+  add([SLOTX, PS[1] + .8, sPt(SD.old2, YA)[2]], 'STRAND SLIDER');
+  add([X0, PF[0] - 4, Z0 + DZ], 'DOCKING PEG');
+  add([TRAY.x1, TRAY.y0 + 1, TRAY.z1], 'NUCLEOTIDE TRAY');
+  BIN.forEach((bn, b) => add([TRAY.x0 + 5, TRAY.y0 + 7 + b*13.5, TRAY.z1 + 6], bn + ' BLOCKS', cop));
+  return L;
+}
+
+/* ---------- behaviour: one progress value, animated toward a goal ---------- */
+let ui;
+function go(st, goal){
+  st.goal = goal;
+  if (st.run) return; st.run = true;
+  ui.animate(dt => { const p = st.p, back = st.goal < p;
+    const rate = back ? 1/2.2 : (p < 1 ? 1/3.6 : 1/6.5);
+    // stop on each phase boundary on the way forward / back, then carry on if the goal lies beyond
+    st.p = back ? Math.max(st.goal, p - rate*dt) : Math.min(st.goal, p + rate*dt);
+    if (st.p === st.goal){ st.run = false; return false; } return true; });
+}
+function newSeq(){
+  for (;;){ let s = ''; for (let i = 0; i < NBP; i++) s += 'ATGC'[Math.floor(Math.random()*4)];
+    if (/[AT]/.test(s) && /[GC]/.test(s)) return s; }
+}
+
+ui = mountFigure({
+  fig:'31', title:'DNA replication',
+  size:[BRD[2], BRD[3], POST_TOP], palette:'cobalt', turn:'full',
+  state:{ p:0, goal:0, run:false, seq:'GATTACAGCT' },
+  scene,
+  stats: st => { const g = dnaGeo(st); return [
+    { label:'Hydrogen bonds', value: g.hb },
+    { label:'Bases added', value: `${g.added}/20`, small:true },
+    { label:'Helices', value: g.c >= 1 ? '2' : '1', small:true } ]; },
+  buttons:[
+    { label:'Unzip with helicase', onClick:(st) => { if (st.p >= 1 && !(st.run && st.goal < st.p)) return ui.flash('Already unzipped: run the polymerase'); go(st, 1); } },
+    { label:'Run polymerase', onClick:(st) => { if (st.p >= 2) return ui.flash('Copied: two identical helices'); if (st.p < 1) ui.flash('Helicase first: unzipping'); go(st, 2); } },
+    { label:'Rewind', onClick:(st) => { if (st.p <= 0) return ui.flash('Already a closed helix'); go(st, 0); } },
+    { label:'New sequence', onClick:(st) => { if (st.p > 0 || st.run) return ui.flash('Rewind first: the helix must be closed'); st.seq = newSeq(); } },
+  ],
+  params:(st, q) => {
+    if (q.has('p')) st.p = st.goal = cl(+q.get('p') || 0, 0, 2);
+    if (/^[ATGC]{10}$/.test(q.get('seq') || '')) st.seq = q.get('seq');
+  },
+});
+{ const r0 = ui.render; ui.render = () => { r0(); document.documentElement.classList.toggle('dnaxr', (ui.st.xr || 0) > .6); }; ui.render(); }
+// the see-through labels fill both columns; the right one runs where the stats sit, so the stats step aside meanwhile
+document.head.insertAdjacentHTML('beforeend', '<style>@media (min-width:561px){html.dnaxr:not(.nolabels) #stats{visibility:hidden}}</style>');
+xrMount(() => ui, () => '');
+</script></body></html>
