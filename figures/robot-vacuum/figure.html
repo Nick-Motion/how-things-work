@@ -1,0 +1,637 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Robot vacuum</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Robot vacuum — a round lidar robot (Roborock-style, 35 cm across, 10 cm tall) on a patch of oak floor in the corner of
+   a room, with its charging dock against the back wall and a pet's food bowl. 1 unit = 1 cm.
+   x = depth (toward viewer-right), y = width (toward viewer-left), z = up. Walls: the back wall along x = 0 and the
+   right wall along y = 0, each with a skirting board.
+
+   How it really works (where everything is after each step):
+   DOCKED   wall socket -> cord -> dock's DC inlet -> dock board -> two spring contacts on the dock's floor plate ->
+            the robot's two charge pads under its rear -> BMS board -> 14.4 V Li-ion pack (4S2P, eight 18650 cells).
+   CLEAN    the CLEAN button on top -> main board. The lidar motor spins the laser head (belt drive) ~5 turns a second:
+            the laser emitter fires, the receiver lens images the spot onto its sensor and the angle gives the distance
+            (triangulation), so the board builds a map. Both drive motors turn their wheels through gearboxes (encoders
+            count the turns); the robot drives forward off the dock. The side brush flicks dirt at the edge inward, the
+            brush roll lifts it, the suction fan pulls air: brush roll -> air inlet -> dust bin -> filter -> fan ->
+            exhaust vent at the rear. Dirt stays in the bin.
+   BUMP     driving toward the wall the bumper (sprung, it floats on the chassis) hits it, slides back and its tab
+            presses a microswitch; the board stops the wheels, reverses 2 cm and turns (wheels run opposite ways).
+            Cliff sensors under the rim watch for stairs; the wall sensor on the right side keeps its distance.
+   LANES    it cleans in back-and-forth lanes, sucking up the dust and kibble it passes.
+   HOME     the dock's IR beacon (three LEDs behind its smoked window) is picked up by the IR receiver at the robot's
+            rear; the robot lines up in front of the dock, turns its back to it and reverses on until its charge pads
+            sit on the dock's contacts. Charging starts again.
+   EMPTY    lift the lid at the rear, take the bin (with its filter) out, tip it in the trash, put it back.
+   KIBBLE   the cat flicks kibble out of its bowl onto the floor: something to clean up.
+
+   Parts (each held by another):
+   CASE     top cover . bumper (front 216 deg, floating) . rubber strip . lid . lidar turret cover with its window band .
+            exhaust vent . wall-sensor window . IR receiver window . CLEAN and DOCK buttons with the status ring
+   CHASSIS  base pan . cliff sensors x4 (on the pan, looking down) . charge pads (under the pan, at the rear)
+   DRIVE    two wheel modules: wheel . gearbox . drive motor . encoder disc . suspension spring + bracket under the cover .
+            front caster on its swivel mount
+   CLEANING side brush + its motor . brush roll in its housing (gear case at the left end) . brush motor .
+            air inlet sleeve . dust bin (with handle) . pleated filter on its side . fan sleeve . suction fan (impeller in
+            its scroll) . fan motor on top of it . exhaust at the rear right
+   SENSING  lidar: standoffs on the board . fixed base . turntable . drive belt . lidar motor . spinning head with the laser
+            emitter and the receiver lens . bumper microswitches x2 with levers . bumper springs x2 . wall sensor .
+            IR receiver . gyro on the board
+   POWER    battery pack (8 cells, end holders) . BMS board . battery leads . main board (processor, gyro, Wi-Fi module,
+            capacitors) . wires to the motors
+   DOCK     sloped case . smoked IR window . IR beacon LEDs x3 . dock board . floor plate . two spring contacts . DC inlet .
+            cord along the skirting to the wall socket . plug */
+
+/* ---------- room ---------- */
+const W = 90, D = 100, H = 19, WALL_H = 16, WT = 3, WF = 3.6;     // floor patch, wall height, wall thickness, wall face (skirting front)
+const RR = 17.5, RIN = 16.8, RTOP = 8.5;                         // robot radius, inner wall radius, top of the cover
+const DOCKX = 31.3, DOCKY = 62, APPR = [50, 62];                  // robot centre when docked, the approach point in front of the dock
+const BOWL = [11, 93];
+const DRIVE = 28, REVV = 14, TURNV = 210;                        // cm/s, cm/s, deg/s
+const FLOORM = { l:'#e6bf86', m:'#cfa063', d:'#9c7140' };
+const WALLM = { l:'#f4ede1', m:'#dfd5c4', d:'#bbb09d' };
+const SKIRTM = { l:'#fffdf7', m:'#ebe7dc', d:'#c4beb0' };
+const DOCKM = { l:'#615c56', m:'#48443f', d:'#2d2a27' };
+const TYREM = { l:'#57524c', m:'#3b3733', d:'#24211e' };
+const PANM = matOf('#7b7772'), HOUSM = matOf('#8d8f92'), GEARM = matOf('#b9b4a8');
+const PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, CELLM = matOf('#4f86d6'), BINM = '#a9c3cf';
+const BRISTM = matOf('#5b5650'), FLAPM = '#e2483d', COPPER = matOf('#d08a52'), YELM = matOf('#f2c230');
+const BOWLM = matOf('#e2483d'), KIBM = matOf('#9a6431');
+const rad = a => a*Math.PI/180;
+const wrap180 = a => ((a + 540) % 360) - 180;
+
+/* ---------- the robot's own frame: u forward, v to its left, z up ---------- */
+let RX = DOCKX, RY = DOCKY, RCs = 1, RSn = 0;
+const rvFrame = st => { RX = st.x; RY = st.y; RCs = Math.cos(rad(st.th)); RSn = Math.sin(rad(st.th)); };
+const W3 = (u, v, z) => [RX + u*RCs - v*RSn, RY + u*RSn + v*RCs, z];
+const dirW = (du, dv, dz = 0) => [du*RCs - dv*RSn, du*RSn + dv*RCs, dz];
+const ringL = (cu, cv, r, z, n = 48, a0 = 0, a1 = 360) => Array.from({length: n}, (_, i) => { const a = rad(a0 + (a1 - a0)*i/(a1 - a0 === 360 ? n : n - 1)); return W3(cu + r*Math.cos(a), cv + r*Math.sin(a), z); });
+const aabb = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+// sort parts given boxes in the robot's frame (so a turned robot still sorts by its own axes)
+function lSort(parts){
+  const V = [CAM_V[0]*RCs + CAM_V[1]*RSn, -CAM_V[0]*RSn + CAM_V[1]*RCs, CAM_V[2]];
+  const dep = b => [0,1,2].reduce((a, k) => a + (b[0][k] + b[1][k])/2*V[k], 0);
+  const sep = (p, q) => { for (let k = 0; k < 3; k++){ if (p.b[1][k] <= q.b[0][k] + 1e-6) return V[k] >= 0 ? -1 : 1; if (q.b[1][k] <= p.b[0][k] + 1e-6) return V[k] >= 0 ? 1 : -1; } return 0; };
+  return parts.filter(Boolean).sort((p, q) => sep(p, q) || dep(p.b) - dep(q.b)).map(p => p.svg).join('');
+}
+// a hexahedron from 8 corners (bottom four, then the top four): every face that faces the viewer
+function rvHexa(c, M, w = .6){
+  const F = [[0,1,2,3],[4,5,6,7],[0,1,5,4],[1,2,6,5],[2,3,7,6],[3,0,4,7]], cen = avg(c); let s = '';
+  for (const fi of F){ const q = fi.map(i => c[i]); let n = norm(cross(sub(q[2], q[0]), sub(q[3], q[1])));
+    if (!isFinite(n[0])) continue; if (dot(n, sub(avg(q), cen)) < 0) n = n.map(v => -v);
+    if (vis(n)) s += shape(q, toneI(n, M), w); }
+  return s; }
+const lbox = (u0, v0, z0, u1, v1, z1, M, w = .6) => rvHexa([W3(u0,v0,z0), W3(u1,v0,z0), W3(u1,v1,z0), W3(u0,v1,z0), W3(u0,v0,z1), W3(u1,v0,z1), W3(u1,v1,z1), W3(u0,v1,z1)], M, w);
+const lcyl = (u, v, z0, z1, r, M, w = .7, n = 20) => { const [x, y] = W3(u, v, 0); return cyl(x, y, z0, z1, r, M, toneI, w, n); };
+const lrod = (a, b, r, M, w = .7, r1 = r, n = 16) => rod(W3(...a), W3(...b), r, M, toneI, w, r1, n);
+const mw = w => `style="stroke-width:${f(w)}"`;
+// wires: short pieces that sort on their own (local points)
+function rvWire(pts, col, w = .28){
+  const out = [];
+  for (let i = 0; i < pts.length - 1; i++){ const a = pts[i], b = pts[i+1], d = pd([W3(...a), W3(...b)], false);
+    let svg = `<path d="${d}" fill="none" stroke="${INK}" ${mw(2*w + .3)} stroke-linecap="round"/><path d="${d}" fill="none" stroke="${col}" ${mw(2*w)} stroke-linecap="round"/>`;
+    out.push({ b: aabb([a, b], w), svg }); }
+  return out; }
+// a coil spring between two local points
+function rvCoil(a, b, r, n = 9){
+  const ax = norm(sub(b, a)), p1 = norm(cross(ax, Math.abs(ax[2]) < .9 ? [0,0,1] : [1,0,0])), pts = [];
+  for (let i = 0; i <= n*2; i++){ const t = i/(n*2), o = i && i < n*2 ? (i % 2 ? r : -r) : 0; pts.push(W3(...[0,1,2].map(k => a[k] + (b[k] - a[k])*t + p1[k]*o))); }
+  const d = pd(pts, false);
+  return `<path d="${d}" fill="none" stroke="${INK}" ${mw(.55)} stroke-linejoin="round"/><path d="${d}" fill="none" stroke="#dfe4e6" ${mw(.25)} stroke-linejoin="round"/>`; }
+
+/* ---------- the case ---------- */
+const RB = [[16.4, .9], [17.3, 1.6], [17.5, 2.3], [17.5, 7.3], [17.2, 8.1], [16.4, RTOP]];
+const bodyRings = (n = 48) => RB.map(([r, z]) => ringL(0, 0, r, z, n));
+// a band round part of the side (local angles a0..a1), each strip only if it faces the viewer
+function band(r, z0, z1, a0, a1, col, n = 24){
+  let s = '';
+  for (let i = 0; i < n; i++){ const b0 = a0 + (a1 - a0)*i/n, b1 = a0 + (a1 - a0)*(i + 1)/n, bm = rad((b0 + b1)/2);
+    if (!facing(dirW(Math.cos(bm), Math.sin(bm)))) continue;
+    const q = [[b0, z0], [b1, z0], [b1, z1], [b0, z1]].map(([a, z]) => W3(r*Math.cos(rad(a)), r*Math.sin(rad(a)), z));
+    s += face(pd(q), typeof col === 'function' ? col(dirW(Math.cos(bm), Math.sin(bm))) : col); }
+  return s; }
+// ink along an arc of the side, only the part facing the viewer
+function arcInk(r, z, a0, a1, w = .8, n = 30){
+  let segs = [], cur = [];
+  for (let i = 0; i <= n; i++){ const a = rad(a0 + (a1 - a0)*i/n);
+    if (facing(dirW(Math.cos(a), Math.sin(a)))) cur.push(W3(r*Math.cos(a), r*Math.sin(a), z)); else { if (cur.length > 1) segs.push(cur); cur = []; } }
+  if (cur.length > 1) segs.push(cur);
+  return segs.map(q => ink(pd(q, false), w)).join(''); }
+const LIDP = Array.from({length: 17}, (_, i) => { const a = rad(106 + 148*i/16); return [15.2*Math.cos(a), 15.2*Math.sin(a)]; });
+const LID_HU = -15.2;                                                 // lid hinge at the rear
+const lidPt = (u, v, z, k) => { const p = rad(105*k), d = u - LID_HU; return W3(LID_HU + d*Math.cos(p) - (z - RTOP)*Math.sin(p), v, RTOP + d*Math.sin(p) + (z - RTOP)*Math.cos(p)); };
+function rvLid(st, m){
+  const k = ease(st.lid), A = LIDP.map(([u, v]) => lidPt(u, v, RTOP - .5, k)), B = LIDP.map(([u, v]) => lidPt(u, v, RTOP + .02, k));
+  const p = rad(105*k), nTop = dirW(-Math.sin(p), 0, Math.cos(p));
+  let s = loft(A, B, n => tone(n, m));
+  if (facing(nTop)) s += fill(pd(B), tone(nTop, m)) + ink(pd(B), .9);
+  else s += fill(pd(A), mix(tone(nTop.map(x => -x), m), '#000000', .12)) + ink(pd(A), .9);
+  return s + hullInk([...A, ...B], 1.2); }
+function rvButtons(st, m){
+  const runC = st.mode === 'run' ? '#43c25c' : st.mode === 'docked' && st.bat < 99.5 ? (Math.sin(st.t*4) > 0 ? '#f4a62a' : '#f7cf7c') : '#f2f0e8';
+  let s = '';
+  // status ring round CLEAN, then the two buttons with their marks
+  s += fill(pd(ringL(10.2, 2.6, 1.95, RTOP + .02, 24)), runC) + ink(pd(ringL(10.2, 2.6, 1.95, RTOP + .02, 24)), .5);
+  s += act('clean', cyl(...W3(10.2, 2.6, 0).slice(0, 2), RTOP, RTOP + .38, 1.35, matOf(mix(m.l, '#ffffff', .35)), toneI, .7, 20)
+    + `<path d="${pd(ringL(10.2, 2.6, .62, RTOP + .4, 12, 130, 410), false)}${pd([W3(10.2 + .15, 2.6, RTOP + .4), W3(10.2 + .85, 2.6, RTOP + .4)], false)}" fill="none" stroke="${INK}" ${mw(.22)} stroke-linecap="round"/>`);
+  s += act('dock', cyl(...W3(10.2, -2.6, 0).slice(0, 2), RTOP, RTOP + .38, 1.35, matOf(mix(m.l, '#ffffff', .35)), toneI, .7, 20)
+    + `<path d="${pd([[9.6,-3.2],[10.4,-3.2],[10.85,-2.6],[10.4,-2.0],[9.6,-2.0]].map(([u, v]) => W3(u, v, RTOP + .4)))}" fill="none" stroke="${INK}" ${mw(.22)} stroke-linejoin="round"/>`);
+  return s; }
+function rvTurret(st, m){
+  const [cx, cy] = W3(1, 0, 0);
+  let s = cyl(cx, cy, RTOP - .1, RTOP + .3, 5.0, m, tone, .8, 36);
+  const A = ringL(1, 0, 4.4, RTOP + .3, 36), B = ringL(1, 0, 4.4, 10.4, 36);
+  s += loft(A, B, n => tone(n, m));
+  s += loft(ringL(1, 0, 4.43, 9.25, 36), ringL(1, 0, 4.43, 9.95, 36), n => mix('#26232a', '#55505a', Math.max(0, dot(rotV(n), L))));   // the smoked window band
+  if (st.lidar){ const a = rad(st.la); if (facing([Math.cos(a), Math.sin(a), 0])){ const [X, Y] = P(cx + 4.46*Math.cos(a), cy + 4.46*Math.sin(a), 9.6);
+    s += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(.9)}" fill="#ff5a4a" opacity=".45"/><circle cx="${f(X)}" cy="${f(Y)}" r="${f(.38)}" fill="#ff2a1a"/>`; } }
+  s += fill(pd(B), tone([0,0,1], m)) + ink(pd(B), .9) + fill(pd(ringL(1, 0, 2.2, 10.42, 20)), mix(tone([0,0,1], m), '#000000', .06));
+  return s + hullInk([...A, ...B], 1.4); }
+// the bin's top part above the cover, and the bin clipped to the lid opening (closed view, lid up)
+function rvBody(st, m, xr){
+  const R = bodyRings();
+  let s = '';
+  for (let i = 0; i < R.length - 1; i++) s += loft(R[i], R[i+1], n => tone(n, m));
+  // bumper: rubber strip round the front, seams; exhaust vent, wall-sensor window, IR receiver window
+  s += band(17.56, 3.9, 4.7, -100, 100, n => tone(n, TYREM), 40);
+  s += arcInk(17.53, 7.3, -108, 108, .8, 40) + arcInk(17.57, 3.9, -100, 100, .5, 40) + arcInk(17.57, 4.7, -100, 100, .5, 40);
+  for (const a of [-108, 108]) if (facing(dirW(Math.cos(rad(a)), Math.sin(rad(a))))) s += line([W3(17.53*Math.cos(rad(a)), 17.53*Math.sin(rad(a)), 1.6), W3(17.53*Math.cos(rad(a)), 17.53*Math.sin(rad(a)), 7.3)], .8);
+  for (let i = 0; i < 7; i++){ const a0 = 206 + i*5; s += band(17.53, 3, 6.4, a0, a0 + 2.6, '#2d2925', 1); }
+  s += band(17.58, 5.4, 6.4, -81, -75, '#1f1c22', 2) + band(17.53, 5.0, 6.3, 176, 184, '#1f1c22', 2);
+  // top: cover, lid seam (or the opening), buttons, turret
+  const topR = R[R.length - 1];
+  s += fill(pd(topR), tone([0,0,1], m));
+  const lidO = LIDP.map(([u, v]) => W3(u, v, RTOP + .02));
+  if (st.lid > .002) s += shape(lidO, '#2b2623', .9);
+  else s += ink(pd(lidO), .9) + fill(pd([[-4.5,-1.8],[-3.9,-1.8],[-3.9,1.8],[-4.5,1.8]].map(([u, v]) => W3(u, v, RTOP + .03))), mix(tone([0,0,1], m), '#000000', .22));
+  const top = [];
+  if (st.lid > .002) top.push({ u: -16, svg: rvLid(st, m) });
+  if (!xr && st.binUp > .002) top.push({ u: -12, svg: binAbove(st) });
+  top.push({ u: 1, svg: rvTurret(st, m) }, { u: 10, svg: rvButtons(st, m) });
+  top.sort((a, b) => facing(dirW(1, 0, 0)) ? a.u - b.u : b.u - a.u);
+  if (!xr && st.binUp > .002) s += clipTo(lidO, rvBin(st, 0));
+  s += top.map(t => t.svg).join('');
+  s += hullInk(R.flat(), 2.6);
+  return s; }
+const binAbove = st => { const z0 = 1.6 + 9*ease(st.binUp); return z0 + 5.8 > RTOP ? rvBin(st, RTOP) : ''; };
+
+/* ---------- the dust bin (local; zc = cut: draw only above this height) ---------- */
+function rvBin(st, zc = 0){
+  const up = 9*ease(st.binUp), op = 1 - st.binOut;
+  if (op < .02) return '';
+  const u0 = -15, u1 = -8.5, v0 = -6, v1 = 5.5, z0 = 1.6 + up, z1 = 7.4 + up, zb = Math.max(z0, zc);
+  if (zb >= z1) return '';
+  const c = [W3(u0,v0,zb), W3(u1,v0,zb), W3(u1,v1,zb), W3(u0,v1,zb), W3(u0,v0,z1), W3(u1,v0,z1), W3(u1,v1,z1), W3(u0,v1,z1)];
+  const F = [[[0,0,-1],[0,1,2,3]], [[0,0,1],[4,5,6,7]], [[0,-1,0],[0,1,5,4]], [[1,0,0],[1,2,6,5]], [[0,1,0],[2,3,7,6]], [[-1,0,0],[3,0,4,7]]];
+  let far = '', near = '';
+  for (const [n, q] of F){ const nw = dirW(...n), pts = q.map(i => c[i]);
+    if (facing(nw)) near += fill(pd(pts), BINM, 'opacity=".32"') + ink(pd(pts), .6);
+    else far += fill(pd(pts), mix(BINM, '#4a5a62', .35), 'opacity=".5"'); }
+  // dust inside, up to its level
+  let dust = '';
+  const dz = Math.min(z1 - .3, z0 + .15 + 5.3*st.bin);
+  if (st.bin > .01 && dz > zb) dust = lbox(u0 + .3, v0 + .3, Math.max(zb, z0 + .15), u1 - .3, v1 - .3, dz, matOf('#9d958a'), .3)
+    + fill(pd([[u0+1.5,v0+1.2],[u0+3.2,v0+1],[u0+2.6,v0+2.4]].map(([u, v]) => W3(u, v, dz + .02))), '#7d766c');
+  // handle on the top, the filter on the right side
+  const hdl = z1 > zc ? lrod([-12.6, -3, z1 + .1], [-12.6, 2.5, z1 + .1], .35, matOf('#6f6a64'), .5) : '';
+  const flt = rvFilter(up, zb);
+  const fF = facing(dirW(0, -1, 0));
+  return `<g opacity="${f(op)}">` + (fF ? far + dust + near + flt : flt + far + dust + near) + hdl + `</g>`; }
+function rvFilter(up, zc){
+  const z0 = Math.max(2.2 + up, zc), z1 = 6.8 + up; if (z0 >= z1) return '';
+  let s = lbox(-14, -6.6, z0, -9.5, -6, z1, matOf('#f6f2e6'), .5);
+  if (facing(dirW(0, -1, 0))){ let pl = ''; for (let u = -13.5; u <= -9.9; u += .45) pl += pd([W3(u, -6.62, z0 + .2), W3(u, -6.62, z1 - .2)], false);
+    s += `<path d="${pl}" fill="none" stroke="#b9b2a0" ${mw(.18)}/>`; }
+  return s; }
+
+/* ---------- working parts (see-through) ---------- */
+function rvWheel(sg, ang){
+  const v0 = sg > 0 ? 10.2 : -12.8, v1 = sg > 0 ? 12.8 : -10.2, zc = 3.6, r = 3.6;
+  let s = lrod([0, v0, zc], [0, v1, zc], r, TYREM, .9, r, 24);
+  let tr = '';
+  for (let i = 0; i < 12; i++){ const a = ang + i*Math.PI/6; if (!facing(dirW(Math.cos(a), 0, Math.sin(a)))) continue;
+    tr += pd([W3(r*Math.cos(a), v0 + .2, zc + r*Math.sin(a)), W3(r*Math.cos(a), v1 - .2, zc + r*Math.sin(a))], false); }
+  if (tr) s += `<path d="${tr}" fill="none" stroke="#1b1916" ${mw(.3)}/>`;
+  const vo = facing(dirW(0, 1)) ? v1 + .05 : v0 - .05;
+  const ring = (rr, n) => Array.from({length: n}, (_, i) => { const a = i/n*2*Math.PI; return W3(rr*Math.cos(a), vo, zc + rr*Math.sin(a)); });
+  s += shape(ring(2.3, 18), '#b9c0c3', .6);
+  let sp = ''; for (let i = 0; i < 5; i++){ const a = ang + i*2*Math.PI/5; sp += pd([W3(.6*Math.cos(a), vo, zc + .6*Math.sin(a)), W3(2.15*Math.cos(a), vo, zc + 2.15*Math.sin(a))], false); }
+  return s + `<path d="${sp}" fill="none" stroke="${INK}" ${mw(.4)}/>` + fill(pd(ring(.6, 10)), INK); }
+function rvSideBrush(st){
+  const cu = 11.5, cv = -9; let s = '';
+  for (let i = 0; i < 3; i++){ const a = rad(st.sa + i*120);
+    let br = '';
+    for (const da of [-.13, -.04, .05, .14]){ let t = W3(cu + 6.8*Math.cos(a + da), cv + 6.8*Math.sin(a + da), .15);
+      t = [Math.max(WF + .3, t[0]), Math.max(WF + .3, t[1]), t[2]];
+      br += pd([W3(cu + 1*Math.cos(a), cv + 1*Math.sin(a), .4), t], false); }
+    s += `<path d="${br}" fill="none" stroke="${INK}" ${mw(.42)} stroke-linecap="round"/><path d="${br}" fill="none" stroke="#6a625a" ${mw(.2)} stroke-linecap="round"/>`; }
+  return s + lcyl(cu, cv, .25, .85, 1.25, matOf('#4a4642'), .6, 14) + lcyl(cu, cv, .85, 1.4, .35, METAL, .4, 8); }
+function rvCaster(){
+  return lbox(12.9, -.9, .9, 14.1, -.6, 2.4, GEARM, .4) + lrod([13.5, -.6, 1.1], [13.5, .6, 1.1], 1.1, TYREM, .6, 1.1, 14)
+    + lbox(12.9, .6, .9, 14.1, .9, 2.4, GEARM, .4) + lcyl(13.5, 0, 2.4, 3.2, 1.25, DARK, .6, 14); }
+function rvBrushRoll(st){
+  const u0 = -5.5, zc = 2.2, rr = 1.9, hb = [];
+  hb.push({ b: [[-6.8,-7.6,1.4],[-4.2,-7.2,4.2]], svg: lbox(-6.8, -7.6, 1.4, -4.2, -7.2, 4.2, HOUSM, .5) });
+  hb.push({ b: [[-6.8,7.2,1.4],[-4.2,8,4.2]], svg: lbox(-6.8, 7.2, 1.4, -4.2, 8, 4.2, GEARM, .5) });
+  let roll = lrod([u0, -7.2, zc], [u0, 7.2, zc], rr, BRISTM, .8, rr, 20);
+  for (let h = 0; h < 3; h++){ let cur = []; const segs = [];
+    for (let i = 0; i <= 28; i++){ const v = -7 + 14*i/28, ph = rad(st.ba) + h*2*Math.PI/3 + v*.32;
+      if (facing(dirW(Math.cos(ph), 0, Math.sin(ph)))) cur.push(W3(u0 + (rr + .05)*Math.cos(ph), v, zc + (rr + .05)*Math.sin(ph)));
+      else { if (cur.length > 1) segs.push(cur); cur = []; } }
+    if (cur.length > 1) segs.push(cur);
+    roll += segs.map(q => `<path d="${pd(q, false)}" fill="none" stroke="${INK}" ${mw(.75)} stroke-linecap="round"/><path d="${pd(q, false)}" fill="none" stroke="${FLAPM}" ${mw(.38)} stroke-linecap="round"/>`).join(''); }
+  hb.push({ b: [[u0 - rr, -7.2, zc - rr], [u0 + rr, 7.2, zc + rr]], svg: roll });
+  const hood = [W3(-8, -7.6, 4.6), W3(-3, -7.6, 4.6), W3(-3, 8, 4.6), W3(-8, 8, 4.6)];
+  return lSort(hb) + fill(pd(hood), HOUSM.l, 'opacity=".25"') + ink(pd(hood), .45); }
+function rvFan(st){
+  const [cx, cy] = W3(-10.5, -9.6, 0);
+  let s = cyl(cx, cy, 1.6, 4.6, 2.5, matOf('#5b5f66'), toneI, .7, 24);
+  let bl = '';
+  for (let i = 0; i < 9; i++){ const a = rad(st.fa + i*40);
+    bl += pd([[.7, 0], [1.5, .35], [2.25, .55]].map(([r, da]) => [cx + r*Math.cos(a + da), cy + r*Math.sin(a + da), 4.62]), false); }
+  s += fill(pd(ringL(-10.5, -9.6, 2.3, 4.61, 24)), '#2c2f34') + `<path d="${bl}" fill="none" stroke="#c9d0d4" ${mw(.3)}/>`;
+  s += cyl(cx, cy, 4.6, 7.0, 1.5, METAL, toneI, .7, 18) + fill(pd(ringL(-10.5, -9.6, .5, 7.02, 10)), '#8f989b');
+  return s; }
+function rvBattery(){
+  const cells = [];
+  for (let i = 0; i < 4; i++) for (const [va, vb] of [[-6.4, -.1], [.1, 6.4]]){ const u = 1.9 + i*1.85;
+    cells.push({ b: [[u - .9, va, 1.45], [u + .9, vb, 3.25]], svg: lrod([u, va, 2.35], [u, vb, 2.35], .9, CELLM, .45, .9, 12) }); }
+  for (const sg of [-1, 1]) cells.push({ b: sg < 0 ? [[.9, -6.8, 1.4], [8.4, -6.4, 3.3]] : [[.9, 6.4, 1.4], [8.4, 6.8, 3.3]], svg: lbox(.9, sg < 0 ? -6.8 : 6.4, 1.4, 8.4, sg < 0 ? -6.4 : 6.8, 3.3, DARK, .5) });
+  return lSort(cells); }
+function rvBoard(){
+  let s = lbox(-2.5, -6.5, 4.6, 12, 6.5, 4.9, PCBM, .6);
+  const ch = [];
+  ch.push({ b: [[4.8, -3.2, 4.9], [7.2, -.8, 5.25]], svg: lbox(4.8, -3.2, 4.9, 7.2, -.8, 5.25, DARK, .5) });
+  ch.push({ b: [[2.5, 2.5, 4.9], [3.5, 3.5, 5.15]], svg: lbox(2.5, 2.5, 4.9, 3.5, 3.5, 5.15, matOf('#2b2b30'), .4) });
+  ch.push({ b: [[9, 3.2, 4.9], [11, 4.8, 5.3]], svg: lbox(9, 3.2, 4.9, 11, 4.8, 5.3, METAL, .45) });
+  for (const v of [-5.2, -3.9]) ch.push({ b: [[8.3, v - .5, 4.9], [9.3, v + .5, 6.1]], svg: lcyl(8.8, v, 4.9, 6.1, .48, matOf('#3f6fb4'), .45, 12) });
+  ch.push({ b: [[-1.8, -5.6, 4.9], [-.6, -2, 5.5]], svg: lbox(-1.8, -5.6, 4.9, -.6, -2, 5.5, matOf('#f3efe4'), .4) });
+  ch.push({ b: [[-1.8, 2, 4.9], [-.6, 5.6, 5.5]], svg: lbox(-1.8, 2, 4.9, -.6, 5.6, 5.5, matOf('#f3efe4'), .4) });
+  let tr = '';
+  for (const [a, b] of [[[7.2, -2], [9, 3.5]], [[4.8, -2], [3, 2.5]], [[6, -.8], [6, 4]], [[4.8, -2.6], [-.6, -3.8]]]) tr += pd([W3(a[0], a[1], 4.91), W3(b[0], a[1], 4.91), W3(b[0], b[1], 4.91)], false);
+  return s + `<path d="${tr}" fill="none" stroke="#d6b45a" ${mw(.16)} opacity=".8"/>` + lSort(ch); }
+function rvLidar(st){
+  const [cx, cy] = W3(1, 0, 0), z0 = 6.4;
+  let s = '';
+  for (let i = 0; i < 3; i++){ const a = rad(i*120 + 30); s += lrod([1 + 3.6*Math.cos(a), 3.6*Math.sin(a), 4.9], [1 + 3.6*Math.cos(a), 3.6*Math.sin(a), z0], .3, METAL, .4); }
+  s += cyl(cx, cy, z0, 7.4, 4.6, DARK, toneI, .7, 32);
+  s += cyl(cx, cy, 7.4, 7.9, 4.15, METAL, toneI, .6, 32);
+  // drive belt from the lidar motor's pulley round the turntable
+  const belt = hull([...ringL(1, 0, 4.2, 7.65, 32), ...ringL(1, 6.3, .55, 7.65, 10)].map(p => P(...p)));
+  s += `<path d="${sp(belt)}" fill="none" stroke="${INK}" ${mw(.55)}/><path d="${sp(belt)}" fill="none" stroke="#3a3632" ${mw(.3)}/>`;
+  // the spinning head: block, laser emitter and receiver lens side by side, pointing along la
+  const a = rad(st.la), d = [Math.cos(a), Math.sin(a), 0], p = [-d[1], d[0], 0];
+  const at = (s1, s2, z) => [cx + d[0]*s1 + p[0]*s2, cy + d[1]*s1 + p[1]*s2, z];
+  const blk = rvHexaW([at(-2.6, -2.6, 7.9), at(1.4, -2.6, 7.9), at(1.4, 2.6, 7.9), at(-2.6, 2.6, 7.9), at(-2.6, -2.6, 9.9), at(1.4, -2.6, 9.9), at(1.4, 2.6, 9.9), at(-2.6, 2.6, 9.9)], matOf('#3d4148'));
+  const em = rod(at(1.4, 1.3, 9.1), at(3.3, 1.3, 9.1), .55, matOf('#d94a3a'), toneI, .5, .55, 12);
+  const rc = rod(at(1.4, -1.2, 9.1), at(3.2, -1.2, 9.1), .85, matOf('#2b3550'), toneI, .5, .85, 14);
+  s += facing(d) ? blk + em + rc : em + rc + blk;
+  return s; }
+const rvHexaW = (c, M) => rvHexa(c, M, .6);
+
+function rvMech(st){
+  const parts = [], put = (b, svg) => parts.push({ b, svg });
+  const moving = st.mode === 'run', on = st.mode === 'run' && st.clean;
+  // drive: wheels, gearboxes, motors with encoders, suspension springs
+  for (const sg of [1, -1]){
+    const vw = sg > 0 ? [10.2, 12.8] : [-12.8, -10.2], vg = sg > 0 ? [7.6, 10.1] : [-10.1, -7.6], vm = sg*8.85;
+    put([[-3.6, vw[0], 0], [3.6, vw[1], 7.2]], rvWheel(sg, sg > 0 ? st.wl : st.wr));
+    put([[-3, vg[0], 1.8], [3, vg[1], 5.8]], lbox(-3, vg[0], 1.8, 3, vg[1], 5.8, GEARM, .6));
+    put([[3, vm - 1.3, 2.9], [8.5, vm + 1.3, 5.5]], lrod([3, vm, 4.2], [8.5, vm, 4.2], 1.3, METAL, .6, 1.3, 16));
+    put([[8.5, vm - 1.6, 2.6], [8.9, vm + 1.6, 5.8]], lrod([8.5, vm, 4.2], [8.9, vm, 4.2], 1.6, YELM, .5, 1.6, 16));
+    put([[-2.5, vm - 1.05, 5.8], [-.5, vm + 1.05, 8.2]], rvCoil([-1.5, vm, 5.8], [-1.5, vm, 7.8], .55, 6) + lbox(-2.5, vm - 1.05, 7.8, -.5, vm + 1.05, 8.2, PANM, .45));
+  }
+  put([[12.9, -1.3, 0], [14.1, 1.3, 3.2]], rvCaster());
+  for (const [u, v] of [[14.4, 4.8], [14.4, -4.8], [4.5, 14.8], [4.5, -14.8]]) put([[u - .7, v - 1, .9], [u + .7, v + 1, 2.1]], lbox(u - .7, v - 1, .9, u + .7, v + 1, 2.1, DARK, .45) + fill(pd(ringL(u, v, .35, 2.12, 8)), '#7a2c25'));
+  put([[4.6, -15.9, .1], [18.4, -2.1, 1.4]], rvSideBrush(st));
+  put([[10.2, -10.3, 1.4], [12.8, -7.7, 4.2]], lcyl(11.5, -9, 1.4, 4.2, 1.3, METAL, .6, 16));
+  put([[-8, -7.6, .3], [-3, 8, 4.6]], rvBrushRoll(st));
+  put([[-6.9, 8, 1.5], [-4.1, 10.6, 4.3]], lrod([-5.5, 8, 2.9], [-5.5, 10.6, 2.9], 1.4, METAL, .6, 1.4, 16));
+  put([[-8.5, -4, 2.4], [-8, 4, 4.4]], lbox(-8.5, -4, 2.4, -8, 4, 4.4, matOf('#6d7176'), .5));
+  { const up = 9*ease(st.binUp); put([[-15, -6.6, 1.6 + up], [-8.5, 5.5, 7.8 + up]], rvBin(st, 0)); }
+  put([[-12, -7.1, 2.4], [-9, -6.6, 4.4]], lbox(-12, -7.1, 2.4, -9, -6.6, 4.4, matOf('#6d7176'), .5));
+  put([[-13, -12.1, 1.6], [-8, -7.1, 7]], rvFan(st));
+  put([[.9, -6.8, 1.4], [8.4, 6.8, 3.3]], rvBattery());
+  put([[8.5, -3, 1.5], [8.85, 3, 3.2]], lbox(8.5, -3, 1.5, 8.85, 3, 3.2, PCBM, .45));
+  for (const p of rvWire([[8.7, 1, 3.2], [9.6, 1, 4.6]], '#e2483d', .22)) parts.push(p);
+  for (const p of rvWire([[8.7, -1, 3.2], [9.6, -1, 4.6]], '#2b2623', .22)) parts.push(p);
+  put([[-2.5, -6.5, 4.6], [12, 6.5, 6.1]], rvBoard());
+  put([[-3.6, -4.6, 4.9], [5.6, 4.6, 10]], rvLidar(st));
+  put([[.15, 5.45, 6], [1.85, 7.15, 7.7]], lcyl(1, 6.3, 6.0, 7.5, .85, METAL, .5, 14) + lcyl(1, 6.3, 7.5, 7.8, .55, matOf('#2b2623'), .4, 12));
+  // bumper: microswitches with levers, springs
+  for (const sg of [1, -1]){ const a = rad(38*sg), c = Math.cos(a), sn = Math.sin(a), hit = st.bump > .3;
+    put(aabb([[11.4, sg*8.8, 5.6], [12.6, sg*10, 6.6], [12.6 + 2*c, sg*10 + 2*Math.abs(sn), 6.6]], .1),
+      lbox(11.4, sg > 0 ? 8.8 : -10, 5.6, 12.6, sg > 0 ? 10 : -8.8, 6.6, DARK, .5)
+      + lrod([15.4*c, 15.4*sn, 6.3], [(16.7 - .5*st.bump)*c, (16.7 - .5*st.bump)*sn, 6.3], .14, METAL, .3)
+      + lcyl(12.6 + .1, sg*9.4, 6.6, 6.9, .3, matOf(hit ? '#ff5a3a' : '#c9c1b2'), .3, 8));
+    const b2 = rad(62*sg), c2 = Math.cos(b2), s2 = Math.sin(b2);
+    put(aabb([[14.4*c2, 14.4*s2, 5.4], [16.7*c2, 16.7*s2, 6.6]], .5), rvCoil([14.4*c2, 14.4*s2, 6], [(16.7 - .5*st.bump)*c2, (16.7 - .5*st.bump)*s2, 6], .45, 5)
+      + lcyl(14.2*c2, 14.2*s2, 5.4, 6.6, .45, PANM, .4, 10)); }
+  put([[2.6, -16.3, 4.8], [4.1, -15, 6.4]], lbox(2.6, -16.3, 4.8, 4.1, -15, 6.4, DARK, .45));
+  put([[-16.5, -.8, 4.8], [-15.3, .8, 6.4]], lbox(-16.5, -.8, 4.8, -15.3, .8, 6.4, DARK, .45) + lcyl(-15.9, 0, 6.4, 6.7, .4, matOf(st.homing ? '#ff5a3a' : '#5a3a3a'), .3, 8));
+  for (const sg of [1, -1]) put([[-16.1, sg > 0 ? 2.4 : -4, .7], [-14.4, sg > 0 ? 4 : -2.4, .9]], lbox(-16.1, sg > 0 ? 2.4 : -4, .72, -14.4, sg > 0 ? 4 : -2.4, .88, matOf('#d6b45a'), .45));
+  put([[-2.1, -5.3, 1.4], [.1, -3.1, 2.4]], lcyl(-1, -4.2, 1.4, 2.4, 1.1, DARK, .5, 14) + fill(pd(ringL(-1, -4.2, .7, 2.42, 12)), '#6d6862'));
+  // wiring: board to the motors and the fan
+  for (const sg of [1, -1]) for (const p of rvWire([[6, sg*6.5, 4.75], [6, sg*7.4, 4.9], [8.5, sg*7.9, 4.9]], '#e8e4da', .18)) parts.push(p);
+  for (const p of rvWire([[-2.5, -5.8, 4.75], [-3.2, -6.85, 5.6], [-9.6, -6.85, 7.2], [-10.5, -8.2, 7.05]], '#e8e4da', .18)) parts.push(p);
+  for (const p of rvWire([[-2.5, 5.2, 4.75], [-4.2, 6.6, 4.8], [-5.5, 8.6, 4.4], [-5.5, 10.6, 3.3]], '#e8e4da', .18)) parts.push(p);
+  for (const p of rvWire([[11.6, -6.5, 4.75], [11.5, -7.8, 4.5], [11.5, -8.7, 4.25]], '#e8e4da', .18)) parts.push(p);
+  // base pan under everything, then the parts in order
+  let s = loft(ringL(0, 0, 16.6, .9, 48), ringL(0, 0, 16.6, 1.4, 48), n => toneI(n, PANM)) + fill(pd(ringL(0, 0, 16.6, 1.4, 48)), PANM.l) + ink(pd(ringL(0, 0, 16.6, 1.4, 48)), .5);
+  s += lSort(parts);
+  // airflow and the dirt riding it
+  if (on){ const path = [[-5.5, 0, 1.2], [-6.6, 0, 3.2], [-8.3, 0, 3.4], [-11.8, 0, 4.6], [-12, -5, 4.4], [-11.5, -7.5, 3.5], [-10.5, -9.6, 3.2], [-13.4, -12.2, 3.2], [-15.5, -14, 3.2]].map(p => W3(...p));
+    s += `<path d="${pd(path, false)}" fill="none" stroke="#6fc3e8" ${mw(.45)} stroke-dasharray="1.1 .9" stroke-dashoffset="${f(-st.t*6)}" opacity=".9"/>`; }
+  for (const mo of st.motes){ const t = mo.t, pt = t < .4 ? [-5.5 + (-.9)*(t/.4), mo.v*(1 - t/.4*.4), 1.2 + 2.2*(t/.4)] : [-6.4 - 5.6*((t - .4)/.6), mo.v*.6*(1 - (t - .4)/.6), 3.4 + (mo.v*.1 + 1)*Math.sin((t - .4)/.6*Math.PI)];
+    const [X, Y] = P(...W3(...pt)); s += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(.42)}" fill="${mo.kind === 'kib' ? KIBM.m : '#8a8378'}" stroke="${INK}" stroke-width=".25"/>`; }
+  return s; }
+
+/* ---------- the robot: underside bits, the case (or its ghost + the working parts), laser ---------- */
+function rvRobot(st, m, k){
+  rvFrame(st);
+  let s = '';
+  if (k < 1) s += `<g opacity="${f(1 - k)}">${rvSideBrush(st)}${rvCaster()}</g>`;
+  if (k > 0){
+    const R = bodyRings(36);
+    let far = ''; for (let i = 0; i < R.length - 1; i++) far += loft(R[i], R[i+1], n => mix(toneI(n.map(v => -v), m), '#f2efe7', .55), true);
+    s += `<g opacity="${f(.5*k)}">${far}</g><g opacity="${f(1 - .8*k)}">${rvBody(st, m, true)}</g><g opacity="${f(k)}">${rvMech(st)}</g>`;
+    s += `<g opacity="${f(.6*k)}">${hullInk(R.flat(), 2.6)}</g>`;
+    // the laser: invisible infrared, shown here with the points it has measured on the walls
+    if (st.lidar){ for (const q of st.scan){ const [X, Y] = P(...q.p); s += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(.55)}" fill="#ff3a2a" opacity="${f(k*Math.max(0, 1 - q.age/1.4))}"/>`; }
+      const hit = scanHit(st, st.la); if (hit){ const o = [...W3(1, 0, 0).slice(0, 2), 9.1];
+        s += `<path d="${pd([o, hit], false)}" fill="none" stroke="#ff3a2a" ${mw(.32)} opacity="${f(.85*k)}"/>`; } }
+  } else s += rvBody(st, m, false);
+  if (st.imp){ const [X, Y] = P(...st.imp.p), a = st.imp.age; if (a < .5){ let d = '';
+    for (let i = -2; i <= 2; i++){ const t = rad(i*28 - 90); d += `M${f(X + 1.2*Math.cos(t))} ${f(Y + 1.2*Math.sin(t))}L${f(X + (2.6 + 3*a)*Math.cos(t))} ${f(Y + (2.6 + 3*a)*Math.sin(t))}`; }
+    s += `<path d="${d}" fill="none" stroke="${INK}" stroke-width="1.1" stroke-linecap="round" opacity="${f(1 - 2*a)}"/>`; } }
+  return s; }
+
+/* ---------- lidar ray-cast against the two walls (the dock, bowl and robot are lower than the laser) ---------- */
+function scanHit(st, la){
+  rvFrame(st);
+  const o = W3(1, 0, 9.1), a = rad(la), d = [Math.cos(a), Math.sin(a)];
+  let best = null;
+  if (d[0] < -1e-6){ const t = (WF - o[0])/d[0], y = o[1] + t*d[1]; if (y >= WF && y <= D && (!best || t < best[0])) best = [t, [WF + .05, y, 9.1]]; }
+  if (d[1] < -1e-6){ const t = (WF - o[1])/d[1], x = o[0] + t*d[0]; if (x >= WF && x <= W && (!best || t < best[0])) best = [t, [x, WF + .05, 9.1]]; }
+  return best ? best[1] : null; }
+
+/* ---------- dock ---------- */
+const DPROF = [[WF, 0], [13, 0], [13, 7.2], [12, 8.6], [WF, 9.2]];
+function rvDock(st, k){
+  const A = on(PY(54), DPROF), B = on(PY(70), DPROF), led = st.mode === 'docked' ? (st.bat < 99.5 ? '#f4a62a' : '#ffffff') : '#8af0ae';
+  let s = loft(A, B, n => tone(n, DOCKM));
+  if (facing([0,-1,0])) s += shape(A, tone([0,-1,0], DOCKM), 1);
+  if (facing([0,1,0])){ s += shape(B, tone([0,1,0], DOCKM), 1); }
+  if (facing([1,0,0])){ s += shape(on(PX(13.02), rrUV(56, 2, 68, 6.2, 1.3)), '#1d1b21', .8)
+      + fill(pd(on(PX(13.04), [[58.5, 2.6], [60, 2.6], [57.6, 5.6], [56.9, 5.6]])), '#ffffff', 'opacity=".22"')
+      + shape(on(PX(13.04), ellUV(62, 6.85, .45, .45, 10)), led, .4); }
+  s += line([[13, 54, 7.2], [13, 70, 7.2]], .7) + line([[12, 54, 8.6], [12, 70, 8.6]], .7);
+  s += rod([5.5, 70, 1.4], [5.5, 70.8, 1.4], .75, DARK, toneI, .6);
+  s += hullInk([...A, ...B], 2.2);
+  if (k <= 0) return act('dockbase', s);
+  // see-through: the dock board, the IR beacon LEDs, wires to the contacts and to the inlet
+  let mech = box(5, 56, .8, 11.5, 68, 1.1, PCBM, toneI, .6) + cyl(7, 66, 1.1, 2.3, .55, matOf('#3f6fb4'), toneI, .4, 10) + box(8.5, 58, 1.1, 10, 60, 1.6, DARK, toneI, .4);
+  for (const y of [58, 62, 66]) mech += box(11.6, y - .7, 3.4, 12.4, y + .7, 4.4, DARK, toneI, .4) + rod([12.4, y, 3.9], [12.9, y, 3.9], .45, matOf(st.homing ? '#ff6a4a' : '#8a3a3a'), toneI, .4);
+  const wd = pd([[11.5, 60, 1.1], [12, 60, 1.1], [12, 60, 3.4]], false) + pd([[11.5, 64, 1.1], [12, 64, 1.1], [12, 64, 3.4]], false) + pd([[11.5, 59, 1], [13, 59, .4]], false) + pd([[11.5, 65, 1], [13, 65, .4]], false) + pd([[6, 68, 1], [5.5, 70, 1.4]], false);
+  mech += `<path d="${wd}" fill="none" stroke="${INK}" ${mw(.5)}/><path d="${wd}" fill="none" stroke="#e8e4da" ${mw(.25)}/>`;
+  const far = `<g opacity="${f(.5*k)}">` + loft(A, B, n => mix(toneI(n.map(v => -v), DOCKM), '#f2efe7', .55), true) + `</g>`;
+  return act('dockbase', far + `<g opacity="${f(1 - .8*k)}">${s}</g><g opacity="${f(k)}">${mech}</g>`); }
+// the floor plate in front of the dock with its two spring contacts (flat, drawn before anything stands on it)
+function rvPlate(st, k){
+  const pl = rrUV(13, 55, 21.5, 69, 1.5, 4);
+  let s = loft(on(PZ(0), pl), on(PZ(.6), pl), n => toneI(n, DOCKM)) + shape(on(PZ(.6), pl), DOCKM.l, .9);
+  for (const y of [58.2, 64.2]) s += box(15, y, .6, 18.5, y + 1.6, .75, matOf('#e0c068'), toneI, .4);
+  if (k > 0) for (const y of [59, 65]){ const sp2 = []; for (let i = 0; i <= 8; i++) sp2.push([16 + (i % 2 ? .5 : -.5)*(i && i < 8 ? 1 : 0), y, .1 + .5*i/8]);
+    s += `<g opacity="${f(k)}"><path d="${pd(sp2, false)}" fill="none" stroke="${INK}" ${mw(.3)}/></g>`; }
+  return s; }
+
+/* ---------- walls, skirting, socket, cord, bowl, dust ---------- */
+// a wall seen from behind is cut down to a low kerb, so it never hides the room
+const wallH = n => facing(n) ? 2.4 : WALL_H;
+function rvBackWall(){
+  const h = wallH([-1,0,0]);
+  let s = box(0, 0, 0, WT, D, h, WALLM, tone, 1.1) + box(WT, 0, 0, WF, WT, Math.min(h, wallH([0,-1,0])), WALLM, tone, 0);
+  if (facing([1,0,0])){
+    s += box(WT, WT, 0, WF, D, 2.4, SKIRTM, tone, .7);
+    s += box(WT, 76, 5, WT + .3, 81, 10, SKIRTM, tone, .7) + box(WT + .3, 77.3, 6.3, 4.2, 79.7, 8.3, matOf('#f3efe4'), toneI, .6);
+    const cd = pd([[3.75, 78.5, 6.3], [3.85, 78.5, 3.2], [4.1, 78.5, 2.6], [4.1, 78.5, .35]], false);
+    s += `<path d="${cd}" fill="none" stroke="${INK}" ${mw(.9)} stroke-linecap="round"/><path d="${cd}" fill="none" stroke="#4a4642" ${mw(.55)} stroke-linecap="round"/>`; }
+  return s; }
+function rvRightWall(){
+  let s = box(WF, 0, 0, W, WT, wallH([0,-1,0]), WALLM, tone, 1.1);
+  if (facing([0,1,0])) s += box(WF, WT, 0, W, WF, 2.4, SKIRTM, tone, .7);
+  return s; }
+function rvCord(){
+  const cd = pd([[5.5, 70.8, .35], [5.5, 73.5, .35], [4.3, 76.5, .35], [4.1, 78.5, .35]], false);
+  return `<path d="${cd}" fill="none" stroke="${INK}" ${mw(.9)} stroke-linecap="round" stroke-linejoin="round"/><path d="${cd}" fill="none" stroke="#4a4642" ${mw(.55)} stroke-linecap="round" stroke-linejoin="round"/>`; }
+function rvBowl(){
+  const [bx, by] = BOWL, A = on(PZ(0), ellUV(bx, by, 5, 5, 28)), B = on(PZ(3), ellUV(bx, by, 6, 6, 28)), Bi = on(PZ(3), ellUV(bx, by, 5.3, 5.3, 28)), Fi = on(PZ(.8), ellUV(bx, by, 4.3, 4.3, 28));
+  let inner = loft(Fi, Bi, n => toneI(n, mix(BOWLM.l, '#ffffff', .3) && matOf('#f3efe4')), true) + fill(pd(Fi), '#e9e4d8');
+  const pile = [];
+  for (let i = 0; i < 14; i++){ const a = i*2.4, r = 1 + (i*1.7) % 3.4; pile.push([bx + r*Math.cos(a), by + r*Math.sin(a), 2.1 + (i % 3)*.25]); }
+  pile.sort((p, q) => depthOf(p) - depthOf(q));
+  for (const p of pile){ const [X, Y] = P(...p); inner += `<ellipse cx="${f(X)}" cy="${f(Y)}" rx="${f(1.05)}" ry="${f(.75)}" fill="${KIBM.m}" stroke="${INK}" stroke-width=".35"/>`; }
+  return loft(A, B, n => toneI(n, BOWLM)) + fill(`${pd(B)}${pd(Bi)}`, BOWLM.l, 'fill-rule="evenodd"') + inner + ink(pd(B), 1) + ink(pd(Bi), .6) + hullInk([...A, ...B], 1.4); }
+function dustSvg(d){
+  if (d.kind === 'kib') return cyl(d.x, d.y, 0, .55, .85, KIBM, toneI, .4, 8);
+  const pts = d.sh.map(([dx, dy]) => [d.x + dx, d.y + dy, .04]);
+  return fill(pd(pts), d.col) + ink(pd(pts), .3); }
+
+/* ---------- dust: seeded specks where the lanes will pass, and a few where they won't ---------- */
+function makeDust(){
+  let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
+  const out = [];
+  while (out.length < 34){
+    const x = 6 + rnd()*82, y = 6 + rnd()*92;
+    if (Math.hypot(x - DOCKX, y - DOCKY) < 19 || (x < 24 && y > 50 && y < 74) || Math.hypot(x - BOWL[0], y - BOWL[1]) < 9) continue;
+    const r = .5 + rnd()*.7, n = 6, sh = Array.from({length: n}, (_, i) => { const a = i/n*2*Math.PI; return [r*(.7 + .5*rnd())*Math.cos(a), r*(.7 + .5*rnd())*Math.sin(a)]; });
+    out.push({ x, y, kind: 'dust', sh, col: ['#9a948a', '#b5ada0', '#7f786e', '#c2b59a'][out.length % 4] });
+  }
+  return out; }
+
+/* ---------- behaviour: a queue of moves (one state object, one clock) ---------- */
+const STEPS = {
+  go: 'Clean: the lidar spins up, maps the room and the robot drives off its dock',
+  bump: 'Bump! The bumper slid back and pressed its switch: stop, back up, turn',
+  home: 'Heading home: it follows the infrared beacon from the dock',
+  docked: 'Docked: the contacts touch and the battery charges',
+  empty: 'Lift the lid, take the bin out, tip it in the trash and put it back',
+};
+let ui;
+const say = key => { if (ui && STEPS[key]) ui.flash(STEPS[key], 2600); };
+function homeQueue(){
+  return [{ k: 'set', fn: s => { s.clean = false; s.homing = true; }, say: 'home' }, { k: 'goto', to: APPR }, { k: 'turn', to: 0 }, { k: 'move', to: [DOCKX, DOCKY], back: true },
+    { k: 'set', fn: s => { s.mode = 'docked'; s.lidar = false; s.homing = false; s.x = DOCKX; s.y = DOCKY; s.th = 0; }, say: 'docked' }]; }
+function cleanQueue(st){
+  const q = [{ k: 'set', fn: s => { s.clean = true; s.lidar = true; s.homing = false; }, say: 'go' }];
+  q.push(st.mode === 'docked' ? { k: 'move', to: APPR } : { k: 'goto', to: APPR });
+  q.push({ k: 'turn', to: -90 }, { k: 'wall' }, { k: 'wait', t: .45 }, { k: 'move', rel: -2, back: true }, { k: 'turn', to: 0 },
+    { k: 'move', to: s => [70, s.y] }, { k: 'turn', to: 90 }, { k: 'move', to: [70, 78] }, { k: 'turn', to: 180 }, { k: 'move', to: [40, 78] }, ...homeQueue());
+  return q; }
+function stepSeg(st, dt){
+  const sg = st.q[0];
+  if (!sg){ st.mode = 'paused'; return; }
+  if (!sg.ok){ sg.ok = true; if (sg.say) say(sg.say);
+    if (sg.k === 'goto'){ const dx = sg.to[0] - st.x, dy = sg.to[1] - st.y, dd = Math.hypot(dx, dy);
+      st.q.splice(0, 1, ...(dd < .5 ? [] : [{ k: 'turn', to: Math.atan2(dy, dx)*180/Math.PI }, { k: 'move', to: sg.to }])); return; }
+    if (sg.k === 'wall'){ const c = Math.cos(rad(st.th)), s = Math.sin(rad(st.th)); let t = 1e9;
+      if (c < -1e-6) t = Math.min(t, (st.x - RR - WF)/(-c)); if (s < -1e-6) t = Math.min(t, (st.y - RR - WF)/(-s));
+      sg.to = [st.x + c*t, st.y + s*t]; sg.bump = true; }
+    if (sg.k === 'move'){ if (sg.rel != null){ const c = Math.cos(rad(st.th)), s = Math.sin(rad(st.th)); sg.to = [st.x + c*sg.rel, st.y + s*sg.rel]; }
+      else if (typeof sg.to === 'function') sg.to = sg.to(st); }
+    if (sg.k === 'turn') st.turnTo = sg.to;
+  }
+  st.moving = false;
+  if (sg.k === 'set'){ sg.fn(st); st.q.shift(); return; }
+  if (sg.k === 'wait'){ sg.t -= dt; if (sg.t <= 0) st.q.shift(); return; }
+  if (sg.k === 'turn'){ const df = wrap180(sg.to - st.th), stp = Math.sign(df)*Math.min(Math.abs(df), TURNV*dt);
+    st.th += stp; st.wl -= rad(stp)*11.5/3.6; st.wr += rad(stp)*11.5/3.6; st.moving = true;
+    if (Math.abs(df) < 1e-3){ st.th = ((sg.to % 360) + 360) % 360; if (st.th > 180) st.th -= 360; st.q.shift(); } return; }
+  if (sg.k === 'move' || sg.k === 'wall'){ const dx = sg.to[0] - st.x, dy = sg.to[1] - st.y, dd = Math.hypot(dx, dy), v = sg.back ? REVV : DRIVE, stp = Math.min(dd, v*dt);
+    if (dd > 1e-6){ st.x += dx/dd*stp; st.y += dy/dd*stp; const w = (sg.back ? -1 : 1)*stp/3.6; st.wl += w; st.wr += w; st.moving = true; }
+    if (dd - stp < 1e-4){ st.x = sg.to[0]; st.y = sg.to[1]; st.q.shift();
+      if (sg.bump){ st.bump = 1; const c = Math.cos(rad(st.th)), s = Math.sin(rad(st.th)); st.imp = { p: [st.x + c*RR, st.y + s*RR, 4.5], age: 0 }; say('bump'); } } }
+}
+function stepSim(st, dt){
+  st.t += dt;
+  const run = st.mode === 'run';
+  if (st.lidar && run) st.la = (st.la + dt*560) % 360;
+  if (run && st.clean){ st.ba += dt*900; st.sa -= dt*420; st.fa += dt*1500; }
+  if (run){ st.bat = Math.max(5, st.bat - dt*.4); stepSeg(st, dt); }
+  if (st.bump > 0) st.bump = Math.max(0, st.bump - dt*2.2);
+  if (st.imp){ st.imp.age += dt; if (st.imp.age > .6) st.imp = null; }
+  // the brushes and the fan take in whatever the robot passes over
+  if (run && st.clean) st.dust = st.dust.filter(d => { if (Math.hypot(d.x - st.x, d.y - st.y) > 16) return true;
+    rvFrame(st); const lu = (d.x - st.x)*RCs + (d.y - st.y)*RSn, lv = -(d.x - st.x)*RSn + (d.y - st.y)*RCs;
+    st.bin = Math.min(1, st.bin + (d.kind === 'kib' ? .03 : .014)); st.motes.push({ t: 0, v: Math.max(-6, Math.min(6, lv)), kind: d.kind });
+    if (st.bin >= 1 && !st.fullSaid){ st.fullSaid = true; if (ui) ui.flash('The bin is full: empty it'); } return false; });
+  for (const mo of st.motes) mo.t += dt/.55; st.motes = st.motes.filter(mo => mo.t < 1);
+  // kibble in flight
+  for (const kb of st.fly){ kb.t += dt; if (kb.t >= kb.t1){ st.dust.push({ x: kb.x1, y: kb.y1, kind: 'kib' }); kb.done = true; } }
+  st.fly = st.fly.filter(kb => !kb.done);
+  // lidar: the spots it has measured
+  if (st.lidar && run){ const h = scanHit(st, st.la); if (h) st.scan.push({ p: h, age: 0 }); }
+  for (const q of st.scan) q.age += dt; st.scan = st.scan.filter(q => q.age < 1.4).slice(-90);
+  if (!st.lidar) st.scan = [];
+  // emptying the bin
+  if (st.mode === 'empty'){ const t = (st.emT += dt), cl = (a, b) => Math.max(0, Math.min(1, (t - a)/(b - a)));
+    st.lid = t < 2.5 ? cl(0, .5) : 1 - cl(2.5, 3);
+    st.binUp = t < 1.9 ? cl(.5, 1.1) : 1 - cl(1.9, 2.5);
+    st.binOut = t < 1.5 ? cl(1.1, 1.45) : 1 - cl(1.55, 1.9);
+    if (t > 1.5){ st.bin = 0; st.fullSaid = false; }
+    if (t >= 3){ st.mode = st.prev; st.lid = st.binUp = st.binOut = 0; } }
+  if (st.mode === 'docked' && st.bat < 100) st.bat = Math.min(100, st.bat + dt*3);
+}
+const busy = st => st.mode === 'run' || st.mode === 'empty' || st.fly.length || st.motes.length || st.bump > 0 || st.imp || (st.mode === 'docked' && st.bat < 100) || st.scan.length;
+let loopOn = false;
+function runLoop(){
+  if (loopOn) return; loopOn = true;
+  ui.animate(dt => { stepSim(ui.st, dt); const b = busy(ui.st); if (!b) loopOn = false; return !!b; }); }
+function clean(st){
+  if (st.mode === 'empty') return ui && ui.flash('Put the bin back first');
+  if (st.mode === 'run'){ st.mode = 'paused'; if (ui) ui.flash('Paused'); return; }
+  if (st.mode === 'docked' || !st.q.length) st.q = cleanQueue(st);
+  st.mode = 'run'; if (ui) runLoop(); }
+function goHome(st){
+  if (st.mode === 'docked') return ui && ui.flash('It is already on its dock');
+  if (st.mode === 'empty') return ui && ui.flash('Put the bin back first');
+  st.q = homeQueue(); st.mode = 'run'; if (ui) runLoop(); }
+function emptyBin(st){
+  if (st.mode === 'run') return ui && ui.flash('It is cleaning: press Clean to pause it first');
+  if (st.mode === 'empty') return;
+  if (st.bin < .02) return ui && ui.flash('The bin is already empty');
+  st.prev = st.mode; st.mode = 'empty'; st.emT = 0; say('empty'); if (ui) runLoop(); }
+function spill(st){
+  if (st.fly.length) return;
+  if (st.dust.filter(d => d.kind === 'kib').length >= 24) return ui && ui.flash('Plenty of kibble on the floor already');
+  let seed = 3 + (st.spills = (st.spills || 0) + 1)*977; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 8; i++){ const a = rad(-40 + rnd()*55), r = 3 + rnd()*.5, x0 = BOWL[0] + 5*Math.cos(a), y0 = BOWL[1] + 5*Math.sin(a);
+    st.fly.push({ x0, y0, x1: 24 + rnd()*28, y1: 82 + rnd()*11, t: -i*.07, t1: .55 + rnd()*.15 }); }
+  if (ui){ ui.flash('The cat flicks kibble out of its bowl'); runLoop(); } }
+
+/* ---------- scene ---------- */
+const FLOOR_TOP = on(PZ(0), rectUV(0, 0, W, D));
+function scene(st, m){
+  const k = ease(st.xr || 0);
+  rvFrame(st);
+  let s = '';
+  // floor slab and its boards
+  const FA = on(PZ(-2.5), rectUV(0, 0, W, D));
+  s += loft(FA, FLOOR_TOP, n => tone(n, FLOORM)) + fill(pd(FLOOR_TOP), FLOORM.l);
+  let pl = ''; for (let y = 12; y < D; y += 11) pl += pd([[WF, y, 0], [W, y, 0]], false);
+  for (let i = 0; i < 9; i++){ const y = 12 + i*11, x = 18 + ((i*37) % 60); pl += pd([[x, y - 11, 0], [x, y, 0]], false); }
+  s += `<path d="${pl}" fill="none" stroke="${FLOORM.d}" stroke-width=".5" opacity=".55"/>` + hullInk([...FA, ...FLOOR_TOP], 2);
+  // shadows (one per object), then flat things on the floor
+  const rob = bodyRings(24).flat().concat(ringL(1, 0, 4.4, 10.4, 16));
+  s += castShadow([...on(PY(54), DPROF), ...on(PY(70), DPROF)], 0, FLOOR_TOP)
+    + castShadow(rob, 0, FLOOR_TOP) + castShadow(on(PZ(3), ellUV(BOWL[0], BOWL[1], 6, 6, 16)).concat(on(PZ(0), ellUV(BOWL[0], BOWL[1], 5, 5, 16))), 0, FLOOR_TOP);
+  s += st.dust.map(dustSvg).join('') + rvPlate(st, k) + rvCord();
+  // things standing up, sorted
+  const rb = aabb(bodyRings(16).flat().concat(ringL(11.5, -9, 6.8, .5, 12)), .1); rb[1][2] = 10.5 + 9*ease(st.binUp) + 10*ease(st.lid)*(st.lid > 0);
+  rb[0][0] = Math.max(rb[0][0], 13.05); rb[0][1] = Math.max(rb[0][1], WF);
+  const items = [
+    { box: [[0, 0, 0], [WF, D, wallH([-1,0,0])]], svg: rvBackWall() },
+    { box: [[WF, 0, 0], [W, WF, wallH([0,-1,0])]], svg: rvRightWall() },
+    { box: [[WF, 54, 0], [13, 70.8, 9.2]], svg: rvDock(st, k) },
+    { box: [[BOWL[0] - 6, BOWL[1] - 6, 0], [BOWL[0] + 6, BOWL[1] + 6, 3.4]], svg: act('bowl', rvBowl()) },
+    { box: rb, svg: act('robot', rvRobot(st, m, k)) } ];
+  for (const kb of st.fly){ if (kb.t < 0) continue; const t = Math.min(1, kb.t/kb.t1), p = [kb.x0 + (kb.x1 - kb.x0)*t, kb.y0 + (kb.y1 - kb.y0)*t, 3 + 7*t*(1 - t)*1.4 - 3*t];
+    items.push({ box: [p.map(v => v - .9), p.map(v => v + .9)], svg: cyl(p[0], p[1], p[2], p[2] + .55, .85, KIBM, toneI, .4, 8) }); }
+  s += byDepth(items);
+  // labels
+  rvFrame(st);
+  // the label box is the robot, stretched toward screen-left so more labels go right (the left column starts below the buttons)
+  const ex = -CAM_R[0]*4, ey = -CAM_R[1]*4;
+  const B = [st.x - RR + Math.min(ex, 0), st.x + RR + Math.max(ex, 0), st.y - RR + Math.min(ey, 0), st.y + RR + Math.max(ey, 0), 0, 11];
+  const run = st.mode === 'run', cl = run && st.clean, mv = run && st.moving, chg = st.mode === 'docked' && st.bat < 100;
+  if (k > .6){ const Lb = (u, v, z, text, on) => ({ at: W3(u, v, z), text, on });
+    s += xrCallouts([
+      Lb(3.3, 1.3, 9.1, 'LASER EMITTER', st.lidar && run), Lb(3.2, -1.2, 9.1, 'LIDAR RECEIVER', st.lidar && run), Lb(1, 6.3, 7.5, 'LIDAR MOTOR', st.lidar && run), Lb(17.4, 0, 6, 'BUMPER', st.bump > .2), Lb(12, 9.4, 6.6, 'BUMPER SWITCH', st.bump > .2),
+      Lb(14.4*Math.cos(rad(-62)), 14.4*Math.sin(rad(-62)), 6, 'BUMPER SPRING', st.bump > .2),
+      Lb(0, 12.8, 5.5, 'DRIVE WHEEL', mv), Lb(5.7, 8.85, 5.5, 'DRIVE MOTOR', mv), Lb(0, 7.6, 5.8, 'GEARBOX', mv),
+ Lb(13.5, 0, 3.2, 'CASTER WHEEL', mv), Lb(14.4, 4.8, 2.1, 'CLIFF SENSOR', run), Lb(3.3, -16.3, 5.6, 'WALL SENSOR', run),
+      Lb(11.5 + 6*Math.cos(rad(st.sa)), -9 + 6*Math.sin(rad(st.sa)), .3, 'SIDE BRUSH', cl), Lb(11.5, -9, 4.2, 'SIDE BRUSH MOTOR', cl), Lb(-5.5, -3, 4.1, 'BRUSH ROLL', cl),
+      Lb(-5.5, 10.6, 3.6, 'BRUSH MOTOR', cl), Lb(-8.2, 3, 4.4, 'AIR INLET', cl), Lb(-11.75, 4, 7.4 + 9*ease(st.binUp), 'DUST BIN', st.motes.length > 0), Lb(-11.5, -6.6, 6.8 + 9*ease(st.binUp), 'FILTER', cl),
+      Lb(-10.5 + 2.5*Math.cos(rad(-150)), -9.6 + 2.5*Math.sin(rad(-150)), 3, 'SUCTION FAN', cl), Lb(-10.5, -9.6, 7, 'FAN MOTOR', cl),
+      Lb(17.5*Math.cos(rad(221)), 17.5*Math.sin(rad(221)), 5, 'EXHAUST VENT', cl), Lb(4.65, -6.4, 3.25, 'BATTERY 14.4 V', run || chg), Lb(8.85, 1.5, 3.2, 'BMS BOARD', chg),
+      Lb(11, -6, 4.9, 'MAIN BOARD', run), Lb(6, -2, 5.25, 'PROCESSOR', run), Lb(3, 3, 5.15, 'GYRO', mv),      Lb(-16.5, 0, 5.6, 'IR RECEIVER', st.homing), Lb(-15.2, 3.2, .8, 'CHARGE PADS', chg),
+      { at: [12.9, 62, 3.9], text: 'IR BEACON', on: st.homing }, { at: [16.75, 65, .75], text: 'DOCK CONTACTS', on: chg },    ], B);
+  } else if (k < .05){ const Lb = (u, v, z, text, on) => ({ at: W3(u, v, z), text, on });
+    const items2 = [Lb(1, 0, 10.4, 'LIDAR TURRET', st.lidar && run), Lb(10.2, 2.6, RTOP + .4, 'CLEAN BUTTON', run), Lb(10.2, -2.6, RTOP + .4, 'DOCK BUTTON', st.homing),
+      Lb(-10, 0, RTOP, 'BIN LID', st.mode === 'empty'), { at: [13, 62, 4], text: 'CHARGING DOCK', on: chg }];
+    if (facing(dirW(1, 0, 0))) items2.push(Lb(17.4, 6, 4.3, 'BUMPER', st.bump > .2));
+    if (facing(dirW(Math.cos(rad(221)), Math.sin(rad(221))))) items2.push(Lb(17.5*Math.cos(rad(221)), 17.5*Math.sin(rad(221)), 5, 'EXHAUST VENT', cl));
+    items2.push(Lb(11.5 + 6.5*Math.cos(rad(st.sa - 40)), -9 + 6.5*Math.sin(rad(st.sa - 40)), .2, 'SIDE BRUSH', cl));
+    s += xrCallouts(items2, B); }
+  return s; }
+
+/* ---------- mount ---------- */
+const rvState = { pal: 'mint', mode: 'docked', x: DOCKX, y: DOCKY, th: 0, q: [], clean: false, lidar: false, homing: false, moving: false,
+  wl: 0, wr: 0, la: 30, ba: 0, sa: 20, fa: 0, bump: 0, imp: null, dust: makeDust(), fly: [], motes: [], scan: [], bin: .1, bat: 100,
+  lid: 0, binUp: 0, binOut: 0, emT: 0, prev: 'docked', t: 0, spills: 0 };
+ui = mountFigure({
+  fig: '07', title: 'Robot vacuum', size: [W, D, H], center: [W/2, D/2], palette: 'mint', turn: 'full',
+  state: rvState, scene,
+  buttons: [
+    { label: 'Clean', onClick: st => clean(st) },
+    { label: 'Dock', onClick: st => goHome(st) },
+    { label: 'Empty bin', onClick: st => emptyBin(st) },
+    { label: 'Spill kibble', onClick: st => spill(st) },
+  ],
+  stats: st => [{ label: 'Battery', value: `${Math.round(st.bat)}%`, small: true }, { label: 'Bin', value: `${Math.round(st.bin*100)}%`, small: true }],
+  acts: { clean: st => clean(st), dock: st => goHome(st), bowl: st => spill(st) },
+  params: (st, q) => {
+    for (const key of ['x', 'y', 'th', 'la', 'sa', 'ba', 'fa', 'bin', 'bat', 'lid', 'binUp', 'bump']) if (q.has(key)) st[key] = +q.get(key);
+    if (q.has('mode')) st.mode = q.get('mode');
+    if (q.get('lidar') === '1') st.lidar = true;
+    if (q.get('clean') === '1') st.clean = true;
+    if (q.get('homing') === '1') st.homing = true;
+    if (q.has('run')){ clean(st); const n = Math.round(+q.get('run')*60); for (let i = 0; i < n; i++) stepSim(st, 1/60); }
+    if (q.has('spill')){ spill(st); for (let i = 0; i < 60; i++) stepSim(st, 1/60); }
+    if (q.has('empty')){ st.bin = .6; emptyBin(st); const n = Math.round(+q.get('empty')*60); for (let i = 0; i < n; i++) stepSim(st, 1/60); }
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
