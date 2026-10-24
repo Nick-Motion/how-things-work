@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LM2596 buck converter</title></head><body>
+<script>document.documentElement.dataset.errors = document.documentElement.dataset.errors || '';</script>
+<script src="core.js"></script>
+<script>
+/* Truth first. TI LM2596 datasheet, https://www.ti.com/lit/ds/symlink/lm2596.pdf.
+   Battery positive enters VIN. The chip switches current through an inductor into the output capacitor and load.
+   While the switch is off, the Schottky catch diode carries the inductor current. Feedback from the trimpot
+   divider regulates the average output. Switching is 150 kHz; drawn current pulses are deliberately slowed.
+   A buck cannot boost a 7.4 V battery to 12 V. Dropout, wiring and battery resistance reduce the available output.
+   This teaching robot has a wide-supply motor driver and 3.3/5 V tolerant controller. Its selected rail threshold
+   is 90 percent of 3.3 or 5 V. Stall demand exceeds this example module's continuous 2 A thermal budget.
+   Voltage sag and current are illustrative load-line values, not a calibrated model or a guaranteed trip point.
+   Parts and attachment. POWER: two cells in a pack on the board, terminals and two leads to input screw pads.
+   MODULE: PCB on four standoffs; input/output pads, capacitors, LM2596 with five soldered leads and thermal tab,
+   catch diode with cathode band, ferrite inductor with copper winding, trimpot with screw and feedback resistor.
+   All module components are soldered to the PCB. Copper paths connect VIN, switch node, inductor, output and ground.
+   ROBOT: chassis on two wheels and a caster; motor bracket carries a direct-drive motor and axle to the wheels.
+   Control PCB on chassis carries MCU, motor driver and status LED. Wires join output pads to control PCB and motor.
+   See-through fades battery sleeve, chip package and motor can to expose cells, silicon, rotor, shaft and brushes. */
+const buckMat = {pcb:matOf('#287f9d'),copper:matOf('#dd924d'),blue:matOf('#498dcb'),red:matOf('#db6650'),green:matOf('#65af81')};
+const buckState = {connected:false,setpoint:5,stalled:false,voltage:0,current:0,phase:0,angle:0,trim:0,animating:false};
+const buckTarget = st => st.connected ? Math.min(st.setpoint,6.1)*(st.stalled?.48:1) : 0;
+const buckBrown = st => st.connected && st.voltage < Math.min(st.setpoint,5)*.9;
+function buckAnimate(st,ui){
+  if(st.animating)return;st.animating=true;
+  ui.animate(dt=>{
+    const goal=buckTarget(st);st.voltage+=(goal-st.voltage)*Math.min(1,dt*7);
+    if(Math.abs(goal-st.voltage)<.002)st.voltage=goal;
+    st.current=st.connected?(st.stalled?2.6:.42*st.voltage/5):0;
+    st.phase=(st.phase+dt*1.6)%1;
+    if(st.connected&&!st.stalled&&!buckBrown(st))st.angle+=dt*st.voltage*2.5;
+    st.trim+=(st.setpoint/12-st.trim)*Math.min(1,dt*6);
+    const more=st.connected||st.voltage>0; if(!more)st.animating=false;return more;
+  });
+}
+function buckConnect(st,ui){st.connected=!st.connected;st.stalled=false;buckAnimate(st,ui);}
+function buckSet(st,ui,value){st.setpoint=value;buckAnimate(st,ui);if(value===12)ui.flash('A buck steps down. 7.4 V in cannot produce 12 V out.',2800);}
+function buckStall(st,ui){if(!st.connected)return ui.flash('Connect the battery first.');st.stalled=!st.stalled;buckAnimate(st,ui);if(st.stalled)ui.flash('Stall overloads this supply. The rail sags and the controller resets.',2600);}
+function buckScene(st,m){
+  const parts=[],labels=[],k=ease(st.xr||0),live=st.connected;
+  const put=(bounds,svg,name,at,active=false)=>{parts.push({box:bounds,svg});if(name)labels.push({text:name,at:at||boxMid(bounds),on:active});};
+  const bx=(a,b,mat,name,active=false,extra='')=>put([a,b],box(...a,...b,mat,toneI,1)+extra,name,null,active);
+  const cy=(x,y,z0,z1,r,mat,name,extra='')=>put([[x-r,y-r,z0],[x+r,y+r,z1]],cyl(x,y,z0,z1,r,mat,toneI,1,18)+extra,name);
+  const cable=(points,col,name,active=false,width=.8)=>{
+    if(name)labels.push({text:name,at:points[Math.floor(points.length/2)],on:active});
+    for(let i=1;i<points.length;i++){
+      const a=points[i-1],b=points[i],bb=[a.map((v,j)=>Math.min(v,b[j])-width),a.map((v,j)=>Math.max(v,b[j])+width)];
+      put(bb,rod(a,b,width,matOf(col),toneI,.55));
+    }
+  };
+  let svg=board(0,0,158,82,2,4);
+  svg+=castShadow([[7,22,2],[38,22,2],[38,54,20],[7,54,20]],2,boardTop(0,0,158,82,2,4));
+  svg+=castShadow([[51,22,6],[103,22,6],[103,59,20],[51,59,20]],2,boardTop(0,0,158,82,2,4));
+  svg+=castShadow([[116,20,4],[151,20,4],[151,65,26],[116,65,26]],2,boardTop(0,0,158,82,2,4));
+  bx([7,23,2],[37,55,4],DARK,'BATTERY TRAY');
+  if(k>0)for(const y of [31,46])cy(22,y,4,18,6.5,buckMat.green,y===31?'BATTERY CELLS':null);
+  bx([8,24,4],[36,54,19],m,'BATTERY SLEEVE',false,'');
+  parts[parts.length-1].svg=`<g opacity="${1-.91*k}">${parts[parts.length-1].svg}</g>`;
+  cy(34,29,19,20.5,1.5,buckMat.red,'BATTERY POSITIVE');cy(34,48,19,20.5,1.5,DARK,'BATTERY NEGATIVE');
+  cable([[34,29,20],[41,29,5],[49,29,5],[live?53:47,29,7]],'#cb4b38','INPUT POSITIVE LEAD',live);
+  cable([[34,48,20],[41,51,4],[49,51,4],[live?53:47,51,7]],'#45423d','INPUT RETURN LEAD',live);
+  for(const x of [54,100])for(const y of [25,56])cy(x,y,2,5.5,1.3,METAL,x===54&&y===25?'MOUNTING STANDOFF':null);
+  bx([51,22,5.5],[103,59,6.5],buckMat.pcb,'MODULE PCB');
+  const trZ=6.6;
+  cable([[54,29,trZ],[62,29,trZ],[62,38,trZ],[70,38,trZ]],'#dba76a',null,live,.45);
+  cable([[70,42,trZ],[80,42,trZ],[88,42,trZ]],'#dba76a','SWITCH NODE',live,.5);
+  cable([[88,42,trZ],[98,42,trZ],[100,29,trZ]],'#dba76a',null,live,.45);
+  cable([[54,51,trZ],[100,51,trZ]],'#dba76a','GROUND COPPER',live,.65);
+  for(const x of [54,100])for(const y of [29,51]){
+    cy(x,y,6.5,7.2,2.4,METAL,y===29?(x===54?'INPUT TERMINALS':'OUTPUT TERMINALS'):null);
+    cy(x,y,7.2,8.4,1.3,METAL,null,line([[x-1,y,8.45],[x+1,y,8.45]],.6));
+  }
+  for(const [x,y,name] of [[61,47,'INPUT CAPACITOR'],[94,47,'OUTPUT CAPACITOR']]){
+    cy(x,y,6.5,18,4,DARK,name);cy(x,y,18,18.5,3.7,METAL,null,line([[x-2,y,18.6],[x+2,y,18.6]],.6)+line([[x,y-2,18.6],[x,y+2,18.6]],.6));
+  }
+  bx([68,28,6.5],[77,37,7.2],METAL,'THERMAL TAB');
+  bx([68,30,7.2],[77,38,10.5],DARK,'LM2596 REGULATOR',live);
+  parts[parts.length-1].svg=`<g opacity="${1-.8*k}">${parts[parts.length-1].svg}</g>`;
+  if(k>0)bx([70,32,7.3],[75,36,8.5],buckMat.copper,'SILICON DIE',live);
+  ['VIN PIN','SWITCH PIN','GROUND PIN','FEEDBACK PIN','ENABLE PIN'].forEach((name,i)=>bx([68+i*1.8,38,6.6],[68.8+i*1.8,41,7.2],METAL,i===0?'REGULATOR LEADS':null,live));
+  bx([79,31,6.5],[87,34,9],DARK,'SCHOTTKY DIODE',live);
+  bx([85.5,31,9],[86.5,34,9.2],METAL,'CATHODE BAND');
+  cable([[86,32,6.6],[86,34.5,6.6],[80,34.5,6.6],[80,42,6.6]],'#dba76a',null,live,.4);
+  cable([[80,32,6.6],[78,32,6.6],[78,51,6.6]],'#dba76a',null,live,.4);
+  cy(85,43,6.5,13.5,5.7,DARK,'INDUCTOR CORE');
+  for(let i=0;i<10;i++){
+    const a=i*Math.PI/5,xx=85+4.8*Math.cos(a),yy=43+4.8*Math.sin(a);
+    cable([[xx,yy,7],[xx,yy,14],[85+2.5*Math.cos(a),43+2.5*Math.sin(a),14],[85+2.5*Math.cos(a),43+2.5*Math.sin(a),7]],'#d99049',i===0?'COPPER WINDING':null,live,.55);
+  }
+  bx([88,24,6.5],[98,32,12],buckMat.blue,'TRIMPOT');
+  const ta=st.trim*Math.PI*3;
+  cy(93,28,12,13.2,1.8,matOf('#dcb75d'),'ADJUSTMENT SCREW',line([[93-Math.cos(ta)*1.4,28-Math.sin(ta)*1.4,13.25],[93+Math.cos(ta)*1.4,28+Math.sin(ta)*1.4,13.25]],.8));
+  bx([93,35,6.5],[98,37,7.5],CERAMIC,'FEEDBACK RESISTOR');
+  cable([[100,29,6.6],[101,35,6.6],[98,36,6.6]],'#dba76a',null,live,.3);
+  cable([[93,36,6.6],[91,35,6.6],[91,32,6.6],[74,40,6.6]],'#dba76a',null,live,.3);
+  cable([[100,29,8],[109,29,4],[117,29,4],[123,34,13]],'#cb4b38','ROBOT SUPPLY LEAD',live);
+  cable([[100,51,8],[109,55,4],[117,55,4],[123,50,13]],'#45423d','ROBOT RETURN LEAD',live);
+  bx([118,24,7],[149,60,9],m,'ROBOT CHASSIS');
+  for(const y of [21,63]){
+    put([[118.5,y-2,2],[147.5,y+2,31]],rod([133,y-2,16.5],[133,y+2,16.5],14.5,DARK,toneI,1.2),y===21?'DRIVE WHEEL':null);
+    const theta=st.angle;
+    for(let j=0;j<4;j++){
+      const a=theta+j*Math.PI/2;
+      cable([[133+Math.cos(a)*6,y+(y===21?-2.1:2.1),16.5+Math.sin(a)*6],[133+Math.cos(a)*12,y+(y===21?-2.1:2.1),16.5+Math.sin(a)*12]],'#b3b2a9',null,false,.4);
+    }
+  }
+  cy(146,42,2,7,2.5,METAL,'CASTER');
+  bx([127,30,9],[139,50,10.5],METAL,'MOTOR BRACKET');
+  put([[127,30,10.5],[139,52,22.5]],`<g opacity="${1-.88*k}">${rod([133,30,16.5],[133,52,16.5],6,METAL,toneI,1.2)}</g>`,'MOTOR CAN');
+  if(k>0){
+    put([[130,32,13.5],[136,49,19.5]],rod([133,32,16.5],[133,49,16.5],3,buckMat.copper,toneI,1),'MOTOR ROTOR',null,live&&!st.stalled);
+    bx([130,49,14],[132,52,16],DARK,'CARBON BRUSH');
+  }
+  cable([[133,19,16.5],[133,30,16.5]],'#9a9d99','DRIVE SHAFT',live&&!st.stalled,.8);
+  cable([[133,52,16.5],[133,65,16.5]],'#9a9d99',null,live&&!st.stalled,.8);
+  bx([119,32,10],[127,52,12],buckMat.green,'CONTROL PCB');
+  bx([120,35,12],[123,40,13.5],DARK,'MICROCONTROLLER',live&&!buckBrown(st));
+  bx([120,44,12],[124,49,14],DARK,'MOTOR DRIVER',live);
+  cy(125,34,12,14,1,matOf(live?(buckBrown(st)?'#e2483d':'#43c25c'):'#888277'),'STATUS LED');
+  cable([[124,46,13],[126,46,13],[128,51,16.5]],'#ca6d45','MOTOR WIRES',live,.4);
+  if(st.stalled)bx([139,60,2],[144,68,13],buckMat.red,'WHEEL STOP');
+  const groups=[parts.filter(p=>boxMid(p.box)[0]<45),parts.filter(p=>boxMid(p.box)[0]>=45&&boxMid(p.box)[0]<=110),parts.filter(p=>boxMid(p.box)[0]>110)];
+  const module=groups[1];
+  const moduleSvg=byDepth(module.filter(p=>p.box[1][2]<=6.5))+byDepth(module.filter(p=>p.box[1][2]>6.5&&p.box[1][2]<7.15))+byDepth(module.filter(p=>p.box[1][2]>=7.15));
+  const robotWheels=groups[2].filter(p=>p.box[1][1]<24||p.box[0][1]>60),robotBody=groups[2].filter(p=>!robotWheels.includes(p));
+  const wheelNear=p=>CAM_V[1]>=0?boxMid(p.box)[1]>42:boxMid(p.box)[1]<42;
+  const robotSvg=byDepth(robotWheels.filter(p=>!wheelNear(p)))+robotBody.sort((a,b)=>a.box[0][2]-b.box[0][2]).map(p=>p.svg).join('')+byDepth(robotWheels.filter(wheelNear));
+  svg+=byDepth([{box:[[7,23,2],[41,55,21]],svg:byDepth(groups[0])},{box:[[45,22,2],[110,59,20]],svg:moduleSvg},{box:[[116,19,2],[151,68,31]],svg:robotSvg}]);
+  if(k>.6){
+    const omitted=new Set(['BATTERY TRAY','BATTERY POSITIVE','BATTERY NEGATIVE','MOUNTING STANDOFF','THERMAL TAB','CATHODE BAND','MOTOR BRACKET','WHEEL STOP']);
+    const items=labels.filter(it=>!omitted.has(it.text)).sort((a,b)=>P(...a.at)[0]-P(...b.at)[0]);
+    const vb=document.getElementById('fig').viewBox.baseVal,half=Math.ceil(items.length/2);
+    for(const [side,col] of [items.slice(0,half),items.slice(half)].entries()){
+      col.sort((a,b)=>P(...a.at)[1]-P(...b.at)[1]);
+      col.forEach((it,i)=>{const [px,py]=P(...it.at),x=vb.width*(side?.86:.14),y=vb.height*(.07+.79*i/Math.max(1,col.length-1));svg+=tag(it.at,(x-px)/INK_K,(y-py)/INK_K,it.text,it.on);});
+    }
+  }
+  return svg;
+}
+const buckUI=mountFigure({fig:'LM2596',turn:'full',title:'LM2596 buck converter',size:[158,82,32],palette:'mustard',state:buckState,scene:buckScene,
+  stats:st=>[{label:'Battery',value:st.connected?'7.4 V':'Disconnected',small:true},{label:'Setpoint',value:st.setpoint.toFixed(1)+' V',small:true},{label:'Output',value:st.voltage.toFixed(2)+' V'},{label:'Load',value:st.current.toFixed(2)+' A',small:true},{label:'Robot',value:!st.connected?'Off':buckBrown(st)?'Brown-out':st.stalled?'Stalled':'Running',small:true}],
+  buttons:[{label:'Connect / disconnect battery',onClick:buckConnect},{label:'Set 5.0 V',onClick:(st,ui)=>buckSet(st,ui,5)},{label:'Set 3.3 V',onClick:(st,ui)=>buckSet(st,ui,3.3)},{label:'Try 12 V',onClick:(st,ui)=>buckSet(st,ui,12)},{label:'Stall / release motor',onClick:buckStall}],
+  params:(st,q)=>{st.connected=q.get('connected')==='1';st.stalled=q.get('stalled')==='1';const v=Number(q.get('setpoint'));if([3.3,5,12].includes(v))st.setpoint=v;st.voltage=buckTarget(st);st.current=st.connected?(st.stalled?2.6:.42*st.voltage/5):0;st.trim=st.setpoint/12;}
+});
+xrMount(()=>buckUI,()=> '');
+const buckStyle=document.createElement('style');
+buckStyle.textContent='.actions{position:static;flex-direction:row;flex-wrap:wrap;max-width:none;padding-right:225px;margin:8px 0}.stats{position:static;flex-direction:row;justify-content:flex-end;flex-wrap:wrap;gap:14px;margin:12px 0}.stat .v{font-size:26px}.stat.small .v{font-size:18px}@media(max-width:560px){.actions{padding-right:0}.stats{gap:10px;justify-content:space-between}.stat.small .v{font-size:15px}}';
+document.head.appendChild(buckStyle);
+if(buckState.connected)buckAnimate(buckState,buckUI);
+</script></body></html>
