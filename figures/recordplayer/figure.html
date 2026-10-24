@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Record player</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Record player: a belt-drive turntable on a sideboard, its record lying on the jacket beside it.
+   How the real thing works (and where everything is after each step):
+   1. Put on a record: the LP is lifted off its jacket, carried over the platter, its centre hole is lowered over the
+      spindle and it lies on the felt mat.
+   2. Start: the start button closes a switch on the switch board; the speed board feeds the DC motor; the motor's
+      pulley pulls the rubber belt, the belt turns the sub-platter, which is pressed on the spindle; the spindle turns
+      in the main bearing (bronze bushing, steel ball on a thrust pad) and carries the platter, mat and record round at
+      33 1/3 rpm, clockwise seen from above.
+   3. Drop the needle: the cue lever raises the lift bar, which raises the arm off its rest; the arm swings on its
+      pivot (vertical bearing in the base, horizontal bearings in the gimbal collar) over the lead-in groove; the cue
+      lever is lowered, the damped piston lets the bar sink slowly and the stylus settles into the groove.
+   4. Playing: the groove wiggles the stylus and cantilever; the magnet on the cantilever's far end moves between the
+      cartridge coils and makes a tiny signal; it runs up the headshell clips, along four wires inside the arm tube,
+      down the pivot, to the phono preamp, which boosts it (RIAA curve) and sends it out of the RCA jacks. The spiral
+      groove pulls the arm slowly toward the spindle.
+   5. Lift the arm: the cue lever raises the bar and the arm, the arm swings back to its rest. At the end of the side
+      the arm lifts and returns by itself and the motor stops.
+
+   Parts (each is held by another):
+   CASE      sideboard . plinth walls . deck plate . bottom plate . four isolation feet . arm board plate
+   PLATTER   aluminium platter with strobe dots . felt mat . record and its label . spindle (top of the bearing shaft)
+   BEARING   main bearing housing bolted under the deck by its flange . two bronze bushings . steel ball . thrust pad
+   DRIVE     DC motor hanging from a bracket on two rubber isolators under the deck . motor shaft up through the deck .
+             motor pulley . flat rubber belt . sub-platter on the spindle
+   POWER     DC jack in the back wall . speed board on standoffs (driver chip, trim pots, capacitors) . switch board on
+             tall standoffs with the start switch and power LED . speed switch under the deck slot . wires along the floor
+   ARM       pivot base on the arm board, with the vertical bearing . pillar . gimbal collar with its two bearings . arm
+             tube . rear stub . counterweight . anti-skate dial . headshell . finger lift . cartridge . cantilever . stylus .
+             four tonearm wires . arm rest post and pad . cue tower with damped piston . lift bar . cue lever
+   SIGNAL    tonearm wires out of the pivot housing to the phono preamp board (op-amp, capacitors, resistors) . RCA jacks .
+             PHONO/LINE switch . ground screw and ground wire . RCA cable and power cord out of the back, over the board edge */
+
+/* ---------- geometry (x = depth toward the viewer, y = width toward viewer-left, z = up; 2 units = 1 cm) ---------- */
+const BX0 = -4, BX1 = 76, BY0 = -6, BY1 = 166, BH = 3, BRAD = 6;      // sideboard top
+const BTOP = boardTop(BX0, BY0, BX1, BY1, BH, BRAD);
+const PW = 70, PD = 88, PRR = 3;                                        // plinth depth, width, corner radius
+const FZ = BH + 2.5, FLZ = FZ + .8, UZ = 14.8, TZ = 16, WALL = 1.2;     // feet top, floor, deck underside, deck top
+const FEET = [[6, 6], [6, 82], [64, 6], [64, 82]];
+const PC = [35, 52];                                                    // spindle
+const SUBR = 9.6, SUB0 = TZ + 1, SUB1 = TZ + 3.4;                       // sub-platter
+const PLR = 30, PL0 = SUB1, PL1 = TZ + 7.4, MATR = 29.2, MATZ = TZ + 7.8;
+const RECR = 30.5, REC0 = MATZ, REC1 = MATZ + .4, LABR = 10, SPR = .72, SPT = TZ + 11;
+const MOT = [20, 38], PULR = 1.3, PUL0 = TZ + .8, PUL1 = TZ + 3, BELTZ = TZ + 2.1;
+const PV = [15, 13], HC = 3.2, AZ = REC1 + HC, TUBR = .85;              // arm pivot, cartridge height, arm axle height
+const ARML = Math.hypot(PC[0] - PV[0], PC[1] - PV[1]) + 3;              // pivot to stylus (3 units of overhang)
+const TEND = [40, -2.2];                                                // end of the straight tube (arm frame)
+const R_IN = 29.2, R_OUT = 12;                                          // lead-in and run-out groove radius
+const CT = [PV[0] + 10.2*Math.cos(-18*Math.PI/180), PV[1] + 10.2*Math.sin(-18*Math.PI/180)];   // cue tower
+const CE = [PV[0] + 10*Math.cos(52*Math.PI/180), PV[1] + 10*Math.sin(52*Math.PI/180)];        // far end of the lift bar
+const CTOP = TZ + 6.5, BAR_R = .5, CONTACT = 9.5;
+const JC = [37, 128], JH = 31, JA = 6*Math.PI/180, JZ = BH + .6;          // record jacket on the sideboard
+const ZT = 37;                                                          // the record's height while carried over
+const RPM = 100/3, SIDE_S = 80, SIDE_MIN = 19.5;                       // a side plays in 80 s here (19:30 really)
+
+const BRASS = matOf('#d8b25a'), BRONZE = matOf('#c8894a'), ALU = matOf('#d4d8da'), STEEL = METAL, RUBBER = DARK;
+const PCB = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, CHIP = matOf('#34302d'), ECAP = matOf('#3f6fb0'), FCAP = matOf('#e8c45a');
+const RES = matOf('#d9c49a'), POT = matOf('#5b8fd6'), CARTM = matOf('#3e6fb8'), CWM = matOf('#4a4542'), CARD = matOf('#ece4d2');
+const VINYL = { l:'#2c2826', m:'#1f1c1a', d:'#141211' }, FELT = matOf('#3b3735'), LABC = '#f4b829';
+
+const rad = a => a*Math.PI/180;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const boxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const vcyl = (x, y, z0, z1, r, m, w = .8, n = 20) => ({ box:[[x-r, y-r, z0], [x+r, y+r, z1]], svg: cyl(x, y, z0, z1, r, m, toneI, w, n) });
+const abox = (x0, y0, z0, x1, y1, z1, m, w = .7, extra = '') => ({ box:[[x0, y0, z0], [x1, y1, z1]], svg: box(x0, y0, z0, x1, y1, z1, m, toneI, w) + extra });
+const rodI = (a, b, r, m, w = .7, n = 12) => ({ box: boxOf([a, b], r), svg: rod(a, b, r, m, toneI, w, r, n) });
+const ring = (x, y, z, r, n = 24) => on(PZ(z), ellUV(x, y, r, r, n));
+const mw = w => `style="stroke-width:${w.toFixed(2)}"`;      // a stroke in model units (not rescaled by inkScale)
+const dotTop = (x, y, z, r, c, w = .35) => { const g = ring(x, y, z, r, 10); return fill(pd(g), c) + ink(pd(g), w); };
+// text lying on a top face; al = reading direction in degrees (-90 = toward the viewer's right at the front view)
+const txH = (x, y, z, str, size, al = -90, col = INK, weight = 700) => { const a = rad(al), o = P(x, y, z);
+  return `<text transform="${txM(o, Dv(Math.cos(a), Math.sin(a), 0), Dv(-Math.sin(a), Math.cos(a), 0))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`; };
+const txB = (x, y, z, str, size, col = INK, weight = 700) => `<text transform="${txM(P(x, y, z), Dv(0, 1, 0), Dv(0, 0, -1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+// any convex block from 8 corners (an arm part at an angle): each face drawn when it faces the viewer
+function hexa(c8, m, w = .6){ const FC = [[0,1,2,3],[4,5,6,7],[0,1,5,4],[1,2,6,5],[2,3,7,6],[3,0,4,7]], cen = avg(c8); let s = '';
+  for (const fc of FC){ const q = fc.map(i => c8[i]); let n = norm(cross(sub(q[1], q[0]), sub(q[3], q[0])));
+    if (dot(n, sub(avg(q), cen)) < 0) n = n.map(v => -v); if (vis(n)) s += shape(q, toneI(n, m), w); } return s; }
+const obox = (fn, p0, p1, q0, q1, c0, c1, m, w = .6) => { const c8 = [[p0,q0,c0],[p1,q0,c0],[p1,q1,c0],[p0,q1,c0],[p0,q0,c1],[p1,q0,c1],[p1,q1,c1],[p0,q1,c1]].map(v => fn(...v));
+  return { box: boxOf(c8), svg: hexa(c8, m, w), pts: c8 }; };
+// a cable: rounded corners, cut into short pieces each with its own box so they sort with the solids they pass
+const bend = (pts, r = 1.2) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k]) * d/la), q = c.map((v, k) => b[k] + (v - b[k]) * d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+const wireParts = (pts, col, w = .3, L = 3) => { const q = bend(pts), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < L){ len += Math.hypot(...q[j].map((v, k) => v - q[j - 1][k])); j++; }
+    if (len < L) while (j < q.length - 1) j++;
+    const seg = q.slice(i, j + 1), d = pd(seg, false);
+    let svg = `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w + .9)}" stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    for (const e of [i === 0 ? q[0] : null, j === q.length - 1 ? q[j] : null]) if (e){ const [X, Y] = P(...e); svg += `<circle cx="${f(X)}" cy="${f(Y)}" r=".9" fill="${INK}"/>`; }
+    out.push({ box: boxOf(seg), svg }); i = j; }
+  return out; };
+// a thick cord (power, RCA) in model units, like the lamp's
+const cordSvg = (pts, col, r = .7) => { const d = pd(bend(pts, 1.5), false), cap = 'fill="none" stroke-linecap="round" stroke-linejoin="round"';
+  return `<path d="${d}" ${cap} stroke="${INK}" ${mw(2*r + 1)}/><path d="${d}" ${cap} stroke="${col}" ${mw(2*r)}/>`; };
+
+/* ---------- the tonearm: one frame per pose ----------
+   th = swing about the vertical bearing (0 = on the rest, larger = toward the spindle); cu = cue (1 = bar up).
+   The bar touches the tube 9.5 from the pivot, so the arm's pitch follows the bar once it has risen to the tube. */
+const barZ = cu => AZ - TUBR - .7 + 1.51*cu;                            // top of the lift bar
+function armF(th, cu){
+  const t = rad(th), zb = barZ(cu), ph = Math.asin(clamp((zb - (AZ - TUBR)) / CONTACT, 0, .2));
+  const e1 = [Math.cos(t), Math.sin(t), 0], e2 = [-Math.sin(t), Math.cos(t), 0], c = Math.cos(ph), s = Math.sin(ph);
+  const a1 = [e1[0]*c, e1[1]*c, s], a3 = [-e1[0]*s, -e1[1]*s, c];
+  const Lp = (a, b, cc) => [PV[0] + a*a1[0] + b*e2[0] + cc*a3[0], PV[1] + a*a1[1] + b*e2[1] + cc*a3[1], AZ + a*a1[2] + cc*a3[2]];
+  const bOf = a => TEND[1]*a/TEND[0];
+  const hl = Math.hypot(ARML - TEND[0], TEND[1]), hd = [(ARML - TEND[0])/hl, -TEND[1]/hl], hp = [-hd[1], hd[0]];
+  const hs = (p, q, cc) => Lp(ARML + p*hd[0] + q*hp[0], p*hd[1] + q*hp[1], cc);   // headshell frame: p forward, q inward, c up; stylus at (0,0,-HC)
+  return { th, cu, zb, ph, e2, Lp, bOf, hs, hl, tube: a => Lp(a, bOf(a), 0) };
+}
+const tipXY = t => [PV[0] + ARML*Math.cos(t), PV[1] + ARML*Math.sin(t)];
+const thForR = r => { let a = 0, b = Math.atan2(PC[1] - PV[1], PC[0] - PV[0]);
+  for (let i = 0; i < 40; i++){ const m = (a + b)/2, p = tipXY(m); if (Math.hypot(p[0] - PC[0], p[1] - PC[1]) > r) a = m; else b = m; }
+  return (a + b)/2*180/Math.PI; };
+const TH_REST = 0, TH_IN = thForR(R_IN), TH_OUT = thForR(R_OUT);
+const thOfG = g => thForR(R_IN + (R_OUT - R_IN)*g);
+const F_REST = armF(TH_REST, 1), REST_A = 37, REST_XY = F_REST.tube(REST_A), PAD_TOP = F_REST.Lp(REST_A - 1.4, F_REST.bOf(REST_A - 1.4), -TUBR)[2];
+
+/* ---------- the record jacket and the record ---------- */
+const jq = (u, v) => [JC[0] + u*Math.cos(JA) - v*Math.sin(JA), JC[1] + u*Math.sin(JA) + v*Math.cos(JA)];
+const JREC = jq(2, -2);
+function jacketSvg(){
+  const cn = [[-JH,-JH],[JH,-JH],[JH,JH],[-JH,JH]].map(([u, v]) => jq(u, v)), A = cn.map(([x, y]) => [x, y, BH]), T = cn.map(([x, y]) => [x, y, JZ]);
+  const zz = JZ + .01, quad = (u0, v0, u1, v1) => [[u0,v0],[u1,v0],[u1,v1],[u0,v1]].map(([u, v]) => [...jq(u, v), zz]);
+  let art = fill(pd(T), '#3e6fb8');
+  for (const u of [8, 15, 22]) art += fill(pd(quad(u, -JH, u + 4, JH)), '#ef6a4c');
+  const sc = jq(-6, 10); art += fill(pd(ring(sc[0], sc[1], zz, 17, 40)), '#f4b829') + fill(pd(ring(sc[0], sc[1], zz, 11, 40)), '#f7cf5e');
+  const t1 = jq(-23, 14), t2 = jq(-17, 14);
+  art += txH(t1[0], t1[1], zz, 'SUNDAY', 5.4, -90 + 6, '#fff4d6', 800) + txH(t2[0], t2[1], zz, 'SPIN', 5.4, -90 + 6, '#fff4d6', 800);
+  return loft(A, T, n => toneI(n, CARD)) + clipTo(T, art) + ink(pd(T), 1.1) + hullInk([...A, ...T], 1.6);
+}
+// a record lying flat at (x, y), its underside at z; la = its own turn (degrees), the label turns with it
+function recordSvg(x, y, z, la){
+  const A = ring(x, y, z, RECR, 64), T = ring(x, y, z + .4, RECR, 64), zt = z + .41;
+  let s = loft(A, T, n => toneI(n, VINYL)) + fill(pd(T), VINYL.m);
+  let gr = ''; for (const r of [12.6, 14.4, 16.2, 18, 19.8, 21.6, 23.4, 25.2, 27, 28.6]) gr += pd(ring(x, y, zt, r, 48));
+  s += `<path d="${gr}" fill="none" stroke="#3b3734" ${mw(.32)}/>`;
+  let gap = ''; for (const r of [17.1, 22.5, 26.1]) gap += pd(ring(x, y, zt, r, 48));
+  s += `<path d="${gap}" fill="none" stroke="#5a544e" ${mw(.55)}/>`;
+  // sheen: the light's reflection stays put while the record turns
+  let sh = ''; for (const [a0, a1] of [[YAW - 28, YAW + 6], [YAW + 160, YAW + 194]]) for (const r of [15.5, 20.5, 25.5]){
+    const pts = []; for (let i = 0; i <= 8; i++){ const a = rad(a0 + (a1 - a0)*i/8); pts.push([x + r*Math.cos(a), y + r*Math.sin(a), zt]); } sh += pd(pts, false); }
+  s += `<path d="${sh}" fill="none" stroke="#ffffff" opacity=".16" ${mw(2.2)} stroke-linecap="round"/>`;
+  const lb = ring(x, y, zt + .01, LABR, 40); s += fill(pd(lb), LABC) + ink(pd(lb), .7) + ink(pd(ring(x, y, zt + .02, LABR - 1.4, 40)), .4);
+  const al = -90 - la, a = rad(al), up = [Math.sin(a), -Math.cos(a)];
+  s += txH(x + up[0]*4.2, y + up[1]*4.2, zt + .03, 'SIDE A', 2.3, al, INK, 800) + txH(x - up[0]*5.6, y - up[1]*5.6, zt + .03, '33 RPM', 1.7, al, INK, 700);
+  s += fill(pd(ring(x, y, zt + .04, 1, 12)), '#1d1a16');
+  return s + hullInk([...A, ...T], 1.5) + ink(pd(T), .8);
+}
+// where the record is along its trip: 0 = on the jacket, 1 = on the mat (up, across, down over the spindle)
+function recPos(r){
+  const [jx, jy] = JREC;
+  if (r < .3){ const e = ease(r/.3); return [jx, jy, JZ + (ZT - JZ)*e]; }
+  if (r < .72){ const e = ease((r - .3)/.42); return [jx + (PC[0] - jx)*e, jy + (PC[1] - jy)*e, ZT]; }
+  const e = ease((r - .72)/.28); return [PC[0], PC[1], ZT + (REC0 - ZT)*e];
+}
+
+/* ---------- the drive: sub-platter, belt, pulley (seen in the gap under the platter, and in see-through) ---------- */
+function beltLoop(){
+  const d = Math.hypot(PC[0] - MOT[0], PC[1] - MOT[1]), u = [(PC[0] - MOT[0])/d, (PC[1] - MOT[1])/d], up = [-u[1], u[0]];
+  const cb = -(SUBR - PULR)/d, sb = Math.sqrt(1 - cb*cb), au = Math.atan2(u[1], u[0]), be = Math.atan2(sb, cb), pts = [];
+  const arc = (c, r, a0, a1, n) => { for (let i = 0; i <= n; i++){ const a = a0 + (a1 - a0)*i/n; pts.push([c[0] + r*Math.cos(a), c[1] + r*Math.sin(a), BELTZ]); } };
+  arc(PC, SUBR + .15, au + be, au - be, 44);                    // round the sub-platter the long way, clockwise from above
+  arc(MOT, PULR + .15, au - be, au + be - 2*Math.PI, 10);       // round the pulley
+  pts.push(pts[0]);
+  return pts;
+}
+const BELT = beltLoop();
+function driveItems(st){
+  const it = [], spinA = -st.ang;
+  // sub-platter, pressed on the spindle; three lightening holes turn with it
+  let sp = cyl(PC[0], PC[1], SUB0, SUB1, SUBR, ALU, toneI, 1, 40);
+  for (let i = 0; i < 3; i++){ const a = rad(spinA + i*120); sp += dotTop(PC[0] + 6*Math.cos(a), PC[1] + 6*Math.sin(a), SUB1 + .02, 1.2, '#8e979a'); }
+  it.push({ box:[[PC[0] - SUBR, PC[1] - SUBR, SUB0], [PC[0] + SUBR, PC[1] + SUBR, SUB1]], svg: sp });
+  // motor pulley with a mark that spins (SUBR / PULR times faster than the platter)
+  const pa = rad(spinA*SUBR/PULR);
+  it.push({ box:[[MOT[0] - PULR, MOT[1] - PULR, PUL0], [MOT[0] + PULR, MOT[1] + PULR, PUL1]], svg: cyl(MOT[0], MOT[1], PUL0, PUL1, PULR, BRASS, toneI, .8, 16)
+    + ink(pd([[MOT[0], MOT[1], PUL1 + .02], [MOT[0] + PULR*.9*Math.cos(pa), MOT[1] + PULR*.9*Math.sin(pa), PUL1 + .02]], false), .5) });
+  // the belt in short pieces, with a few pale marks that travel round with it
+  let len = 0; const cum = [0]; for (let i = 1; i < BELT.length; i++){ len += Math.hypot(BELT[i][0] - BELT[i-1][0], BELT[i][1] - BELT[i-1][1]); cum.push(len); }
+  const shift = (st.ang/360*2*Math.PI*SUBR) % len, marks = Array.from({ length: 7 }, (_, i) => (i*len/7 + shift) % len);
+  for (let i = 0; i < BELT.length - 1; i += 3){
+    const j = Math.min(BELT.length - 1, i + 3), seg = BELT.slice(i, j + 1), d = pd(seg, false);
+    let svg = `<path d="${d}" fill="none" stroke="${INK}" ${mw(1.25)} stroke-linecap="round"/><path d="${d}" fill="none" stroke="#3a3431" ${mw(.75)} stroke-linecap="round"/>`;
+    for (const mk of marks) if (mk >= cum[i] && mk < cum[j]){ let k = i; while (cum[k + 1] < mk) k++;
+      const t = (mk - cum[k]) / (cum[k + 1] - cum[k] || 1), p = BELT[k].map((v, n) => v + (BELT[k + 1][n] - v)*t), q = BELT[k + 1];
+      svg += `<path d="${pd([p, p.map((v, n) => v + (q[n] - v)*.35)], false)}" fill="none" stroke="#8a817a" ${mw(.5)}/>`; }
+    it.push({ box: boxOf(seg, .3), svg });
+  }
+  return it;
+}
+
+/* ---------- the turntable's outside ---------- */
+function plinthItem(st, m){
+  const A = on(PZ(FZ), rrUV(0, 0, PW, PD, PRR, 3)), T = on(PZ(TZ), rrUV(0, 0, PW, PD, PRR, 3));
+  let s = byDepth(FEET.map(([x, y]) => vcyl(x, y, BH, FZ, 3.2, RUBBER, 1, 18)));
+  s += loft(A, T, n => tone(n, m));
+  if (facing([1, 0, 0])){
+    const fm = tone([1, 0, 0], m);
+    s += tx(PW + .25, 20, FZ + 4, 'MODEL LP-3', 2.6, mix(fm, '#000000', .5), 800) + tx(PW + .25, 72, FZ + 4, 'STEREO TURNTABLE', 2.2, mix(fm, '#000000', .5), 700);
+    s += line([[PW + .2, PRR, FZ + 1.6], [PW + .2, PD - PRR, FZ + 1.6]], .6);
+  }
+  if (facing([-1, 0, 0])){
+    const bx = -.06, disc = (y, z, r, c, w = .6) => { const g = on(PX(bx), ellUV(y, z, r, r, 16)); return fill(pd(g), c) + ink(pd(g), w); };
+    s += disc(70, 10, 1.6, '#2d2a28') + disc(70, 10, .55, '#8f989b', .4) + txB(bx - .02, 70, 6.9, 'DC 12V', 1.5);
+    s += disc(26, 10, 1.6, '#d8453a') + disc(26, 10, .7, '#e0b84a', .4) + disc(32, 10, 1.6, '#efeee8') + disc(32, 10, .7, '#e0b84a', .4) + txB(bx - .02, 29, 6.9, 'OUTPUT', 1.5);
+    s += shape(on(PX(bx), rectUV(18.4, 9, 21.6, 11.2)), '#2d2a28', .5) + shape(on(PX(bx - .02), rectUV(st.lineOut ? 20 : 18.8, 9.4, st.lineOut ? 21.2 : 20, 10.8)), '#c6ccce', .4) + txB(bx - .02, 20, 7.2, 'PHONO LINE', 1.2);
+    s += disc(38, 12, 1, '#c6ccce') + txB(bx - .02, 38, 9.6, 'GND', 1.3);
+  }
+  s += fill(pd(T), tone([0, 0, 1], m));
+  // decals on the deck: the arm board, the platter's shadow, the speed slot, the start ring, words
+  const top = TZ + .02, ab = on(PZ(top), rrUV(6.5, 3.5, 29, 24, 3));
+  s += shape(ab, ALU.m, .8);
+  for (const [x, y] of [[8.5, 5.5], [27, 5.5], [8.5, 22], [27, 22]]) s += dotTop(x, y, top + .01, .5, ALU.l, .3);
+  s += castShadow([...ring(PC[0], PC[1], PL0, PLR, 32), ...ring(PC[0], PC[1], MATZ, PLR, 32)], TZ, T);
+  s += shape(on(PZ(top), rrUV(62.8, 67.5, 64.2, 74.5, .7)), '#2b2523', .6);
+  s += txH(66.4, 73, top, '33', 1.8) + txH(66.4, 69, top, '45', 1.8) + txH(61.2, 71, top, 'SPEED', 1.3, 0);
+  s += ink(pd(ring(62, 80, top, 2.7, 24)), .7) + txH(66.2, 80, top, 'START', 1.5) + ink(pd(ring(62, 85, top, 1.1, 14)), .5);
+  s += ink(pd(T), 1.8) + hullInk([...A, ...T], 2.8);
+  return { box:[[0, 0, BH], [PW, PD, TZ]], svg: s };
+}
+function platterItem(st){
+  const [cx, cy] = PC;
+  let s = cyl(cx, cy, PL0, PL1, PLR, ALU, toneI, 1.4, 64), d = '';
+  for (let i = 0; i < 36; i++){ const b = rad(i*10 - st.ang), n = [Math.cos(b), Math.sin(b), 0], rv = rotV(n);
+    if (rv[0] + rv[1] + rv[2] < .25) continue;
+    const q = [-1.4, 1.4].map(o => rad(i*10 - st.ang + o)), r = PLR + .03;
+    d += pd([[cx + r*Math.cos(q[0]), cy + r*Math.sin(q[0]), PL0 + 1.1], [cx + r*Math.cos(q[1]), cy + r*Math.sin(q[1]), PL0 + 1.1],
+             [cx + r*Math.cos(q[1]), cy + r*Math.sin(q[1]), PL0 + 2.6], [cx + r*Math.cos(q[0]), cy + r*Math.sin(q[0]), PL0 + 2.6]]); }
+  if (d) s += fill(d, '#4a5256');
+  s += cyl(cx, cy, PL1, MATZ, MATR, FELT, toneI, .9, 64);
+  // platter, mat, record and spindle are one stack, drawn bottom up as one part
+  if (st.rec === 1) s += act('record', recordSvg(cx, cy, REC0, st.recA));
+  s += cyl(cx, cy, st.rec === 1 ? REC1 : MATZ, SPT, SPR, STEEL, toneI, .7, 12);
+  return { box:[[cx - PLR, cy - PLR, PL0], [cx + PLR, cy + PLR, st.rec === 1 ? REC1 : MATZ]], svg: s };
+}
+const spindleItem = z0 => ({ box:[[PC[0] - SPR, PC[1] - SPR, z0], [PC[0] + SPR, PC[1] + SPR, SPT]], svg: cyl(PC[0], PC[1], z0, SPT, SPR, STEEL, toneI, .7, 12) });
+
+function armItems(st, F, xr){
+  const it = [], add = x => (it.push(x), x), gh = svg => xr ? `<g opacity=".38">${svg}</g>` : svg;
+  const AX = [PV[0], PV[1], AZ], sideA = a => F.Lp(0, 0, 0).map((v, i) => v + F.e2[i]*a);
+  // pivot base on the arm board (vertical bearing inside), pillar up to the gimbal collar
+  const base = add(vcyl(PV[0], PV[1], TZ + .02, TZ + 2.2, 5.2, DARK, 1.1, 32)); base.svg = gh(base.svg);
+  if (xr) base.svg += cyl(PV[0], PV[1], TZ + .8, TZ + 2.2, 2.4, BRASS, toneI, .6, 16);
+  const pil = add(vcyl(PV[0], PV[1], TZ + 2.2, AZ - 1.7, 1.7, STEEL, .9, 16)); pil.svg = gh(pil.svg);
+  if (xr) pil.svg += `<path d="${pd([[PV[0], PV[1], AZ - 1.7], [PV[0], PV[1], TZ + 2.2]], false)}" fill="none" stroke="#c0392b" ${mw(.45)}/>`;
+  const col = add(rodI(sideA(-2.6), sideA(2.6), 1.6, DARK, .9, 16)); col.svg = gh(col.svg); col.hi = true;
+  if (xr) for (const sgn of [-1, 1]) col.svg += rod(sideA(sgn*2.1), sideA(sgn*2.7), 1.05, BRASS, toneI, .5, 1.05, 12);
+  // the arm tube in three pieces (it passes over the lift bar and the rest pad), rear stub, counterweight
+  const wires = (a0, a1) => xr ? [['#d8453a', .28, .22], ['#43a35c', -.28, .22], ['#3e6fb8', .28, -.22], ['#f3f0e6', -.28, -.22]]
+    .map(([c, b, z]) => `<path d="${pd([F.Lp(a0, F.bOf(a0) + b, z), F.Lp(a1, F.bOf(a1) + b, z)], false)}" fill="none" stroke="${c}" ${mw(.22)}/>`).join('') : '';
+  const seg = (a0, a1) => { const x = rodI(F.tube(a0), F.tube(a1), TUBR, ALU, .9, 12); x.svg = gh(x.svg) + wires(a0, a1); return x; };
+  // the lift bar sits under the first piece, so they are drawn as one: bar, then tube
+  const segA = seg(1.6, 14), bar = rodI([CT[0], CT[1], F.zb - BAR_R], [CE[0], CE[1], F.zb - BAR_R], BAR_R, STEEL, .7, 10);
+  const hi = x => (x.hi = true, add(x));
+  hi({ box:[segA.box[0].map((v, i) => Math.min(v, bar.box[0][i])), segA.box[1].map((v, i) => Math.max(v, bar.box[1][i]))], svg: bar.svg + segA.svg });
+  hi(seg(14, 33));
+  const segC = hi(seg(33, TEND[0]));
+  hi(rodI(F.tube(-1.6), F.tube(-8.2), .7, ALU, .8, 10));
+  hi(rodI(F.tube(-8), F.tube(-13.4), 2.9, CWM, 1.1, 20));
+  hi(rodI(F.tube(-13.4), F.tube(-14.5), 1.1, STEEL, .7, 12));
+  // headshell: cartridge under the plate, cantilever and stylus at its front, finger lift out to the side
+  const cart = obox(F.hs, -3.6, .2, -1.15, 1.15, -2.5, -.2, CARTM, .6), plate = obox(F.hs, -F.hl - .2, 1.4, -1.6, 1.6, -.2, .35, ALU, .7);
+  let hsv = (xr ? `<g opacity=".55">${cart.svg}</g>` : cart.svg);
+  if (xr) hsv += [['#d8453a', -.55, -.7], ['#43a35c', -.55, -1.3], ['#3e6fb8', .55, -.7], ['#f3f0e6', .55, -1.3]]
+    .map(([c, q, z]) => `<path d="${pd([F.hs(-4.6, q, -.2), F.hs(-4.2, q, z), F.hs(-3.6, q, z)], false)}" fill="none" stroke="${c}" ${mw(.22)}/>`).join('');
+  if (xr) hsv += rod(F.hs(-1.6, 0, -1.6), F.hs(-.5, 0, -2.3), .32, matOf('#9a9fa3'), toneI, .4, .32, 8);   // magnet on the cantilever's far end, between the coils
+  hsv += rod(F.hs(-.6, 0, -2.35), F.hs(0, 0, -3.0), .15, ALU, toneI, .4, .15, 8) + rod(F.hs(0, 0, -3.0), F.hs(0, 0, -HC), .16, matOf('#e8f4f6'), toneI, .35, .03, 8);
+  hsv += plate.svg;
+  for (const p of [-2.6, -.9]){ const c = P(...F.hs(p, 0, .37)); hsv += `<circle cx="${f(c[0])}" cy="${f(c[1])}" r=".45" fill="${STEEL.d}" stroke="${INK}" stroke-width=".3"/>`; }
+  hsv += rod(F.hs(.9, -1.5, .1), F.hs(1.9, -3.5, 1.1), .3, ALU, toneI, .5, .3, 8);
+  hi({ box: boxOf([...cart.pts, ...plate.pts, F.hs(1.9, -3.5, 1.4), F.hs(0, 0, -HC)], .02), svg: act('arm', hsv) });
+  // arm rest: post and pad (the pad's box stops just under the tube so they sort cleanly)
+  add(vcyl(REST_XY[0], REST_XY[1], TZ, PAD_TOP - 1, .9, STEEL, .8, 12));
+  const pad = add(abox(REST_XY[0] - 1.4, REST_XY[1] - 1.4, PAD_TOP - 1, REST_XY[0] + 1.4, REST_XY[1] + 1.4, PAD_TOP, RUBBER, .7));
+  pad.box[1][2] = Math.min(PAD_TOP, segC.box[0][2]);
+  // cue: tower with its damped piston, the piston rod up to the bar, the lever
+  const tw = add(vcyl(CT[0], CT[1], TZ, CTOP, 1.2, STEEL, .9, 16)); tw.svg = gh(tw.svg);
+  if (xr) tw.svg += cyl(CT[0], CT[1], TZ + 1, CTOP - 1, .75, matOf('#8fc2e0'), toneI, .4, 12) + cyl(CT[0], CT[1], TZ + 2, CTOP, .35, STEEL, toneI, .4, 8);
+  add(vcyl(CT[0], CT[1], CTOP, F.zb - 2*BAR_R, .38, STEEL, .6, 10));
+  const la = rad(32*st.cu), l0 = [CT[0] + 1.2, CT[1], TZ + 4], l1 = [l0[0] + 4.6*Math.cos(la), CT[1], l0[2] + 4.6*Math.sin(la)], l2 = [l1[0] + 1.6*Math.cos(la), CT[1], l1[2] + 1.6*Math.sin(la)];
+  add({ box: boxOf([l0, l2], .9), svg: act('cue', rod(l0, l1, .32, STEEL, toneI, .6, .32, 8) + rod(l1, l2, .8, DARK, toneI, .8, .8, 12)) });
+  // anti-skate dial on the base
+  const ak = [PV[0] - 2.9, PV[1] + 2.9];
+  add(vcyl(ak[0], ak[1], TZ + 2.2, TZ + 3.3, 1, DARK, .7, 14)).svg += fill(pd(ring(ak[0] + .55, ak[1] - .25, TZ + 3.32, .22, 8)), '#ffffff');
+  return it;
+}
+function controlItems(st){
+  const pz = st.pressT > 0 ? .6 : 1.2;
+  return [ { box:[[59.8, 77.8, TZ], [64.2, 82.2, TZ + pz]], svg: act('start', cyl(62, 80, TZ, TZ + pz, 2.2, STEEL, toneI, .9, 20) + dotTop(62, 80, TZ + pz + .01, 1.3, STEEL.m, .4)) },
+    { box:[[61.2, 84.2, TZ], [62.8, 85.8, TZ + .4]], svg: cyl(62, 85, TZ, TZ + .4, .8, st.motor ? matOf('#43c25c') : matOf('#7c8a7f'), toneI, .5, 12)
+      + (st.motor ? `<circle cx="${f(P(62, 85, TZ + .4)[0])}" cy="${f(P(62, 85, TZ + .4)[1])}" r="2.2" fill="#8af0ae" opacity=".35"/>` : '') },
+    abox(62.9, 71.7, TZ, 64.1, 73.7, TZ + 1, DARK, .6) ];
+}
+
+/* ---------- see-through: the works under the deck, and the arm's insides ---------- */
+const BD_SPEED = [44, 58, 62, 74], BD_PRE = [22, 3, 42, 19], BZ0 = 7.3, BZ1 = 7.8, WZ = FLZ + .3;
+function boardItems(b, standoffs){
+  const it = [abox(b[0], b[1], BZ0, b[2], b[3], BZ1, PCB, .7)];
+  for (const [x, y] of standoffs) it.push(vcyl(x, y, FLZ, BZ0, .4, BRASS, .5, 10));
+  return it;
+}
+function mechItems(st, F){
+  const it = [], add = x => (it.push(x), x), many = xs => it.push(...xs), spin = st.rpm > .5, live = st.motor, play = st.playing && spin;
+  const sig = play ? '#ff9a3a' : null;
+  // ---- drive: motor on its bracket and isolators, shaft, pulley, belt, sub-platter
+  add(vcyl(MOT[0], MOT[1], 7.6, 13.3, 3.4, STEEL, .9, 24)).svg += cyl(MOT[0], MOT[1], 10.4, 11.6, 3.45, matOf(live ? '#e2483d' : '#b8473c'), toneI, .4, 24);
+  for (const dy of [-.8, .8]) add(abox(MOT[0] + 1.6, MOT[1] + dy - .3, 7, MOT[0] + 2.2, MOT[1] + dy + .3, 7.6, BRASS, .4));
+  add(abox(MOT[0] - 2.4, MOT[1] - 7, 13.3, MOT[0] + 2.4, MOT[1] + 7, 13.8, STEEL, .7));
+  for (const dy of [-5.5, 5.5]) add(vcyl(MOT[0], MOT[1] + dy, 13.8, UZ, 1.1, RUBBER, .6, 14));
+  add(rodI([MOT[0], MOT[1], 13.8], [MOT[0], MOT[1], PUL0], .3, STEEL, .5, 8));
+  many(driveItems(st));
+  // ---- main bearing: flange under the deck, housing (seen through), thrust pad, ball, bushings, the shaft
+  { const [x, y] = PC; let s = `<g opacity=".45">${cyl(x, y, 7.4, 14, 2.5, ALU, toneI, .8, 24)}</g>`;
+    s += cyl(x, y, 7.6, 7.95, 1.4, matOf('#5b6064'), toneI, .4, 14);
+    const bc = P(x, y, 8.33); s += `<circle cx="${f(bc[0])}" cy="${f(bc[1])}" r="${f(.72*1.22)}" fill="${STEEL.l}" stroke="${INK}" stroke-width=".4"/><circle cx="${f(bc[0] - .3)}" cy="${f(bc[1] - .3)}" r=".25" fill="#fff"/>`;
+    s += cyl(x, y, 8.7, UZ, SPR, STEEL, toneI, .5, 12);
+    for (const z of [9, 12.6]) s += cyl(x, y, z, z + 1.2, 1.1, BRONZE, toneI, .5, 16);
+    s += cyl(x, y, 14, UZ, 4.4, ALU, toneI, .8, 28);
+    for (let i = 0; i < 3; i++){ const a = rad(30 + i*120); s += dotTop(x + 3.4*Math.cos(a), y + 3.4*Math.sin(a), UZ + .01, .45, STEEL.m, .3); }
+    add({ box:[[x - 4.4, y - 4.4, 7.4], [x + 4.4, y + 4.4, UZ]], svg: s }); }
+  add(spindleItem(SUB1)); add({ ...spindleItem(UZ), box:[[PC[0] - SPR, PC[1] - SPR, UZ], [PC[0] + SPR, PC[1] + SPR, SUB0]], svg: cyl(PC[0], PC[1], UZ, SUB0, SPR, STEEL, toneI, .5, 12) });
+  // ---- speed board, switch board (start switch + power LED), speed switch, DC jack
+  many(boardItems(BD_SPEED, [[45, 59], [61, 59], [45, 73], [61, 73]]));
+  add(abox(50, 62, BZ1, 54, 66, 8.7, CHIP, .6));
+  for (const [x, y] of [[47, 61.2], [47, 70.5]]) add(vcyl(x, y, BZ1, BZ1 + 2.4, 1, ECAP, .6, 14)).svg += dotTop(x, y, BZ1 + 2.42, .5, '#c6ccce', .25);
+  for (const y of [60, 64]) add(abox(56, y, BZ1, 58.4, y + 2.4, 9, POT, .5)).svg += dotTop(57.2, y + 1.2, 9.02, .5, '#f3f0e6', .25);
+  add(abox(59, 66.5, BZ1, 61.5, 71.5, 9.3, matOf('#efeee8'), .5));
+  add(abox(58.5, 76.5, 12.6, 65.5, 86.4, 13.1, PCB, .7));
+  for (const [x, y] of [[59.3, 77.3], [64.7, 85.6]]) add(vcyl(x, y, FLZ, 12.6, .45, BRASS, .5, 10));
+  add(abox(60.8, 78.8, 13.1, 63.2, 81.2, 14.1, CHIP, .5));
+  add(vcyl(62, 80, 14.1, TZ, .55, STEEL, .4, 10));
+  add(vcyl(62, 85, 13.1, TZ, .6, live ? matOf('#43c25c') : matOf('#9fb8a2'), .5, 10));
+  add(abox(62.4, 67.5, 13.4, 64.6, 74.5, UZ, CHIP, .6));
+  add(vcyl(63.5, 72.7, UZ, TZ, .35, STEEL, .3, 8));
+  add(abox(WALL, 67.8, 8.6, 5, 72.2, 11.4, CHIP, .6));
+  // ---- arm under the deck: pivot housing and nut, cue tower nut
+  add(vcyl(PV[0], PV[1], 13.9, UZ, 3.4, STEEL, .6, 6));
+  { const h = vcyl(PV[0], PV[1], 10, 13.9, 2.4, ALU, .7, 18); h.svg = `<g opacity=".45">${h.svg}</g>` + `<path d="${pd([[PV[0], PV[1], 13.9], [PV[0], PV[1], 10]], false)}" fill="none" stroke="#c0392b" ${mw(.45)}/>`; add(h); }
+  add(vcyl(CT[0], CT[1], 13.8, UZ, 1.6, STEEL, .5, 6));
+  // ---- phono preamp board: op-amp, caps, resistors; RCA jacks, PHONO/LINE switch, ground screw on the back wall
+  many(boardItems(BD_PRE, [[23, 4], [41, 4], [23, 18], [41, 18]]));
+  add(abox(30, 9, BZ1, 34, 11.6, 8.6, CHIP, .6, facing([0,0,1]) ? dotTop(30.6, 9.6, 8.62, .25, '#c6ccce', .2) : ''));
+  for (const [x, y] of [[25.5, 6], [25.5, 15.5], [38.5, 6], [38.5, 15.5]]) add(vcyl(x, y, BZ1, BZ1 + 2, .9, ECAP, .5, 14)).svg += dotTop(x, y, BZ1 + 2.02, .45, '#c6ccce', .2);
+  for (const x of [27.5, 35.5]) add(abox(x, 13, BZ1, x + 1.8, 15.6, 9.2, FCAP, .5));
+  for (const x of [28.5, 32, 35.5]) add(rodI([x, 4.6, 8.3], [x, 7.6, 8.3], .35, RES, .4, 8));
+  for (const [y, c] of [[26, '#d8453a'], [32, '#efeee8']]){
+    add(rodI([WALL, y, 10], [4.2, y, 10], 1.3, matOf(c), .6, 14)); add(abox(4.2, y - .4, 8.6, 4.6, y + .4, 9.6, BRASS, .4)); }
+  add(abox(WALL, 18, 9, 3.6, 22, 11.4, CHIP, .5));
+  add(rodI([WALL, 38, 12], [2.6, 38, 12], .9, STEEL, .5, 6));
+  // ---- wires along the floor, port to port
+  const W = (pts, c, w = .3) => many(wireParts(pts, c, w));
+  W([[5, 70, 8.6], [5.5, 70, WZ], [43, 66, WZ], [44.2, 66, BZ1]], live ? '#ff6a2a' : '#c0392b');
+  W([[5, 71.2, 8.6], [5.5, 71.2, WZ], [43, 67.2, WZ], [44.2, 67.2, BZ1]], '#2d2a28');
+  W([[44.2, 62.6, BZ1], [43, 62.6, WZ], [39.5, 46.5, WZ], [23, 39.2, WZ], [21.9, 38.8, 7.1]], live ? '#ff6a2a' : '#c0392b', .25);
+  W([[44.2, 61.6, BZ1], [43, 61.6, WZ], [39, 45.5, WZ], [23, 37.9, WZ], [21.9, 37.2, 7.1]], '#2d2a28', .25);
+  W([[44.6, 58.2, BZ1], [44.6, 57.4, WZ], [44.6, 22, WZ], [42.4, 18.6, WZ], [41.6, 18.6, BZ1]], live ? '#ff6a2a' : '#c0392b', .25);
+  W([[58.6, 77, 12.6], [58.6, 77, WZ], [58.6, 74.6, WZ], [58.6, 73.6, BZ1]], '#f2c230', .25);
+  W([[64.6, 71, 13.6], [68.6, 71, 13.6], [68.6, 71, WZ], [62.6, 70.6, WZ], [61.8, 70.6, BZ1]], '#f2c230', .25);
+  W([[PV[0], PV[1] - 1, 10], [PV[0] + .5, PV[1] - 1.5, WZ], [21.5, 11, WZ], [22.4, 11, BZ1]], sig || '#8a3a24', .3);
+  W([[22.4, 17.4, BZ1], [21.4, 17.8, WZ], [5.2, 26, WZ], [4.6, 26, 8.7]], sig || '#5a3a24', .28);
+  W([[22.4, 18.4, BZ1], [21.4, 18.8, WZ], [5.2, 32, WZ], [4.6, 32, 8.7]], sig || '#5a3a24', .28);
+  W([[22.4, 14.4, BZ1], [21.4, 14.4, WZ], [4, 20, WZ], [3.6, 20, 9]], '#3e6fb8', .22);
+  W([[PV[0] + 1.6, PV[1] + 1.6, 10.5], [PV[0] + 1, PV[1] + 2.4, WZ], [2.2, 38, WZ], [1.9, 38, 11.2]], '#43a35c', .22);
+  // ---- the arm and the controls above the deck, drawn over the ghost
+  many(armItems(st, F, true));
+  many(controlItems(st));
+  return it;
+}
+
+/* ---------- labels: two columns either side, leaders never cross (both columns always used) ---------- */
+function rpCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0])), cx = (xmin + xmax)/2;
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 7.6*k, hgt = u ? 17*u : fs*1.75, gap = hgt + (u ? 3*u : 1.4*k);   // 36 labels: a size smaller than the core's
+  const Lc = [], Rc = [], svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal;
+  for (const it of items){ const [X, Y] = P(...it.at); (X < cx ? Lc : Rc).push({ ...it, X, Y }); }
+  const top = { [-1]: fs, [1]: fs };
+  const below = (el, side) => { if (!el || !svgEl.getScreenCTM()) return; const r = el.getBoundingClientRect(), q = new DOMPoint(side < 0 ? r.right : r.left, r.bottom + 10).matrixTransform(svgEl.getScreenCTM().inverse()); if (q.y > 0 && q.y < vb.y + vb.height*.4) top[side] =Math.max(top[side], q.y + hgt/2); };
+  below(document.getElementById('btns'), -1); below(document.querySelector('.vset'), 1); below(document.getElementById('stats'), 1);
+  // and above the zoom chip the built page puts in the figure's bottom-right corner
+  const bot = { [-1]: vb.y + vb.height - hgt/2, [1]: vb.y + vb.height - hgt/2 }, zc = document.querySelector('.zchip');
+  if (zc && svgEl.getScreenCTM()){ const r = zc.getBoundingClientRect(), q = new DOMPoint(r.left, r.top - 6).matrixTransform(svgEl.getScreenCTM().inverse()); if (q.y > vb.y + vb.height*.6) bot[1] = Math.min(bot[1], q.y - hgt/2); }
+  // a column that would run off the bottom hands its innermost labels to the other column
+  const cap = side => Math.floor((bot[side] - top[side]) / gap) + 1;
+  Lc.sort((a, b) => a.X - b.X); Rc.sort((a, b) => b.X - a.X);
+  while (Lc.length > cap(-1) && Rc.length < cap(1)) Rc.push(Lc.pop());
+  while (Rc.length > cap(1) && Lc.length < cap(-1)) Lc.push(Rc.pop());
+  let s = '';
+  for (const [col, side] of [[Lc, -1], [Rc, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    const over = col.length ? col[col.length - 1].py - bot[side] : 0;
+    if (over > 0){ const room = col.length ? col[0].py - top[side] : 0, sh = Math.min(over, room); for (const c of col) c.py -= sh; }
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? vb.x + w/2 + 2*k : vb.x + vb.width - w/2 - 2*k;
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+const nearPt = (x, y, r, z) => [x + r*Math.cos(rad(YAW)), y + r*Math.sin(rad(YAW)), z];
+function insideLabels(st, F){
+  const spin = st.rpm > .5, play = st.playing && spin, cur = st.cur && st.cur.kind, cue = cur === 'cue', swing = cur === 'swing' || play;
+  const bl = BELT[Math.round(BELT.length*.62)];
+  return [
+    { at: nearPt(PC[0], PC[1], PLR, PL1), text:'PLATTER', on: spin },
+    { at: nearPt(PC[0], PC[1], SUBR, SUB1), text:'SUB-PLATTER', on: spin },
+    { at: bl, text:'DRIVE BELT', on: spin },
+    { at: [MOT[0], MOT[1], PUL1], text:'MOTOR PULLEY', on: spin },
+    { at: nearPt(MOT[0], MOT[1], 3.4, 9.5), text:'DC MOTOR', on: spin },
+    { at: [MOT[0], MOT[1] + 5.5, 14.3], text:'MOTOR ISOLATORS', on: spin },
+    { at: nearPt(PC[0], PC[1], 4.4, UZ), text:'MAIN BEARING', on: spin },
+    { at: [PC[0], PC[1], 13.2], text:'BRONZE BUSHING', on: spin },
+    { at: [PC[0], PC[1], 8.33], text:'STEEL BALL', on: spin },
+    { at: [PC[0], PC[1], SPT], text:'SPINDLE', on: spin },
+    { at: [53, 70, BZ1], text:'SPEED BOARD', on: st.motor },
+    { at: [57.2, 61.2, 9], text:'SPEED TRIM POTS', on: st.motor },
+    { at: [62, 80, 14.1], text:'START SWITCH', on: st.pressT > 0 },
+    { at: [62, 85, TZ + .4], text:'POWER LED', on: st.motor },
+    { at: [63.5, 71, 13.4], text:'SPEED SWITCH', on: false },
+    { at: [3, 70, 11.4], text:'DC JACK', on: st.motor },
+    { at: [32, 4, BZ1], text:'PHONO PREAMP', on: play },
+    { at: [32, 10.3, 8.6], text:'OP-AMP', on: play },
+    { at: [2.7, 29, 11.3], text:'RCA JACKS', on: play },
+    { at: [2.4, 20, 11.4], text:'PHONO/LINE SWITCH', on: false },
+    { at: [1.9, 38, 12.9], text:'GROUND SCREW', on: false },
+    { at: F.Lp(0, 0, 1.6), text:'GIMBAL COLLAR', on: swing },
+    { at: F.Lp(0, 2.7, 0), text:'PIVOT BEARINGS', on: swing },
+    { at: F.tube(27), text:'ARM TUBE', on: false },
+    { at: F.tube(19), text:'TONEARM WIRES', on: play },
+    { at: F.Lp(-11, F.bOf(-11), 2.9), text:'COUNTERWEIGHT', on: false },
+    { at: [PV[0] - 2.9, PV[1] + 2.9, TZ + 3.3], text:'ANTI-SKATE', on: play },
+    { at: F.hs(-5.5, 0, .35), text:'HEADSHELL', on: false },
+    { at: F.hs(1.9, -3.5, 1.1), text:'FINGER LIFT', on: false },
+    { at: F.hs(-1.8, 1.15, -1.4), text:'CARTRIDGE', on: play },
+    { at: F.hs(-.3, 0, -2.7), text:'CANTILEVER', on: play },
+    { at: F.hs(0, 0, -HC), text:'STYLUS', on: play },
+    { at: [REST_XY[0], REST_XY[1], PAD_TOP], text:'ARM REST', on: false },
+    { at: [CT[0] + 1.2 + 6*Math.cos(rad(32*st.cu)), CT[1], TZ + 4 + 6*Math.sin(rad(32*st.cu))], text:'CUE LEVER', on: cue },
+    { at: [(CT[0] + CE[0])/2, (CT[1] + CE[1])/2, F.zb], text:'LIFT BAR', on: cue },
+    { at: [CT[0], CT[1], TZ + 3], text:'DAMPED PISTON', on: cue },
+  ];
+}
+function surfaceLabels(st, F){
+  const spin = st.rpm > .5, play = st.playing && spin, rp = st.rec > 0 && st.rec < 1 ? recPos(st.rec) : null;
+  return [
+    { at: nearPt(PC[0], PC[1], PLR, PL0 + 2), text:'PLATTER', on: spin },
+    st.rec === 1 ? { at: [PC[0] + 20, PC[1] + 8, REC1], text:'RECORD', on: play } : rp ? { at: [rp[0], rp[1], rp[2] + .4], text:'RECORD', on: true } : { at: [JREC[0] + 16, JREC[1], JZ + .4], text:'RECORD', on: false },
+    { at: [...jq(28, 20), JZ], text:'JACKET', on: false },
+    { at: [PC[0], PC[1], SPT], text:'SPINDLE', on: false },
+    { at: F.tube(26), text:'TONEARM', on: play },
+    { at: F.hs(-5.5, 0, .35), text:'HEADSHELL', on: play },
+    { at: F.Lp(-11, F.bOf(-11), 2.9), text:'COUNTERWEIGHT', on: false },
+    { at: [CT[0] + 1.2 + 6*Math.cos(rad(32*st.cu)), CT[1], TZ + 4 + 6*Math.sin(rad(32*st.cu))], text:'CUE LEVER', on: st.cur && st.cur.kind === 'cue' },
+    { at: [REST_XY[0], REST_XY[1], PAD_TOP], text:'ARM REST', on: false },
+    { at: [62, 80, TZ + 1.2], text:'START BUTTON', on: st.pressT > 0 },
+    { at: [63.5, 72.7, TZ + 1], text:'SPEED SWITCH', on: false },
+  ];
+}
+
+/* ---------- scene ---------- */
+const CORD_OFF = [[[-3.8, 71.6, BH + .7], [-4.4, 71.9, BH - .6], [-4.7, 72.2, -9]], [[-3.8, 29, BH + .7], [-4.4, 29, BH - .6], [-4.7, 29, -9]]];
+function cordItems(){
+  const it = [], put = (pts, col, r) => it.push({ box: boxOf(pts, 0).map((b, i) => i ? b.map((v, k) => k ? v : Math.min(v, 0)) : b), svg: cordSvg(pts, col, r) });
+  it.push({ box:[[-2.6, 69.1, 9.1], [0, 70.9, 10.9]], svg: cylX(-2.6, 0, 70, 10, .9, DARK, toneI, .8, 12) });
+  put([[-2.6, 70, 10], [-3.3, 70.3, 8.4], [-3.7, 71, 5], [-3.8, 71.6, BH + .7]], DARK.l, .7);
+  for (const [y, c] of [[26, '#d8453a'], [32, '#efeee8']]){
+    it.push({ box:[[-3.2, y - 1.1, 8.9], [0, y + 1.1, 11.1]], svg: cylX(-3.2, -1.2, y, 10, 1.1, matOf(c), toneI, .8, 14) + cylX(-1.2, 0, y, 10, .75, matOf('#e0b84a'), toneI, .6, 12) });
+    put([[-3.2, y, 10], [-3.6, y + (29 - y)*.4, 7.5], [-3.8, 29, BH + .7]], '#5a5550', .55); }
+  put([[0, 38, 12], [-1.4, 38, 11.6], [-3.3, 35, 6], [-3.8, 30, BH + .7]], '#43a35c', .25);
+  return it;
+}
+function scene(st, m){
+  const k = ease(st.xr || 0), F = armF(st.th, st.cu), behind = facing([-1, 0, 0]);
+  const drops = CORD_OFF.map((p, i) => cordSvg(p, i ? '#5a5550' : DARK.l, i ? .55 : .7)).join('');
+  let s = (behind ? '' : drops) + board(BX0, BY0, BX1, BY1, BH, BRAD, WOOD) + (behind ? drops : '');
+  s += jacketSvg();
+  if (st.rec === 0) s += act('record', recordSvg(JREC[0], JREC[1], JZ, st.recA));
+  s += clipTo(BTOP, castShadow([...on(PZ(FZ), rrUV(0, 0, PW, PD, PRR, 3)), ...on(PZ(TZ), rrUV(0, 0, PW, PD, PRR, 3)), ...ring(PC[0], PC[1], MATZ, PLR, 24)], BH));
+  // the outside: plinth, drive in the gap under the platter, platter, spindle, record, arm, controls
+  const out = [plinthItem(st, m), ...driveItems(st), platterItem(st), ...armItems(st, F, false), ...controlItems(st)];
+  const props = cordItems();
+  if (st.rec > 0 && st.rec < 1){ const [x, y, z] = recPos(st.rec);
+    let rs = recordSvg(x, y, z, st.recA);
+    if (Math.hypot(x - PC[0], y - PC[1]) < .01 && z + .4 < SPT) rs += cyl(PC[0], PC[1], z + .4, SPT, SPR, STEEL, toneI, .7, 12);   // the spindle through the hole
+    props.push({ box:[[x - RECR, y - RECR, z], [x + RECR, y + RECR, z + .4]], svg: rs, hi: z > REC1 + 3 }); }
+  // the raised arm (tube, headshell, weight) and a record in the air go over everything lower down: byDepth is a
+  // plain comparator sort, not transitive over ~60 boxes, and could otherwise put the record over the arm above it
+  const lo = xs => xs.filter(i => !i.hi), up = xs => xs.filter(i => i.hi);
+  if (k <= 0) s += byDepth(lo([...out, ...props])) + byDepth(up([...out, ...props]));
+  else {
+    const A = on(PZ(FLZ), rrUV(WALL, WALL, PW - WALL, PD - WALL, 2, 3)), T = on(PZ(UZ), rrUV(WALL, WALL, PW - WALL, PD - WALL, 2, 3));
+    s += `<g opacity="${f(.5*k)}">` + fill(pd(A), mix(m.d, '#f2efe7', .5)) + loft(A, T, n => mix(toneI(n.map(v => -v), m), '#f2efe7', .55), true) + `</g>`;
+    const ghost = out.map(it => ({ ...it, svg: `<g opacity="${f(1 - .8*k)}">${it.svg}</g>` })), inner = [...mechItems(st, F).map(it => ({ ...it, svg: `<g opacity="${f(k)}">${it.svg}</g>` })), ...props];
+    s += byDepth(lo(ghost)) + byDepth(up(ghost)) + byDepth(lo(inner)) + byDepth(up(inner));
+    s += `<g opacity="${f(.6*k)}">` + hullInk([...on(PZ(FZ), rrUV(0, 0, PW, PD, PRR, 3)), ...on(PZ(TZ), rrUV(0, 0, PW, PD, PRR, 3))], 2.8) + `</g>`;
+  }
+  const items = k > .6 ? insideLabels(st, F) : surfaceLabels(st, F);
+  return s + rpCallouts(items, [0, PW, 0, PD, BH, ZT]);
+}
+
+/* ---------- behaviour: one state, one clock, a queue of real steps ---------- */
+let ui, loopOn = false;
+const parked = st => st.th < TH_REST + .3 && st.cu > .99;
+const T_swing = (to, d = 1.5) => ({ kind:'swing', d, init: st => st._f = st.th, f: (st, k) => { st.th = st._f + (to - st._f)*ease(k); } });
+const T_cue = (to, d) => ({ kind:'cue', d, init: st => st._c = st.cu, f: (st, k) => { st.cu = st._c + (to - st._c)*ease(k); if (to === 0 && st.cu < .46) st.playing = true; } });
+const T_rec = to => ({ kind:'rec', d: 2.4, init: st => st._r = st.rec, f: (st, k) => { st.rec = k >= 1 ? to : st._r + (to - st._r)*k; } });
+const T_do = fn => ({ kind:'do', d: 0, f: st => fn(st) });
+const T_wait = fn => ({ kind:'wait', wait: fn });
+const liftSeq = () => [T_do(s => { s.playing = false; }), T_cue(1, .7), T_swing(TH_REST, 1.5)];
+function tick(st, dt){
+  if (!st.cur && st.q.length){ st.cur = st.q.shift(); st.cur.t = 0; if (st.cur.init) st.cur.init(st); }
+  const c = st.cur;
+  if (c){ if (c.wait){ if (c.wait(st)) st.cur = null; } else { c.t += dt; const k = c.d ? Math.min(1, c.t/c.d) : 1; c.f(st, k); if (k >= 1) st.cur = null; } }
+  const dr = (st.motor ? RPM : 0) - st.rpm;
+  st.rpm += dr > 0 ? Math.min(dr, dt*RPM/1.2) : Math.max(dr, -dt*RPM/2.6);
+  const w = st.rpm*6*dt;                                                // degrees turned this frame
+  st.ang = (st.ang + w) % 360; if (st.rec === 1) st.recA = (st.recA + w) % 360;
+  if (st.playing){ st.g = Math.min(1, st.g + dt*st.rpm/RPM/SIDE_S); st.th = thOfG(st.g);
+    if (st.g >= 1 && !st.cur && !st.q.length){ st.q.push(...liftSeq(), T_do(s => { s.motor = false; })); ui.flash('End of the side: the arm lifts and goes home', 2200); } }
+  st.pressT = Math.max(0, st.pressT - dt);
+}
+function kick(){ if (loopOn) return; loopOn = true;
+  ui.animate(dt => { const st = ui.st; tick(st, dt);
+    const busy = !!st.cur || st.q.length > 0 || st.motor || st.rpm > 0 || st.pressT > 0;
+    if (!busy) loopOn = false; return busy; }); }
+const busyArm = st => !!st.cur || st.q.length > 0;
+function recordBtn(st){
+  if (busyArm(st)) return ui.flash('One moment - something is still moving');
+  const q = [];
+  if (!parked(st)) q.push(...liftSeq());
+  if (st.rec === 1){ if (st.motor || st.rpm > 0){ q.push(T_do(s => { s.motor = false; }), T_wait(s => s.rpm <= 0)); ui.flash('Lifting the arm and stopping the platter first'); } q.push(T_rec(0)); }
+  else q.push(T_rec(1));
+  st.q.push(...q); kick();
+}
+function startBtn(st){
+  if (st.cur && st.cur.kind === 'rec') return ui.flash('Wait for the record to land');
+  st.motor = !st.motor; st.pressT = .2; kick();
+}
+function dropBtn(st){
+  if (st.rec !== 1) return ui.flash(st.rec > 0 ? 'Wait for the record to land' : 'Put a record on first');
+  if (busyArm(st)) return ui.flash('The arm is already moving');
+  if (st.playing || st.cu < .5) return ui.flash('The needle is already in the groove');
+  const q = [];
+  if (!st.motor){ q.push(T_do(s => { s.motor = true; s.pressT = .2; })); ui.flash('Starting the platter first'); }
+  q.push(T_cue(1, .3), T_do(s => { s.g = 0; }), T_swing(TH_IN, 1.6), T_wait(s => s.rpm > RPM*.95), T_cue(0, 1.4));
+  st.q.push(...q); kick();
+}
+function liftBtn(st){
+  if (busyArm(st)) return ui.flash('The arm is already moving');
+  if (parked(st)) return ui.flash('The arm is already on its rest');
+  st.q.push(...liftSeq()); kick();
+}
+const mmss = s => `${Math.floor(s/60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+ui = mountFigure({
+  fig:'22', title:'Record player', turn:'full',
+  size:[BX1 + 24, BY1, 84], center:[(BX0 + BX1)/2, (BY0 + BY1)/2], palette:'tomato',
+  state:{ rec:0, recA:20, motor:false, rpm:0, ang:0, th:TH_REST, cu:1, g:0, playing:false, pressT:0, q:[], cur:null, lineOut:false },
+  scene,
+  stats: st => [ { label:'Platter', value: st.rpm < .05 ? 'stopped' : st.rpm.toFixed(1) + ' rpm' },
+                 { label:'Side A of ' + mmss(SIDE_MIN*60), value: mmss(st.g*SIDE_MIN*60), small:true } ],
+  buttons:[
+    { label:'Record on / off', onClick: st => recordBtn(st) },
+    { label:'Start / stop', onClick: st => startBtn(st) },
+    { label:'Drop the needle', onClick: st => dropBtn(st) },
+    { label:'Lift the arm', onClick: st => liftBtn(st) },
+  ],
+  acts:{ start: st => startBtn(st), record: st => recordBtn(st), cue: st => (st.playing || st.cu < .5 ? liftBtn(st) : dropBtn(st)), arm: st => (st.playing || st.cu < .5 ? liftBtn(st) : dropBtn(st)) },
+  params:(st, q) => {
+    if (q.has('rec')) st.rec = clamp(+q.get('rec'), 0, 1);
+    if (q.has('g')) st.g = clamp(+q.get('g'), 0, 1);
+    if (q.get('motor') === '1'){ st.motor = true; st.rpm = RPM; }
+    if (q.get('spin') === '1') st.rpm = RPM;                      // turning, without starting the clock (for shots)
+    if (q.get('play') === '1'){ st.rec = 1; st.rpm = RPM; st.cu = 0; st.playing = true; st.th = thOfG(st.g); }
+    if (q.has('th')) st.th = +q.get('th');
+    if (q.has('cue')) st.cu = clamp(+q.get('cue'), 0, 1);
+    if (q.has('ang')) st.ang = st.recA = +q.get('ang');
+  },
+});
+if (ui.st.motor) kick();
+xrMount(() => ui, () => '');
+addEventListener('load', () => setTimeout(() => ui.render(), 300));   // labels re-place once the page has laid out its controls
+</script></body></html>
