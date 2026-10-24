@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Flashlight</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Flashlight: a classic two-D-cell torch with a slide switch on top and a twist-to-focus head.
+   Truth (how it really works, and where the current is):
+   1. Two D cells sit in the body tube in series, + end toward the head (1.5 V each, 3.0 V fresh, ~1.2 V each when worn).
+   2. The front cell's + nub presses the centre spring on the back of the driver board; the driver board feeds the LED
+      through two wires that run over the heat sink to the LED board, at the focus of the reflector.
+   3. The LED's return goes back through the driver board to the fixed contact, a brass tab running back along the top
+      inside the tube. A brass contact strip runs the rest of the tube's length and folds over the tail rim (the strip tab).
+   4. The slide switch: a knob on the switch housing carries a slider through a slot in the tube; under it a contact bridge.
+      Slid forward, the bridge spans the fixed contact and the strip: the circuit closes.
+   5. The tail cap screws onto the tube's tail thread (an O-ring seals it). Inside it a conical tail spring on a brass
+      spring plate presses the rear cell's - end, and the plate touches the strip tab on the rim: the loop is
+      cell + -> centre spring -> driver -> LED -> fixed contact -> bridge -> strip -> tab -> plate -> tail spring -> cell -.
+      Cap off: the loop is open, no light, whatever the switch says.
+   6. Focus: the head screws on the focus thread at the front of the tube. The reflector (a parabola) and the lens ride in
+      the head; the LED stays put on the tube. Screwed fully in, the LED sits at the reflector's focus: a narrow spot.
+      Twisted out, the reflector moves forward, the LED falls behind the focus and the beam spreads (flood).
+   7. Swap: cap off, the old cells slide out of the tail, fresh ones from the box slide in + end first, cap back on.
+   Parts (each held by another):
+   HEAD    bezel . lens . bezel O-ring . reflector . head shell with grip flutes (screws on the focus thread)
+   LIGHT   LED (die + dome) . LED board . heat sink (pressed into the tube front) . two LED wires
+   DRIVER  two standoffs on the heat sink . driver board . inductor . driver chip . capacitor . centre spring
+   SWITCH  switch housing on the tube . switch knob . slider through the tube slot . contact bridge . fixed contact
+   BODY    body tube . focus thread . grip rings . contact strip . strip tab . tail thread . cap O-ring
+   POWER   front cell . rear cell . + terminal . - end
+   TAIL    tail cap . spring plate . tail spring . lanyard loop
+   SCENE   wooden table . beam test card in its stand . box of spare D cells . a wooden block under the tube
+   x = across (the box of cells is at +x), y = along the torch (the head points to -y, at the card), z = up. 1 unit = 1 mm. */
+const BT = 6;                                         // table top
+const AX = 98, AZ = 37;                               // the torch's axis (x, z), along y; the bezel rests on the table
+const TBL = [0, 0, 186, 352];                         // table board (x0, y0, x1, y1)
+const CARD = { x0: AX - 56, x1: AX + 56, y0: 13, y1: 15.5, z0: BT + 7, z1: BT + 80 };
+const TUBE_R = 20, TUBE_IN = 18.5, TUBE_Y0 = 128, TUBE_Y1 = 282;
+const GRIPS = [232, 239, 246, 253, 260];             // grip rings, each 3 long
+const BOSS = [160, 194];                              // switch housing on top of the tube
+const CAPG = { y0: 266, y1: 296, r: 22.5, rin: 21 };
+const PLATE_Y = 282.6, THREAD_LEN = 16;
+const CELL_L = 61.5, CELL_R = 17.1, NUB_R = 4.75, NUB_L = 1.5;
+const HOME_Y0 = [149, 210.5], OUT_Y0 = 285;
+const BOXC = { x0: 135, x1: 179, y0: 166, y1: 308, z1: BT + 24 };
+const BOX_CZ = BT + 2 + CELL_R;
+const USED = [{ x: 26, y0: 160 }, { x: 26, y0: 228 }];
+const REST_T = [26 - AX, 30, BT + CAPG.r - AZ];       // where the cap lies on the table when it is off
+const BLOCK = [AX - 12, 238, BT, AX + 12, 258, AZ - 20.8];
+// reflector: a parabola, focus at the LED when the head is screwed fully in
+const RF = 5.385, RV = 126.385, RMOUTH = 26, RHOLE = 9, LED_Y = RV - RF, HS_Y0 = LED_Y + 2.4;
+const reflY = r => RV - r*r/(4*RF);
+const FOCI = { spot: { label: 'Spot', fd: 0 }, medium: { label: 'Medium', fd: 3 }, flood: { label: 'Flood', fd: 6 } };
+const LUMENS = 120;
+
+const ALU = matOf('#d4d8da'), BRASS = matOf('#d8b25a'), PCB = { l: '#4fa36a', m: '#2f8a4a', d: '#1d5f31' }, CHIPM = matOf('#3a3632'),
+  INDM = matOf('#5c6369'), CAPM = matOf('#3f7fc0'), PLAS = matOf('#efe9dc'), KRAFT = matOf('#c9a46a'), CARDM = matOf('#fbf8ee'),
+  REFM = { l: '#ffffff', m: '#dfe5e8', d: '#aab4b8' }, PHOS = matOf('#f2d04a'),
+  CELL_NEW = matOf('#34302c'), BAND_NEW = matOf('#d0884a'), CELL_OLD = matOf('#7d8f9c'), BAND_OLD = matOf('#d5d9dc');
+
+/* ---------- helpers: round parts on an axis parallel to y ---------- */
+const ringY = (y, r, n = 24, cx = AX, cz = AZ) => on(PY(y), ellUV(cx, cz, r, r, n));
+const boxY = (y0, y1, r, cx = AX, cz = AZ) => [[cx - r, y0, cz - r], [cx + r, y1, cz + r]];
+const rodY = (y0, y1, r0, M, w = 1, r1 = r0, n = 24, cx = AX, cz = AZ, sh = tone) => rod([cx, y0, cz], [cx, y1, cz], r0, M, sh, w, r1, n);
+const flBoxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const stroke2 = (d, c, w) => `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(w + .9)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${c}" stroke-width="${f(w)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+const add3 = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+// lines along y on a round part, only those turned toward the viewer (grip flutes, knurling)
+function flutes(cx, cz, y0, y1, r, n, rot, w = .6, op = .55){
+  let d = ''; for (let i = 0; i < n; i++){ const a = (i*360/n + rot)*Math.PI/180, nr = [Math.cos(a), 0, Math.sin(a)], q = rotV(nr);
+    if (q[0] + q[1] + q[2] < .35) continue;
+    d += pd([[cx + r*Math.cos(a), y0, cz + r*Math.sin(a)], [cx + r*Math.cos(a), y1, cz + r*Math.sin(a)]], false); }
+  return d ? `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${w}" opacity="${op}"/>` : ''; }
+// the near half of a thread (a helix on the surface), as short visible pieces
+function helixNear(cx, cz, y0, y1, r, pitch, w = .55, op = .7){
+  const pts = [], n = Math.ceil((y1 - y0)/pitch*24); let d = '', run = [];
+  for (let i = 0; i <= n; i++){ const y = y0 + (y1 - y0)*i/n, a = (y - y0)/pitch*2*Math.PI, nr = [Math.cos(a), 0, Math.sin(a)], q = rotV(nr);
+    if (q[0] + q[1] + q[2] > .05) run.push([cx + r*Math.cos(a), y, cz + r*Math.sin(a)]); else if (run.length){ if (run.length > 1) d += pd(run, false); run = []; } }
+  if (run.length > 1) d += pd(run, false);
+  return d ? `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${w}" opacity="${op}"/>` : ''; }
+// the near half of a ring round the axis (an O-ring seen on a tube)
+function ringNear(y, r, col, w){ const pts = []; for (let i = 0; i <= 36; i++){ const a = i/36*2*Math.PI, q = rotV([Math.cos(a), 0, Math.sin(a)]);
+    pts.push(q[0] + q[1] + q[2] > -.05 ? [AX + r*Math.cos(a), y, AZ + r*Math.sin(a)] : null); }
+  let d = '', run = []; for (const p of pts){ if (p) run.push(p); else { if (run.length > 1) d += pd(run, false); run = []; } } if (run.length > 1) d += pd(run, false);
+  return d ? stroke2(d, col, w) : ''; }
+// a coil spring along y from ya to yb, radius r0 at ya to r1 at yb
+function coilY(ya, yb, r0, r1, turns, col = '#cfd6d8', cx = AX, cz = AZ){
+  const pts = []; for (let i = 0; i <= turns*16; i++){ const t = i/(turns*16), a = t*turns*2*Math.PI, r = r0 + (r1 - r0)*t;
+    pts.push([cx + r*Math.cos(a), ya + (yb - ya)*t, cz + r*Math.sin(a)]); }
+  return { box: flBoxOf([[cx - Math.max(r0, r1), Math.min(ya, yb), cz - Math.max(r0, r1)], [cx + Math.max(r0, r1), Math.max(ya, yb), cz + Math.max(r0, r1)]]),
+    svg: stroke2(pd(pts, false), col, .9) }; }
+
+/* ---------- state helpers ---------- */
+const capHome = st => !st.capT[0] && !st.capT[1] && !st.capT[2];
+const capCoax = st => !st.capT[0] && !st.capT[2];
+const cellsHome = st => st.inLight.every((i, k) => { const c = st.cells[i]; return c.x === AX && c.z === AZ && Math.abs(c.y0 - HOME_Y0[k]) < .01; });
+const isFresh = st => st.cells[st.inLight[0]].fresh;
+const level = st => st.sw > .5 && capHome(st) && cellsHome(st) && !st.busy ? (isFresh(st) ? 1 : .3) : 0;
+const beamHalf = fd => fd <= 3 ? 4 + 9*fd/3 : 13 + 17*(fd - 3)/3;            // degrees: spot 8 deg wide, medium 26, flood 60
+const spotR = st => RMOUTH + (95 - st.fd - CARD.y1) * Math.tan(beamHalf(st.fd)*Math.PI/180);
+const glowCol = st => isFresh(st) ? '#fff8d8' : '#ffd77a';
+
+/* ---------- the reflector, LED and LED board (the head's optics) ---------- */
+const REF_RS = [RHOLE, 11, 13.5, 16, 18.5, 21, 23.5, RMOUTH];
+function reflLoft(hy, inner){ const rings = REF_RS.map(r => ringY(reflY(r) + hy, r, 32)); let s = '';
+  for (let i = 0; i < rings.length - 1; i++) s += loft(rings[i], rings[i + 1], n => toneI(n, REFM), inner);
+  return s; }
+function ledSvg(st){
+  const lv = level(st), parts = [];
+  parts.push(rodY(LED_Y + 1.4, HS_Y0, 8, ALU, .6, 8, 20, AX, AZ, toneI));                     // LED board (star)
+  parts.push(box(AX - 2.8, LED_Y + .2, AZ - 2.8, AX + 2.8, LED_Y + 1.4, AZ + 2.8, PHOS, toneI, .5));   // LED package
+  const c = P(AX, LED_Y, AZ), r = 2.4*1.2247;
+  parts.push((lv ? `<circle cx="${f(c[0])}" cy="${f(c[1])}" r="${f(r*2.6)}" fill="${glowCol(st)}" opacity="${f(.7*lv)}"/>` : '')
+    + `<circle cx="${f(c[0])}" cy="${f(c[1])}" r="${f(r)}" fill="${lv ? '#ffffff' : '#f4f1e2'}" fill-opacity=".85" stroke="${INK}" stroke-width=".6"/>`
+    + `<circle cx="${f(c[0] - r*.35)}" cy="${f(c[1] - r*.35)}" r="${f(r*.25)}" fill="#ffffff"/>`);
+  return facing([0, -1, 0]) ? parts.join('') : parts.reverse().join('');
+}
+
+/* ---------- a D cell lying along y, + end toward -y; ymin/ymax keep only the part between them ---------- */
+function cellItems(c, ymin = -1e9, ymax = 1e9){
+  const out = [], M = c.fresh ? CELL_NEW : CELL_OLD, BD = c.fresh ? BAND_NEW : BAND_OLD, y0 = c.y0, cx = c.x, cz = c.z;
+  const seg = (a, b, r, mat, extra) => { const A = Math.max(a, ymin), B2 = Math.min(b, ymax); if (B2 - A < .05) return;
+    out.push({ box: boxY(A, B2, r, cx, cz), svg: rodY(A, B2, r, mat, .9, r, 24, cx, cz, toneI) + (extra ? extra(A, B2) : '') }); };
+  seg(y0, y0 + NUB_L, NUB_R, METAL);
+  seg(y0 + NUB_L, y0 + 18, CELL_R, BD, (A) => A === y0 + NUB_L && facing([0, -1, 0])
+    ? shape(ringY(y0 + NUB_L - .05, 13, 20, cx, cz), METAL.m, .5) : '');
+  seg(y0 + 18, y0 + CELL_L, CELL_R, M, (A, B2) => {
+    let s = '';
+    if (B2 === y0 + CELL_L && facing([0, 1, 0])) s += shape(ringY(y0 + CELL_L + .05, 14, 20, cx, cz), METAL.l, .5);
+    if (A <= y0 + 28 && B2 >= y0 + 54) s += tx(cx + CELL_R + .15, y0 + 41, cz + 2, 'D  1.5V', 6, c.fresh ? '#f4e2c8' : '#ffffff', 800);
+    return s; });
+  return out;
+}
+
+/* ---------- the tail cap (pose: translation T, knurl turned by rot) ---------- */
+function capParts(st, k){
+  const T = st.capT, rot = st.capRot, cx = AX + T[0], cz = AZ + T[2], y0 = CAPG.y0 + T[1], y1 = CAPG.y1 + T[1];
+  const shell = [], mech = [], m = st.m;
+  let body = loft(ringY(y0, CAPG.r, 32, cx, cz), ringY(y1, CAPG.r, 32, cx, cz), n => tone(n, m));
+  body += flutes(cx, cz, y0 + 4, y1 - 3, CAPG.r + .05, 20, rot, .6, .5);
+  if (facing([0, 1, 0])) body += shape(ringY(y1, CAPG.r, 32, cx, cz), tone([0, 1, 0], m), 1.1);
+  if (facing([0, -1, 0])){ const bore = ringY(y0 - .05, CAPG.rin, 32, cx, cz);
+    body += shape(ringY(y0 - .02, CAPG.r, 32, cx, cz), tone([0, -1, 0], m), 1) + shape(bore, '#2b2523', .8)
+      + clipTo(bore, shape(ringY(PLATE_Y + T[1], 19, 28, cx, cz), BRASS.m, .5) + coilY(PLATE_Y + T[1], tailFront(st), 9, 6, 4, '#cfd6d8', cx, cz).svg); }
+  body += hullInk([...ringY(y0, CAPG.r, 24, cx, cz), ...ringY(y1, CAPG.r, 24, cx, cz)], 2.2);
+  shell.push({ box: boxY(y0, y1, CAPG.r, cx, cz), svg: act('cap', body) });
+  // lanyard: a lug on the closed end, and a steel loop through it
+  const lug = rodY(y1, y1 + 3, 3, m, .8, 2.6, 14, cx, cz);
+  const loopPts = Array.from({ length: 25 }, (_, i) => { const a = i/24*2*Math.PI; return [cx, y1 + 7 + 4.5*Math.cos(a), cz + 5.5*Math.sin(a)]; });
+  const loop = stroke2(pd(loopPts, false), METAL.m, 1.2);
+  shell.push({ box: [[cx - 3, y1, cz - 6], [cx + 3, y1 + 12, cz + 6]], svg: act('cap', facing([0, 1, 0]) ? lug + loop : loop + lug) });
+  // inside: the brass spring plate and the conical tail spring
+  mech.push({ box: boxY(PLATE_Y + T[1], PLATE_Y + T[1] + 1, 19, cx, cz), svg: rodY(PLATE_Y + T[1], PLATE_Y + T[1] + 1, 19, BRASS, .7, 19, 28, cx, cz, toneI) });
+  mech.push(coilY(PLATE_Y + T[1], tailFront(st), 9, 6, 5, '#cfd6d8', cx, cz));
+  return { shell, mech };
+}
+// where the tail spring's front end is: on the rear cell's - end while it presses, free (18 long) otherwise
+function tailFront(st){
+  const free = PLATE_Y + st.capT[1] - 18;
+  if (!capCoax(st)) return free;
+  let y = free; for (const c of st.cells) if (c.x === AX && c.z === AZ){ const e = c.y0 + CELL_L; if (e > y && e < PLATE_Y + st.capT[1]) y = e; }
+  return y;
+}
+
+/* ---------- the torch body (case parts, each sorted) ---------- */
+function shellItems(st, m){
+  const hy = -st.fd, hr = st.fd*60, items = [], put = (b, svg) => items.push({ box: b, svg }), lv = level(st);
+  // bezel with the lens; through the lens: the reflector and the LED
+  { const y0 = 90 + hy, y1 = 97 + hy; let s = rodY(y0, y1, 31, METAL, 1.4, 31, 36);
+    if (facing([0, -1, 0])){ const lr = ringY(y0 - .05, 26.5, 36);
+      const inside = fill(pd(ringY(reflY(RHOLE) + hy, RHOLE, 20)), '#55504a') + reflLoft(hy, true) + ledSvg(st);
+      s += clipTo(lr, inside) + fill(pd(lr), lv ? glowCol(st) : CLEAR.l, `opacity="${lv ? f(.45 + .45*lv) : .3}"`) + ink(pd(lr), 1.1);
+      const a = P(AX - 14, y0 - .1, AZ + 16), b = P(AX - 4, y0 - .1, AZ + 21), c2 = P(AX - 18, y0 - .1, AZ + 9);
+      s += `<path d="M${f(c2[0])} ${f(c2[1])}L${f(a[0])} ${f(a[1])}L${f(b[0])} ${f(b[1])}" fill="none" stroke="#ffffff" stroke-width="1.4" opacity=".38" stroke-linecap="round"/>`; }
+    put(boxY(y0, y1, 31), act('focus', s)); }
+  // head shell: barrel with grip flutes (they turn as the head is twisted), cone, neck
+  put(boxY(97 + hy, 126 + hy, 30), act('focus', rodY(97 + hy, 126 + hy, 30, m, 1.8, 30, 36) + flutes(AX, AZ, 100 + hy, 123 + hy, 30.05, 18, hr)));
+  put(boxY(126 + hy, 138 + hy, 30), act('focus', rodY(126 + hy, 138 + hy, 30, m, 1.4, 22.5, 36)));
+  put(boxY(138 + hy, 156 + hy, 22.5), act('focus', rodY(138 + hy, 156 + hy, 22.5, m, 1.3, 22.5, 32)));
+  // body tube in pieces between the grip rings; the tail end shows its thread and O-ring when the cap is off
+  const coax = capCoax(st), tEnd = coax ? Math.min(TUBE_Y1, CAPG.y0 + st.capT[1]) : TUBE_Y1;
+  const cuts = [156 + hy]; for (const g of GRIPS) cuts.push(g, g + 3); cuts.push(tEnd);
+  for (let i = 0; i < cuts.length - 1; i++){ const a = cuts[i], b = cuts[i + 1], grip = i % 2 === 1;
+    let s = rodY(a, b, grip ? TUBE_R + .8 : TUBE_R, grip ? DARK : m, grip ? .9 : 1.3, grip ? TUBE_R + .8 : TUBE_R, 32);
+    if (i === 0 && facing([1, 0, 0])) s += tx(AX + TUBE_R + .2, 212, AZ - 2.5, 'BRIGHTBEAM 2D', 6.2, mix(m.d, '#000000', .2), 800);
+    if (i === cuts.length - 2 && b > 266){
+      s += helixNear(AX, AZ, 270, Math.min(b, TUBE_Y1), TUBE_R + .1, 1.6);
+      if (b > 269.5) s += ringNear(268.75, TUBE_R + .5, DARK.m, 1.3);
+      if (b >= TUBE_Y1 - .01 && facing([0, 1, 0])){ const bore = ringY(TUBE_Y1 + .05, TUBE_IN, 32);
+        let ins = '';
+        for (const c of st.cells) if (c.x === AX && c.z === AZ && c.y0 + CELL_L <= TUBE_Y1 && c.y0 + CELL_L > TUBE_Y1 - 30)
+          ins += shape(ringY(c.y0 + CELL_L, CELL_R, 28), (c.fresh ? CELL_NEW : CELL_OLD).d, .6) + shape(ringY(c.y0 + CELL_L + .05, 14, 20), METAL.m, .5);
+        s += shape(ringY(TUBE_Y1 + .05, TUBE_R, 32), tone([0, 1, 0], m), 1) + shape(bore, '#2b2523', .8) + clipTo(bore, ins)
+          + box(AX - 2.2, TUBE_Y1 - .5, AZ + 17.2, AX + 2.2, TUBE_Y1 + .6, AZ + 20.2, BRASS, toneI, .5); } }
+    put(boxY(a, b, grip ? TUBE_R + .8 : TUBE_R), s); }
+  // switch housing: a rounded block on the tube with the slot the slider runs in
+  { const prof = rrUV(AX - 7.5, AZ + 18.4, AX + 7.5, AZ + 23.5, 2.2, 4), A = on(PY(BOSS[0]), prof), B = on(PY(BOSS[1]), prof);
+    let s = loft(A, B, n => tone(n, m));
+    if (facing([0, -1, 0])) s += shape(A, tone([0, -1, 0], m), 1); if (facing([0, 1, 0])) s += shape(B, tone([0, 1, 0], m), 1);
+    s += shape(on(PZ(AZ + 23.55), rrUV(AX - 1.8, BOSS[0] + 5, AX + 1.8, BOSS[1] - 5, 1.6, 3)), '#2b2523', .6);
+    s += tx(AX + 7.55, BOSS[0] + 7, AZ + 19.6, 'ON', 3.2, INK, 800) + tx(AX + 7.55, BOSS[1] - 7, AZ + 19.6, 'OFF', 3.2, INK, 800);
+    s += hullInk([...A, ...B], 1.4);
+    items.push({ box: [[AX - 7.5, BOSS[0], AZ + 20.01], [AX + 7.5, BOSS[1], AZ + 23.5]], svg: s }); }
+  items.push(knobItem(st));
+  return items;
+}
+function knobItem(st){
+  const ky = 182 - 10*st.sw;
+  let s = box(AX - 5.5, ky - 5.5, AZ + 23.5, AX + 5.5, ky + 5.5, AZ + 27.5, DARK, tone, 1.1);
+  if (facing([0, 0, 1])) for (const d of [-3, 0, 3]) s += line([[AX - 4.5, ky + d, AZ + 27.55], [AX + 4.5, ky + d, AZ + 27.55]], .7);
+  return { box: [[AX - 5.5, ky - 5.5, AZ + 23.5], [AX + 5.5, ky + 5.5, AZ + 27.5]], svg: act('switch', s) };
+}
+
+/* ---------- see-through: the working parts inside the case ---------- */
+function mechItems(st){
+  const hy = -st.fd, lv = level(st), items = [], put = (b, svg) => items.push({ box: b, svg });
+  const ky = 182 - 10*st.sw, wireCol = lv ? '#ff9a3a' : null;
+  // lens, bezel O-ring, reflector (far inside wall, the LED, near outer wall)
+  put(boxY(92 + hy, 94 + hy, 27), rodY(92 + hy, 94 + hy, 27, CLEAR, .7, 27, 36, AX, AZ, toneI).replace(/<path d="([^"]*)" fill="([^"]*)" stroke="([^"]*)" stroke-width="\.7"/g, '<path d="$1" fill="$2" fill-opacity=".55" stroke="$3" stroke-width=".7"'));
+  put(boxY(94 + hy, 95.2 + hy, 27.8), rodY(94 + hy, 95.2 + hy, 27.8, DARK, .6, 27.8, 36, AX, AZ, toneI));
+  put([[AX - RMOUTH, 95 + hy, AZ - RMOUTH], [AX + RMOUTH, reflY(RHOLE) + hy, AZ + RMOUTH]],
+    reflLoft(hy, true) + ledSvg(st) + reflLoft(hy, false) + hullInk([...ringY(95 + hy, RMOUTH, 24), ...ringY(reflY(RHOLE) + hy, RHOLE, 16)], 1.1));
+  // heat sink pressed into the tube front, two LED wires over its top, standoffs, the driver board and its parts
+  put(boxY(HS_Y0, 133, 17.8), rodY(HS_Y0, 133, 17.8, ALU, .9, 17.8, 32, AX, AZ, toneI) + flutes(AX, AZ, HS_Y0 + 1.5, 131.5, 17.85, 12, 15, .5, .45));
+  for (const [dx, col] of [[-1.6, '#d8443a'], [1.6, '#2b2523']]){
+    const zr = Math.sqrt(18.1*18.1 - dx*dx);
+    put([[AX + dx - .4, HS_Y0 - .35, AZ + 7.6], [AX + dx + .4, HS_Y0 - .05, AZ + zr + .4]], stroke2(pd([[AX + dx, LED_Y + 1.9, AZ + 7.8], [AX + dx, HS_Y0 - .2, AZ + 8.2], [AX + dx, HS_Y0 - .2, AZ + zr]], false), wireCol || col, .7));
+    put([[AX + dx - .4, HS_Y0, AZ + 17.8], [AX + dx + .4, 140, AZ + zr + .45]], stroke2(pd([[AX + dx, HS_Y0 - .2, AZ + zr], [AX + dx, 139.9, AZ + zr]], false), wireCol || col, .7));
+  }
+  for (const sx of [-12, 12]) put(boxY(133, 140, 1.3, AX + sx, AZ - 9), rodY(133, 140, 1.3, BRASS, .6, 1.3, 10, AX + sx, AZ - 9, toneI));
+  put(boxY(134.5, 140, 3.6, AX - 6, AZ - 3), rodY(134.5, 140, 3.6, INDM, .7, 3.6, 16, AX - 6, AZ - 3, toneI) + (facing([0, -1, 0]) ? shape(ringY(134.45, 1.6, 10, AX - 6, AZ - 3), '#b87333', .4) : ''));
+  put([[AX + 2, 138.6, AZ - 1], [AX + 9, 140, AZ + 6]], box(AX + 2, 138.6, AZ - 1, AX + 9, 140, AZ + 6, CHIPM, toneI, .6));
+  put(boxY(135.5, 140, 2.6, AX + 2, AZ - 10), rodY(135.5, 140, 2.6, CAPM, .6, 2.6, 14, AX + 2, AZ - 10, toneI));
+  put(boxY(140, 141.6, 18), rodY(140, 141.6, 18, PCB, .8, 18, 32, AX, AZ, toneI));
+  // centre spring from the driver board's back to the front cell's + nub
+  { let front = 152; const c0 = st.cells[st.inLight[0]]; if (c0.x === AX && c0.z === AZ && c0.y0 < 152) front = c0.y0;
+    for (const c of st.cells) if (c.x === AX && c.z === AZ && c.y0 >= 141.6 && c.y0 < front) front = c.y0;
+    items.push(coilY(141.6, front, 3.8, 3.8, 4, lv ? '#ffd27a' : '#cfd6d8')); }
+  // the switch: fixed contact tab from the driver board, contact bridge under the slider, the strip and its tab over the rim
+  put([[AX - 2.2, 140, AZ + 17.2], [AX + 2.2, 172, AZ + 17.8]], box(AX - 2.2, 140, AZ + 17.2, AX + 2.2, 172, AZ + 17.8, lv ? matOf('#ffb347') : BRASS, toneI, .5));
+  put([[AX - 2.2, 177, AZ + 17.2], [AX + 2.2, TUBE_Y1, AZ + 17.8]], box(AX - 2.2, 177, AZ + 17.2, AX + 2.2, TUBE_Y1, AZ + 17.8, lv ? matOf('#ffb347') : BRASS, toneI, .5));
+  put([[AX - 2.2, TUBE_Y1, AZ + 17.2], [AX + 2.2, TUBE_Y1 + .6, AZ + 20.2]], box(AX - 2.2, TUBE_Y1, AZ + 17.2, AX + 2.2, TUBE_Y1 + .6, AZ + 20.2, BRASS, toneI, .5));
+  put([[AX - 2.6, ky - 7, AZ + 17.8], [AX + 2.6, ky + 7, AZ + 18.4]], box(AX - 2.6, ky - 7, AZ + 17.8, AX + 2.6, ky + 7, AZ + 18.4, lv ? matOf('#ffb347') : BRASS, toneI, .5));
+  put([[AX - 2.4, ky - 3, AZ + 18.4], [AX + 2.4, ky + 3, AZ + 23.5]], box(AX - 2.4, ky - 3, AZ + 18.4, AX + 2.4, ky + 3, AZ + 23.5, PLAS, toneI, .6));
+  // the cells: the parts inside the tube (the rest is drawn with the scene)
+  for (const c of st.cells) if (c.x === AX && c.z === AZ) items.push(...cellItems(c, -1e9, TUBE_Y1));
+  return items;
+}
+// thin things on the tube's outside, drawn over the inside parts (their near halves only)
+function mechOverlay(st){
+  const coax = capCoax(st);
+  return helixNear(AX, AZ, 140, 150, TUBE_R + .1, 1.6, .7, .9) + helixNear(AX, AZ, 270, TUBE_Y1, TUBE_R + .1, 1.6, .7, .9) + ringNear(268.75, TUBE_R + .5, DARK.m, 1.3);
+}
+
+/* ---------- the scene ---------- */
+function scene(st, m){
+  st.m = m;
+  document.documentElement.classList.toggle('flxr', (st.xr || 0) > .6);   // labelled see-through: its right column needs the stats' corner
+  const k = ease(st.xr || 0), lv = level(st), hy = -st.fd, coax = capCoax(st);
+  const TOP = boardTop(...TBL, BT, 8);
+  let s = board(...TBL, BT, 8, WOOD);
+  // cast shadows on the table: the torch, the card, the box, the cells and the cap lying out
+  const torchPts = [...ringY(90 + hy, 31, 12), ...ringY(126 + hy, 30, 12), ...ringY(156 + hy, 22.5, 12), ...ringY(coax ? 296 + st.capT[1] : TUBE_Y1, 22, 12)];
+  let sh = castShadow(torchPts, BT, TOP) + castShadow([[CARD.x0, CARD.y0, BT], [CARD.x1, CARD.y0, BT], [CARD.x0, CARD.y1, CARD.z1], [CARD.x1, CARD.y1, CARD.z1], [CARD.x0, 22, BT], [CARD.x1, 22, BT]], BT, TOP)
+    + castShadow([[BOXC.x0, BOXC.y0, BT], [BOXC.x1, BOXC.y0, BT], [BOXC.x0, BOXC.y1, BT], [BOXC.x1, BOXC.y1, BT], [BOXC.x0, BOXC.y0, BOXC.z1], [BOXC.x1, BOXC.y0, BOXC.z1], [BOXC.x0, BOXC.y1, BOXC.z1], [BOXC.x1, BOXC.y1, BOXC.z1]], BT, TOP);
+  for (const c of st.cells){ const inside = c.x === AX && c.z === AZ && c.y0 + CELL_L <= TUBE_Y1 + .5, inBox = c.x > BOXC.x0 && c.z < BOXC.z1;
+    if (!inside && !inBox) sh += castShadow([...ringY(c.y0, CELL_R, 10, c.x, c.z), ...ringY(c.y0 + CELL_L, CELL_R, 10, c.x, c.z)], BT, TOP); }
+  if (!coax) sh += castShadow([...ringY(CAPG.y0 + st.capT[1], CAPG.r, 12, AX + st.capT[0], AZ + st.capT[2]), ...ringY(CAPG.y1 + st.capT[1] + 10, 6, 8, AX + st.capT[0], AZ + st.capT[2])], BT, TOP);
+  s += sh;
+  // the block the tube rests on
+  s += box(...BLOCK, WOOD, toneI, 1);
+  const items = [];
+  // beam test card in its wooden stand, with the light spot
+  items.push({ box: [[CARD.x0 - 4, 6, BT], [CARD.x1 + 4, 22, BT + 7]], svg: box(CARD.x0 - 4, 6, BT, CARD.x1 + 4, 22, BT + 7, WOOD, toneI, 1) });
+  { let c = box(CARD.x0, CARD.y0, CARD.z0, CARD.x1, CARD.y1, CARD.z1, CARDM, toneI, 1.1);
+    if (facing([0, 1, 0])){ const yf = CARD.y1 + .05, face = on(PY(yf), rectUV(CARD.x0, CARD.z0, CARD.x1, CARD.z1));
+      let pr = ''; for (const r of [12, 24, 36]) pr += pd(on(PY(yf), ellUV(AX, AZ, r, r, 40)));
+      pr += pd([[AX - 50, yf, AZ], [AX + 50, yf, AZ]], false) + pd([[AX, yf, CARD.z0 + 2], [AX, yf, CARD.z1 - 12]], false);
+      c += `<path d="${pr}" fill="none" stroke="#9fb6d6" stroke-width=".7"/>` + txY(AX, yf, CARD.z1 - 8, 'BEAM TEST', 6, '#7d8fae', 800);
+      if (lv){ const rs = spotR(st), col = glowCol(st), a = lv*(.5 + .5*Math.min(1, 34/rs));
+        const disc = r => fill(pd(on(PY(yf + .02), ellUV(AX, AZ, r, r, 48))), col, `opacity="${f(a)}"`);
+        c += clipTo(face, disc(rs*1.18).replace(`opacity="${f(a)}"`, `opacity="${f(.35*a)}"`) + disc(rs) + fill(pd(on(PY(yf + .03), ellUV(AX, AZ, rs*.45, rs*.45, 32))), '#ffffff', `opacity="${f(.55*a)}"`)); }
+      c += ink(pd(face), 1.1); }
+    items.push({ box: [[CARD.x0, CARD.y0, CARD.z0], [CARD.x1, CARD.y1, CARD.z1]], svg: c }); }
+  // the beam through the air, from the lens to the card (its bottom stops at the table)
+  if (lv){ const rs = spotR(st), mouth = ringY(95 + hy, RMOUTH, 24), spot = ringY(CARD.y1 + .1, rs, 32).map(p => [p[0], p[1], Math.max(BT + .2, Math.min(CARD.z1, p[2]))]);
+    items.push({ box: [[AX - rs, CARD.y1, BT], [AX + rs, 90 + hy, AZ + rs]], svg: fill(sp(hull([...mouth, ...spot].map(p => P(...p)))), glowCol(st), `opacity="${f(.3*lv)}" pointer-events="none"`) }); }
+  // the box of spare D cells: floor, four walls, the cells in it
+  { const { x0, x1, y0, y1, z1 } = BOXC;
+    items.push({ box: [[x0, y0, BT], [x1, y1, BT + 2]], svg: box(x0, y0, BT, x1, y1, BT + 2, KRAFT, toneI, 1) });
+    items.push({ box: [[x0, y0, BT + 2], [x0 + 2, y1, z1]], svg: box(x0, y0, BT + 2, x0 + 2, y1, z1, KRAFT, toneI, 1) });
+    items.push({ box: [[x1 - 2, y0, BT + 2], [x1, y1, z1]], svg: box(x1 - 2, y0, BT + 2, x1, y1, z1, KRAFT, toneI, 1) + (facing([1, 0, 0]) ? tx(x1 + .1, (y0 + y1)/2, BT + 10, 'D CELLS  1.5V', 7, '#5a4126', 800) : '') });
+    items.push({ box: [[x0 + 2, y0, BT + 2], [x1 - 2, y0 + 2, z1]], svg: box(x0 + 2, y0, BT + 2, x1 - 2, y0 + 2, z1, KRAFT, toneI, 1) });
+    items.push({ box: [[x0 + 2, y1 - 2, BT + 2], [x1 - 2, y1, z1]], svg: box(x0 + 2, y1 - 2, BT + 2, x1 - 2, y1, z1, KRAFT, toneI, 1) }); }
+  // loose cells (in the box, on the table, in a hand), and the parts of cells sticking out of the open tail
+  for (const c of st.cells){ const onAxis = c.x === AX && c.z === AZ; items.push(...cellItems(c, onAxis ? TUBE_Y1 : -1e9)); }
+  // the cap, when it is off the tube
+  const cap = capParts(st, k), ghost = svg => k > 0 ? `<g opacity="${f(1 - .8*k)}">${svg}</g>` : svg;
+  if (!coax) items.push({ box: flBoxOf([...cap.shell.flatMap(p => p.box)]), svg: ghost(byDepth(cap.shell)) + (k > 0 ? `<g opacity="${f(k)}">${byDepth(cap.mech)}</g>` : '') });
+  // the torch itself: its case (a ghost in see-through), the working parts over it, the knob on top
+  { const sh2 = shellItems(st, m); if (coax) sh2.push(...cap.shell);
+    let t = ghost(byDepth(sh2));
+    if (k > 0){ const mi = mechItems(st); if (coax) mi.push(...cap.mech);
+      t += `<g opacity="${f(k)}">${byDepth(mi)}${mechOverlay(st)}</g>` + knobItem(st).svg; }
+    const yEnd = coax ? CAPG.y1 + 12 + st.capT[1] : TUBE_Y1 + 1;
+    items.push({ box: [[AX - 31, 90 + hy, BT], [AX + 31, yEnd, AZ + 31]], svg: t }); }
+  s += byDepth(items);
+  // labels
+  // bounds from y 40, not 90: the head end carries half the labels, this splits the two columns evenly;
+  // but if that leaves no room for a right column (views from the head end), fall back to the torch itself
+  let B = [AX - 31, AX + 31, 40, 300, BT, AZ + 31];
+  { const vb = document.getElementById('fig')?.viewBox.baseVal, xr = b => Math.max(...[b[2], b[3]].flatMap(y => [b[0], b[1]].map(x => P(x, y, b[5])[0])));
+    if (vb && vb.width && vb.x + vb.width - xr(B) < 110*INK_K) B = [AX - 31, AX + 31, 90, 300, BT, AZ + 31]; }
+  if (k > .6) s += xrCallouts(insideLabels(st), B);
+  else s += xrCallouts(surfaceLabels(st), B);
+  return s;
+}
+
+/* ---------- labels ---------- */
+function insideLabels(st){
+  const hy = -st.fd, lv = level(st) > 0, ky = 182 - 10*st.sw, foc = !!st.focusing, T = st.capT, cx = AX + T[0], cz = AZ + T[2];
+  const c0 = st.cells[st.inLight[0]], c1 = st.cells[st.inLight[1]], sw = !!st.swAnim;
+  return [
+    { at: [AX, 90 + hy, AZ + 31], text: 'BEZEL', on: foc },
+    { at: [AX - 10, 92 + hy, AZ + 18], text: 'LENS', on: lv },
+    { at: [AX, 94.6 + hy, AZ - 27.8], text: 'BEZEL O-RING', on: false },
+    { at: [AX, reflY(18) + hy, AZ + 18], text: 'REFLECTOR', on: foc || lv },
+    { at: [AX, LED_Y, AZ + 2.4], text: 'LED', on: lv },
+    { at: [AX, LED_Y + 1.9, AZ - 8], text: 'LED BOARD', on: lv },
+    { at: [AX + 26, 112 + hy, AZ + 15], text: 'FOCUS HEAD', on: foc },
+    { at: [AX + 17, 146, AZ + 10], text: 'FOCUS THREAD', on: foc },
+    { at: [AX, 128, AZ - 17.8], text: 'HEAT SINK', on: lv },
+    { at: [AX + 1.6, 131, AZ + 18], text: 'LED WIRES', on: lv },
+    { at: [AX + 12, 136.5, AZ - 10.3], text: 'STANDOFFS', on: false },
+    { at: [AX, 140.8, AZ - 18], text: 'DRIVER BOARD', on: lv },
+    { at: [AX - 6, 134.5, AZ - 3], text: 'INDUCTOR', on: lv },
+    { at: [AX + 5.5, 138.6, AZ + 6], text: 'DRIVER CHIP', on: lv },
+    { at: [AX + 2, 135.5, AZ - 12.6], text: 'CAPACITOR', on: lv },
+    { at: [AX, 145.5, AZ + 3.8], text: 'CENTRE SPRING', on: lv },
+    { at: [AX, 150, AZ + 17.8], text: 'FIXED CONTACT', on: lv },
+    { at: [AX, ky + 5, AZ + 18.4], text: 'CONTACT BRIDGE', on: lv || sw },
+    { at: [AX - 2.4, ky, AZ + 21], text: 'SLIDER', on: sw },
+    { at: [AX, ky, AZ + 27.5], text: 'SWITCH KNOB', on: sw },
+    { at: [AX, 225, AZ + 17.8], text: 'CONTACT STRIP', on: lv },
+    { at: [AX, TUBE_Y1 + .3, AZ + 20.2], text: 'STRIP TAB', on: lv },
+    { at: [AX + TUBE_R, 200, AZ - 6], text: 'BODY TUBE', on: false },
+    { at: [AX + TUBE_R + .8, 247.5, AZ - 4], text: 'GRIP RINGS', on: false },
+    { at: [c0.x, c0.y0 + 30, c0.z + CELL_R], text: 'FRONT CELL', on: lv },
+    { at: [c1.x, c1.y0 + 30, c1.z + CELL_R], text: 'REAR CELL', on: lv },
+    { at: [c0.x, c0.y0, c0.z + NUB_R], text: '+ TERMINAL', on: lv },
+    { at: [c1.x, c1.y0 + CELL_L, c1.z - 10], text: '- END', on: lv },
+    { at: [AX - TUBE_R, 276, AZ], text: 'TAIL THREAD', on: !!st.capMoving },
+    { at: [AX - TUBE_R - .5, 268.75, AZ + 4], text: 'CAP O-RING', on: false },
+    { at: [cx, CAPG.y0 + 22 + T[1], cz + CAPG.r], text: 'TAIL CAP', on: !!st.capMoving },
+    { at: [cx, tailFront(st) + 4, cz + 7.5], text: 'TAIL SPRING', on: lv },
+    { at: [cx, PLATE_Y + .5 + T[1], cz - 19], text: 'SPRING PLATE', on: lv } ];
+}
+function surfaceLabels(st){
+  const hy = -st.fd, ky = 182 - 10*st.sw, T = st.capT;
+  return [
+    { at: [AX, ky, AZ + 27.5], text: 'SLIDE SWITCH', on: st.sw > .5 },
+    { at: [AX + 26, 112 + hy, AZ + 15], text: 'FOCUS HEAD', on: !!st.focusing },
+    { at: [AX, 90 + hy, AZ + 31], text: 'BEZEL AND LENS', on: level(st) > 0 },
+    { at: [AX + T[0], CAPG.y0 + 15 + T[1], AZ + T[2] + CAPG.r], text: 'TAIL CAP', on: !!st.capMoving },
+    { at: [(BOXC.x0 + BOXC.x1)/2, BOXC.y1, BOXC.z1], text: 'SPARE D CELLS', on: false },
+    { at: [CARD.x1 - 10, CARD.y1, CARD.z1], text: 'BEAM TEST CARD', on: level(st) > 0 } ];
+}
+
+/* ---------- behaviour ---------- */
+let ui;
+function slideSwitch(st, ui){
+  st.swT = st.swT ? 0 : 1;
+  if (st.swT){ if (!capCoax(st) || !capHome(st)) ui.flash('The cap is off: the circuit is open, so no light');
+    else if (!cellsHome(st)) ui.flash('No batteries in'); }
+  if (st.swAnim) return; st.swAnim = true;
+  ui.animate(dt => { st.sw += Math.sign(st.swT - st.sw)*Math.min(Math.abs(st.swT - st.sw), dt/.22);
+    if (st.sw === st.swT){ st.swAnim = false; return false; } return true; });
+}
+function setFocus(st, ui, key){
+  st.focus = key; const goal = FOCI[key].fd;
+  if (st.focusing) return; st.focusing = true;
+  ui.animate(dt => { st.fd += Math.sign(goal - st.fd)*Math.min(Math.abs(goal - st.fd), dt*9);
+    if (st.fd === FOCI[st.focus].fd){ st.focusing = false; return false; } return true; });
+}
+// a list of timed steps, one after another: { dur (s), at(e, k) } with e eased
+function runSeq(st, ui, steps, done){
+  st.busy = true; let i = 0, t = 0;
+  ui.animate(dt => { const sp2 = steps[i]; t += dt/sp2.dur; const k = Math.min(1, t); sp2.at(ease(k), k);
+    if (k >= 1){ i++; t = 0; if (i >= steps.length){ st.busy = false; st.capMoving = false; if (done) done(); return false; } }
+    return true; });
+}
+const lerp3 = (a, b, e, lift = 0) => [0, 1, 2].map(j => a[j] + (b[j] - a[j])*e + (j === 2 ? lift*Math.sin(Math.PI*e) : 0));
+function capOffSteps(st){
+  return [
+    { dur: .8, at: e => { st.capMoving = true; st.capT = [0, THREAD_LEN*e, 0]; st.capRot = -720*e; } },
+    { dur: .6, at: e => { st.capT = lerp3([0, THREAD_LEN, 0], REST_T, e, 30); if (e >= 1) st.capT = REST_T.slice(); } } ];
+}
+function capOnSteps(st){
+  return [
+    { dur: .6, at: e => { st.capMoving = true; st.capT = lerp3(REST_T, [0, THREAD_LEN, 0], e, 30); if (e >= 1) st.capT = [0, THREAD_LEN, 0]; } },
+    { dur: .8, at: e => { st.capT = [0, THREAD_LEN*(1 - e), 0]; st.capRot = -720*(1 - e); if (e >= 1) st.capT = [0, 0, 0]; } } ];
+}
+const slideCell = (c, from, to, dur) => ({ dur, at: e => { c.x = AX; c.z = AZ; c.y0 = from + (to - from)*e; } });
+const carryCell = (c, to, dur = .6) => { let from = null; return { dur, at: e => { if (!from) from = [c.x, c.y0, c.z];
+  const p = lerp3(from, to, e, 34); c.x = p[0]; c.y0 = p[1]; c.z = p[2]; if (e >= 1){ c.x = to[0]; c.y0 = to[1]; c.z = to[2]; } } }; };
+function capButton(st, ui){
+  if (st.busy) return ui.flash('One moment, still working');
+  if (capHome(st)) runSeq(st, ui, capOffSteps(st), () => ui.flash('Cap off: the tail spring has let go of the cells'));
+  else runSeq(st, ui, capOnSteps(st), () => ui.flash('Cap back on: the tail spring presses the cells again'));
+}
+function swap(st, ui){
+  if (st.busy) return ui.flash('One moment, still working');
+  if (isFresh(st)) return ui.flash('These cells are fresh (3.0 V) and the spares box is empty');
+  const [i0, i1] = st.inLight, a = st.cells[i0], b = st.cells[i1], n0 = st.cells[2], n1 = st.cells[3];
+  const steps = capHome(st) ? capOffSteps(st) : [];
+  steps.push(slideCell(b, HOME_Y0[1], OUT_Y0, .55), carryCell(b, [USED[1].x, USED[1].y0, BT + CELL_R]),
+    slideCell(a, HOME_Y0[0], OUT_Y0, .75), carryCell(a, [USED[0].x, USED[0].y0, BT + CELL_R]),
+    carryCell(n0, [AX, OUT_Y0, AZ]), slideCell(n0, OUT_Y0, HOME_Y0[0], .75),
+    carryCell(n1, [AX, OUT_Y0, AZ]), slideCell(n1, OUT_Y0, HOME_Y0[1], .55),
+    { dur: .01, at: () => { st.inLight = [2, 3]; } }, ...capOnSteps(st));
+  runSeq(st, ui, steps, () => ui.flash(st.sw > .5 ? 'Fresh cells in: 3.0 V, full brightness' : 'Fresh cells in: 3.0 V. Slide the switch'));
+}
+
+const initCells = () => [
+  { x: AX, y0: HOME_Y0[0], z: AZ, fresh: false }, { x: AX, y0: HOME_Y0[1], z: AZ, fresh: false },
+  { x: (BOXC.x0 + BOXC.x1)/2, y0: 172, z: BOX_CZ, fresh: true }, { x: (BOXC.x0 + BOXC.x1)/2, y0: 236, z: BOX_CZ, fresh: true } ];
+ui = mountFigure({
+  fig: '41', title: 'Flashlight',
+  size: [TBL[2], TBL[3], CARD.z1], palette: 'mustard', turn: 'full',
+  state: { sw: 0, swT: 0, fd: 0, focus: 'spot', capT: [0, 0, 0], capRot: 0, cells: initCells(), inLight: [0, 1], busy: false },
+  scene,
+  stats: st => { const lv = level(st), home = cellsHome(st) && capCoax(st);
+    return [ { label: 'Light', value: Math.round(LUMENS*lv) + ' lm' },
+      { label: 'Beam', value: Math.round(2*beamHalf(st.fd)) + '°', small: true },
+      { label: 'Batteries', value: home ? (isFresh(st) ? '3.0 V' : '2.4 V') : 'out', small: true } ]; },
+  buttons: [
+    { label: 'Slide the switch', onClick: slideSwitch },
+    { label: 'Focus the beam', choices: st => Object.keys(FOCI).map(key => ({ label: FOCI[key].label, current: st.focus === key, onClick: (st, ui) => setFocus(st, ui, key) })) },
+    { label: 'Unscrew the cap', onClick: capButton },
+    { label: 'Swap the batteries', onClick: swap },
+  ],
+  acts: { switch: (st, el, ui) => slideSwitch(st, ui), cap: (st, el, ui) => capButton(st, ui),
+    focus: (st, el, ui) => { const ks = Object.keys(FOCI); setFocus(st, ui, ks[(ks.indexOf(st.focus) + 1) % ks.length]); } },
+  params: (st, q) => {
+    if (q.get('on') === '1') st.sw = st.swT = 1;
+    if (FOCI[q.get('focus')]){ st.focus = q.get('focus'); st.fd = FOCI[st.focus].fd; }
+    if (q.get('fresh') === '1'){ st.cells[0].x = st.cells[1].x = USED[0].x; st.cells[0].z = st.cells[1].z = BT + CELL_R; st.cells[0].y0 = USED[0].y0; st.cells[1].y0 = USED[1].y0;
+      st.cells[2].x = st.cells[3].x = AX; st.cells[2].z = st.cells[3].z = AZ; st.cells[2].y0 = HOME_Y0[0]; st.cells[3].y0 = HOME_Y0[1]; st.inLight = [2, 3]; }
+    if (q.get('cap') === 'off') st.capT = REST_T.slice();
+    if (q.has('capy')) st.capT = [0, +q.get('capy'), 0];
+    if (q.get('out') === '1'){ st.capT = REST_T.slice(); st.cells[1].y0 = OUT_Y0 - 20; }
+  },
+});
+document.head.insertAdjacentHTML('beforeend', '<style>@media (min-width:561px){html.flxr:not(.nolabels) #stats{visibility:hidden}}</style>');
+xrMount(() => ui, () => '');
+</script></body></html>
