@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The atom</title></head><body>
+<script src="core.js"></script>
+<script>
+/* The atom: a Bohr-style teaching model on a tabletop stand.
+   How it works (the physics the model shows, and where every photon goes):
+   1. The element dial picks hydrogen, helium, carbon or neon. The nucleus rebuilds with Z protons and N neutrons
+      (H 1p 0n, He 2p 2n, C 6p 6n, Ne 10p 10n) and Z electrons fill the shells 2, 8 (H 1; He 2; C 2,4; Ne 2,8).
+   2. The photon lamp (an LED behind a filter wheel) fires one photon of the chosen energy along the plane of the shells
+      at the outermost electron. If its energy matches the gap to a higher level the electron takes it and jumps up a
+      shell (or two, or three); if it matches no gap it passes straight through.
+   3. The excited electron falls back level by level. Each fall emits a photon carrying exactly the energy gap:
+      wavelength = 1239.84 / gap in eV (nm). It flies to the spectroscope's slit, the grating spreads it by colour and
+      it lands as a bright line on the scale screen. UV and IR lines light the end cells of the strip.
+   Real numbers used (energies above the ground state, eV; lines in nm):
+     H   levels 0, 10.20, 12.09, 12.75 (n = 1..4) - lines 121.6 (UV, 2-1), 656.3 (red, 3-2), 486.1 (cyan, 4-2)
+     He  levels 0, 21.22, 23.07, 23.74 - lines 58.4 (UV), 667.8 (red), 492.2 (cyan)
+     C   levels 0, 7.48, 9.99           - lines 165.7 (UV), 493.2 (cyan)
+     Ne  levels 0, 16.85, 18.97         - lines 73.6 (UV), 585.2 (yellow)
+   The Bohr picture puts each excited level on the next wire ring out (a teaching simplification for He, C and Ne).
+
+   Parts (each held by another):
+   PLINTH   rounded wooden-look case . LCD (element, p n e) . element dial . energy knob . fire button . battery door
+   INSIDE   battery tray + four AA cells . main board on the floor . microcontroller . lamp driver chip . rotary switch
+            behind the dial . encoder behind the energy knob . fire push switch . LCD module . wires board to each part,
+            lamp cable up the lamp post
+   ATOM     stand post with flange on the plinth . disc clamp gripping the acrylic disc's bottom edge . clear acrylic disc .
+            four brass wire rings (shells 1..4) on standoff pins off the disc's front face . electron beads on the rings .
+            nucleus: protons and neutrons glued through the disc's centre, inside a frosted capsule
+   LAMP     post with flange . yoke . housing tube aimed at the atom . heat sink . LED . filter wheel on its motor shaft .
+            wheel motor . lens . bezel
+   SPECTRO  two feet . housing . slit tube facing the atom . entrance slit . collimator lens . diffraction grating .
+            focus lens . scale screen (the strip, on its outer face, with UV / IR end cells) */
+
+const W = 50, D = 124, HB = 14;                                  // plinth: depth, width, height
+const OUT = rrUV(0, 0, D, HB, 3);
+const AC = [25, 60, 70], DISC_R = 44, DX0 = 24.4, DX1 = 25.6, XW = 28;   // atom centre, disc, wire-ring plane
+const RS = [12, 21, 30, 39];                                     // shell radii
+const TH_A = 211;                                                // the outer electron sits facing the lamp
+const HCEV = 1239.84;
+const addv = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]], scl = (a, k) => a.map(v => v*k);
+const lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const LAMP_C = [25, 6, 38], LDIR = norm([0, 54, 32]), LUP = norm(cross([1, 0, 0], LDIR));
+const lampAt = t => addv(LAMP_C, scl(LDIR, t));
+const LAMP_A = lampAt(-4), LAMP_B = lampAt(5), LAMP_M = lampAt(5.8);
+const SP = { x0:6, x1:44, y0:106, y1:122, z0:22, z1:36 };
+const SLIT = [25, 104.5, 29];
+const STRIP = { x0:9, x1:41, z0:25, z1:33, v0:12, v1:38 };
+const nmX = nm => STRIP.v0 + (nm - 380) / 340 * (STRIP.v1 - STRIP.v0);
+const DIAL = [80, 7.5], EKNOB = [60, 7.5], FIREB = [40, 7.5], LCD = [96, 3.5, 118, 11.5];
+
+const ELEM = {
+  H:  { name:'Hydrogen', sym:'H',  p:1,  n:0,  shells:[1],    lv:[0, 10.20, 12.09, 12.75], dn:[null, [0, 121.6], [1, 656.3], [1, 486.1]], miss:11.0 },
+  He: { name:'Helium',   sym:'He', p:2,  n:2,  shells:[2],    lv:[0, 21.22, 23.07, 23.74], dn:[null, [0, 58.4],  [1, 667.8], [1, 492.2]], miss:22.0 },
+  C:  { name:'Carbon',   sym:'C',  p:6,  n:6,  shells:[2, 4], lv:[0, 7.48, 9.99],          dn:[null, [0, 165.7], [1, 493.2]],             miss:8.6 },
+  Ne: { name:'Neon',     sym:'Ne', p:10, n:10, shells:[2, 8], lv:[0, 16.85, 18.97],        dn:[null, [0, 73.6],  [1, 585.2]],             miss:17.9 },
+};
+const ELKEYS = Object.keys(ELEM);
+
+const KNOBM = { l:'#fff4d6', m:'#e6dcbd', d:'#bfb390' }, REDM = matOf('#e2483d'), BLUEM = matOf('#4d8fe0'), PROTM = matOf('#ef5a47'),
+  NEUTM = matOf('#c9d1d6'), BRASS = matOf('#d8b25a'), PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, CHIPM = matOf('#3a3632'),
+  LAMPM = { l:'#6a7480', m:'#4b535c', d:'#2c3238' }, SWM = matOf('#3f7fc0'), CELLM = matOf('#e8c45a');
+const WIRE_C = '#c9a24a', LIGHTSH = mix(SHADOW, '#f2efe7', .55);
+
+/* ---------- light ---------- */
+function nmCol(nm){
+  if (nm < 380) return '#b98cff'; if (nm > 720) return '#b8433a';
+  let r, g, b;
+  if (nm < 440){ r = (440 - nm)/60; g = 0; b = 1; } else if (nm < 490){ r = 0; g = (nm - 440)/50; b = 1; } else if (nm < 510){ r = 0; g = 1; b = (510 - nm)/20; }
+  else if (nm < 580){ r = (nm - 510)/70; g = 1; b = 0; } else if (nm < 645){ r = 1; g = (645 - nm)/65; b = 0; } else { r = 1; g = 0; b = 0; }
+  const k = nm < 420 ? .45 + .55*(nm - 380)/40 : nm > 690 ? .45 + .55*(720 - nm)/30 : 1;
+  const h = v => Math.round(255*Math.pow(Math.max(0, v*k), .8)).toString(16).padStart(2, '0');
+  return '#' + h(r) + h(g) + h(b);
+}
+const nmName = nm => nm < 380 ? 'UV' : nm > 720 ? 'IR' : nm < 450 ? 'violet' : nm < 485 ? 'blue' : nm < 500 ? 'cyan' : nm < 565 ? 'green' : nm < 590 ? 'yellow' : nm < 625 ? 'orange' : 'red';
+
+/* ---------- the atom's parts ---------- */
+const NUC_R = 2.5;
+function nucleons(e){
+  const A = e.p + e.n;
+  if (A === 1) return [{ c: AC, p: true }];
+  const R = Math.max(NUC_R*1.2, NUC_R*Math.sqrt(A*.9/Math.PI)), out = [];
+  for (let i = 0; i < A; i++){ const zz = 1 - 2*(i + .5)/A, rr = Math.sqrt(1 - zz*zz), th = i*2.39996;
+    out.push({ c: [AC[0] + R*rr*Math.cos(th), AC[1] + R*rr*Math.sin(th), AC[2] + R*zz], p: e.n === 0 || i % 2 === 0 }); }
+  return out;
+}
+const nucR = e => (e.p + e.n === 1 ? 0 : Math.max(NUC_R*1.2, NUC_R*Math.sqrt((e.p + e.n)*.9/Math.PI))) + NUC_R;
+const ringPt = (r, deg, x = XW) => [x, AC[1] + r*Math.cos(deg*Math.PI/180), AC[2] + r*Math.sin(deg*Math.PI/180)];
+const radAt = (e, l) => { const v = e.shells.length, i = Math.floor(l), fr = l - i, a = RS[v - 1 + i], b = RS[Math.min(3, v + i)]; return a + (b - a)*fr; };
+const elecPos = (e, l) => ringPt(radAt(e, l), TH_A);
+// every electron: shell index, angle, radius (the active one rides st.lvl), fly-in while the atom rebuilds
+function electrons(st){
+  const e = ELEM[st.el], v = e.shells.length, out = []; let idx = 0;
+  e.shells.forEach((k, si) => { for (let j = 0; j < k; j++){
+    const act = si === v - 1 && j === 0, th = (si === v - 1 ? TH_A : TH_A + 90) + j*360/k;
+    let r = act ? radAt(e, st.lvl) : RS[si];
+    const u = clamp01((st.build - (.45 + .5*idx/e.p)) / .12); idx++;
+    if (u <= 0) continue;
+    r = r + (1 - ease(u))*(48 - r);
+    out.push({ c: ringPt(r, th), act, si }); } });
+  return out;
+}
+function ball(c, r, M, w = .8){
+  const [X, Y] = P(...c), R = r*CAM_K;
+  return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="${M.m}"/><circle cx="${f(X - .22*R)}" cy="${f(Y - .22*R)}" r="${f(.72*R)}" fill="${M.l}"/>`
+    + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="none" stroke="${INK}" stroke-width="${w}"/>`;
+}
+const strokeLine = (pts, col, w, extra = '') => `<path d="${pd(pts, false)}" fill="none" stroke="${col}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" ${extra}/>`;
+// text on the disc face toward the viewer (reads correctly from the front and from behind)
+function discText(y, z, str, size, col){
+  const fr = CAM_V[0] >= 0, x = fr ? XW + .6 : DX0 - .3, o = P(x, y, z);
+  return `<text transform="${txM(o, Dv(0, fr ? -1 : 1, 0), Dv(0, 0, -1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em">${str}</text>`;
+}
+const txB = (x, y, z, str, size, col = INK, weight = 700) => `<text transform="${txM(P(x, y, z), Dv(0, 1, 0), Dv(0, 0, -1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+
+function atomGroup(st, k){
+  const e = ELEM[st.el], v = e.shells.length, parts = [];
+  let s = '';
+  // stand: flange + post, the clamp's bottom block, then the jaw behind the disc
+  s += cyl(25, 60, HB, HB + 1.2, 5, METAL, toneI, 1, 22) + rod([25, 60, HB + 1.2], [25, 60, 24], 1.6, METAL, toneI, 1);
+  s += box(21.6, 56, 23, 28.4, 64, 26, DARK, toneI, 1);
+  const fr = CAM_V[0] >= 0, jawF = box(DX1, 56.5, 26, 28.4, 63.5, 31, DARK, toneI, .9), jawB = box(21.6, 56.5, 26, DX0, 63.5, 31, DARK, toneI, .9);
+  s += fr ? jawB : jawF;
+  // the clear acrylic disc
+  const dA = on(PX(DX0), ellUV(AC[1], AC[2], DISC_R, DISC_R, 56)), dB = on(PX(DX1), ellUV(AC[1], AC[2], DISC_R, DISC_R, 56));
+  const fx = fr ? DX1 : DX0;
+  s += `<g opacity=".6">${loft(dA, dB, n => toneI(n, CLEAR))}</g>` + fill(pd(on(PX(fx), ellUV(AC[1], AC[2], DISC_R, DISC_R, 56))), CLEAR.l, 'opacity=".34"');
+  s += strokeLine([ringPt(40, 118, fx), ringPt(40, 140, fx)], '#ffffff', 1.6, 'opacity=".5"') + strokeLine([ringPt(36, 124, fx), ringPt(36, 132, fx)], '#ffffff', 1.2, 'opacity=".4"');
+  s += hullInk([...dA, ...dB], 1.5) + ink(pd(on(PX(fx), ellUV(AC[1], AC[2], DISC_R, DISC_R, 56))), .8);
+  s += fr ? jawF : jawB;
+  // the brass wire rings (in short pieces so they sort with the beads and the nucleus), their standoff pins
+  RS.forEach((r, ri) => {
+    const n = 28; for (let i = 0; i < n; i++){ const a0 = i*360/n, a1 = (i + 1)*360/n, pts = [0, 1, 2, 3].map(j => ringPt(r, a0 + (a1 - a0)*j/3));
+      parts.push({ at: ringPt(r, (a0 + a1)/2), svg: strokeLine(pts, INK, 1.7) + strokeLine(pts, WIRE_C, .8) }); }
+    for (let j = 0; j < 4; j++){ const a = 45 + 90*j + 22*ri, p0 = ringPt(r, a, DX1), p1 = ringPt(r, a, XW - .2);
+      parts.push({ at: ringPt(r, a, (DX1 + XW)/2), svg: rod(p0, p1, .45, METAL, toneI, .6) }); }
+  });
+  // electrons: blue beads; the one that took a photon glows
+  for (const el of electrons(st)){
+    let svg = '';
+    if (el.act && st.lvl > .02){ const [X, Y] = P(...el.c); svg += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(5.2*CAM_K)}" fill="#fff0a0" opacity="${f(.7*clamp01(st.lvl*2))}"/>`; }
+    svg += ball(el.c, 2, el.act && st.lvl > .02 ? matOf('#ffd23a') : BLUEM, .9);
+    parts.push({ at: addv(el.c, scl(CAM_V, 1.2)), svg });
+  }
+  // nucleus: protons and neutrons, then the frosted capsule over them (fades in see-through)
+  const nuc = nucleons(e).map((q, i, all) => ({ ...q, u: clamp01((st.build - .4*i/all.length) / .1) })).filter(q => q.u > 0);
+  let ns = nuc.slice().sort((a, b) => depthOf(a.c) - depthOf(b.c)).map(q => { const svg = ball(q.c, NUC_R*(.4 + .6*ease(q.u)), q.p ? PROTM : NEUTM, .7);
+    if (!q.p || k < .3) return svg; const [X, Y] = P(...q.c), h = .9*INK_K;
+    return svg + `<path d="M${f(X - h)} ${f(Y)}L${f(X + h)} ${f(Y)}M${f(X)} ${f(Y - h)}L${f(X)} ${f(Y + h)}" stroke="#fff4d6" stroke-width=".5" opacity="${f(k)}"/>`; }).join('');
+  const cr = (nucR(e) + 1.2)*CAM_K, [cX, cY] = P(...AC), ca = 1 - .85*k;
+  ns += `<g opacity="${f(ca)}"><circle cx="${f(cX)}" cy="${f(cY)}" r="${f(cr)}" fill="#f6e2d8" opacity=".7"/>`
+    + `<path d="M${f(cX - .62*cr)} ${f(cY - .3*cr)}A${f(cr*.75)} ${f(cr*.75)} 0 0 1 ${f(cX - .1*cr)} ${f(cY - .7*cr)}" fill="none" stroke="#ffffff" stroke-width="1.3" opacity=".8"/>`
+    + `<circle cx="${f(cX)}" cy="${f(cY)}" r="${f(cr)}" fill="none" stroke="${INK}" stroke-width="1.2"/></g>`;
+  parts.push({ at: AC, svg: ns });
+  s += byDepth(parts);
+  // see-through: each shell's energy level, printed on the disc
+  if (k > .05){ let t = '';
+    RS.forEach((r, ri) => { const l = ri + 1 - v, str = l < 0 ? `n=${ri + 1} FULL` : e.lv[l] != null ? `n=${ri + 1} ${e.lv[l].toFixed(2)} eV` : `n=${ri + 1}`;
+      t += discText(AC[1], AC[2] + r + 1.3, str, 2.1, l === Math.round(st.lvl) && st.lvl > .02 ? '#b8430a' : INK); });
+    s += `<g opacity="${f(k)}">${t}</g>`; }
+  return s;
+}
+
+/* ---------- the photon lamp ---------- */
+const ringAround = (c, ax, r, n = 20) => { const u = norm(cross(ax, Math.abs(ax[2]) < .9 ? [0, 0, 1] : [1, 0, 0])), w = cross(ax, u);
+  return Array.from({ length: n }, (_, i) => { const t = i/n*2*Math.PI; return addv(c, addv(scl(u, r*Math.cos(t)), scl(w, r*Math.sin(t)))); }); };
+function lampGroup(st, k){
+  const toward = vis(LDIR);
+  let post = cyl(25, 6, HB, HB + 1.2, 3.6, METAL, toneI, 1, 18) + rod([25, 6, HB + 1.2], [25, 6, 33.4], 1.3, METAL, toneI, 1)
+    + box(23.4, 4.6, 32.6, 26.6, 7.4, 35.2, DARK, toneI, .9);
+  let house = rod(LAMP_A, LAMP_B, 3.4, LAMPM, tone, 1.4) + rod(LAMP_B, LAMP_M, 3.7, METAL, toneI, 1);
+  if (toward){ const lens = ringAround(addv(LAMP_M, scl(LDIR, .05)), LDIR, 2.9, 20);
+    house += fill(pd(lens), st.lampT > 0 ? '#fffbe0' : '#cfe9f0') + ink(pd(lens), .7);
+    if (st.lampT > 0){ const [X, Y] = P(...LAMP_M); house += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(6*CAM_K)}" fill="#fff2a8" opacity="${f(.6*st.lampT)}"/>`; } }
+  if (k <= 0) return post + house;
+  // see-through: cable up the post, then the housing as a ghost and its insides over it
+  const sel = st.sel > 0 ? HCEV / ELEM[st.el].lv[Math.min(st.sel, ELEM[st.el].lv.length - 1)] : HCEV / ELEM[st.el].miss;
+  const cable = wireParts([[25, 6, HB - 2], [25, 6, 33.6], LAMP_A.map((v, i) => v + LDIR[i]*.4)], k > .5 && (st.lampT > 0) ? '#ffb347' : '#3a3632', .35, false).map(p => p.svg).join('');
+  const hw = `<g opacity="${f(1 - .8*k)}">${post + house}</g>`;
+  const off = scl(LUP, 1.4), ins = [
+    rod(lampAt(-3.6), lampAt(-1.7), 2.6, METAL, toneI, .7),
+    rod(lampAt(-1.7), lampAt(-1.1), 1.3, matOf('#f5f0d8'), toneI, .6),
+    rod(addv(lampAt(-.2), off), addv(lampAt(1.0), off), .8, DARK, toneI, .6),
+    rod(addv(lampAt(1.1), off), addv(lampAt(1.5), off), 1.8, matOf(nmCol(sel)), toneI, .6),
+    rod(lampAt(3.9), lampAt(4.4), 2.9, CLEAR, toneI, .6) ];
+  return `<g opacity="${f(k)}">${cable}</g>` + hw + `<g opacity="${f(k)}">${(toward ? ins : ins.reverse()).join('')}</g>`;
+}
+
+/* ---------- the spectroscope ---------- */
+function stripSvg(st){
+  const y = SP.y1 + .2, q = (x0, x1, z0, z1, yy = y) => [[x0, yy, z0], [x1, yy, z0], [x1, yy, z1], [x0, yy, z1]];
+  let s = shape(q(STRIP.x0 - .8, STRIP.x1 + .8, STRIP.z0 - .8, STRIP.z1 + .8), '#2b2523', 1);
+  s += fill(pd(q(STRIP.x0, STRIP.x1, STRIP.z0, STRIP.z1, y + .05)), '#14110f');
+  for (let nm = 380; nm < 720; nm += 10) s += fill(pd(q(nmX(nm), nmX(nm + 10) + .05, STRIP.z0 + .4, STRIP.z1 - .4, y + .08)), nmCol(nm + 5), 'opacity=".13"');
+  const uv = st.lines.some(l => l.nm < 380), ir = st.lines.some(l => l.nm > 720);
+  s += fill(pd(q(STRIP.x0 + .2, STRIP.v0 - .6, STRIP.z0 + .4, STRIP.z1 - .4, y + .08)), uv ? '#d9c2ff' : '#3a3346');
+  s += fill(pd(q(STRIP.v1 + .6, STRIP.x1 - .2, STRIP.z0 + .4, STRIP.z1 - .4, y + .08)), ir ? '#e08070' : '#46302c');
+  for (const l of st.lines){ if (l.nm < 380 || l.nm > 720) continue; const x = nmX(l.nm), c = nmCol(l.nm);
+    if (l.t < 1) s += fill(pd(q(x - 1.4, x + 1.4, STRIP.z0, STRIP.z1, y + .1)), c, `opacity="${f(.45*(1 - l.t))}"`);
+    s += fill(pd(q(x - .35, x + .35, STRIP.z0 + .2, STRIP.z1 - .2, y + .12)), c); }
+  s += txY((STRIP.x0 + STRIP.v0)/2, y + .15, STRIP.z0 + 3.2, 'UV', 1.3, uv ? INK : '#9a90b0', 800) + txY((STRIP.x1 + STRIP.v1)/2, y + .15, STRIP.z0 + 3.2, 'IR', 1.3, ir ? INK : '#a08a84', 800);
+  for (const nm of [400, 500, 600, 700]) s += txY(nmX(nm), y, STRIP.z0 - 2.6, String(nm), 1.5, INK, 700) + strokeLine([[nmX(nm), y, STRIP.z0 - .8], [nmX(nm), y, STRIP.z0 - 1.5]], INK, .5);
+  s += txY(25, y, SP.z1 - 2.2, 'SPECTROSCOPE  nm', 1.7, INK, 800);
+  return s;
+}
+function spectroGroup(st, k){
+  const feet = cyl(12, 114, HB, SP.z0, 1.4, METAL, toneI, .9, 14) + cyl(38, 114, HB, SP.z0, 1.4, METAL, toneI, .9, 14);
+  const cs = [[SP.x0, SP.y0, SP.z0], [SP.x1, SP.y0, SP.z0], [SP.x1, SP.y1, SP.z0], [SP.x0, SP.y1, SP.z0], [SP.x0, SP.y0, SP.z1], [SP.x1, SP.y0, SP.z1], [SP.x1, SP.y1, SP.z1], [SP.x0, SP.y1, SP.z1]];
+  const house = box(SP.x0, SP.y0, SP.z0, SP.x1, SP.y1, SP.z1, CERAMIC, tone, 1.2) + hullInk(cs, 2.2);
+  let tube = rod([25, SP.y0, SLIT[2]], [25, SLIT[1], SLIT[2]], 2.4, DARK, toneI, 1);
+  if (facing([0, -1, 0])) tube += shape([[24.6, SLIT[1] - .05, 27], [25.4, SLIT[1] - .05, 27], [25.4, SLIT[1] - .05, 31], [24.6, SLIT[1] - .05, 31]], '#fff4d6', .4);
+  const tubeFirst = !facing([0, -1, 0]), strip = facing([0, 1, 0]) ? stripSvg(st) : '';
+  if (k <= 0) return feet + (tubeFirst ? tube + house : house + tube) + strip;
+  // see-through: slit plate, collimator, grating, focus lens, the screen's back, and the light fanned out by colour
+  const pl = (y, r, M) => rod([25, y - .25, SLIT[2]], [25, y + .25, SLIT[2]], r, M, toneI, .6);
+  const ins = [ box(21, 106.3, 24, 29, 106.8, 34, DARK, toneI, .6), pl(109, 3.6, CLEAR), box(20.5, 111.8, 25, 29.5, 112.4, 33, matOf('#9fb4d8'), toneI, .6), pl(116, 5.6, CLEAR),
+    box(STRIP.x0, 121.2, STRIP.z0, STRIP.x1, 121.6, STRIP.z1, matOf('#e9e4d6'), toneI, .6) ];
+  if (!facing([0, 1, 0])) ins.reverse();
+  let rays = strokeLine([[25, SLIT[1], SLIT[2]], [25, 112, SLIT[2]]], '#fff8d0', 1.4, 'opacity=".9"');
+  for (const l of st.lines){ const x = l.nm < 380 ? (STRIP.x0 + STRIP.v0)/2 : l.nm > 720 ? (STRIP.x1 + STRIP.v1)/2 : nmX(l.nm);
+    rays += strokeLine([[25, 112.1, SLIT[2]], [25 + (x - 25)*.42, 116, SLIT[2]], [x, 121.2, SLIT[2]]], nmCol(l.nm), 1.1, 'opacity=".95"'); }
+  return `<g opacity="${f(1 - .8*k)}">${feet + (tubeFirst ? tube + house : house + tube)}</g>` + `<g opacity="${f(k)}">${feet + ins.join('') + rays}</g>` + strip
+    + (tubeFirst ? '' : `<g opacity="${f(k)}">${tube}</g>`);
+}
+
+/* ---------- inside the plinth ---------- */
+const boxOf = (pts, e = .05) => [[0, 1, 2].map(i => Math.min(...pts.map(p => p[i])) - e), [0, 1, 2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const wireParts = (pts, col, w = .3, ends = true, Lseg = 4) => { const out = [];
+  for (let i = 0; i < pts.length - 1; i++){ const a = pts[i], b = pts[i + 1], n = Math.max(1, Math.ceil(Math.hypot(...sub(b, a)) / Lseg));
+    for (let j = 0; j < n; j++){ const seg = [lerp3(a, b, j/n), lerp3(a, b, (j + 1)/n)];
+      out.push({ box: boxOf(seg), svg: strokeLine(seg, INK, f(2*w + .9)) + strokeLine(seg, col, f(2*w)) }); } }
+  return out; };
+function plinthMech(st){
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg });
+  const bx = (x0, y0, z0, x1, y1, z1, M, w = .7) => put([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, M, toneI, w));
+  const live = st.lampT > 0 || !!st.seq;
+  bx(6, 7.5, 1, 25, 28, 3.2, DARK, .8);                                                         // battery tray
+  for (const y of [10, 15, 20, 25]) put([[7, y - 2.3, 3.2 - 2.3 + 2.3], [24, y + 2.3, 5.5]], rod([7, y, 4.3], [24, y, 4.3], 2.2, CELLM, toneI, .6));
+  bx(10, 46, 1, 40, 98, 1.8, PCBM, .8);                                                         // main board
+  bx(22, 66, 1.8, 28, 72, 2.8, CHIPM, .6);                                                      // microcontroller
+  bx(14, 50, 1.8, 18, 54, 2.6, CHIPM, .5);                                                      // lamp driver
+  bx(43, DIAL[0] - 3.5, 4, 49.6, DIAL[0] + 3.5, 11, SWM, .7);                                   // rotary switch
+  bx(44, EKNOB[0] - 3, 4.5, 49.6, EKNOB[0] + 3, 10.5, SWM, .7);                                 // encoder
+  bx(45, FIREB[0] - 3, 5, 49.6, FIREB[0] + 3, 10, CHIPM, .7);                                   // fire switch
+  bx(46.5, LCD[0], 3, 49.4, LCD[2], 12, PCBM, .7);                                              // LCD module
+  const wc = live ? '#ffb347' : '#3a3632';
+  parts.push(...wireParts([[24, 12, 3.4], [30, 12, 1.4], [30, 47, 1.4]], '#9a3a24', .3), ...wireParts([[24, 23, 3.4], [33, 23, 1.4], [33, 47, 1.4]], '#2a2622', .3));
+  parts.push(...wireParts([[38, 80, 1.9], [43, 80, 4.5]], '#3a3632', .25), ...wireParts([[38, 60, 1.9], [44, 60, 5]], '#3a3632', .25),
+    ...wireParts([[38, 52, 1.9], [42, 46, 1.9], [45, 40, 6]], wc, .25), ...wireParts([[38, 94, 1.9], [46.5, 100, 4]], '#3a3632', .25));
+  parts.push(...wireParts([[16, 50, 2.2], [16, 34, 1.4], [25, 10, 1.4], [25, 6, 2], [25, 6, HB]], wc, .35));      // lamp driver to the lamp post
+  return byDepth(parts);
+}
+
+/* ---------- photons: a short wave packet flying along its path ---------- */
+function photonSvg(p){
+  const len = Math.hypot(...sub(p.b, p.a)), t = clamp01(p.t), t0 = Math.max(0, t - 11/len);
+  const H0 = P(...lerp3(p.a, p.b, t)), T0 = P(...lerp3(p.a, p.b, t0)), dx = H0[0] - T0[0], dy = H0[1] - T0[1], L2 = Math.hypot(dx, dy) || 1;
+  const nx = -dy/L2, ny = dx/L2, amp = 1.7*INK_K, cyc = 3.2, pts = [];
+  for (let i = 0; i <= 30; i++){ const u = i/30, w = Math.sin(u*Math.PI)*amp*Math.sin(u*cyc*2*Math.PI - t*40);
+    pts.push([T0[0] + dx*u + nx*w, T0[1] + dy*u + ny*w]); }
+  const d = 'M' + pts.map(q => f(q[0]) + ' ' + f(q[1])).join('L'), c = nmCol(p.nm), op = p.fade ? 1 - clamp01((t - .7)/.3) : 1;
+  return `<g opacity="${f(op)}"><path d="${d}" fill="none" stroke="${c}" stroke-width="3.6" opacity=".35" stroke-linecap="round"/>`
+    + `<path d="${d}" fill="none" stroke="${INK}" stroke-width="1.7" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${c}" stroke-width="1" stroke-linecap="round"/>`
+    + `<circle cx="${f(H0[0])}" cy="${f(H0[1])}" r="${f(1.3*INK_K)}" fill="${c}" stroke="${INK}" stroke-width=".6"/></g>`;
+}
+
+/* ---------- scene ---------- */
+const dialAng = i => (-54 + 36*i)*Math.PI/180;
+function scene(st, m){
+  const k = ease(st.xr || 0), e = ELEM[st.el];
+  const FRONT = facing([1, 0, 0]), BACK = facing([-1, 0, 0]), LEFT = facing([0, 1, 0]);
+  let s = castShadow([...on(PX(0), OUT), ...on(PX(W), OUT)]);
+  // ---- the plinth: front panel (LCD, dial marks, words), back (battery door), left side (name)
+  let body = '';
+  if (FRONT){ body += fill(pd(on(PX(W), OUT)), tone([1, 0, 0], m));
+    body += shape(on(PX(W + .2), rrUV(LCD[0] - 1, LCD[1] - 1, LCD[2] + 1, LCD[3] + 1, 1.2)), '#2b2523', 1) + shape(on(PX(W + .3), rectUV(LCD[0], LCD[1], LCD[2], LCD[3])), '#1d2a26', .5);
+    body += tx(W + .4, (LCD[0] + LCD[2])/2, 7.9, e.name.toUpperCase(), 2.5, '#8af0ae', 800) + tx(W + .4, (LCD[0] + LCD[2])/2, 4.7, `${e.p}p ${e.n}n ${e.p}e`, 2, '#8af0ae', 700);
+    ELKEYS.forEach((key, i) => { const a = dialAng(i); body += tx(W + .35, DIAL[0] - 5.6*Math.sin(a), DIAL[1] + 5.6*Math.cos(a) - .6, ELEM[key].sym, 1.7, key === st.el ? INK : '#6b6356', 800); });
+    for (let i = 0; i < 4; i++){ const a = (-60 + 40*i)*Math.PI/180; body += line([[W + .3, EKNOB[0] - 3.6*Math.sin(a), EKNOB[1] + 3.6*Math.cos(a)], [W + .3, EKNOB[0] - 4.6*Math.sin(a), EKNOB[1] + 4.6*Math.cos(a)]], .6); }
+    body += tx(W + .35, DIAL[0], 1.7, 'ELEMENT', 1.5, INK, 800) + tx(W + .35, EKNOB[0], 1.7, 'ENERGY', 1.5, INK, 800) + tx(W + .35, FIREB[0], 1.7, 'FIRE', 1.5, INK, 800);
+    body += tx(W + .35, 17, 7.6, 'BOHR', 2.8, mix(tone([1, 0, 0], m), '#000000', .55), 800) + tx(W + .35, 17, 4.4, 'ATOM MODEL', 1.7, mix(tone([1, 0, 0], m), '#000000', .55), 800); }
+  if (BACK){ const tb = tone([-1, 0, 0], m); body += fill(pd(on(PX(0), OUT)), tb);
+    body += shape(on(PX(-.2), rrUV(6, 2.5, 30, 11.5, 1.5)), mix(tb, '#000000', .12), 1) + line([[-.3, 27, 5], [-.3, 27, 9]], 1);
+    body += txB(-.3, 17, 6.2, '4 x AA  6V', 1.9, INK, 800); }
+  body += extrude(OUT, 0, W, m);
+  if (LEFT){ const sm = tone([0, 1, 0], m); body += txY(W/2, D + .3, 5.8, 'ATOMIC STRUCTURE', 2.6, mix(sm, '#000000', .5), 800); }
+  if (FRONT) body += ink(pd(on(PX(W), OUT)), 2.2);
+  if (BACK) body += ink(pd(on(PX(0), OUT)), 2.2);
+  body += hullInk([...on(PX(0), OUT), ...on(PX(W), OUT)], 2.8);
+  // ---- knobs and the fire button on the front
+  const pa = st.dialA, ea = (-60 + 40*Math.max(0, st.sel < 0 ? 3 : Math.min(st.sel - 1, 2)))*Math.PI/180;
+  let dial = cylX(W, W + 2.6, DIAL[0], DIAL[1], 3.4, KNOBM, toneI, 1.1, 24);
+  const pd0 = dialAng(pa);
+  if (FRONT) dial += line([[W + 2.65, DIAL[0], DIAL[1]], [W + 2.65, DIAL[0] - 2.8*Math.sin(pd0), DIAL[1] + 2.8*Math.cos(pd0)]], 1.1);
+  let knob = cylX(W, W + 2.2, EKNOB[0], EKNOB[1], 2.8, DARK, toneI, 1.1, 22);
+  if (FRONT) knob += strokeLine([[W + 2.25, EKNOB[0], EKNOB[1]], [W + 2.25, EKNOB[0] - 2.3*Math.sin(ea), EKNOB[1] + 2.3*Math.cos(ea)]], '#fff4d6', 1);
+  const press = st.pressT > 0 ? .5 : 1.6;
+  const fire = cylX(W, W + .7, FIREB[0], FIREB[1], 4, METAL, toneI, 1, 22) + cylX(W + .7, W + .7 + press, FIREB[0], FIREB[1], 3.1, REDM, toneI, 1.1, 22);
+  const knobs = act('dial', dial) + act('knob', knob) + act('fire', fire);
+  // ---- shadows on the plinth top: the lamp, the spectroscope, the post (solid), the clear disc (pale)
+  const topClip = on(PZ(HB), rectUV(0, 1, W, D - 1));
+  const shLamp = castShadow([...ringAround([25, 6, HB], [0, 0, 1], 1.4, 8), ...ringAround([25, 6, 33], [0, 0, 1], 1.4, 8), ...ringAround(LAMP_A, LDIR, 3.4, 12), ...ringAround(LAMP_M, LDIR, 3.7, 12)], HB, topClip);
+  const shSp = castShadow([[SP.x0, SP.y0, SP.z0], [SP.x1, SP.y0, SP.z0], [SP.x1, SP.y1, SP.z0], [SP.x0, SP.y1, SP.z0], [SP.x0, SP.y0, SP.z1], [SP.x1, SP.y0, SP.z1], [SP.x1, SP.y1, SP.z1], [SP.x0, SP.y1, SP.z1], [12, 114, HB], [38, 114, HB]], HB, topClip);
+  const shPost = castShadow([...ringAround([25, 60, HB], [0, 0, 1], 1.6, 8), ...ringAround([25, 60, 26], [0, 0, 1], 3.5, 8)], HB, topClip);
+  const shDisc = castShadow([...on(PX(25), ellUV(AC[1], AC[2], DISC_R, DISC_R, 24)), [25, 56, 24], [25, 64, 24]], HB, topClip).replace(SHADOW, LIGHTSH);
+  const shadows = shDisc + shPost + shLamp + shSp;
+  const plinth = k > 0 ? xrGhost(body, '', k, OUT, 0, W, m) + shadows + `<g opacity="${f(k)}">${plinthMech(st)}</g>` : body + shadows;
+  const upper = byDepth([
+    { box: [[20, 0, HB], [30, 12.5, 45]], svg: lampGroup(st, k) },
+    { box: [[19, 15.5, HB], [31, 104.3, 114]], svg: atomGroup(st, k) },
+    { box: [[6, 104.5, HB], [44, 122.5, 36]], svg: spectroGroup(st, k) } ]);
+  s += FRONT ? plinth + upper + knobs : knobs + plinth + upper;
+  s += st.ph.map(photonSvg).join('');
+  return s + labels(st, k);
+}
+
+/* ---------- labels ---------- */
+// core's xrCallouts splits at the object's middle and starts the right column at the top of the stage, under the stats;
+// here the columns run from below the buttons / view switches to the bottom, and a column that would overflow hands
+// its most central labels to the other side. Same markup as core (phones keep core's numbered badges).
+function callouts(items, B){
+  const svgEl = document.getElementById('fig'), M = svgEl.getScreenCTM(), btn = document.getElementById('btns'), vs = document.querySelector('.vset');
+  if ((window.LBL_U && LBL_U()) || !M || !btn || !vs) return xrCallouts(items, B);
+  const vb = svgEl.viewBox.baseVal, inv = M.inverse(), k = INK_K, fs = 8.6*k, hgt = fs*1.8, gap0 = hgt + 3*k;
+  const yAt = py => new DOMPoint(0, py).matrixTransform(inv).y;
+  const bx = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) bx.push(P(x, y, z)[0]);
+  const xmin = Math.min(...bx), xmax = Math.max(...bx), cx = (xmin + xmax)/2;
+  const t0 = vb.y + hgt/2 + 2*k, tL = Math.max(t0, yAt(btn.getBoundingClientRect().bottom + 40) + hgt/2);
+  // whatever sits over the drawing's top right (stats, view switches) pushes the right column down
+  const fr = svgEl.getBoundingClientRect(), over = [vs, document.getElementById('stats')].filter(Boolean).map(el => el.getBoundingClientRect())
+    .filter(r => r.height && r.right > fr.left + fr.width/2 && r.top < fr.top + fr.height/2).map(r => r.bottom);
+  const top = { [-1]: tL, [1]: over.length ? Math.max(t0, yAt(Math.max(...over) + 10) + hgt/2) : tL }, zc = document.querySelector('.zchip');
+  const bot0 = vb.y + vb.height - hgt/2 - 2*k, bot = { [-1]: bot0, [1]: zc ? Math.min(bot0, yAt(zc.getBoundingClientRect().top - 6) - hgt/2) : bot0 };
+  const its = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  const cap = side => Math.floor((bot[side] - top[side])/gap0) + 1;
+  const nL = Math.min(cap(-1), Math.max(its.length - cap(1), its.filter(c => c.X < cx).length));
+  let s = '';
+  for (const [col, side] of [[its.slice(0, nL), -1], [its.slice(nL), 1]]){
+    if (!col.length) continue;
+    col.sort((a, b) => a.Y - b.Y);
+    const n = col.length, gap = n > 1 ? Math.min(gap0, (bot[side] - top[side])/(n - 1)) : gap0;
+    let y = -1e9; col.forEach(c => { c.py = y = Math.max(c.Y, y + gap, top[side]); });
+    col.forEach((c, i) => { c.py = Math.min(c.py, bot[side] - (n - 1 - i)*gap); });
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+function labels(st, k){
+  const e = ELEM[st.el], v = e.shells.length, B = [0, W + 3, 0, D, 0, 114];
+  const busy = !!st.seq, actE = electrons(st).find(q => q.act), act3 = actE ? actE.c : elecPos(e, 0);
+  if (k > .6){
+    const nuc = nucleons(e), front = pp => nuc.filter(q => q.p === pp).sort((a, b) => depthOf(b.c) - depthOf(a.c))[0];
+    const pr = front(true), nu = front(false), inner = electrons(st).find(q => !q.act);
+    const items = [
+      { at: [AC[0], AC[1], AC[2] + nucR(e)], text: 'NUCLEUS', on: false },
+      pr && { at: pr.c, text: 'PROTON', on: false },
+      nu && { at: nu.c, text: 'NEUTRON', on: false },
+      { at: act3, text: 'ELECTRON', on: st.lvl > .02 },
+      inner && { at: inner.c, text: 'INNER ELECTRON', on: false },
+      ...RS.map((r, i) => ({ at: ringPt(r, 58 + 7*i), text: `SHELL ${i + 1}`, on: st.lvl > .02 && Math.round(st.lvl) + v - 1 === i })),
+      { at: ringPt(DISC_R, 35, DX1), text: 'ACRYLIC DISC', on: false },
+      { at: ringPt(RS[3], 45 + 180 + 66, (DX1 + XW)/2), text: 'RING STANDOFF', on: false },
+      { at: [28.4, 60, 29], text: 'DISC CLAMP', on: false },
+      { at: [25, 60, 19], text: 'STAND POST', on: false },
+      { at: lampAt(-1.4), text: 'LED', on: st.lampT > 0 },
+      { at: lampAt(-2.8), text: 'HEAT SINK', on: false },
+      { at: addv(lampAt(1.3), scl(LUP, 3)), text: 'FILTER WHEEL', on: false },
+      { at: addv(lampAt(.4), scl(LUP, 2.2)), text: 'WHEEL MOTOR', on: false },
+      { at: lampAt(4.2), text: 'LAMP LENS', on: st.lampT > 0 },
+      { at: [25, 4.6, 34], text: 'LAMP YOKE', on: false },
+      { at: [25, 6, 24], text: 'LAMP CABLE', on: st.lampT > 0 },
+      { at: [25, 106.5, 33], text: 'ENTRANCE SLIT', on: false },
+      { at: [25, 109, SLIT[2] + 3.6], text: 'COLLIMATOR', on: false },
+      { at: [29.5, 112, 33], text: 'GRATING', on: false },
+      { at: [25, 116, SLIT[2] + 5.6], text: 'FOCUS LENS', on: false },
+      { at: [STRIP.x1, 121.4, STRIP.z1], text: 'SCALE SCREEN', on: st.lines.some(l => l.t < 1) },
+      { at: [38, 114, 18], text: 'SCOPE FEET', on: false },
+      { at: [15, 17, 6.5], text: 'BATTERY PACK', on: false },
+      { at: [36, 90, 1.8], text: 'MAIN BOARD', on: busy },
+      { at: [25, 69, 2.8], text: 'MICROCHIP', on: busy },
+      { at: [16, 52, 2.6], text: 'LAMP DRIVER', on: st.lampT > 0 },
+      { at: [46, DIAL[0], 11], text: 'ROTARY SWITCH', on: st.build < 1 },
+      { at: [46.5, EKNOB[0], 10.5], text: 'ENERGY ENCODER', on: false },
+      { at: [47, FIREB[0], 10], text: 'FIRE SWITCH', on: st.pressT > 0 },
+      { at: [48, 107, 12], text: 'LCD MODULE', on: false },
+      ...st.ph.slice(0, 1).map(p => ({ at: lerp3(p.a, p.b, clamp01(p.t)), text: 'PHOTON', on: true })) ].filter(Boolean);
+    return callouts(items, B);
+  }
+  if (k > 0) return '';
+  const fr = facing([1, 0, 0]);
+  return callouts([
+    fr && { at: [W + 2.6, DIAL[0], DIAL[1] + 3.4], text: 'ELEMENT DIAL', on: st.build < 1 },
+    fr && { at: [W + 2.2, EKNOB[0], EKNOB[1] + 2.8], text: 'ENERGY KNOB', on: false },
+    fr && { at: [W + 2, FIREB[0], FIREB[1] + 3.1], text: 'FIRE BUTTON', on: st.pressT > 0 },
+    fr && { at: [W + .4, 107, 11.5], text: 'LCD', on: false },
+    { at: lampAt(0), text: 'PHOTON LAMP', on: st.lampT > 0 },
+    { at: [SP.x1, 114, SP.z1], text: 'SPECTROSCOPE', on: st.lines.some(l => l.t < 1) },
+    { at: [AC[0], AC[1], AC[2] + nucR(e) + 1.2], text: 'NUCLEUS', on: st.build < 1 },
+    { at: act3, text: 'ELECTRON', on: st.lvl > .02 },
+    { at: ringPt(RS[3], 60), text: 'ELECTRON SHELLS', on: false } ].filter(Boolean), B);
+}
+
+/* ---------- behaviour: one state object, one clock ---------- */
+let ui, looping = false;
+const st = { el:'C', build:1, lvl:0, sel:1, ph:[], seq:null, si:0, sk:0, lines:[], lastE:null, lastNm:null, lampT:0, pressT:0, dialA:2 };
+const busy = () => !!st.seq || st.ph.length > 0 || st.build < 1 || Math.abs(st.dialA - ELKEYS.indexOf(st.el)) > .002 || st.lines.some(l => l.t < 1) || st.pressT > 0 || st.lampT > 0;
+function kick(){ if (looping) return; looping = true; ui.animate(dt => { update(dt); const more = busy(); if (!more) looping = false; return more; }); }
+function update(dt){
+  st.build = Math.min(1, st.build + dt/1.4);
+  const tg = ELKEYS.indexOf(st.el); st.dialA += (tg - st.dialA)*Math.min(1, dt*9); if (Math.abs(tg - st.dialA) < .002) st.dialA = tg;
+  st.pressT = Math.max(0, st.pressT - dt); st.lampT = Math.max(0, st.lampT - dt*1.6);
+  for (const l of st.lines) l.t = Math.min(1, l.t + dt/1.2);
+  for (const p of st.ph) p.t = (p.t || 0) + dt/p.dur;
+  const done = st.ph.filter(p => p.t >= 1); st.ph = st.ph.filter(p => p.t < 1); done.forEach(p => p.done && p.done());
+  if (st.seq){ const s = st.seq[st.si];
+    if (st.sk === 0 && s.start) s.start();
+    st.sk += dt/s.dur; if (s.run) s.run(clamp01(st.sk));
+    if (st.sk >= 1){ st.si++; st.sk = 0; if (st.si >= st.seq.length) st.seq = null; } }
+}
+function addLine(nm){ const l = st.lines.find(q => q.nm === nm); if (l) l.t = 0; else st.lines.push({ nm, t: 0 }); }
+// the steps for one photon of level L (L < 0: an energy that matches no gap)
+function photonSteps(L){
+  const e = ELEM[st.el], E = L < 0 ? e.miss : e.lv[L], nm = HCEV / E, steps = [];
+  steps.push({ dur: L < 0 ? 1.5 : .8, start(){ const tgt = elecPos(e, 0); st.sel = L; st.lampT = 1; st.lastE = E; st.lastNm = nm;
+    st.ph.push(L < 0 ? { a: LAMP_M, b: addv(tgt, scl(sub(tgt, LAMP_M), 1.1)), t: 0, dur: 1.5, nm, fade: true } : { a: LAMP_M, b: tgt, t: 0, dur: .8, nm }); } });
+  if (L < 0) return steps;
+  steps.push({ dur: .35, run: kk => { st.lvl = L*ease(kk); } }, { dur: .55 });
+  for (let l = L; l > 0; ){ const [to, nm2] = e.dn[l], from = l;
+    steps.push({ dur: .4, start(){ st.ph.push({ a: elecPos(e, from), b: SLIT, t: 0, dur: 1, nm: nm2, done: () => addLine(nm2) }); st.lastE = e.lv[from] - e.lv[to]; st.lastNm = nm2; },
+      run: kk => { st.lvl = from - (from - to)*ease(kk); } }, { dur: .35 });
+    l = to; }
+  return steps;
+}
+function play(steps){ st.seq = steps; st.si = 0; st.sk = 0; st.pressT = .18; kick(); }
+const settling = () => !!st.seq || st.build < 1;
+function fire(L){
+  if (settling()) return ui.flash('Wait - the electron is still settling');
+  const e = ELEM[st.el];
+  if (L < 0) ui.flash(`${e.miss.toFixed(1)} eV matches no gap, so the photon passes straight through`, 2400);
+  play(photonSteps(L));
+}
+function white(){
+  if (settling()) return ui.flash('Wait - the electron is still settling');
+  const e = ELEM[st.el]; let steps = [];
+  for (let L = 1; L < e.lv.length; L++) steps = steps.concat(photonSteps(L));
+  ui.flash('White light: the atom takes only the photons that match a gap', 2400);
+  play(steps);
+}
+function setEl(key){
+  if (settling()) return ui.flash('Wait - the electron is still settling');
+  st.el = key; st.build = 0; st.lvl = 0; st.lines = []; st.ph = []; st.lastE = st.lastNm = null; st.sel = 1; kick();
+}
+const fireChoices = st => { const e = ELEM[st.el];
+  return [...e.lv.slice(1).map((E, i) => ({ label: `${E.toFixed(2)} eV - up ${i + 1} shell${i ? 's' : ''}`, onClick: () => fire(i + 1) })),
+    { label: `${e.miss.toFixed(2)} eV - no gap`, onClick: () => fire(-1) }]; };
+
+ui = mountFigure({
+  fig:'A1', title:'The atom', size:[W + 36, D + 40, 128], center:[W/2 + 1.5, D/2], palette:'cobalt', turn:'full', state: st,
+  scene,
+  stats: st => { const e = ELEM[st.el];
+    return [ { label:'Protons Neutrons Electrons', value: `${e.p} ${e.n} ${e.p}` },
+      { label:'Photon energy', value: st.lastE != null ? st.lastE.toFixed(2) + ' eV' : '-', small: true },
+      { label:'Wavelength', value: st.lastNm != null ? `${st.lastNm.toFixed(1)} nm ${nmName(st.lastNm)}` : '-', small: true } ]; },
+  buttons:[
+    { label:'Element', choices: st => ELKEYS.map(key => ({ label: ELEM[key].name, current: st.el === key, onClick: () => setEl(key) })) },
+    { label:'Fire a photon', choices: fireChoices },
+    { label:'Shine white light', onClick: () => white() },
+  ],
+  acts:{ dial: () => setEl(ELKEYS[(ELKEYS.indexOf(st.el) + 1) % ELKEYS.length]),
+    knob: () => { const e = ELEM[st.el]; st.sel = st.sel < 0 ? 1 : st.sel + 1 >= e.lv.length ? -1 : st.sel + 1; },
+    fire: () => fire(st.sel) },
+  params:(st, q) => {
+    if (ELEM[q.get('el')]){ st.el = q.get('el'); st.dialA = ELKEYS.indexOf(st.el); }
+    const e = ELEM[st.el];
+    if (q.has('lvl')) st.lvl = Math.max(0, Math.min(e.lv.length - 1, +q.get('lvl')));
+    if (q.has('build')) st.build = clamp01(+q.get('build'));
+    if (q.has('lines')) st.lines = q.get('lines').split(',').map(Number).filter(x => x > 0).map(nm => ({ nm, t: 1 }));
+    if (q.has('ph')){ const t = +q.get('ph'); st.ph.push(q.get('pin') === '1' ? { a: LAMP_M, b: elecPos(e, 0), t, dur: 1, nm: HCEV / e.lv[1] }
+      : { a: elecPos(e, Math.max(1, Math.round(st.lvl))), b: SLIT, t, dur: 1, nm: e.dn[Math.max(1, Math.round(st.lvl))][1] }); st.lastNm = st.ph[0].nm; st.lastE = HCEV / st.lastNm; }
+  },
+});
+xrMount(() => ui, () => '');
+// the labels measure the page; lay them out again once it settles (the gallery build moves the switches and fits the svg after load)
+addEventListener('load', () => setTimeout(() => ui.render(), 500)); new ResizeObserver(() => ui.render()).observe(document.getElementById('fig'));
+</script></body></html>
