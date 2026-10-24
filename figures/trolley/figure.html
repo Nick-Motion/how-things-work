@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Trolley</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   The book's first-class trolley tips around its wheel axle. An operator pulls the handles backward,
+   raising the toe plate and its load, then holds the tilted frame while rolling it on two wheels.
+   The miniature table and two 20 kg illustrative crates are teaching fixtures, not book specifications.
+   Tip is reversible. Add crate transfers the spare from the table onto the first crate only while upright.
+   Roll needs Tip first and traverses the same tabletop in alternate directions. No motor is implied.
+   The horizontal handle force balances gravity's torque about the axle. The readout excludes frame weight,
+   bearing friction and acceleration. At the chosen 20 degree tilt both crate centres remain ahead of the axle,
+   so adding the second crate increases required handle force at the same pose.
+   2016 page 22 image and 1998 page 22 saved OCR support the lever action. 1988 is inaccessible and unverified.
+   Representative hardware is supported by Magliner B9481_NAHandtruck assembly instructions and
+   https://www.magliner.com/hand-truck-fastener-pack-all-models and https://www.magliner.com/190108-hdw.
+   The assembly PDF fetch returned 403; its indexed parts list supports frame, nose, wheel brackets and axle.
+   Structure. Two uprights carry three crossbars and backward bent handles with rubber grips.
+   Load. The rigid toe plate and its heel meet both upright feet; the crate sits on the toe plate against the frame.
+   Running gear. Two brackets connect the frame feet to the axle. Wheel hubs turn on that axle, with
+   spacer washers and cotter pins retaining them. Rubber tyres surround the wheel rims.
+   Controls. Buttons represent human actions. Dashed force arms and arrows are teaching overlays, not anatomy.
+   Parts. Handle, grip, upright, upper crossbar, middle crossbar, lower crossbar, toe plate, heel,
+   wheel bracket, axle, tyre, rim, hub, spacer washer and cotter pin. All are drawn in 3D and attached.
+*/
+const trTable = { w:142, d:88, h:4 }, trRadius = 10, trAxleZ = 14, trMaxTilt = 20*Math.PI/180;
+const trCrate = matOf('#d6a567');
+const trState = { angle:0, travel:0, crates:1, phase:'idle', progress:0, from:0, target:0 };
+const trPoint = (st, [x,y,z]) => [65 + st.travel + x*Math.cos(st.angle) - z*Math.sin(st.angle),44+y,trAxleZ+x*Math.sin(st.angle)+z*Math.cos(st.angle)];
+const trBounds = (pts, r=0) => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))-r),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i]))+r)];
+const trCorners = b => { const out=[]; for(const x of [b[0],b[3]])for(const y of [b[1],b[4]])for(const z of [b[2],b[5]])out.push([x,y,z]); return out; };
+function trSolid(st, b, material, opacity=1){
+  const pts=trCorners(b).map(p=>trPoint(st,p)), faces=[[0,1,3,2],[4,6,7,5],[0,4,5,1],[2,3,7,6],[0,2,6,4],[1,5,7,3]];
+  let svg='';
+  for(const ids of faces){
+    const q=ids.map(i=>pts[i]), n=norm(cross(sub(q[1],q[0]),sub(q[2],q[1])));
+    if(!vis(n))continue;
+    svg+=shape(q,tone(n,material),.9);
+    if(material===trCrate)for(const t of [.25,.75])svg+=line([q[0].map((v,i)=>v+(q[1][i]-v)*t),q[3].map((v,i)=>v+(q[2][i]-v)*t)],.5);
+  }
+  return { box:trBounds(pts), localBox:[[b[0],b[1],b[2]],[b[3],b[4],b[5]]], frame:st, svg:`<g opacity="${opacity}">${svg}${hullInk(pts,2.3)}</g>` };
+}
+function trTube(st, a, b, r, material, opacity=1){
+  const aa=trPoint(st,a),bb=trPoint(st,b);
+  return {box:trBounds([aa,bb],r),localBox:trBounds([a,b],r),frame:st,svg:`<g opacity="${opacity}">${rod(aa,bb,r,material,tone,1.2)}</g>`};
+}
+function trSorted(parts){
+  return parts.sort((p,q)=>{
+    if(p.frame===q.frame){
+      const a=p.frame.angle,c=Math.cos(a),s=Math.sin(a),v=[CAM_V[0]*c+CAM_V[2]*s,CAM_V[1],-CAM_V[0]*s+CAM_V[2]*c];
+      for(let i=0;i<3;i++){
+        if(p.localBox[1][i]<=q.localBox[0][i]+1e-6)return v[i]>=0?-1:1;
+        if(q.localBox[1][i]<=p.localBox[0][i]+1e-6)return v[i]>=0?1:-1;
+      }
+      return dot(sub(boxMid(p.localBox),boxMid(q.localBox)),v);
+    }
+    return sepOrder(p,q)||depthOf(boxMid(p.box))-depthOf(boxMid(q.box));
+  }).map(p=>p.svg).join('');
+}
+function trForce(st){
+  const h=trPoint(st,[-17,0,87])[2]-trAxleZ;
+  let torque=0;for(let i=0;i<st.crates;i++)torque+=20*9.81*(18*Math.cos(st.angle)-(3.5+24*i)*Math.sin(st.angle));
+  return torque/h;
+}
+function trArrow(a,b,color){
+  const dir=norm(sub(b,a)), side=[-dir[2],0,dir[0]],head=b.map((v,i)=>v-dir[i]*3.5);
+  return `<path d="${pd([a,b],false)}" fill="none" stroke="${color}" stroke-width="2.3"/>`+shape([b,head.map((v,i)=>v+side[i]*1.6),head.map((v,i)=>v-side[i]*1.6)],color,.5);
+}
+function trScene(st,m){
+  const k=ease(st.xr||0),parts=[],labels=[],ghost=1-.63*k;
+  const addBox=(b,mat=m,op=ghost)=>parts.push(trSolid(st,b,mat,op));
+  const addTube=(a,b,r,mat=m,op=ghost)=>parts.push(trTube(st,a,b,r,mat,op));
+  const label=(p,text,on=false)=>labels.push({at:trPoint(st,p),text,on});
+  for(const y of [-18,18]){
+    for(const [z0,z1] of [[-9,12],[12,39],[39,66],[66,87]])addTube([3,y,z0],[3,y,z1],1.5);
+    addTube([3,y,87],[-8,y,96],1.5);addTube([-8,y,96],[-17,y,87],1.5);
+    addTube([-12,y,92],[-17,y,87],2,DARK,1);
+    addBox([-7,y-2,-2,3,y+2,3],METAL);
+  }
+  for(const z of [10,38,65])addTube([3,-18,z],[3,18,z],1.3);
+  addBox([3,-20,-10,32,20,-8.5]);
+  addBox([2,-20,-8.5,5,20,-3]);
+  for(const y of [-18,18])addBox([4,y-1.3,-5,7,y+1.3,3],METAL);
+  const active=st.phase==='rolling';
+  addTube([0,-31,0],[0,31,0],.9,k>.5?matOf('#dd7740'):METAL,1);
+  for(const y of [-25,25]){
+    const fixed={...st,angle:0},a=[0,y-3,0],b=[0,y+3,0];
+    const wheel=trTube(fixed,a,b,10,DARK,1-.84*k);
+    wheel.svg+=trTube(fixed,[0,y-3.1,0],[0,y+3.1,0],6.8,METAL,1-.48*k).svg;
+    const spin=-st.travel/trRadius;
+    for(const side of [-1,1])if(side*CAM_V[1]>0){
+      const yy=y+side*3.11;
+      for(let i=0;i<5;i++){
+        const th=spin+i*Math.PI*2/5,p=[6.5*Math.sin(th),yy,6.5*Math.cos(th)];
+        const aa=trPoint(fixed,[0,yy,0]),bb=trPoint(fixed,p);
+        wheel.svg+=`<g opacity="${1-.5*k}">${line([aa,bb],.9)}</g>`;
+      }
+    }
+    wheel.svg+=trTube(fixed,[0,y-3.3,0],[0,y+3.3,0],2.2,matOf('#d2a451'),1).svg;
+    const nearY=y+Math.sign(CAM_V[1]||1)*3.6;
+    wheel.svg+=trTube(fixed,[0,nearY-.2,0],[0,nearY+.2,0],1.5,METAL,1).svg;
+    const end=y<0?-30.5:30.5;
+    const pin=trTube(fixed,[-1,end,-.7],[1,end,.7],.25,METAL,1).svg+trTube(fixed,[-1,end,.7],[1,end,-.7],.25,METAL,1).svg;
+    wheel.svg=(Math.sign(y)*CAM_V[1]>0?wheel.svg+pin:pin+wheel.svg);
+    wheel.box=[trPoint(fixed,[-10,y-6,-10]),trPoint(fixed,[10,y+6,10])];
+    parts.push(wheel);
+  }
+  for(let i=0;i<st.crates;i++){
+    const z=-8.5+24*i;
+    addBox([6,-16,z,30,16,z+24],trCrate,1-.85*k);
+  }
+  if(st.crates===1){
+    const p=st.phase==='adding'?ease(st.progress):0;
+    const c0=[116,8,4],c1=trPoint(st,[6,-16,15.5]);
+    const q=c0.map((v,i)=>v+(c1[i]-v)*p+(i===2?25*Math.sin(Math.PI*p):0));
+    parts.push(trSolid({angle:0,travel:q[0]-65},[0,q[1]-44,q[2]-14,24,q[1]-12,q[2]+10],trCrate));
+  }
+  let svg=board(0,0,trTable.w,trTable.d,4,5,WOOD);
+  const silhouette=[[-22,-30,0],[32,30,-10],[-17,-18,96],[30,16,40]].map(p=>trPoint(st,p));
+  svg+=castShadow(silhouette,4,boardTop(0,0,trTable.w,trTable.d,4,5));
+  svg+=trSorted(parts);
+  if(k>.01){
+    const pivot=trPoint(st,[0,0,0]),hand=trPoint(st,[-17,0,87]);
+    const cg=trPoint(st,[18,0,3.5+12*(st.crates-1)]),armTop=[pivot[0],hand[1],hand[2]];
+    svg+=`<g opacity="${k}" data-overlay="force-arms"><path d="${pd([armTop,pivot,[cg[0],cg[1],pivot[2]]],false)}" fill="none" stroke="#bb673d" stroke-width="1.3" stroke-dasharray="3 2"/>`;
+    svg+=trArrow(hand,[hand[0]-14,hand[1],hand[2]],'#c46b35');
+    svg+=trArrow([cg[0],cg[1],cg[2]+8],[cg[0],cg[1],cg[2]-4],'#426b9e');
+    svg+=`<circle cx="${f(P(...pivot)[0])}" cy="${f(P(...pivot)[1])}" r="2.2" fill="#dd7740"/></g>`;
+  }
+  label([-15,18,89],'RUBBER GRIP',st.phase==='tipping');label([-8,-18,96],'BENT HANDLE',st.phase==='tipping');
+  label([3,18,78],'FRAME UPRIGHT');label([3,0,65],'UPPER CROSSBAR');label([3,0,38],'MIDDLE CROSSBAR');label([3,0,10],'LOWER CROSSBAR');
+  label([29,15,-9],'TOE PLATE',st.phase==='tipping');label([3,16,-4],'HEEL');label([-3,-18,1],'WHEEL BRACKET');label([0,0,0],'AXLE FULCRUM',st.phase==='tipping');
+  for(const [p,text] of [[[8,25,5],'RUBBER TYRE'],[[0,-25,7],'WHEEL RIM'],[[0,28.4,0],'WHEEL HUB'],[[0,-28.6,0],'SPACER WASHER'],[[1,30.5,.7],'COTTER PIN']]){
+    labels.push({at:trPoint({...st,angle:0},p),text,on:active&&['RUBBER TYRE','WHEEL RIM','WHEEL HUB'].includes(text)});
+  }
+  if(k>.6)svg+=xrCallouts(labels,[28,112,12,76,4,114]);
+  return svg;
+}
+function trAction(st,ui,phase,target){
+  if(st.phase!=='idle')return ui.flash('Let the current action finish');
+  st.phase=phase;st.progress=0;st.from=phase==='tipping'?st.angle:st.travel;st.target=target;
+  ui.animate(dt=>{
+    st.progress=Math.min(1,st.progress+dt/(phase==='rolling'?1.7:1.1));const e=ease(st.progress);
+    if(phase==='tipping')st.angle=st.from+(st.target-st.from)*e;
+    if(phase==='rolling')st.travel=st.from+(st.target-st.from)*e;
+    if(st.progress<1)return true;
+    if(phase==='adding')st.crates=2;
+    st.phase='idle';return false;
+  });
+}
+const trUI=mountFigure({
+  fig:'16',title:'Trolley',turn:'full',size:[142,88,114],palette:'cobalt',state:trState,scene:trScene,
+  stats:st=>[{label:'Handle effort',value:Math.round(trForce(st))+' N'},{label:'Load',value:20*st.crates+' kg',small:true}],
+  buttons:[
+    {label:'Tip',onClick:(st,ui)=>trAction(st,ui,'tipping',st.angle>.01?0:trMaxTilt)},
+    {label:'Roll',onClick:(st,ui)=>{if(st.angle<trMaxTilt-.001)return ui.flash('Tip the trolley before rolling');trAction(st,ui,'rolling',st.travel>0?-17:17);}},
+    {label:'Add crate',onClick:(st,ui)=>{if(st.phase!=='idle')return ui.flash('Let the current action finish');if(st.crates===2)return ui.flash('Both crates are already loaded');if(st.angle>.001)return ui.flash('Use Tip to stand upright before adding the crate');trAction(st,ui,'adding',0);}}
+  ],
+  params:(st,q)=>{if(q.get('tip')==='1')st.angle=trMaxTilt;if(q.get('crates')==='2')st.crates=2;if(q.has('travel')){const n=Number(q.get('travel'));if(Number.isFinite(n))st.travel=Math.max(-17,Math.min(17,n));}}
+});
+xrMount(()=>trUI,()=> '');
+</script></body></html>

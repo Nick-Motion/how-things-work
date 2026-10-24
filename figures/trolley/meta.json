@@ -1,0 +1,141 @@
+{
+  "slug": "trolley",
+  "title": "Trolley",
+  "prompt": "a miniature hand trolley with a heavy crate on a table with three buttons: “Tip” pivots the handles backward to lift the crate; “Roll” moves the balanced load along the table; “Add crate” increases the required handle force; see-through reveals the wheel axle fulcrum and the effort and load arms",
+  "source": "book",
+  "sourceUrl": "https://archive.org/details/the-way-things-work-now-david-macaulay-neil-ardley-z-library/page/n23/mode/1up",
+  "category": "transport",
+  "buttons": [
+    "Tip",
+    "Roll",
+    "Add crate"
+  ],
+  "blurb": "A tabletop teaching model of a two-wheel hand trolley lifts a load by pivoting around its axle.",
+  "primarySourceAndAdaptation": {
+    "identity": {
+      "status": "checked_named_machine_or_diagram",
+      "note": "Levers / Levers in action / First-class levers / Trolley, page 22. Tipping the handle around the wheel axle raises the load. The 1998 caption calls it a hand cart.",
+      "classificationNote": "A named machine or diagram inside Levers is not a separate main chapter. The parking-meter heading is historical.",
+      "adaptationDecision": {
+        "decision": "distinct_named_application",
+        "reason": "The book classifies trolley as first-class and wheelbarrow as second-class. A tower-crane trolley is a travelling carriage on a jib, a different apparatus."
+      }
+    },
+    "prompt": {
+      "status": "source_aligned",
+      "note": "Faithful for an upright two-wheel hand truck with a toe plate. Tip teaches leverage, Roll follows tipping, and another crate increases effort at unchanged geometry. Keep load and effort on opposite sides of the axle during initial lift. Do not replace it with a flat four-wheel cart.",
+      "apparatusRelation": "Bench or scale teaching adaptation of a named book example. Controls, fixtures and test specimens stage the lesson and are not claimed as the book apparatus."
+    },
+    "editions": {
+      "1988": "access_restricted_unverified",
+      "1998": "direct_page_support",
+      "2016": "direct_page_support"
+    },
+    "citations": [
+      {
+        "edition": "2016",
+        "printedPage": 22,
+        "rawJsonIndex": 23,
+        "url": "https://archive.org/details/the-way-things-work-now-david-macaulay-neil-ardley-z-library/page/n23/mode/1up",
+        "rawEvidence": "/home/nm/.bb/thread-storage/thr_mr6grtbcjs/book-catalog-audit/raw/now-pages.json",
+        "pageTextSha256": "d18654c59099686d61c80c9332db57cec7b47376683cd013304d2397f5eaf6ef",
+        "contentReadThisUnit": true,
+        "priorPageCheck": "/home/nm/.bb/thread-storage/thr_mr6grtbcjs/book-catalog-correction/page-checks.json",
+        "priorPageHashMatches": true,
+        "visuallyReadImage": "/home/nm/.bb/thread-storage/thr_mr6grtbcjs/book-catalog-audit/raw/2016-leaf-23.jpg",
+        "sourceId": "scan-2016"
+      },
+      {
+        "edition": "1998",
+        "printedPage": 22,
+        "rawJsonIndex": 25,
+        "url": "https://archive.org/details/ebook-hay.net-van-vat-van-hanh-nhu-the-nao-eng/page/n25/mode/1up",
+        "rawEvidence": "/home/nm/.bb/thread-storage/thr_mr6grtbcjs/book-catalog-audit/raw/new-pages.json",
+        "pageTextSha256": "9797737bd7eb667e5af4d3152d8543aaac8ccd821d5557389d8488ce0aadc876",
+        "contentReadThisUnit": true,
+        "sourceId": "scan-1998"
+      }
+    ],
+    "editionAccess": {
+      "1988": {
+        "access": "access_restricted_unverified",
+        "mechanismVerified": false
+      },
+      "1998": {
+        "access": "saved_accessible_page_content",
+        "mechanismVerified": true,
+        "inspection": "Listed mechanism pages read in saved primary OCR."
+      },
+      "2016": {
+        "access": "saved_accessible_page_content",
+        "mechanismVerified": true,
+        "inspection": "Listed mechanism pages read in saved primary OCR."
+      }
+    },
+    "sourceReview": {
+      "report": "/home/nm/.bb/thread-storage/thr_mr6grtbcjs/book-next-20/report.json",
+      "sha256": "5af97357fa69327114bc68c3fe15e6cea9b3a57d43019fb7d6b807d16df2cf07",
+      "catalogIndex": 15
+    }
+  },
+  "expectedAnatomyMinimum": 10,
+  "anatomyLabels": [
+    "RUBBER GRIP",
+    "BENT HANDLE",
+    "FRAME UPRIGHT",
+    "UPPER CROSSBAR",
+    "MIDDLE CROSSBAR",
+    "LOWER CROSSBAR",
+    "TOE PLATE",
+    "HEEL",
+    "WHEEL BRACKET",
+    "AXLE FULCRUM",
+    "RUBBER TYRE",
+    "WHEEL RIM",
+    "WHEEL HUB",
+    "SPACER WASHER",
+    "COTTER PIN"
+  ],
+  "truthNotes": {
+    "apparatus": "Upright two-wheel hand truck with fixed toe plate, crossbars and rearward bent handles. Representative construction, not an exact model from the book.",
+    "teachingFixtures": "Miniature table, two illustrative 20 kg crates, controls, force arrows and dashed moment arms stage the book lesson. They are not additional anatomy or book specifications. No page caption is added.",
+    "actions": {
+      "Tip": "Pulls the handles horizontally backward to tilt 20 degrees around the wheel axle and raise the load; a repeat returns it upright. The operator holds torque equilibrium at each pose.",
+      "Roll": "Requires the tipped pose, moves 34 cm between alternate tabletop positions after the first 17 cm move, and rotates the wheels by distance divided by their 10 cm radius.",
+      "Add crate": "While upright, represents an operator lifting the spare from the table onto the loaded crate. Total load increases from 20 to 40 kg and initial handle effort doubles. A repeat reports both crates are loaded."
+    },
+    "forceModel": "Quasistatic horizontal handle force F=sum(m*g*x_CG)/z_handle, relative to axle. Frame weight, friction, inertia and hand forces needed to prevent lateral tipping are excluded. Stack geometry is drawn. Both crate centres stay ahead of axle at the maximum 20 degree tilt.",
+    "seeThrough": "Fades crates, frame, tyres and rims to reveal the axle, wheel hubs, spacers and retention. Dashed horizontal load arm and vertical effort arm are force overlays, excluded from anatomy count.",
+    "hardwareSources": [
+      {
+        "url": "https://www.magliner.com/hand-truck-fastener-pack-all-models",
+        "observed": "Axle washers and cotter pins are genuine hand-truck hardware."
+      },
+      {
+        "url": "https://www.magliner.com/190108-hdw",
+        "observed": "Axle washer sizes and use on two-wheel trucks."
+      },
+      {
+        "url": "https://www.magliner.com/resources/assembly-instructions/B9481_NAHandtruck.pdf",
+        "observed": "Indexed primary manufacturer parts list includes frame, handles, wheel brackets, nose plate and axle. Direct PDF fetch returned 403."
+      }
+    ],
+    "editionLimit": "1988 remains inaccessible and unverified. No complete edition union is claimed."
+  },
+  "verification": {
+    "productionTelemetry": "n/a. This standalone static figure has no production telemetry. Live verification untested.",
+    "repairRoundLimit": 3,
+    "ownerVerdict": "local_pass_independent_verifier_pending",
+    "repairRoundsUsed": 2,
+    "repositoryCommand": "bash verify_figure.sh trolley 10",
+    "anatomyLabelsRendered": 15,
+    "browserChecks": 32,
+    "browserErrors": [],
+    "builtIndexSha256": "58e98cb9071414523932e392938dbbb2d4a758dfdbe3254964280610f7111c98",
+    "evidenceDirectory": "figures/trolley/evidence/",
+    "video": "figures/trolley/evidence/trolley-actions.webm",
+    "videoReview": "Owner reviewed the final video contact sheet sampled every 3 seconds, showing initial state, tipping, rolling, added load and see-through result. Intermediate animation screenshots were also reviewed.",
+    "visualReview": "All seven required camera angles in closed and see-through states, action sequences from front and rear, enlarged mechanism crop and phone screenshot reviewed. mechanism-4x.png is a 2x enlargement of a native 2x screenshot crop, not a separate 4x browser render.",
+    "dashboard": "n/a: standalone local static figure; no production telemetry installed; no dashboard URL invented."
+  }
+}
