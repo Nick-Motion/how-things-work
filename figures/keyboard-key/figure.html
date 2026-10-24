@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mechanical keyboard key</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Mechanical keyboard key: a one-key USB macropad (an MX-style linear switch, a keycap, a steel plate, a PCB) modelled
+   large. 1 unit = 1 mm. x = depth (front of the pad at x = 46, USB at the back x = 14), y = width, z = up.
+   North of the switch = toward the back (small x): the contacts live there; the backlight LED sits south, under the
+   window in the housing.
+
+   How it really works (where everything is after each step):
+   REST     the spring (about 30 cN preload) holds the stem up against the top housing's ceiling. The stem's contact leg
+            rests its foot on the bump of the contact leaf and holds the leaf off the fixed contact: the circuit is open.
+   PRESS    the finger pushes the keycap; the keycap rides on the stem's cross, the stem slides down its guide in the
+            housing and squeezes the spring (force rises ~7.5 cN per mm).
+   2.0 mm   the leg's foot slides past the leaf's bump; the leaf springs across and its gold crosspoint touches the
+            fixed contact. Pin 1 and pin 2 are now joined: the microcontroller sees its input pulled low through the
+            per-key diode (through a via to the back of the board), debounces it for 5 ms and sends a key-down report over
+            the USB D+/D- lines. It also switches the LED MOSFET on: current runs from USB 5 V through the polyfuse,
+            the LED resistor and the backlight LED, whose light shines up through the clear housing and the legend.
+   4.0 mm   the stem bottoms out on the housing floor (the foot reaches the floor).
+   RELEASE  the spring pushes the stem and cap back up; at 2.0 mm the foot rides back onto the bump, the leaf is lifted
+            off and the contacts open: key-up report, the LED fades.
+
+   Parts (each held by another):
+   CASE     case shell (sits on the desk) . front badge . USB-C cut-out in the back wall
+   PLATE    1.5 mm steel plate with a 14 mm square cut-out . four brass spacers on the PCB . four plate screws
+   SWITCH   bottom housing (through the cut-out, its two plate clips latched under the plate) . housing flange on the
+            plate . top housing (clear) clipped on by four latches . stem (red) with its cross, contact leg and foot,
+            guide pole . spring on the housing's centre post . fixed contact with its gold crosspoint (pin 2) .
+            contact leaf in its anchor (pin 1) . both pins soldered into pads on the PCB
+   KEYCAP   keycap on the cross (its socket boss grips the cross) . shine-through legend
+   PCB      1.6 mm board . traces . via . microcontroller (ATmega32U4) . 16 MHz crystal and two load caps . decoupling
+            caps . bulk cap . reset button . USB-C receptacle . ESD chip . two 22 ohm data resistors . polyfuse .
+            per-key diode . LED resistor . LED MOSFET . SMD backlight LED under the switch
+   POWER    USB-C cable plug in the back port, cable away over the desk to the computer */
+
+const XB = 14, CW = 32, CZ = 10;                       // case: x XB..XB+CW, y 0..CW, z 0..CZ
+const CASE_RR = rrUV(XB, 0, XB + CW, CW, 3, 5);
+const PCB0 = 3.4, PCB1 = 5.0, PL0 = 8.5, PL1 = 10.0;   // board and plate heights
+const SXc = 30, SYc = 16;                               // switch centre
+const TRAVEL = 4, PRE = 2;                              // mm
+const FLOOR = 5.6;                                      // top of the housing floor
+const LED_C = '#62e6ff';
+const kRR = (x0, y0, x1, y1, r, n = 3) => rrUV(x0, y0, x1, y1, r, n);
+const kZ = (pts, z) => on(PZ(z), pts);
+const CASE_M = CERAMIC;
+const FLANGE_M = { l:'#5d5852', m:'#45403b', d:'#2c2925' };
+const STEM_M = matOf('#e2483d'), BRASS = matOf('#d8b25a'), BRONZE = matOf('#d99a45'), GOLD = '#ffd54a';
+const PCB_M = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, CHIP = { l:'#4a4744', m:'#34312e', d:'#211f1d' };
+const TRACE = '#79c98a', TRACE_ON = '#ffcf3a', COPPER = '#e0bb62';
+const mwk = w => `style="stroke-width:${w}"`;
+const txZ = (x, y, z, str, size, col = INK, weight = 700, extra = '') => `<text transform="${txM(P(x,y,z), Dv(0,-1,0), Dv(1,0,0))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em" ${extra}>${str}</text>`;
+const kBoxOf = (pts, e = .02) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const kItem = (x0, y0, z0, x1, y1, z1, svg) => ({ box: [[x0, y0, z0], [x1, y1, z1]], svg });
+const kB = (x0, y0, z0, x1, y1, z1, m, w = .5) => kItem(x0, y0, z0, x1, y1, z1, box(x0, y0, z0, x1, y1, z1, m, toneI, w));
+
+/* ---------- moving geometry ---------- */
+const capRings = t => [kZ(kRR(21, 7, 39, 25, 1.4, 4), 16.7 - t), kZ(kRR(23.7, 9.5, 36.3, 22.5, 2.2, 4), 25.2 - t)];
+const HB0 = kZ(kRR(22.2, 8.2, 37.8, 23.8, .6, 2), 11.4), HB1 = kZ(kRR(22.2, 8.2, 37.8, 23.8, .6, 2), 12.0), HT = kZ(kRR(24.4, 10.4, 35.6, 21.6, .6, 2), 16.4);
+// the leaf is held off the fixed contact while the foot covers its bump, and closes as the foot slides past (t = 2.0)
+const leafOpen = t => { const k = Math.max(0, Math.min(1, (11.6 - t - 9.6) / .3)); return .6 * k*k*(3 - 2*k); };
+const leafX = (y, d) => { const tip = 25.05 + d; return 25.4 + (tip - 25.4) * (19.4 - y) / 4.8 - .26 * Math.max(0, 1 - Math.abs(y - 17.3) / .7); };
+
+/* ---------- the closed object ---------- */
+function caseBody(m){
+  const A = kZ(CASE_RR, 0), B = kZ(CASE_RR, CZ);
+  let s = loft(A, B, n => tone(n, m)) + fill(pd(B), tone([0,0,1], m));
+  if (facing([-1,0,0])){                                 // USB-C cut-out in the back wall
+    s += shape(on(PX(XB - .03), kRR(11.6, 5.0, 20.4, 8.2, 1.5)), '#2b2523', .8);
+    s += fill(pd(on(PX(XB - .05), rectUV(13.4, 6.3, 18.6, 6.9))), '#cfd6d8');
+  }
+  if (facing([1,0,0])){
+    s += shape(on(PX(XB + CW + .03), kRR(10, 3, 22, 6.4, 1.2)), mix(tone([1,0,0], m), '#ffffff', .4), .5);
+    s += tx(XB + CW + .06, 16, 4.1, 'ONE KEY', 1.9, mix(m.d, INK, .4), 800);
+  }
+  // the steel plate, set into the top, and its four screws
+  s += shape(kZ(rectUV(XB + 1.5, 1.5, XB + 30.5, 30.5), CZ + .01), METAL.l, .8);
+  s += fill(pd(kZ(rectUV(XB + 2.2, 2.2, XB + 29.8, 3.2), CZ + .02)), '#ffffff', 'opacity=".5"');
+  for (const [x, y] of SCREWS) s += plateScrew(x, y);
+  s += ink(pd(B), 1.6) + hullInk([...A, ...B], 2.8);
+  return s;
+}
+const SCREWS = [[XB + 4, 4], [XB + 28, 4], [XB + 4, 28], [XB + 28, 28]];
+const plateScrew = (x, y) => cyl(x, y, PL1, PL1 + .3, 1, METAL, toneI, .5, 14) + ink(pd([[x - .6, y - .6, PL1 + .32], [x + .6, y + .6, PL1 + .32]], false), .5);
+
+// keycap, solid or as a ghost; legend lit by the LED
+function keycap(st, m, ghost){
+  const [A, B] = capRings(st.t), zt = 25.2 - st.t;
+  const lit = st.led;
+  let s = '';
+  if (!ghost){
+    s += loft(A, B, n => tone(n, m)) + fill(pd(B), tone([0,0,1], m));
+    s += fill(pd(kZ(kRR(24.6, 10.4, 35.4, 21.6, 1.8, 4), zt + .01)), mix(tone([0,0,1], m), m.m, .35));
+    s += legend(st, zt + .02);
+    s += ink(pd(B), 1.3) + hullInk([...A, ...B], 2.2);
+  } else {
+    s += `<g opacity=".3">${loft(A, B, n => toneI(n, m), true)}</g>`;
+    s += ghost;                                         // what is inside the cap: socket, cross, the light
+    s += `<g opacity=".28">${loft(A, B, n => tone(n, m))}${fill(pd(B), tone([0,0,1], m))}</g>`;
+    s += legend(st, zt + .02);
+    s += `<g opacity=".7">${ink(pd(B), 1) + hullInk([...A, ...B], 1.6)}</g>`;
+  }
+  return act('key', s);
+}
+function legend(st, z){
+  const lit = st.led;
+  let s = '';
+  if (lit > .02) s += txZ(30.4, 16, z, 'A', 6.4, LED_C, 900, `stroke="${LED_C}" ${mwk(1.4)} opacity="${f(lit)}" filter="url(#kkSoft)"`);
+  return s + txZ(30.4, 16, z, 'A', 6.4, mix('#f4efe0', '#ffffff', lit), 900, `stroke="${INK}" ${mwk(.12)}`);
+}
+// top housing (clear plastic, tinted by the LED light) with its four latches; flange under it
+function housingClosed(st){
+  const hm = { l: mix(CLEAR.l, LED_C, .45*st.led), m: mix(CLEAR.m, LED_C, .4*st.led), d: mix(CLEAR.d, LED_C, .3*st.led) };
+  let s = box(22.2, 8.2, PL1, 37.8, 23.8, 11.4, FLANGE_M, toneI, .9);
+  s += loft(HB0, HB1, n => toneI(n, hm)) + loft(HB1, HT, n => toneI(n, hm)) + fill(pd(HT), toneI([0,0,1], hm));
+  s += shape(kZ(rectUV(27.2, 13.2, 32.8, 18.8), 16.42), '#5b6b70', .5);
+  s += ink(pd(HT), .9) + hullInk([...HB0, ...HT], 1.6);
+  s += latches(1);
+  return s;
+}
+const LATCHES = [[21.8, 22.2, -1], [37.8, 38.2, 1]];
+const latches = op => { let s = ''; for (const [x0, x1, sx] of LATCHES) if (facing([sx, 0, 0])) for (const y of [10.5, 19.5])
+  s += `<g opacity="${f(op)}">${box(x0, y, 10.6, x1, y + 2, 11.8, FLANGE_M, toneI, .5)}</g>`; return s; };
+// glow of the LED leaking out round the switch onto the plate
+const plateGlow = st => st.led > .02 ? fill(pd(kZ(ellUV(SXc, SYc, 13, 13, 32), PL1 + .03)), 'url(#kkG)', `opacity="${f(.9*st.led)}"`) : '';
+
+/* ---------- USB cable, out of the back port and away over the desk ---------- */
+const CABLE = [[5, 16, 6.6], [3.4, 16.1, 5.6], [2.6, 15.8, 3.6], [2.4, 15, 1.9], [2.1, 13, 1.2], [1.4, 9.5, 1.2], [.3, 6, 1.2]];
+function cableItems(){
+  const plug = kRR(11, 4.6, 21, 8.6, 1.6, 3);
+  const PM = { l:'#5d5852', m:'#45403b', d:'#2c2925' };
+  let p = extrude(plug, 7, 14, PM, toneI);
+  if (facing([-1,0,0])) p += fill(pd(on(PX(7), plug)), toneI([-1,0,0], PM)) + ink(pd(on(PX(7), plug)), .8);
+  p += hullInk([...on(PX(7), plug), ...on(PX(14), plug)], 1.4);
+  const relief = rod([7, 16, 6.6], [5, 16, 6.6], 1.6, PM, toneI, .9, 1.25);
+  // the cable fades out where it leaves the picture toward the computer
+  const a = P(...CABLE[4]), b = P(...CABLE[6]);
+  const d = pd(CABLE, false);
+  const cab = `<defs><linearGradient id="kkFade" gradientUnits="userSpaceOnUse" x1="${f(a[0])}" y1="${f(a[1])}" x2="${f(b[0])}" y2="${f(b[1])}"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>`
+    + `<mask id="kkMask" maskUnits="userSpaceOnUse" x="-500" y="-500" width="2000" height="2000"><path d="${d}" fill="none" stroke="url(#kkFade)" ${mwk(4)} stroke-linecap="round" stroke-linejoin="round"/></mask></defs>`
+    + `<g mask="url(#kkMask)"><path d="${d}" fill="none" stroke="${INK}" ${mwk(2.6)} stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${PM.m}" ${mwk(1.9)} stroke-linecap="round" stroke-linejoin="round"/></g>`;
+  return [ kItem(7, 11, 4.6, 14, 21, 8.6, p), kItem(5, 14.4, 5, 7, 17.6, 8.2, relief), kItem(0, 5, 0, 5, 17.5, 7.6, cab) ];
+}
+
+/* ---------- see-through: the board ---------- */
+const PZt = PCB1 + .02;
+const trc = (pts, col, w = .42, op = 1) => `<path d="${pd(pts.map(([x, y]) => [x, y, PZt]), false)}" fill="none" stroke="${col}" ${mwk(w)} opacity="${op}" stroke-linejoin="round" stroke-linecap="round"/>`;
+const pad = (x, y, r, hole = 0) => fill(pd(kZ(ellUV(x, y, r, r, 14), PZt)), COPPER) + (hole ? fill(pd(kZ(ellUV(x, y, hole, hole, 12), PZt + .01)), '#1b1a17') : '');
+const DPLUS = [[21.6, 16.5], [22.3, 16.5], [22.3, 7.6], [24, 7.6]], DPLUS2 = [[25.6, 7.6], [38.5, 7.6], [38.5, 12.5]];
+const DMIN = [[21.6, 15.7], [21.9, 15.7], [21.9, 6.2], [24, 6.2]], DMIN2 = [[25.6, 6.2], [39.3, 6.2], [39.3, 12.5]];
+const VBUS = [[21.6, 19.2], [22.6, 19.2], [22.6, 25.3], [20.7, 25.3]], VBUS2 = [[17.5, 25.3], [16.6, 25.3], [16.6, 29.6], [43.8, 29.6], [43.8, 19.5]];
+const LEDP = [[31, 29.6], [31, 27.2], [31.4, 27.2]], LEDP2 = [[33, 27.2], [34.6, 27.2], [34.6, 17.75]];
+const LEDN = [[34.6, 14.25], [34.6, 11], [36.4, 11], [36.4, 20.6], [38, 20.6]];
+const SIG = [[27.46, 19.81], [27.46, 22.5], [25.4, 22.5], [25.4, 25.3], [26, 25.3]], SIG2 = [[28.7, 25.3], [29.4, 25.3]], SIG3 = [[36.8, 19], [36.8, 18.4], [37.3, 18.4]];
+const PIN2T = [[24.92, 13.46], [24.92, 11.2], [23.6, 10.2]];
+function pcb(st){
+  let s = box(XB + 1.5, 1.5, PCB0, XB + 30.5, 30.5, PCB1, PCB_M, toneI, .8);
+  s += `<path d="${pd(kZ(rectUV(23, 9, 37, 23), PZt))}" fill="none" stroke="#eef3e6" ${mwk(.22)}/>`;
+  s += txZ(18.6, 9.5, PZt, 'ONEKEY v1', 1.2, '#eef3e6', 700);
+  const on1 = st.closed, sg = st.sig, ld = st.led > .05;
+  const hl = (pts, on, w) => trc(pts, on ? TRACE_ON : TRACE, w);
+  s += hl(DPLUS, sg > .05) + hl(DPLUS2, sg > .05) + hl(DMIN, sg > .05) + hl(DMIN2, sg > .05);
+  s += hl(VBUS, ld, .6) + hl(VBUS2, ld, .6) + hl(LEDP, ld) + hl(LEDP2, ld) + hl(LEDN, ld);
+  s += hl(SIG, on1) + hl(SIG2, on1) + hl(SIG3, on1) + hl(PIN2T, on1);
+  // pads: switch pins, centre post hole, locating peg holes, the two vias of the key signal
+  s += pad(27.46, 19.81, .9, .5) + pad(24.92, 13.46, .9, .5) + pad(SXc, 10.92, .9, .85) + pad(SXc, 21.08, .9, .85);
+  s += fill(pd(kZ(ellUV(SXc, SYc, 2.05, 2.05, 18), PZt)), '#1b1a17');
+  for (const [x, y] of [[29.4, 25.3], [36.8, 19]]) s += pad(x, y, .55, .25) + (on1 ? fill(pd(kZ(ellUV(x, y, .8, .8, 12), PZt + .02)), TRACE_ON, 'opacity=".5"') : '');
+  s += pad(23.6, 10.2, .45, .2);
+  return s;
+}
+// small parts on the board, each a box item
+function chip(x0, y0, x1, y1, h, m, top){ return kItem(x0, y0, PCB1, x1, y1, PCB1 + h, box(x0, y0, PCB1, x1, y1, PCB1 + h, m, toneI, .4) + (top || '')); }
+const passive = (x0, y0, x1, y1, h, col) => { const e = (x1 - x0) > (y1 - y0), w = e ? (x1 - x0)*.2 : (y1 - y0)*.2;
+  const parts = e ? [[x0, x0 + w, METAL], [x0 + w, x1 - w, matOf(col)], [x1 - w, x1, METAL]] : [[y0, y0 + w, METAL], [y0 + w, y1 - w, matOf(col)], [y1 - w, y1, METAL]];
+  return kItem(x0, y0, PCB1, x1, y1, PCB1 + h, byDepth(parts.map(([a, b, m]) => e ? kB(a, y0, PCB1, b, y1, PCB1 + h, m, .3) : kB(x0, a, PCB1, x1, b, PCB1 + h, m, .3)))); };
+function boardParts(st){
+  const out = [];
+  // USB-C receptacle: steel shell at the back edge, its mouth in the case's cut-out
+  out.push(kItem(14.2, 11.5, PCB1, 21.6, 20.5, 8.2, box(14.2, 11.5, PCB1, 21.6, 20.5, 8.2, METAL, toneI, .6)
+    + (facing([-1,0,0]) ? shape(on(PX(14.18), kRR(11.9, 5.3, 20.1, 7.9, 1.2)), '#2b2523', .5) : '')
+    + (facing([0,0,1]) ? ink(pd([[15.2, 12.3, 8.22], [20.6, 12.3, 8.22]], false), .3) + ink(pd([[15.2, 19.7, 8.22], [20.6, 19.7, 8.22]], false), .3) : '')));
+  // microcontroller (QFN) with its pin ring and a mark
+  out.push(chip(37.3, 12.5, 44.3, 19.5, .9, CHIP, facing([0,0,1]) ? fill(pd(kZ(ellUV(38.3, 13.5, .35, .35, 10), PCB1 + .92)), '#cfcac0')
+    + txZ(40.8, 16, PCB1 + .92, '32U4', 1.3, (st.closed || st.sig > .05) ? TRACE_ON : '#bdb8ae', 800) : ''));
+  for (let i = 0; i < 9; i++){ const y = 13.1 + i*.72; out.push(kB(37.0, y, PCB1, 37.3, y + .3, PCB1 + .2, METAL, .2), kB(44.3, y, PCB1, 44.6, y + .3, PCB1 + .2, METAL, .2)); }
+  // 16 MHz crystal, two load caps, decoupling, bulk and UCAP caps
+  out.push(chip(38.5, 21.5, 41.7, 24.0, .8, METAL, facing([0,0,1]) ? txZ(40.1, 22.75, PCB1 + .82, '16M', .9, INK, 800) : ''));
+  out.push(passive(38.5, 25, 39.3, 26.6, .8, '#c9a77a'), passive(40.9, 25, 41.7, 26.6, .8, '#c9a77a'));
+  out.push(passive(37.6, 9.8, 38.4, 11.4, .8, '#c9a77a'), passive(42.6, 9.8, 43.4, 11.4, .8, '#c9a77a'), passive(35, 3.6, 36.6, 4.4, .8, '#c9a77a'));
+  out.push(passive(32, 3.5, 34, 4.75, 1.2, '#b98f5a'));
+  // reset button: a steel tact switch with a black plunger
+  out.push(kItem(26, 3, PCB1, 30, 6, 6.9, box(26, 3, PCB1, 30, 6, PCB1 + 1.3, METAL, toneI, .5) + cyl(28, 4.5, PCB1 + 1.3, 6.9, .9, CHIP, toneI, .5, 14)));
+  // ESD chip and the two 22 ohm data resistors
+  out.push(chip(17, 6, 19.9, 7.6, 1.1, CHIP));
+  for (const y of [5.8, 7.2]) out.push(passive(24, y, 25.6, y + .8, .5, '#2b2826'));
+  // polyfuse, per-key diode (with its band), LED resistor, LED MOSFET
+  out.push(passive(17.5, 24.5, 20.7, 26.1, .8, '#d9c34a'));
+  out.push(chip(26, 24.5, 28.7, 26.1, 1.1, CHIP, facing([0,0,1]) ? fill(pd(kZ(rectUV(26.3, 24.5, 26.8, 26.1), PCB1 + 1.12)), '#bdb8ae') : ''));
+  out.push(passive(31.4, 26.8, 33, 27.6, .5, '#2b2826'));
+  out.push(chip(38, 19.9, 40.6, 21.2, 1, CHIP));
+  // brass spacers between board and plate
+  for (const [x, y] of SCREWS) out.push(kItem(x - 1.3, y - 1.3, PCB1, x + 1.3, y + 1.3, PL0, cyl(x, y, PCB1, PL0, 1.3, BRASS, toneI, .6, 6)));
+  // plate screws on top of the plate
+  for (const [x, y] of SCREWS) out.push(kItem(x - 1, y - 1, PL1, x + 1, y + 1, PL1 + .35, plateScrew(x, y)));
+  return out;
+}
+// the plate as a faint ghost (a cover, drawn under the parts)
+function plateGhost(){
+  const bars = [[XB + 1.5, 1.5, 23, 30.5], [37, 1.5, XB + 30.5, 30.5], [23, 1.5, 37, 9], [23, 23, 37, 30.5]];
+  let s = '<g opacity=".22">' + bars.map(([x0, y0, x1, y1]) => fill(pd(kZ(rectUV(x0, y0, x1, y1), PL1)), METAL.m)).join('') + '</g>';
+  return s + `<g opacity=".55">${ink(pd(kZ(rectUV(XB + 1.5, 1.5, XB + 30.5, 30.5), PL1)), .7)}${ink(pd(kZ(rectUV(23, 9, 37, 23), PL1)), .5)}${ink(pd(kZ(rectUV(XB + 1.5, 1.5, XB + 30.5, 30.5), PL0)), .35)}</g>`;
+}
+
+/* ---------- see-through: inside the switch ---------- */
+const BL0 = kZ(kRR(23, 9, 37, 23, .4, 2), PCB1), BL1 = kZ(kRR(23, 9, 37, 23, .4, 2), PL1);
+const BF0 = kZ(kRR(22.2, 8.2, 37.8, 23.8, .6, 2), PL1), BF1 = kZ(kRR(22.2, 8.2, 37.8, 23.8, .6, 2), 11.4);
+const BOT_G = mix(FLANGE_M.l, '#f2efe7', .25), TOP_G = '#bfe6f0';
+function coil(z0, z1, zCut, r){
+  const far = [], near = [], N = 180, turns = 7.5, vx = CAM_V[0], vy = CAM_V[1];
+  let cur = null, side = null;
+  for (let i = 0; i <= N; i++){
+    const a = i / N * turns * 2 * Math.PI, z = z0 + (z1 - z0) * i / N;
+    if (z > zCut) break;
+    const p = [SXc + r*Math.cos(a), SYc + r*Math.sin(a), z], sd = Math.cos(a)*vx + Math.sin(a)*vy > 0;
+    if (sd !== side){ if (cur) cur.push(p); cur = [p]; (sd ? near : far).push(cur); side = sd; } else cur.push(p);
+  }
+  const draw = (ls, col) => ls.filter(l => l.length > 1).map(l => { const d = pd(l, false);
+    return `<path d="${d}" fill="none" stroke="${INK}" ${mwk(.6)} stroke-linecap="round"/><path d="${d}" fill="none" stroke="${col}" ${mwk(.32)} stroke-linecap="round"/>`; }).join('');
+  return { far: draw(far, '#9aa3a6'), near: draw(near, '#e6eaeb') };
+}
+function switchInside(st){
+  const t = st.t, d = leafOpen(t), closed = st.closed, zb = 11.4 - t;
+  const items = [];
+  // stem: slider body, cross (below the housing top), contact leg with its foot
+  const crossTop = Math.min(16.4, 20.4 - t), cz0 = 15.6 - t;
+  let stem = box(26.4, 13.3, zb, 33.6, 18.7, 15.6 - t, STEM_M, toneI, .6);
+  if (crossTop > cz0) stem += kCross(cz0, crossTop);
+  items.push(kItem(26.4, 13.3, zb, 33.6, 18.7, Math.max(15.6 - t, crossTop), act('key', stem)));
+  items.push(kB(24.3, 16.8, 9.6 - t, 25.26, 17.8, 11.6 - t, STEM_M, .4));
+  items.push(kB(24.3, 16.8, 11.6 - t, 24.7, 17.8, 15.4 - t, STEM_M, .4));
+  items.push(kB(24.7, 16.8, 14.6 - t, 26.4, 17.8, 15.4 - t, STEM_M, .4));
+  // spring on the centre post, the stem's guide pole inside the post
+  const cl = coil(FLOOR, 13.4 - t, zb, 2.5);
+  let spr = cl.far + cyl(SXc, SYc, FLOOR, 8.6, 1.9, matOf('#8c867d'), toneI, .5, 18);
+  if (zb > 8.6) spr += rod([SXc, SYc, 8.6], [SXc, SYc, zb], .8, STEM_M, toneI, .4);
+  spr += cl.near;
+  items.push(kItem(27.4, 13.4, FLOOR, 32.6, 18.6, zb, spr));
+  // fixed contact (pin 2) with its gold crosspoint; the leaf (pin 1) in its anchor
+  let fx = box(24.8, 12.6, FLOOR, 25.0, 15.4, 11.2, BRONZE, toneI, .35) + box(24.82, 13.2, PCB1, 24.98, 13.7, FLOOR, BRONZE, toneI, .25);
+  if (facing([1,0,0])) fx += shape(on(PX(25.02), ellUV(14.6, 10, .38, .38, 12)), closed ? '#fff3a0' : GOLD, .25);
+  items.push(kItem(24.8, 12.6, PCB1, 25.02, 15.4, 11.2, fx));
+  const ys = []; for (let y = 19.8; y >= 14.6 - 1e-6; y -= .2) ys.push(+y.toFixed(2));
+  const band = [...ys.map(y => [leafX(y, d), y, 10.4]), ...ys.slice().reverse().map(y => [leafX(y, d), y, 9.6])];
+  const lx = band.map(p => p[0]);
+  items.push(kItem(Math.min(...lx), 14.6, 9.6, Math.max(...lx), 19.8, 10.4, shape(band, closed ? '#f0c060' : BRONZE.l, .3)
+    + shape(on(PX(leafX(14.7, d) - .02), ellUV(14.75, 10, .3, .3, 10)), GOLD, .2)));
+  items.push(kItem(25.2, 18.8, PCB1, 27.8, 20.8, 9.6, box(25.2, 19.2, PCB1, 27.8, 20.4, 6.4, BRONZE, toneI, .3)
+    + shape(on(PX(25.4), rectUV(19.0, 6.4, 19.8, 9.6)), BRONZE.m, .3)));
+  // backlight LED: white body, phosphor window, and its glow
+  let led = box(33.2, 14.25, PCB1, 36.0, 17.75, 6.9, matOf('#f4f1e8'), toneI, .4);
+  led += fill(pd(kZ(ellUV(34.6, 16, 1.1, 1.1, 14), 6.92)), mix('#f2e27a', '#ffffff', st.led));
+  if (st.led > .02) led += fill(pd(kZ(ellUV(34.6, 16, 5, 5, 24), 6.95)), 'url(#kkG)', `opacity="${f(st.led)}"`);
+  items.push(kItem(33.2, 14.25, PCB1, 36.0, 17.75, 6.9, led));
+  // housing: far walls faint, the parts, near walls faint over them; clips and latches on their faces
+  const clips = near => { let s = ''; for (const [y0, y1, sy] of [[8.6, 9, -1], [23, 23.4, 1]]) if (facing([0, sy, 0]) === near) s += box(27, y0, 7.4, 33, y1, 8.4, FLANGE_M, toneI, .4); return s; };
+  let s = `<g opacity=".38">${loft(BL0, BL1, () => BOT_G, true)}${fill(pd(BL0), BOT_G)}${loft(BF0, BF1, () => BOT_G, true)}</g>`
+    + `<g opacity=".3">${loft(HB0, HB1, () => TOP_G, true)}${loft(HB1, HT, () => TOP_G, true)}</g>` + clips(false);
+  s += byDepth(items);
+  s += `<g opacity=".22">${loft(BL0, BL1, n => toneI(n, FLANGE_M))}${loft(BF0, BF1, n => toneI(n, FLANGE_M))}</g>` + clips(true);
+  s += `<g opacity=".24">${loft(HB0, HB1, () => TOP_G)}${loft(HB1, HT, () => TOP_G)}${fill(pd(HT), TOP_G)}</g>`;
+  s += fill(pd(kZ(rectUV(27.2, 13.2, 32.8, 18.8), 16.42)), '#5b6b70', 'opacity=".25"');
+  s += `<g opacity=".6">${hullInk([...BL0, ...BF1], 1.1)}${hullInk([...HB0, ...HT], 1.2)}${ink(pd(HT), .6)}${ink(pd(BF1), .5)}</g>` + latches(.7);
+  return kItem(22.2, 8.2, PCB1, 37.8, 23.8, 16.4, s);
+}
+// the cross: a centre and four arms (convex pieces, sorted)
+const kCross = (z0, z1) => byDepth([[29.4, 15.4, 30.6, 16.6], [30.6, 15.4, 32, 16.6], [28, 15.4, 29.4, 16.6], [29.4, 16.6, 30.6, 18], [29.4, 14, 30.6, 15.4]]
+  .map(([x0, y0, x1, y1]) => kB(x0, y0, z0, x1, y1, z1, STEM_M, .3)));
+// inside the keycap: the light rising from the LED, the socket boss and the part of the cross above the housing
+function capInside(st, m){
+  const t = st.t;
+  let s = '';
+  if (st.led > .02){
+    const pts = [...kZ(ellUV(34.6, 16, 1.2, 1.2, 10), 6.9), ...kZ(kRR(23.5, 9.5, 36.5, 22.5, 1, 2), 16.7 - t)];
+    s += fill(sp(hull(pts.map(p => P(...p)))), LED_C, `opacity="${f(.2*st.led)}"`);
+  }
+  s += `<g opacity=".45">${cyl(SXc, SYc, 17 - t, 23.9 - t, 2.75, m, toneI, .5, 20)}</g>`;
+  if (20.4 - t > 16.4) s += kCross(16.4, 20.4 - t);
+  return s;
+}
+
+/* ---------- labels ---------- */
+function insideLabels(st){
+  const t = st.t, cl = st.closed, lit = st.led > .3, sg = st.sig > .05, mv = st.t > .02;
+  return [
+    { at: [38.5, 22, 20 - t], text: 'KEYCAP', on: mv },
+    { at: [30.4, 18, 25.2 - t], text: 'LEGEND', on: lit },
+    { at: [SXc, 18, 18.6 - t], text: 'STEM CROSS', on: mv },
+    { at: [33.6, 16, 14 - t], text: 'STEM', on: mv },
+    { at: [24.3, 17.3, 13.5 - t], text: 'CONTACT LEG', on: mv && !cl },
+    { at: [32.4, 16.6, (FLOOR + 11.4 - t)/2], text: 'SPRING', on: mv },
+    { at: [35.6, 21.6, 15.5], text: 'TOP HOUSING', on: false },
+    { at: [37, 22, 7], text: 'BOTTOM HOUSING', on: false },
+    { at: [21.8, 11.5, 11.4], text: 'HOUSING LATCH', on: false },
+    { at: [SXc, 17.9, 7.5], text: 'CENTRE POST', on: false },
+    { at: [24.9, 12.8, 8], text: 'FIXED CONTACT', on: cl },
+    { at: [leafX(18.4, leafOpen(t)), 18.4, 10.4], text: 'CONTACT LEAF', on: cl },
+    { at: [25.02, 14.6, 10], text: 'GOLD CROSSPOINT', on: cl },
+    { at: [27.46, 19.81, PCB1], text: 'SWITCH PINS', on: cl },
+    { at: [XB + 2, 30, PL1], text: 'STEEL PLATE', on: false },
+    { at: [XB + 28, 28, PL1 + .3], text: 'PLATE SCREW', on: false },
+    { at: [XB + 28, 4, 7], text: 'PLATE SPACER', on: false },
+    { at: [XB + 30.5, 30, 4.2], text: 'PCB', on: false },
+    { at: [34.6, 16, 6.9], text: 'BACKLIGHT LED', on: lit },
+    { at: [32.2, 27.2, 5.5], text: 'LED RESISTOR', on: lit },
+    { at: [39.3, 20.6, 6], text: 'LED MOSFET', on: lit },
+    { at: [27.3, 25.3, 6.1], text: 'DIODE', on: cl },
+    { at: [44.3, 16, 5.9], text: 'MICROCONTROLLER', on: cl || sg },
+    { at: [41.7, 22.7, 5.8], text: 'CRYSTAL', on: false },
+    { at: [43, 10.6, 5.8], text: 'DECOUPLING CAP', on: false },
+    { at: [33, 4.1, 6.2], text: 'BULK CAP', on: false },
+    { at: [15, 16, 8.2], text: 'USB-C PORT', on: sg },
+    { at: [18.5, 6.8, 6.1], text: 'ESD CHIP', on: sg },
+    { at: [19.1, 25.3, 5.8], text: 'POLYFUSE', on: lit },
+    { at: [28, 4.5, 6.9], text: 'RESET BUTTON', on: false },
+    { at: [33, 7.6, PCB1], text: 'DATA LINES', on: sg },
+    { at: [XB + CW, 30, 3], text: 'CASE', on: false },
+    { at: [4, 16, 6.6], text: 'USB CABLE', on: sg },
+  ];
+}
+const surfaceLabels = st => [
+  { at: [38.5, 22, 20 - st.t], text: 'KEYCAP', on: st.t > .02 },
+  { at: [30.4, 18, 25.2 - st.t], text: 'LEGEND', on: st.led > .3 },
+  { at: [35.6, 21.6, 15.5], text: 'TOP HOUSING', on: false },
+  { at: [XB + 2, 30, PL1], text: 'STEEL PLATE', on: false },
+  { at: [XB + CW, 30, 3], text: 'CASE', on: false },
+  { at: [4, 16, 6.6], text: 'USB CABLE', on: st.sig > .05 },
+];
+const LBL_B = [XB, XB + CW, 0, CW, 0, 25.2];
+/* labels in two columns either side (xrCallouts, adapted): the right column starts under the stats, and the labels are
+   shared between the columns by the room each has, so neither runs off the page */
+function kCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0]));
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 1.5*u : 3*k);
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, ctm = svgEl.getScreenCTM();
+  const top = { [-1]: fs, [1]: u ? fs : fs + 30*k };
+  const below = (id, side) => { const el = document.getElementById(id); if (!el || !ctm) return;
+    const r = el.getBoundingClientRect(); if (!r.height) return; const q = new DOMPoint(r.right, r.bottom + 14).matrixTransform(ctm.inverse()); if (q.y > top[side]) top[side] = q.y + hgt/2; };
+  below('btns', -1); if (!u) below('stats', 1);
+  const bottom = vb.y + vb.height*1.08;
+  let zb = 1e9; const zc = document.querySelector('.zchip');
+  if (zc && ctm){ const r = zc.getBoundingClientRect(); if (r.height) zb = new DOMPoint(r.left, r.top - 6).matrixTransform(ctm.inverse()).y - hgt/2; }
+  const capL = Math.max(1, (bottom - top[-1]) / gap), capR = Math.max(1, (bottom - top[1]) / gap);
+  const its = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  const nL = Math.round(its.length * capL / (capL + capR)), cols = [[its.slice(0, nL), -1], [its.slice(nL), 1]];
+  let s = '';
+  for (const [col, side] of cols){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    const shift = col.length ? Math.max(0, col.reduce((a, c) => a + c.py - c.Y, 0) / col.length) : 0;
+    const room = col.length ? col[0].py - top[side] : 0; for (const c of col) c.py -= Math.min(shift, room);
+    if (u) col.forEach((c, i) => c.py = top[side] + i*gap);  // phone: numbered badges pack from the top, clear of the zoom chip
+    let yb = zb + gap; for (let i = col.length - 1; i >= 0; i--){ col[i].py = Math.min(col[i].py, yb - gap); yb = col[i].py; }  // keep clear of the zoom chip
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0);
+  let s = `<defs><filter id="kkSoft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="${(1.6*INK_K).toFixed(2)}"/></filter>`
+    + `<radialGradient id="kkG"><stop offset="0" stop-color="${LED_C}" stop-opacity=".95"/><stop offset=".55" stop-color="${LED_C}" stop-opacity=".35"/><stop offset="1" stop-color="${LED_C}" stop-opacity="0"/></radialGradient></defs>`;
+  const [cA, cB] = capRings(st.t);
+  s += castShadow([...kZ(CASE_RR, 0), ...kZ(CASE_RR, CZ), ...cB, ...HT]);
+  const cables = cableItems();
+  let body = caseBody(CASE_M) + plateGlow(st);
+  let top;
+  if (k > 0){
+    body = xrGhostRings(body, '', k, kZ(CASE_RR, 0), kZ(CASE_RR, CZ), CASE_M);
+    const mech = pcb(st) + plateGhost() + byDepth([...boardParts(st), switchInside(st), kItem(21, 7, 16.7 - st.t, 39, 25, 25.2 - st.t, keycap(st, m, capInside(st, m)))]);
+    top = `<g opacity="${f(1 - k)}">${housingClosed(st) + keycap(st, m)}</g><g opacity="${f(k)}">${mech}</g>`;
+  } else top = housingClosed(st) + keycap(st, m);
+  s += byDepth([...cables, kItem(XB, 0, 0, XB + CW, CW, CZ, body), kItem(21, 7, CZ, 39, 25, 25.2, top)]);
+  s += kCallouts(k > .6 ? insideLabels(st) : surfaceLabels(st), LBL_B);
+  return s;
+}
+
+/* ---------- behaviour ---------- */
+let ui, kLoop = false;
+const ledTarget = st => st.bl === 'off' ? 0 : st.bl === 'on' ? (st.closed ? 1 : .5) : (st.closed ? 1 : 0);
+function kStep(dt){
+  const st = ui.st;
+  if (st.hold){ st.p = Math.min(1, st.p + dt / st.dDown); }
+  else if (st.phase === 'down'){ st.p += dt / st.dDown; if (st.p >= 1){ st.p = 1; st.phase = 'dwell'; st.tw = 0; } }
+  else if (st.phase === 'dwell'){ st.tw += dt; if (st.tw >= st.dDwell) st.phase = 'up'; }
+  else if (st.p > 0){ st.p -= dt / st.dUp; if (st.p <= 0){ st.p = 0; if (st.queue > 0){ st.queue--; st.phase = 'down'; } else st.phase = 'idle'; } }
+  else if (st.queue > 0){ st.queue--; st.phase = 'down'; }
+  else st.phase = 'idle';
+  st.t = TRAVEL * ease(Math.max(0, Math.min(1, st.p)));
+  const was = st.closed; st.closed = st.t >= PRE;
+  if (st.closed && !was){ st.keys++; st.sig = 1; }
+  if (!st.closed && was) st.sig = Math.max(st.sig, .6);   // key-up report
+  const tgt = ledTarget(st), tau = tgt > st.led ? .03 : st.bl === 'react' ? .3 : .08;
+  st.led += (tgt - st.led) * (1 - Math.exp(-dt / tau)); if (Math.abs(tgt - st.led) < .01) st.led = tgt;
+  st.sig = Math.max(0, st.sig - dt / .5);
+  const busy = st.phase !== 'idle' || st.queue > 0 || (st.hold ? st.p < 1 : st.p > 0) || st.led !== tgt || st.sig > 0;
+  if (!busy) kLoop = false;
+  return busy;
+}
+function run(){ if (kLoop) return; kLoop = true; ui.animate(kStep); }
+function setSpeed(st, fast){ Object.assign(st, fast ? { dDown:.1, dDwell:.06, dUp:.1 } : { dDown:.45, dDwell:.35, dUp:.4 }); }
+function press(st){
+  if (st.hold){ st.hold = false; st.phase = 'up'; return run(); }    // pressing again lets a held key go
+  if (st.phase !== 'idle'){ st.queue = Math.min(3, st.queue + 1); return; }
+  setSpeed(st, false); st.phase = 'down'; run();
+}
+function hold(st){
+  if (st.hold){ st.hold = false; st.phase = 'up'; return run(); }
+  setSpeed(st, false); st.queue = 0; st.hold = true; st.phase = 'held'; run();
+}
+function typeFast(st){
+  if (st.hold) return ui.flash('Let the held key go first');
+  setSpeed(st, true); st.queue = st.phase === 'idle' ? 4 : 5; if (st.phase === 'idle') st.phase = 'down'; run();
+}
+function setBacklight(st, mode){ st.bl = mode; run(); }
+
+ui = mountFigure({
+  fig:'K1', turn:'full', title:'Mechanical keyboard key',
+  size:[2*XB + CW, CW, 25.4], center:[XB + CW/2, CW/2], palette:'tomato',
+  state:{ t:0, p:0, phase:'idle', tw:0, queue:0, hold:false, closed:false, led:0, sig:0, keys:0, bl:'react', dDown:.45, dDwell:.35, dUp:.4 },
+  scene,
+  stats: st => [
+    { label:'Travel', value:`${st.t.toFixed(1)} mm` },
+    { label:'Force', value:`${st.p > 0 ? Math.round(30 + 7.5*st.t) : 0} cN`, small:true },
+    { label:'Contacts', value: st.closed ? 'CLOSED' : 'OPEN', small:true },
+    { label:'Keys sent', value: st.keys, small:true },
+  ],
+  buttons:[
+    { label:'Press the key', onClick:(st) => press(st) },
+    { label:'Hold it down', onClick:(st) => hold(st) },
+    { label:'Type fast', onClick:(st) => typeFast(st) },
+    { label:'Backlight', choices: st => [['react', 'Lights on press'], ['on', 'Always on'], ['off', 'Off']].map(([k, label]) => ({ label, current: st.bl === k, onClick:(st) => setBacklight(st, k) })) },
+  ],
+  acts:{ key:(st) => press(st) },
+  params:(st, q) => {
+    if (q.has('t')){ const t = Math.max(0, Math.min(TRAVEL, +q.get('t'))); let lo = 0, hi = 1; for (let i = 0; i < 30; i++){ const mid = (lo + hi)/2; if (TRAVEL*ease(mid) < t) lo = mid; else hi = mid; } st.p = (lo + hi)/2; st.t = t; st.closed = t >= PRE; st.hold = st.p > 0; if (st.hold) st.phase = 'held'; }
+    if (q.has('bl')) st.bl = q.get('bl');
+    st.led = q.has('led') ? +q.get('led') : ledTarget(st);
+    if (q.has('sig')) st.sig = +q.get('sig');
+  },
+});
+addEventListener('keydown', e => {
+  if (/input|textarea|button/i.test(e.target.tagName)) return;
+  const kk = e.key.toLowerCase(), st = ui.st;
+  if (kk === ' ' || kk === 'enter') press(st); else if (kk === 'h') hold(st); else if (kk === 't') typeFast(st); else return;
+  e.preventDefault(); ui.render();
+});
+xrMount(() => ui, () => '');
+{ const css = document.createElement('style'); css.textContent = '@media (min-width:561px){.stats{flex-direction:row!important;align-items:flex-start!important;gap:20px!important}}'; document.head.appendChild(css); ui.render(); }
+</script></body></html>
