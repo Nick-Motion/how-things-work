@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Toilet booth</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Toilet booth: a self-cleaning street toilet (the automatic public toilet kind).
+   TRUTH FIRST
+   - You pay at a panel by the door (coin or card). The coin acceptor checks the coin and drops it down a chute into a
+     locked cash box; the controller (a PLC in the technical room) then pulls the electric lock bolt and the door motor
+     drives the door open along a top track with a toothed belt. The door is a sliding panel that runs into a pocket in the
+     front wall; a rubber safety edge on its leading edge stops it closing on someone.
+   - The booth is two rooms: the cabin, and behind a partition the technical room, reached by a service door at the back.
+     Everything wet or electrical lives in the technical room.
+   - Inside, a presence sensor in the ceiling and load cells under the floor plate tell the controller someone is in. The
+     door closes and locks, the light outside turns red. A flush tank (cistern) high in the technical room empties through
+     a flush valve and pipe into the stainless bowl; a solenoid valve on the mains refills it. Hand wash unit: soap, water
+     (from a small heater), warm air.
+   - After the user leaves and the load cells read empty, the door closes and the wash cycle runs (light amber): the bowl
+     slides back through a hatch into the technical room on rails, driven by a motor and lead screw, where a spray bar
+     washes it; a pump feeds jets along the skirting that wash the floor, which slopes to a drain gully; a blower dries it.
+     The bowl slides back and the light goes green.
+   PARTS (each held by another)
+   DOOR    sliding door . safety edge . top track . hangers + rollers . toothed belt on two pulleys . belt clamp . gearmotor .
+           lock housing + bolt in the jamb . door-closed sensor . status light over the door
+   PAY     panel: display, coin slot, card pad . display board . coin acceptor . coin chute . cash box . card reader
+   TECH    controller cabinet (PLC + relays) . fuse box . water heater . flush tank + fill valve + flush valve + flush pipe .
+           mains inlet + stop valve + solenoid valve manifold . wash pump . bowl rails + actuator (motor, lead screw, nut) .
+           bowl spray bar . floor dryer blower + duct . vent fan + duct to the roof grille . cables from the controller
+   CABIN   bowl on its back block . paper roll . hand wash unit . grab rail . help button . floor plate on load cells .
+           drain grate + gully + sewer pipe . floor wash manifold + nozzles . presence sensor . LED light
+   x = depth (front at x = W), y = width (+y to the viewer's left), z = up; 1 unit = 1 cm. */
+const W = 200, D = 250, H = 250, BR = 16, FT = 10;
+const CX0 = 62, CX1 = W - FT, CY0 = 56, CY1 = D - 4, CZ0 = 10, CZ1 = 224;     // cabin
+const DY0 = 140, DY1 = 226, DW = DY1 - DY0, DZ1 = 210;                        // door opening (door slides to lower y)
+const RING = rrUV(0, 0, W, D, BR), RA = on(PZ(0), RING), RB = on(PZ(H), RING);
+const ROOF = rrUV(-6, -6, W + 6, D + 6, BR + 6), RFA = on(PZ(H), ROOF), RFB = on(PZ(H + 12), ROOF);
+const PLIN = rrUV(-1, -1, W + 1, D + 1, BR + 1);
+const PX_OUT = W + 58, PX_IN = 142, PY0 = 183, BOWL_RET = 44;
+const BM = { door: matOf('#c3ccd0'), frame: matOf('#7f8a8f'), tile: matOf('#eef0ec'), floor: matOf('#93a0a6'), steel: METAL,
+  grey: matOf('#a9b1b5'), black: matOf('#3a3632'), water: matOf('#7cc3ec'), copper: matOf('#d08a52'), pvc: matOf('#a3a8ab'),
+  pcb: matOf('#4fa36a'), brass: matOf('#d8b25a'), white: CERAMIC, red: matOf('#e2483d'), pump: matOf('#5c7fa3'), gold: matOf('#e8c45a'),
+  jacket: matOf('#5a82c6'), trousers: matOf('#4a4f5c'), skin: matOf('#e9b48f'), shoe: matOf('#2d2a27'), hat: matOf('#ef6a4c'),
+  concrete: matOf('#b3afa5') };
+const LAMP = { free: '#43c25c', busy: '#e2483d', clean: '#f0a92a' };
+const LAMP_T = { free: 'FREE', busy: 'IN USE', clean: 'CLEANING' };
+const WATER = '#5fb4e8';
+
+/* ---------- small helpers ---------- */
+const bthBoxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const bthBend = (pts, r = 2.5) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k]) * d/la), q = c.map((v, k) => b[k] + (v - b[k]) * d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+// a pipe or cable cut into short pieces, each with its own box, so byDepth sorts it among the solids it passes
+const bthWire = (pts, col, w = .5, Lseg = 10) => { const q = bthBend(pts), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < Lseg){ len += Math.hypot(...q[j].map((v, k) => v - q[j - 1][k])); j++; }
+    if (len < Lseg) while (j < q.length - 1) j++;
+    const seg = q.slice(i, j + 1), d = pd(seg, false);
+    out.push({ box: bthBoxOf(seg, w), svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w + .9)}" stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linecap="round" stroke-linejoin="round"/>` }); i = j; }
+  return out; };
+// a rigid pipe: one rod per straight run, a ball at each joint
+const bthPipe = (pts, r, m) => { const out = [];
+  for (let i = 0; i < pts.length - 1; i++) out.push({ box: bthBoxOf([pts[i], pts[i + 1]], r), svg: rod(pts[i], pts[i + 1], r, m, toneI, .9) });
+  for (let i = 1; i < pts.length - 1; i++){ const [X, Y] = P(...pts[i]);
+    out.push({ box: bthBoxOf([pts[i]], r + .1), svg: `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r*CAM_K)}" fill="${toneI([0,0,1], m)}" stroke="${INK}" stroke-width=".9"/>` }); }
+  return out; };
+const fr = (y0, z0, y1, z1, r = 0, dx = .3) => on(PX(W + dx), r > 0 ? rrUV(y0, z0, y1, z1, r, 4) : rectUV(y0, z0, y1, z1));
+const bthTxB = (x,y,z,str,size,col=INK,weight=700) => `<text transform="${txM(P(x,y,z), Dv(0,1,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+const bthTxR = (x,y,z,str,size,col=INK,weight=700) => `<text transform="${txM(P(x,y,z), Dv(-1,0,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+const cl01 = v => Math.max(0, Math.min(1, v));
+const inside = st => st.px < W - 14;
+
+/* ---------- the person ---------- */
+function bthPersonZ(x){ return x <= W - FT ? CZ0 : x >= W + 6 ? 0 : CZ0 * (1 - (x - (W - FT)) / (FT + 6)); }
+function bthPerson(st){
+  const x = st.px, y = PY0, z0 = bthPersonZ(x), sw = st.moving ? Math.sin(st.walk) : 0, out = [], put = (b, svg) => out.push({ box: b, svg });
+  for (const sd of [-1, 1]){
+    const fx = x + sd*sw*12, yy = y + sd*7, hip = [x, yy, z0 + 84], foot = [fx, yy, z0 + 5];
+    put([[Math.min(x, fx) - 5.5, yy - 5.5, z0 + 5], [Math.max(x, fx) + 5.5, yy + 5.5, z0 + 84]], rod(hip, foot, 5.4, BM.trousers, toneI, 1.1, 4.8));
+    put([[fx - 8, yy - 4.6, z0], [fx + 7, yy + 4.6, z0 + 5]], box(fx - 8, yy - 4.4, z0, fx + 7, yy + 4.4, z0 + 5, BM.shoe, toneI, .9));
+    const sh = [x, y + sd*19.5, z0 + 135], hd = [x - sd*sw*10, y + sd*20.5, z0 + 90], [hx, hy] = P(...hd);
+    put([[Math.min(x, hd[0]) - 4.3, y + (sd > 0 ? 15.2 : -25), z0 + 86], [Math.max(x, hd[0]) + 4.3, y + (sd > 0 ? 25 : -15.2), z0 + 140]],
+      rod(sh, hd, 4.4, BM.jacket, toneI, 1, 3.8) + `<circle cx="${f(hx)}" cy="${f(hy)}" r="${f(3.6*CAM_K)}" fill="${BM.skin.l}" stroke="${INK}" stroke-width=".8"/>`);
+  }
+  put([[x - 15, y - 15, z0 + 84], [x + 15, y + 15, z0 + 142]], rod([x, y, z0 + 84], [x, y, z0 + 142], 15, BM.jacket, toneI, 1.3, 13.5));
+  const [hx, hy] = P(x, y, z0 + 156);
+  put([[x - 10.6, y - 10.6, z0 + 142], [x + 10.6, y + 10.6, z0 + 170]], rod([x, y, z0 + 140], [x, y, z0 + 148], 4.6, BM.skin, toneI, .9)
+    + `<circle cx="${f(hx)}" cy="${f(hy)}" r="${f(10.5*CAM_K)}" fill="${BM.skin.l}" stroke="${INK}" stroke-width="1.1"/>`
+    + rod([x, y, z0 + 158.5], [x, y, z0 + 169], 10.7, BM.hat, toneI, 1, 5.5));
+  return out;
+}
+const bthPersonPts = st => { const x = st.px, y = PY0, z0 = bthPersonZ(x); return [[x - 9, y - 13, z0], [x + 9, y + 13, z0], [x - 6, y - 20, z0 + 140], [x + 6, y + 20, z0 + 140], [x, y, z0 + 168]]; };
+
+/* ---------- the cabin's furniture (seen through the open door, and in the see-through) ---------- */
+function bthBowl(st, put){
+  const dx = -BOWL_RET*st.bowl, cx = 88 + dx, cy = 200;
+  put([[62 + dx, 184, 10], [70 + dx, 216, 76]], box(62 + dx, 184, 10, 70 + dx, 216, 76, BM.steel, toneI, 1));
+  const A = on(PZ(10), ellUV(cx - 3, cy, 9, 8, 20)), B = on(PZ(46), ellUV(cx, cy, 17, 14.5, 20));
+  let water = '';
+  if (st.bowl < .05){ const sw = on(PZ(38), ellUV(cx + 1, cy, 10.5, 8.5, 18));
+    water = fill(pd(sw), st.flowF ? '#8fd0f2' : '#c4e6f3') + ink(pd(sw), .5);
+    if (st.flowF) for (let i = 0; i < 3; i++){ const a0 = st.spin*60 + i*120;
+      water += line(on(PZ(38.2), arcUV(cx + 1, cy, 7 - i*1.6, a0, a0 + 150, 8)).map(([u, v, z]) => [u, cy + (v - cy)*.8, z]), .7); } }
+  put([[70 + dx, 185, 10], [106 + dx, 215, 46]], openShell(A, B, n => toneI(n, BM.steel), water) + ink(pd(B), 1.1) + hullInk([...A, ...B], 1.4));
+}
+function bthCabin(st){
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg });
+  const bx = (x0,y0,z0,x1,y1,z1,mm,w=.8) => put([[x0,y0,z0],[x1,y1,z1]], box(x0,y0,z0,x1,y1,z1,mm,toneI,w));
+  bthBowl(st, put);
+  bx(CX0, 220, 66, CX0 + 10, 234, 82, BM.white);                                                   // paper roll
+  // hand wash unit set in the right-hand wall: steel panel, basin, tap, soap, dryer
+  bx(118, CY0 - 1, 78, 162, CY0, 124, BM.steel, .9);
+  bx(124, CY0, 86, 156, CY0 + 14, 94, BM.white, .9);
+  bx(130, CY0, 108, 134, CY0 + 7, 112, BM.steel, .6);
+  bx(138, CY0, 108, 142, CY0 + 7, 112, BM.white, .6);
+  bx(146, CY0, 106, 154, CY0 + 8, 114, BM.black, .6);
+  // grab rail and help button on the left-hand wall
+  put([[82, CY1 - 9, 78], [142, CY1, 82]], rod([88, CY1, 80], [88, CY1 - 7, 80], 1.2, METAL, toneI, .6) + rod([136, CY1, 80], [136, CY1 - 7, 80], 1.2, METAL, toneI, .6)
+    + rod([84, CY1 - 7, 80], [140, CY1 - 7, 80], 1.6, METAL, toneI, .8));
+  put([[150, CY1 - 3, 112], [164, CY1, 128]], box(150, CY1 - 3, 112, 164, CY1, 128, BM.steel, toneI, .7)
+    + (vis([0,-1,0]) ? shape(on(PY(CY1 - 3.1), ellUV(157, 120, 4, 4, 14)), BM.red.l, .7) : ''));
+  if (inside(st)) parts.push(...bthPerson(st));
+  return parts;
+}
+// the floor drain grate, flush with the floor
+const bthGrate = () => { let s = shape(on(PZ(CZ0 + .1), rectUV(120, 140, 136, 156)), '#6d777c', .8), g = '';
+  for (let x = 123; x <= 133; x += 2.5) g += pd(on(PZ(CZ0 + .15), [[x, 142], [x, 154]]), false);
+  return s + `<path d="${g}" fill="none" stroke="${INK}" stroke-width=".7"/>`; };
+
+function bthInterior(st, e){
+  const T = BM.tile;
+  let s = fill(pd(on(PZ(CZ0), rectUV(CX0, CY0, W, CY1))), toneI([0,0,1], BM.floor)) + bthGrate();
+  s += fill(pd(on(PX(CX0), rectUV(CY0, CZ0, CY1, CZ1))), toneI([1,0,0], T));
+  s += `<path d="${pd(on(PX(CX0 + .1), rectUV(182, CZ0, 218, 78)))}" fill="none" stroke="${INK}" stroke-width=".7" opacity=".6"/>`;   // the bowl hatch
+  if (vis([0,1,0])) s += fill(pd(on(PY(CY0), rectUV(CX0, CZ0, W, CZ1))), toneI([0,1,0], T));
+  if (vis([0,-1,0])) s += fill(pd(on(PY(CY1), rectUV(CX0, CZ0, W, CZ1))), toneI([0,-1,0], T));
+  s += `<path d="${pd(on(PX(CX0 + .1), [[CY0, 120], [CY1, 120]]), false)}" fill="none" stroke="${INK}" stroke-width=".6" opacity=".35"/>`;
+  s += byDepth(bthCabin(st));
+  // the doorway: the door's leading edge and the fixed jamb
+  if (vis([0,1,0])) s += shape(on(PY(e), rectUV(W - FT, CZ0, W, DZ1)), toneI([0,1,0], BM.door), .8) + fill(pd(on(PY(e + .1), rectUV(W - 4, CZ0 + 2, W, DZ1 - 2))), '#2d2a27');
+  if (vis([0,-1,0])) s += shape(on(PY(DY1), rectUV(W - FT, CZ0, W, DZ1)), toneI([0,-1,0], BM.frame), .8);
+  return s;
+}
+
+/* ---------- the outside of the booth ---------- */
+const bthCoinAt = c => { const pts = [[W + 16, 34, 142], [W, 34, 142], [W - 22, 34, 140], [W - 26, 34, 128], [W - 30, 34, 62]];
+  const L = []; let tot = 0; for (let i = 1; i < pts.length; i++){ const l = Math.hypot(...sub(pts[i], pts[i - 1])); L.push(l); tot += l; }
+  let d = c*tot; for (let i = 0; i < L.length; i++){ if (d <= L[i] || i === L.length - 1){ const t = Math.min(1, d / L[i]); return pts[i].map((v, k) => v + (pts[i + 1][k] - v)*t); } d -= L[i]; }
+  return pts[pts.length - 1]; };
+const bthCoin = p => rod([p[0], p[1] - .9, p[2]], [p[0], p[1] + .9, p[2]], 4.5, BM.gold, toneI, .8);
+
+function bthFront(st, m){
+  const e = DY1 - DW*st.door, fm = tone([1,0,0], m);
+  let s = '';
+  // door frame, the visible part of the door, the opening
+  s += shape(fr(DY0 - 5, CZ0, DY1 + 5, DZ1 + 5, 0, .2), tone([1,0,0], BM.frame), 1);
+  if (e - DY0 > .5){ s += shape(fr(DY0, CZ0, e, DZ1, 0, .3), tone([1,0,0], BM.door), 1);
+    let g = ''; for (const z of [60, 110, 160]) g += pd(on(PX(W + .35), [[DY0 + 1, z], [Math.max(DY0 + 1, e - 4), z]]), false);
+    s += `<path d="${g}" fill="none" stroke="${INK}" stroke-width=".6" opacity=".55"/>`;
+    s += fill(pd(fr(Math.max(DY0, e - 2.5), CZ0 + 2, e, DZ1 - 2, 0, .4)), '#2d2a27'); }
+  if (st.door > .01) s += clipTo(fr(e, CZ0, DY1, DZ1, 0, 0), bthInterior(st, e)) + ink(pd(fr(e, CZ0, DY1, DZ1, 0, .3)), 1.1);
+  // status light over the door, the name on the fascia, the WC sign
+  s += shape(fr(152, 213, 214, 222, 3, .3), LAMP[st.light], 1) + tx(W + .4, 183, 215.6, LAMP_T[st.light], 6, '#ffffff', 800);
+  s += tx(W + .4, 183, 230, 'TOILET', 12, INK, 800);
+  s += shape(on(PX(W + .3), ellUV(34, 222, 12.5, 12.5, 24)), '#fff4d6', 1.2) + tx(W + .4, 34, 218.4, 'WC', 10, INK, 800);
+  // the pay panel: display, coin slot, card pad
+  const disp = st.phase === 'pay' ? (st.coin >= 0 ? 'COIN' : 'PAID') : st.phase === 'open' ? 'ENTER' : st.light === 'busy' ? 'BUSY' : st.light === 'clean' ? 'WAIT' : '0.50';
+  let p = shape(fr(16, 96, 52, 196, 4, .3), tone([1,0,0], BM.steel), 1.2);
+  p += shape(fr(21, 166, 47, 186, 1.5, .4), '#1d2b26', .8) + tx(W + .5, 34, 173.4, disp, 6.4, '#7dffa6', 800);
+  p += tx(W + .5, 34, 157, 'PAY HERE', 3.4, INK, 800);
+  p += shape(fr(30, 134, 38, 150, 1.5, .4), '#c9cfd2', .8) + fill(pd(fr(33.3, 136, 34.7, 148, 0, .5)), INK) + tx(W + .5, 34, 128.6, 'COINS', 3.2, INK, 700);
+  p += shape(fr(24, 106, 44, 122, 2, .4), '#2d3236', .8);
+  for (const r of [2.5, 4.5, 6.5]) p += `<path d="${pd(on(PX(W + .5), arcUV(30, 114, r, -40, 40, 6)), false)}" fill="none" stroke="#fff4d6" stroke-width=".8"/>`;
+  p += tx(W + .5, 34, 100.4, 'CARD', 3.2, INK, 700);
+  s += act('pay', p);
+  if (st.phase === 'pay' && st.coin >= 0){ const c = bthCoinAt(st.coin); if (c[0] > W + .5) s += bthCoin(c); }
+  return s;
+}
+function bthBack(m){
+  const tb = tone([-1,0,0], m), dm = mix(tb, '#000000', .12);
+  let s = shape(on(PX(-.3), rectUV(70, CZ0, 150, 200)), dm, 1.1);
+  let g = ''; for (let z = 168; z <= 192; z += 5) g += pd(on(PX(-.4), [[80, z], [140, z]]), false);
+  for (let z = 206; z <= 232; z += 5) g += pd(on(PX(-.4), [[170, z], [226, z]]), false);
+  s += `<path d="${g}" fill="none" stroke="${INK}" stroke-width=".9"/>`;
+  s += shape(on(PX(-.4), rectUV(136, 100, 140, 116)), '#c9cfd2', .7);
+  s += bthTxB(-.4, 110, 140, 'SERVICE', 7, INK, 800) + bthTxB(-.4, 110, 131, 'STAFF ONLY', 4, INK, 700);
+  return s;
+}
+function bthLeft(m){
+  const sm = tone([0,1,0], m);
+  let s = shape(on(PY(D + .3), rrUV(36, 50, 168, 200, 4)), '#fff4d6', 1.2);
+  let g = ''; for (const [a, b] of [[[44, 80], [160, 92]], [[44, 140], [160, 128]], [[90, 58], [98, 178]], [[128, 58], [120, 178]], [[44, 112], [160, 112]]]) g += pd(on(PY(D + .4), [a, b]), false);
+  s += `<path d="${g}" fill="none" stroke="#9aa3a8" stroke-width="2.2" stroke-linecap="round"/>`;
+  s += shape(on(PY(D + .45), ellUV(110, 112, 3, 3, 12)), LAMP.busy, .7);
+  s += txY(102, D + .5, 186, 'CITY MAP', 8, INK, 800);
+  s += txY(100, D + .4, 30, 'OPEN 24 HOURS', 6, mix(sm, '#000000', .5), 800);
+  return s;
+}
+function bthRight(m){
+  const sm = tone([0,-1,0], m);
+  return bthTxR(100, -.4, 176, 'PUBLIC', 12, mix(sm, '#000000', .5), 800) + bthTxR(100, -.4, 160, 'TOILET', 12, mix(sm, '#000000', .5), 800)
+    + bthTxR(100, -.4, 140, 'SELF CLEANING', 5, mix(sm, '#000000', .5), 800);
+}
+
+/* ---------- see-through: the working parts ---------- */
+let MECH_LABELS = '';
+// pills in two columns either side (the shared xrCallouts), but split by how many fit each side and kept inside the frame:
+// the left column starts under the buttons, the right one under the See-through switches
+function bthCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0])), cx = (xmin + xmax)/2;
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 3*k);
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, ctm = svgEl.getScreenCTM();
+  const below = (el, d) => { if (!el || !ctm) return null; const r = el.getBoundingClientRect(); return new DOMPoint(r.right, r.bottom + d).matrixTransform(ctm.inverse()).y; };
+  // an element below the middle of the frame (phone layout) does not cap the column
+  const lim = y => y == null || y > vb.y + vb.height/2 ? 0 : y;
+  const top = { [-1]: Math.max(fs, lim(below(document.getElementById('btns'), 16))) + hgt/2, [1]: Math.max(fs, lim(below(document.querySelector('.vset'), 10))) + hgt/2 };
+  // the built page puts a zoom chip (about 34 screen px tall, made after this runs) in the bottom-right corner: the right column ends above it
+  const botV = vb.y + vb.height - hgt/2, bot = { [-1]: botV, [1]: botV - (!u && ctm ? 34/ctm.a : 0) };
+  const all = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  const cap = side => Math.max(1, Math.floor((bot[side] - top[side]) / gap) + 1);
+  const nL = Math.max(all.length - cap(1), Math.min(cap(-1), all.filter(c => c.X < cx).length));
+  let s = '';
+  for (const [col, side] of [[all.slice(0, nL), -1], [all.slice(nL), 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    y = 1e9; for (let i = col.length - 1; i >= 0; i--){ col[i].py = Math.min(col[i].py, y - gap, bot[side]); y = col[i].py; }
+    y = -1e9; for (const c of col){ c.py = Math.max(c.py, y + gap, top[side]); y = c.py; }
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+function bthMech(st){
+  const under = [], parts = [], put = (b, svg) => parts.push({ box: b, svg }), putU = (b, svg) => under.push({ box: b, svg });
+  const bx = (x0,y0,z0,x1,y1,z1,mm,w=.8) => put([[x0,y0,z0],[x1,y1,z1]], box(x0,y0,z0,x1,y1,z1,mm,toneI,w));
+  const e = DY1 - DW*st.door, d0 = e - DW, dx = -BOWL_RET*st.bowl;
+  const wetOn = st.flowR || st.jets || st.bjets, pumpOn = st.jets || st.bjets;
+  const cu = c => c ? WATER : BM.copper.l;
+  // ---- under the floor: drain gully, load cells, sewer, mains inlet
+  putU([[120, 140, 0], [136, 156, 8]], box(120, 140, 0, 136, 156, 8, BM.pvc, toneI, .8));
+  for (const [x, y] of [[70, 64], [182, 64], [70, 238], [182, 238]]) putU([[x - 5, y - 5, 2], [x + 5, y + 5, 8]], box(x - 5, y - 5, 2, x + 5, y + 5, 8, BM.grey, toneI, .7));
+  under.push(...bthPipe([[128, 148, 4], [128, 228, 4], [24, 228, 4], [24, 228, -16]], 4, BM.pvc));
+  under.push(...bthPipe([[44, 136, -16], [44, 136, 10]], 2, BM.copper));
+  // ---- the floor plate on its load cells, seen through, with what happens on it
+  const FL = on(PZ(CZ0), rectUV(64, 58, CX1, 244));
+  let floor = `<g opacity=".35">${shape(FL, BM.floor.l, .8)}</g>` + bthGrate();
+  if (st.wet > .01) floor += fill(pd(FL), WATER, `opacity="${f(.35*st.wet)}"`);
+  const NOZ = [...[80, 106, 132, 158].map(y => [[64, y], [1, 0]]), ...[90, 116, 142, 168].map(x => [[x, 62], [0, 1]]), ...[90, 116, 142, 168].map(x => [[x, 240], [0, -1]])];
+  if (st.jets){ let sp2 = '';
+    for (const [[x, y], [ux, uy]] of NOZ) for (const a of [-28, 0, 28]){ const t = a*Math.PI/180, c = Math.cos(t), sn = Math.sin(t), L = 24 + 4*Math.sin(st.spin*3 + x + y);
+      sp2 += pd([[x, y, 14], [x + (ux*c - uy*sn)*L, y + (ux*sn + uy*c)*L, 11]], false); }
+    floor += `<path d="${sp2}" fill="none" stroke="${WATER}" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="3 2.5" stroke-dashoffset="${f(-st.spin*6)}"/>`; }
+  if (st.dry){ let a = ''; for (const yo of [-6, 0, 6]){ const pts = []; for (let i = 0; i <= 12; i++) pts.push([66 + i*6, 95 + yo + 2.2*Math.sin(i*1.1 - st.spin*2), 12]); a += pd(pts, false); }
+    floor += `<path d="${a}" fill="none" stroke="#f0a92a" stroke-width="1.3" stroke-linecap="round" opacity=".9"/>`; }
+  // ---- the partition between the cabin and the technical room, with the bowl hatch
+  let wall = `<g opacity=".28">${fill(pd(on(PX(60), rectUV(4, CZ0, CY1, H - 4))), '#dfe4e2')}</g>`
+    + `<path d="${pd(on(PX(60), rectUV(4, CZ0, CY1, H - 4)))}${pd(on(PX(60), rectUV(182, CZ0, 218, 78)))}" fill="none" stroke="${INK}" stroke-width=".7" opacity=".45"/>`;
+
+  // ---- cabin: bowl, wash unit, rail, person
+  parts.push(...bthCabin(st));
+  // floor wash manifold along the skirting, with its nozzles
+  parts.push(...bthWire([[64, 176, 14], [64, 62, 14], [186, 62, 14]], st.jets ? WATER : '#c6ccce', 1.1));
+  parts.push(...bthWire([[66, 240, 14], [186, 240, 14]], st.jets ? WATER : '#c6ccce', 1.1));
+  for (const [[x, y], [ux, uy]] of NOZ) put(bthBoxOf([[x, y, 13], [x + 3*ux, y + 3*uy, 16]], 1.4), box(Math.min(x, x + 3*ux) - 1.4, Math.min(y, y + 3*uy) - 1.4, 12.6, Math.max(x, x + 3*ux) + 1.4, Math.max(y, y + 3*uy) + 1.4, 15.4, BM.brass, toneI, .5));
+  // ceiling: LED light, presence sensor, vent fan + duct to the roof grille
+  bx(96, 120, 222, 126, 180, 224, st.light === 'busy' ? matOf('#fff3b8') : BM.white, .8);
+  put([[132, 144, 220], [144, 156, 224]], box(132, 144, 220, 144, 156, 224, BM.white, toneI, .7) + (vis([1,0,0]) ? shape(on(PX(144.1), ellUV(150, 221.6, 2.6, 1.4, 12)), inside(st) ? '#e2483d' : '#2d3236', .5) : ''));
+  { const fan = st.light !== 'free'; let bl = ''; for (let i = 0; i < 3; i++){ const a = (fan ? st.spin*2 : 0) + i*2.094; bl += pd([[80, 120, 236.1], [80 + 7.5*Math.cos(a), 120 + 7.5*Math.sin(a), 236.1]], false); }
+    put([[71, 111, 226], [89, 129, 236]], cyl(80, 120, 226, 236, 9, BM.grey, toneI, 1) + `<path d="${bl}" fill="none" stroke="${INK}" stroke-width="1.4" stroke-linecap="round"/>`);
+    bx(74, 114, 236, 86, 126, H, BM.pvc, .7); }
+  // ---- the door: panel, safety edge, track, hangers and rollers, belt drive, lock, sensor, status light
+  bx(W - 9, d0, CZ0, W - .6, e - 2.5, DZ1, BM.door, 1);
+  bx(W - 9, e - 2.5, CZ0 + 2, W - .6, e, DZ1 - 2, BM.black, .6);
+  bx(W - 8, 58, 214, W - 2, 236, 217, BM.steel, .8);
+  for (const y of [d0 + 12, e - 12]){ bx(W - 10, y - 2, 210, W - 8, y + 2, 222, BM.grey, .6);
+    put([[W - 7, y - 3.5, 217], [W - 3, y + 3.5, 224]], cylX(W - 7, W - 3, y, 220.5, 3.5, BM.black, toneI, .8, 14)); }
+  { const c = d0 + DW/2; bx(W - 14, c - 3, 210, W - 11, c + 3, 224, BM.grey, .6); bx(W - 14, c - 3, 207, W - 9, c + 3, 210, BM.grey, .6); }
+  bx(W - 14.5, 76, 224, W - 11.5, 230, 225, BM.black, .5);
+  bx(W - 14.5, 76, 232, W - 11.5, 230, 233, BM.black, .5);
+  for (const y of [76, 230]) put([[W - 15, y - 4.6, 224], [W - 11, y + 4.6, 233]], cylX(W - 15, W - 11, y, 228.5, 4.5, BM.steel, toneI, .8, 16));
+  bx(W - 19, 58, 222, W - 11, 72, 236, BM.grey, .9);
+  put([[W - 42, 58.5, 222.5], [W - 19, 71.5, 235.5]], rod([W - 19, 65, 229], [W - 42, 65, 229], 6.5, BM.pump, toneI, 1));
+  bx(W - 9, 228, 98, W - 1, 238, 116, BM.black, .8);
+  if (st.lock > .05) bx(W - 7, 228 - 8*st.lock, 104, W - 3, 228, 110, BM.steel, .6);
+  bx(W - 8, 227, 196, W - 2, 233, 204, BM.black, .6);
+  bx(W - 5, 152, 212, W - .5, 214, 222, matOf(LAMP[st.light]), .7);
+  // ---- pay column: display board, coin acceptor, card reader, chute, cash box
+  bx(W - 14, 20, 166, W - 11, 48, 186, BM.pcb, .7);
+  bx(W - 34, 24, 129, W - 11, 44, 148, BM.grey, .9);
+  bx(W - 17, 22, 110, W - 11, 46, 128, BM.black, .8);
+  put([[W - 33, 31, 60], [W - 25, 37, 129]], rod([W - 28, 34, 129], [W - 30, 34, 60], 3, CLEAR, toneI, .8));
+  bx(W - 46, 12, 14, W - 14, 50, 60, DARK, 1);
+  if (st.phase === 'pay' && st.coin >= 0){ const c = bthCoinAt(st.coin); if (c[0] <= W + .5) put(bthBoxOf([c], 4.6), bthCoin(c)); }
+  // ---- technical room: controller cabinet with its PLC and relays, fuse box
+  { let cab = box(4, 14, 116, 22, 66, 204, BM.grey, toneI, 1.1), mnt = box(22, 20, 176, 26, 40, 196, BM.white, toneI, .7) + box(22, 18, 126, 24, 62, 134, BM.black, toneI, .6);
+    for (let i = 0; i < 4; i++) mnt += box(22, 44 + 4.5*i, 176, 25, 47.5 + 4.5*i, 192, matOf('#3c6fb4'), toneI, .5);
+    if (vis([1,0,0])) mnt += shape(on(PX(26.1), ellUV(24, 191, 1.2, 1.2, 10)), st.phase === 'idle' || st.phase === 'inuse' || st.phase === 'open' ? '#43c25c' : '#f0a92a', .4);
+    put([[4, 14, 116], [26, 66, 204]], vis([1,0,0]) ? cab + mnt : mnt + cab); }
+  bx(4, 74, 150, 16, 100, 192, BM.white, .9);
+  // water: heater, flush tank (water seen through its clear case), fill valve, flush valve, flush pipe
+  put([[20, 104, 150], [44, 128, 204]], cyl(32, 116, 150, 204, 12, BM.white, toneI, 1.2));
+  { const tz = 152 + 46*st.tank; let tk = st.tank > .01 ? box(29, 177, 152, 55, 225, tz, BM.water, toneI, 0) : '';
+    tk += `<g opacity=".5">${box(28, 176, 152, 56, 226, 200, CLEAR, toneI, 1)}</g>`; put([[28, 176, 152], [56, 226, 200]], tk); }
+  bx(32, 216, 200, 38, 222, 208, BM.brass, .6);
+  bx(44, 196, 140, 54, 206, 152, BM.black, .7);
+  parts.push(...bthPipe([[49, 201, 140], [49, 201, 72], [62, 201, 72]], 2.4, st.flowF ? matOf('#9fd6f5') : BM.white));
+  // mains inlet, stop valve, solenoid valve manifold and its branches
+  parts.push(...bthPipe([[44, 136, 10], [44, 136, 30]], 2, BM.copper), ...bthPipe([[44, 136, 40], [44, 136, 60]], 2, BM.copper));
+  put([[40, 132, 30], [55, 140, 40]], box(40, 132, 30, 48, 140, 40, BM.brass, toneI, .7) + rod([48, 136, 35], [55, 136, 35], 1.2, BM.red, toneI, .6));
+  bx(38, 122, 60, 50, 172, 70, BM.brass, .8);
+  for (const yc of [128, 146, 164]) bx(40, yc - 4, 70, 48, yc + 4, 80, BM.black, .6);
+  parts.push(...bthWire([[44, 164, 80], [44, 164, 212], [35, 164, 212], [35, 219, 212], [35, 219, 208]], cu(st.flowR), .9));
+  parts.push(...bthWire([[44, 128, 80], [44, 128, 142], [32, 116, 142], [32, 116, 150]], BM.copper.l, .9));
+  parts.push(...bthWire([[44, 156, 60], [44, 156, 28], [30, 156, 28]], cu(pumpOn), .9));
+  // wash pump and its feeds: floor manifold (two runs), bowl spray bar
+  put([[8, 142, 20], [30, 158, 36]], cylX(8, 30, 150, 28, 8, BM.pump, toneI, 1.1, 18));
+  parts.push(...bthWire([[25, 150, 36], [25, 150, 48], [56, 150, 48]], cu(pumpOn), 1));
+  parts.push(...bthWire([[56, 150, 48], [64, 150, 48], [64, 150, 15]], cu(st.jets), 1));
+  parts.push(...bthWire([[56, 150, 48], [56, 170, 48], [56, 170, 90], [56, 236, 90], [66, 240, 90], [66, 240, 15]], cu(st.jets), 1));
+  parts.push(...bthWire([[40, 150, 48], [40, 150, 54], [40, 197, 54]], cu(st.bjets), .9));
+  bx(28, 197, 52, 56, 203, 56, BM.steel, .7);
+  if (st.bjets){ let sp2 = ''; for (let x = 31; x <= 53; x += 5.5) for (const yo of [-5, 0, 5]) sp2 += pd([[x, 200, 52], [x + 1.5*Math.sin(st.spin*4 + x), 200 + yo, 46.5]], false);
+    put([[28, 194, 46.1], [56, 206, 52]], `<path d="${sp2}" fill="none" stroke="${WATER}" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="2.5 2" stroke-dashoffset="${f(-st.spin*5)}"/>`); }
+  // bowl rails, actuator (motor, lead screw, nut on the bowl's back block), drain hose
+  bx(14, 184, 9, 62, 187, 11, BM.steel, .5); bx(14, 213, 9, 62, 216, 11, BM.steel, .5);
+  bx(4, 194, 12, 13, 206, 26, BM.black, .9);
+  for (const [a, b] of [[13, 58 + dx], [62 + dx, 60]]) if (b - a > .5) put([[a, 198.5, 17.5], [b, 201.5, 20.5]], rod([a, 200, 19], [b, 200, 19], 1.5, METAL, toneI, .6));
+  bx(58 + dx, 195, 14, 62 + dx, 205, 24, BM.brass, .7);
+  parts.push(...bthWire([[62 + dx, 212, 16], [Math.max(36, 50 + dx*.3), 224, 15], [30, 228, 13], [30, 228, 5]], st.flowF ? '#7d8a93' : '#4a4f55', 1.6));
+  // floor dryer blower + duct into the cabin
+  put([[34, 80, 12], [56, 110, 36]], box(34, 80, 12, 56, 110, 36, BM.grey, toneI, .9)
+    + (vis([1,0,0]) ? shape(on(PX(56.1), ellUV(95, 24, 8, 8, 18)), '#2d3236', .7) + line(on(PX(56.2), [[95 + 7*Math.cos(st.dry ? st.spin*3 : 0), 24 + 7*Math.sin(st.dry ? st.spin*3 : 0)], [95 - 7*Math.cos(st.dry ? st.spin*3 : 0), 24 - 7*Math.sin(st.dry ? st.spin*3 : 0)]]), 1) : ''));
+  bx(56, 86, 24, 64, 104, 32, DARK, .8);
+  // cables from the controller: door motor, coin acceptor, lock, valves, bowl motor
+  parts.push(...bthWire([[22, 40, 204], [22, 40, 240], [W - 15, 40, 240], [W - 15, 64, 240], [W - 15, 64, 236]], '#3a3632', .45));
+  parts.push(...bthWire([[22, 26, 150], [W - 34, 26, 150], [W - 34, 34, 144]], '#3c6fb4', .45));
+  parts.push(...bthWire([[18, 50, 204], [18, 50, 243], [W - 5, 50, 243], [W - 5, 233, 243], [W - 5, 233, 116]], '#3a3632', .45));
+  parts.push(...bthWire([[22, 62, 130], [34, 62, 96], [44, 118, 84], [44, 124, 80]], '#3c6fb4', .45));
+  parts.push(...bthWire([[14, 66, 116], [14, 66, 44], [9, 200, 44], [9, 200, 26]], '#3a3632', .45));
+
+  const inn = inside(st), ph = st.phase, busy = st.light === 'busy';
+  MECH_LABELS = bthCallouts([
+    { at: [W - 30, 65, 235.5], text: 'DOOR MOTOR', on: !!st.dm },
+    { at: [W - 13, 150, 233], text: 'TOOTHED BELT', on: !!st.dm },
+    { at: [W - 2, 222, 217], text: 'DOOR TRACK', on: false },
+    { at: [W - 3, d0 + 12, 220.5], text: 'DOOR ROLLERS', on: !!st.dm },
+    { at: [W - .6, d0 + 30, 150], text: 'SLIDING DOOR', on: !!st.dm },
+    { at: [W - .6, e - 1, 120], text: 'SAFETY EDGE', on: st.door > .05 },
+    { at: [W - 1, 233, 107], text: 'DOOR LOCK', on: st.lock > .5 && ph !== 'idle' },
+    { at: [W - .5, 183, 222], text: 'STATUS LIGHT', on: st.light !== 'free' },
+    { at: [W - 11, 40, 186], text: 'DISPLAY', on: ph === 'pay' },
+    { at: [W - 11, 34, 148], text: 'COIN ACCEPTOR', on: st.coin >= 0 && st.coin < .5 },
+    { at: [W - 29, 34, 95], text: 'COIN CHUTE', on: st.coin >= .5 },
+    { at: [W - 14, 31, 40], text: 'CASH BOX', on: st.coin > .9 },
+    { at: [W - 11, 34, 112], text: 'CARD READER', on: false },
+    { at: [26, 30, 186], text: 'CONTROLLER', on: ph !== 'idle' && ph !== 'open' && ph !== 'inuse' },
+    { at: [44, 116, 192], text: 'WATER HEATER', on: false },
+    { at: [56, 200, 194], text: 'FLUSH TANK', on: ph === 'flush' },
+    { at: [54, 201, 146], text: 'FLUSH VALVE', on: !!st.flowF },
+    { at: [49, 201, 100], text: 'FLUSH PIPE', on: !!st.flowF },
+    { at: [44, 136, 16], text: 'WATER INLET', on: !!wetOn },
+    { at: [48, 146, 80], text: 'SOLENOID VALVES', on: !!wetOn },
+    { at: [19, 158, 28], text: 'WASH PUMP', on: !!pumpOn },
+    { at: [142, 62, 15.4], text: 'FLOOR WASH JETS', on: !!st.jets },
+    { at: [88 + dx, 214.5, 46], text: 'BOWL', on: !!st.flowF },
+    { at: [13, 200, 26], text: 'BOWL ACTUATOR', on: st.bowl > .01 && st.bowl < .99 },
+    { at: [42, 197, 56], text: 'BOWL WASH JETS', on: !!st.bjets },
+    { at: [38, 226, 15], text: 'DRAIN HOSE', on: !!st.flowF },
+    { at: [128, 156, 10], text: 'FLOOR DRAIN', on: st.jets || st.wet > .05 },
+    { at: [24, 228, -10], text: 'SEWER PIPE', on: st.flowF || !!st.jets },
+    { at: [182, 238, 8], text: 'LOAD CELLS', on: inn },
+    { at: [140, CY0 + 14, 94], text: 'HAND WASH UNIT', on: false },
+    { at: [144, 150, 222], text: 'PRESENCE SENSOR', on: inn },
+    { at: [80, 129, 231], text: 'VENT FAN', on: st.light !== 'free' },
+    { at: [56, 95, 30], text: 'FLOOR DRYER', on: !!st.dry },
+  ], [0, W, 0, D, 0, H + 12]);
+  return byDepth(under) + floor + wall + byDepth(parts);
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const FRONT = facing([1,0,0]), BACK = facing([-1,0,0]), LEFT = facing([0,1,0]), RIGHT = facing([0,-1,0]);
+  const k = ease(st.xr || 0), inn = inside(st);
+  let s = castShadow([...RA, ...RFB]);
+  if (!inn) s += castShadow(bthPersonPts(st));
+  // ---- the booth
+  // plinth first, so the body hides its far edges
+  let body = loft(on(PZ(0), PLIN), on(PZ(CZ0), PLIN), n => tone(n, BM.concrete)) + hullInk([...on(PZ(0), PLIN), ...on(PZ(CZ0), PLIN)], 1);
+  body += loft(on(PZ(CZ0), RING), RB, n => tone(n, m));
+  if (FRONT) body += bthFront(st, m);
+  if (BACK) body += bthBack(m);
+  if (LEFT) body += bthLeft(m);
+  if (RIGHT) body += bthRight(m);
+  body += hullInk([...RA, ...RB], 2.8);
+  // roof slab with the vent grille
+  const rm = { l: mix(m.m, '#ffffff', .15), m: m.m, d: mix(m.m, '#000000', .3) };
+  body += loft(RFA, RFB, n => tone(n, rm)) + fill(pd(RFB), tone([0,0,1], rm)) + ink(pd(RFB), 1.2) + hullInk([...RFA, ...RFB], 2.2);
+  { let g = box(72, 112, H + 12, 88, 128, H + 17, BM.grey, tone, 1); for (let x = 75; x <= 85; x += 3.3) g += line([[x, 113.5, H + 17.1], [x, 126.5, H + 17.1]], .7); body += g; }
+  if (k > 0) body = xrGhostRings(body, '', k, RA, RB, m) + `<g opacity="${f(k)}">${bthMech(st)}</g>`;
+  // ---- the person outside: in front of the booth when its front faces us, behind it otherwise
+  const pers = inn ? '' : byDepth(bthPerson(st));
+  s += FRONT ? body + pers : pers + body;
+  if (k > .6) s += MECH_LABELS;
+  return s;
+}
+
+/* ---------- behaviour: one state machine, one clock ---------- */
+const ANIM = new Set(['pay', 'enter', 'flush', 'leave', 'wash']);
+function bthGo(st, ph){ st.phase = ph; st.t = 0; }
+function bthStart(st, ph){ bthGo(st, ph); if (ph === 'pay') st.coin = 0; }
+function bthStep(st, dt){
+  st.t += dt; st.spin += dt*6; const u = st.t;
+  st.moving = false; st.flowF = st.flowR = st.bjets = st.jets = st.dry = st.dm = 0;
+  if (st.phase === 'pay'){
+    st.coin = u < 1.1 ? cl01(u/1.1) : -1;
+    st.lock = 1 - cl01((u - 1.1)/.3);
+    const d = cl01((u - 1.3)/1.6); st.door = ease(d); st.dm = d > 0 && d < 1 ? 1 : 0;
+    if (u >= 2.9) bthGo(st, 'open');
+  } else if (st.phase === 'enter'){
+    const w = cl01(u/2.8); st.px = PX_OUT + (PX_IN - PX_OUT)*w; st.moving = w < 1;
+    const c = cl01((u - 3)/1.4); st.door = 1 - ease(c); st.dm = c > 0 && c < 1 ? 1 : 0;
+    if (u > 3) st.light = 'busy';
+    st.lock = cl01((u - 4.4)/.2);
+    if (u >= 4.7) bthGo(st, 'inuse');
+  } else if (st.phase === 'flush'){
+    st.tank = u < .9 ? 1 - cl01(u/.9) : cl01((u - 1.1)/2);
+    st.flowF = u < 1.4 ? 1 : 0; st.flowR = u > 1.1 && u < 3.1 ? 1 : 0;
+    if (u >= 3.2){ st.tank = 1; bthGo(st, 'inuse'); }
+  } else if (st.phase === 'leave'){
+    st.lock = 1 - cl01(u/.3);
+    const o = cl01((u - .3)/1.4), w = cl01((u - 1.8)/2.6), c = cl01((u - 4.5)/1.4);
+    st.door = u < 4.5 ? ease(o) : 1 - ease(c); st.dm = (o > 0 && o < 1) || (c > 0 && c < 1) ? 1 : 0;
+    st.px = PX_IN + (PX_OUT - PX_IN)*w; st.moving = w > 0 && w < 1;
+    if (u > 4.5) st.light = 'clean';
+    if (u >= 6){ st.lock = 1; bthGo(st, 'wash'); }
+  } else if (st.phase === 'wash'){
+    st.bowl = u < 7 ? ease(cl01(u/1.5)) : 1 - ease(cl01((u - 7)/1.5));
+    st.bjets = u > 1.6 && u < 4.2 ? 1 : 0;
+    st.jets = u > 1.8 && u < 4.8 ? 1 : 0; if (st.jets) st.wet = Math.min(1, st.wet + dt/1.2);
+    st.dry = u > 5 && u < 8.4 ? 1 : 0; if (st.dry) st.wet = Math.max(0, st.wet - dt/3);
+    if (u >= 9.4){ st.wet = 0; st.bowl = 0; st.light = 'free'; bthGo(st, 'idle'); }
+  }
+  if (st.moving) st.walk += dt*9;
+  return ANIM.has(st.phase);
+}
+let ui, bthLoop = false;
+function bthRun(){ if (bthLoop) return; bthLoop = true;
+  ui.animate(dt => { const go = bthStep(ui.st, dt); if (!go) bthLoop = false; return go; }); }
+const NOTE = {
+  pay:   'Coin in. The lock opens and the door motor slides the door open',
+  enter: 'In you go. The door closes and locks, the light turns red',
+  flush: 'The flush tank empties into the bowl, then refills',
+  leave: 'The door opens. Once you are out, the wash cycle runs',
+};
+const WAIT = { busy: 'In use. Wait for the green light', clean: 'Cleaning. Wait for the green light' };
+function bthPress(st, what){
+  const ph = st.phase;
+  if (what === 'pay'){
+    if (ph === 'idle'){ bthStart(st, 'pay'); ui.flash(NOTE.pay, 2400); return bthRun(); }
+    return ui.flash(ph === 'pay' ? 'Paid. The door is opening' : ph === 'open' || ph === 'enter' ? 'Already paid. Step in' : WAIT[st.light] || 'Wait for the green light');
+  }
+  if (what === 'enter'){
+    if (ph === 'open'){ bthStart(st, 'enter'); ui.flash(NOTE.enter, 2400); return bthRun(); }
+    return ui.flash(ph === 'idle' ? 'Pay first. The door is locked' : ph === 'pay' ? 'Wait for the door to open' : ph === 'enter' ? 'Going in' : ph === 'wash' ? WAIT.clean : 'Already inside');
+  }
+  if (what === 'flush'){
+    if (ph === 'inuse'){ bthStart(st, 'flush'); ui.flash(NOTE.flush, 2000); return bthRun(); }
+    return ui.flash(ph === 'flush' ? 'Flushing' : ph === 'wash' || ph === 'leave' ? 'The bowl washes itself now' : 'Step in first');
+  }
+  if (what === 'leave'){
+    if (ph === 'inuse'){ bthStart(st, 'leave'); ui.flash(NOTE.leave, 2400); return bthRun(); }
+    return ui.flash(ph === 'flush' ? 'Wait for the flush to finish' : ph === 'leave' ? 'Leaving' : ph === 'wash' ? WAIT.clean : 'Nobody is inside');
+  }
+}
+// screenshot states: ?at=SECONDS runs the whole visit (pay, step in, flush, leave, wash) up to that moment and stops there
+function bthSeek(st, T){
+  for (const ph of ['pay', 'enter', 'flush', 'leave']){ bthStart(st, ph);
+    while (T > 0 && ANIM.has(st.phase)){ bthStep(st, .02); T -= .02; }
+    if (T <= 0) return; }
+}
+const bthCaption = st => ({
+  idle:  'Inside: a door motor on a toothed belt, a flush tank, floor wash jets, sensors, and a controller in the technical room that runs every step.',
+  pay:   'The coin acceptor checks the coin and drops it down the chute into the cash box. The controller pulls back the lock bolt and the door motor drives the belt that slides the door open.',
+  open:  'The door waits open. The rubber safety edge on its leading edge stops it if it touches anyone.',
+  enter: 'The presence sensor in the ceiling and the load cells under the floor tell the controller someone is in. The door closes, the lock shoots its bolt, the light turns red.',
+  inuse: 'In use. The hand wash unit gives soap, warm water from the heater, and warm air.',
+  flush: 'Flush: the flush valve opens and the tank empties down the flush pipe into the bowl. A solenoid valve then refills the tank from the mains.',
+  leave: 'Leaving: the lock opens and the door slides back. When the load cells read empty, the door closes again.',
+  wash:  'Wash cycle: the bowl slides back on its rails into the technical room, where a spray bar washes it. The pump sprays the floor from the skirting jets, the water runs to the drain, and a blower dries the floor.',
+})[st.phase] || '';
+
+ui = mountFigure({
+  fig:'21', title:'Toilet booth', turn:'full',
+  size:[W + 70, D, H + 18], center:[W/2 + 20, D/2], palette:'mint',
+  // door 0 = closed, 1 = open; lock 1 = bolt out; px = the person's x; tank 0..1 full; bowl 0 = in the cabin, 1 = pulled back
+  state:{ phase:'idle', t:0, door:0, lock:1, px:PX_OUT, walk:0, moving:false, coin:-1, tank:1, bowl:0, wet:0, spin:0,
+    flowF:0, flowR:0, bjets:0, jets:0, dry:0, dm:0, light:'free' },
+  scene,
+  buttons:[
+    { label:'Pay', onClick:(st) => bthPress(st, 'pay') },
+    { label:'Step in', onClick:(st) => bthPress(st, 'enter') },
+    { label:'Flush', onClick:(st) => bthPress(st, 'flush') },
+    { label:'Leave', onClick:(st) => bthPress(st, 'leave') },
+  ],
+  acts:{ pay:(st) => bthPress(st, 'pay') },
+  params:(st, q) => { if (q.has('at')) bthSeek(st, +q.get('at')); },
+});
+xrMount(() => ui, bthCaption);
+</script></body></html>
