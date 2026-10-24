@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nutcrackers</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   The book identifies two second-class levers hinged at one end. The shell is the load between hinge and hand.
+   This representative pin-hinged tool rests on a table. Each serrated jaw is integral with its arm.
+   Load opens the jaws and lifts a table walnut into their gap. Squeeze rotates both arms inward until the shell cracks.
+   Move nut reopens the jaws and reseats the SAME specimen nearer the hinge. A cracked shell never heals.
+   Load after cracking clears the old shell to the table and supplies a different intact walnut.
+   The three walnuts are teaching supplies. Load explicitly replenishes the batch when it is exhausted.
+   Structure parts are the two arms, interleaved hinge eyes and their vertical pin.
+   Mechanism features are the two jaws and their integral teeth. Grips cover the free ends of the arms.
+   Power is hand effort. There are no motors, return springs or concealed mechanisms.
+   The table, controls, animated loading and force overlays stage the lesson rather than reproduce the book artwork.
+   The ideal static ratio uses perpendicular forces and neglects friction. It is not a walnut fracture measurement.
+   Accepted sources are 2016 pp20/22 and 1998 p22. The inaccessible 1988 edition remains unverified.
+*/
+const ncHinge = [18,42,6], ncRadius = 6, ncEffortArm = 72;
+const ncStock = [[92,15,9],[105,28,9],[98,69,9]];
+const ncShellMat = {l:'#c89458',m:'#ab733e',d:'#774a2c'};
+const ncKernelMat = {l:'#f1d2a1',m:'#d6af74',d:'#a67e49'};
+const ncState = {specimen:'table', stock:3, discarded:0, near:false, nutX:60, angle:.20, compression:0, action:null, transfer:0, source:0};
+const ncClamp = (v,lo,hi) => Math.max(lo,Math.min(hi,v));
+const ncAt = (side,t,v=0,z=6,angle=ncState.angle) => [18+t*Math.cos(angle)-v*Math.sin(side*angle),42+side*t*Math.sin(angle)+v*Math.cos(angle),z];
+const ncBox = (pts,pad=0) => [[0,1,2].map(k=>Math.min(...pts.map(p=>p[k]))-pad),[0,1,2].map(k=>Math.max(...pts.map(p=>p[k]))+pad)];
+const ncContactAngle = x => Math.asin((ncRadius+3.1)/(x-18));
+const ncGain = st => ncEffortArm / ((st.nutX-18)*Math.cos(ncContactAngle(st.nutX)));
+function ncPrism(points,z0,z1,material){
+  const a=points.map(p=>[p[0],p[1],z0]), b=points.map(p=>[p[0],p[1],z1]);
+  return loft(a,b,n=>toneI(n,material))+fill(pd(b),toneI([0,0,1],material))+ink(pd(b),1)+hullInk([...a,...b],2.3);
+}
+function ncWalnut(center,broken=0,xray=0){
+  const panels=[], n=24, rings=10;
+  const point=(a,b)=>{const ripple=1+.045*Math.cos(8*a)*Math.sin(b);return [center[0]+6.6*Math.cos(a)*Math.sin(b)*ripple,center[1]+6*Math.sin(a)*Math.sin(b)*ripple+Math.sign(Math.sin(a))*broken*.65,center[2]+6*Math.cos(b)];};
+  for(let j=0;j<rings;j++)for(let i=0;i<n;i++){
+    const a=i/n*2*Math.PI,b=j/rings*Math.PI;
+    const pts=[point(a,b),point(a+2*Math.PI/n,b),point(a+2*Math.PI/n,b+Math.PI/rings),point(a,b+Math.PI/rings)];
+    const normal=norm(sub(avg(pts),center));
+    if(vis(normal))panels.push({box:ncBox(pts),at:avg(pts),svg:fill(pd(pts),toneI(normal,ncShellMat))+((i%3===0)?line([pts[0],pts[3]],.55):'')});
+  }
+  let s=byDepth(panels);
+  const outline=Array.from({length:60},(_,i)=>{const a=i/60*Math.PI*2;return [center[0]+6.6*Math.cos(a),center[1]+6*Math.sin(a),center[2]];});
+  const hullPts=[...outline,center.map((v,i)=>i===2?v+6:v),center.map((v,i)=>i===2?v-6:v)];
+  s+=hullInk(hullPts,2);
+  if(broken){
+    const seam=Array.from({length:15},(_,i)=>{const t=-1+i/7;return [center[0]+t*5.9,center[1]+(i%2?.75:-.75),center[2]+6*Math.sqrt(Math.max(0,1-t*t))];});
+    s+=line(seam,2.4);
+  }
+  if(xray>0){
+    const kernel=rod([center[0]-3.3,center[1],center[2]],[center[0]+3.3,center[1],center[2]],3.4,ncKernelMat,toneI,1.2);
+    s=`<g opacity="${1-.77*xray}">${s}</g><g opacity="${xray}">${kernel}</g>`;
+  }
+  return s;
+}
+function ncArrow(a,b,col){
+  const d=norm(sub(b,a)),u=norm(cross(d,[0,0,1]));
+  const head=[b,b.map((v,i)=>v-d[i]*2+u[i]*1.1),b.map((v,i)=>v-d[i]*2-u[i]*1.1)];
+  return `<path d="${pd([a,b],false)}" fill="none" stroke="${col}" stroke-width="1.8"/>`+fill(pd(head),col);
+}
+function ncScene(st,m){
+  const parts=[],labels=[],k=ease(st.xr||0);
+  const put=(pts,svg,pad=0)=>parts.push({box:ncBox(pts,pad),at:avg(pts),svg});
+  let s=board(0,0,118,86,3,5,WOOD);
+  const endpoints=[-1,1].flatMap(side=>[ncAt(side,0,0,9),ncAt(side,78,0,9)]);
+  s+=castShadow([...endpoints,...ncStock],3,boardTop(0,0,118,86,3,5));
+  for(const side of [-1,1]){
+    const armM=k>.01?METAL:m;
+    for(const [a,b,width] of [[4,13,2.4],[13,25,2.4],[25,38,2.4],[38,50,2.4],[50,78,2.1]]){
+      const z0=a===4&&side>0?6:3,z1=a===4&&side<0?6:9;
+      const pts=[[a,-width],[b,-width],[b,width],[a,width]].map(([t,v])=>ncAt(side,t,v,z0));
+      let body=ncPrism(pts,z0,z1,armM);
+      if(k>0)body=`<g opacity="${1-.62*k}">${body}</g>`;
+      put([...pts,...pts.map(p=>[p[0],p[1],z1])],body);
+    }
+    const eyeZ=side<0?[3,6]:[6,9];
+    put([[14,38,eyeZ[0]],[22,46,eyeZ[1]]],`<g opacity="${1-.62*k}">${cyl(18,42,...eyeZ,4,armM,toneI,1.3)}</g>`);
+    for(let t=16;t<49;t+=3){
+      const inner=-side*2.4,tip=-side*3.1;
+      const pts=[ncAt(side,t,inner,3),ncAt(side,t+1.4,tip,3),ncAt(side,t+2.5,inner,3)];
+      put([...pts,...pts.map(p=>[p[0],p[1],9])],`<g opacity="${1-.35*k}">${ncPrism(pts,3,9,METAL)}</g>`);
+    }
+    const gripPts=[[51,-2.8],[78,-2.8],[80,0],[78,2.8],[51,2.8]].map(([t,v])=>ncAt(side,t,v,3));
+    put([...gripPts,...gripPts.map(p=>[p[0],p[1],9])],`<g opacity="${1-.72*k}">${ncPrism(gripPts,3,9,m)}</g>`);
+    const name=side<0?'RIGHT':'LEFT';
+    labels.push({at:ncAt(side,48,0,9),text:name+' ARM',on:st.action?.kind==='squeeze'},
+      {at:ncAt(side,27,-side*2.2,9),text:name+' JAW',on:st.specimen==='intact'||st.specimen==='broken'},
+      {at:ncAt(side,66,0,9),text:name+' GRIP',on:st.action?.kind==='squeeze'});
+  }
+  put([[16.5,40.5,3],[19.5,43.5,10.4]],cyl(18,42,3,10.4,1.5,METAL,toneI,1.3)+line([[17,42,10.45],[19,42,10.45]],.7));
+  labels.push({at:[18,42,10.4],text:'HINGE PIN',on:!!st.action},{at:ncAt(1,19,-2.8,9),text:'JAW TEETH',on:st.specimen==='intact'||st.specimen==='broken'});
+  for(let i=0;i<st.stock;i++){
+    const center=ncStock[i];put([center.map((v,j)=>v-(j===0?7:6)),center.map((v,j)=>v+(j===0?7:6))],ncWalnut(center));
+  }
+  if(st.specimen!=='table'){
+    let center=[st.nutX,42,9];
+    if(st.action?.kind==='load'){
+      const a=ncStock[st.source],e=ease(st.transfer);
+      center=a.map((v,i)=>v+(center[i]-v)*e+(i===2?16*Math.sin(Math.PI*e):0));
+    }
+    put([center.map(v=>v-7),center.map(v=>v+7)],ncWalnut(center,st.specimen==='broken'?1:0,k));
+  }
+  if(st.discarded){
+    const old=[32,72,6];
+    put([[25,66,3],[40,78,10]],ncPrism([[26,68],[32,67],[34,72],[29,76],[25,73]],3,5,ncShellMat)+ncPrism([[35,68],[39,71],[37,76],[33,74]],3,5,ncShellMat));
+  }
+  s+=byDepth(parts);
+  if(k>.01){
+    let overlays='';
+    for(const side of [-1,1]){
+      const p=ncAt(side,72,0,11),n=[-Math.sin(st.angle),side*Math.cos(st.angle),0];
+      overlays+=`<path d="${pd([ncAt(side,0,0,10),ncAt(side,76,0,10)],false)}" fill="none" stroke="#356db2" stroke-width="1.3" stroke-dasharray="3 2"/>`;
+      overlays+=ncArrow(p.map((v,i)=>v+n[i]*10),p,'#cc5b36');
+      if(st.specimen==='intact'||st.specimen==='broken'){
+        const cp=[st.nutX-ncRadius*Math.sin(st.angle),42+side*ncRadius*Math.cos(st.angle),9];
+        overlays+=ncArrow(cp.map((v,i)=>v+n[i]*6),cp,'#cc5b36');
+        const projected=P(...cp);overlays+=`<circle cx="${projected[0]}" cy="${projected[1]}" r="${1.3}" fill="#f4b829" stroke="${INK}" stroke-width=".8"/>`;
+      }
+    }
+    s+=`<g opacity="${k}">${overlays}</g>`;
+  }
+  if(k>.6)s+=xrCallouts(labels,[14,101,14,73,3,18]);
+  return s;
+}
+function ncAdvance(st,dt){
+  const action=st.action;if(!action)return false;
+  action.t=Math.min(1,action.t+dt/(action.kind==='squeeze'?1.15:1.3));
+  const e=ease(action.t);
+  if(action.kind==='load'){
+    st.transfer=action.t;st.angle=action.angle+(ncContactAngle(st.nutX)-action.angle)*e;
+  }else if(action.kind==='move'){
+    st.nutX=action.x+(action.target-action.x)*e;
+    st.angle=ncContactAngle(st.nutX);
+  }else{
+    st.compression=e;
+    st.angle=action.angle-.018*e;
+    if(e>.62)st.specimen='broken';
+  }
+  if(action.t===1){if(action.kind==='load')st.specimen='intact';st.action=null;return false;}
+  return true;
+}
+function ncStart(st,ui,action){st.action={...action,t:0};ui.animate(dt=>ncAdvance(st,dt));}
+function ncLoad(st,ui){
+  if(st.action)return ui.flash('Wait for the current action.');
+  if(st.specimen==='intact')return ui.flash('The walnut is loaded. Squeeze the grips.');
+  if(st.specimen==='broken'){st.discarded++;ui.flash('Old shell set aside. Loading a fresh walnut.');}
+  if(st.stock===0){st.stock=3;st.discarded=0;ui.flash('Fresh batch supplied. Loading a new walnut.');}
+  st.source=--st.stock;st.specimen='loading';st.compression=0;st.transfer=0;
+  ncStart(st,ui,{kind:'load',angle:st.angle});
+}
+function ncSqueeze(st,ui){
+  if(st.action)return ui.flash('Wait for the current action.');
+  if(st.specimen==='table')return ui.flash('Load a walnut first.');
+  if(st.specimen==='broken')return ui.flash('The shell is already cracked. Load a fresh walnut.');
+  ncStart(st,ui,{kind:'squeeze',angle:st.angle});
+}
+function ncMove(st,ui){
+  if(st.action)return ui.flash('Wait for the current action.');
+  if(st.specimen==='table')return ui.flash('Load a walnut first.');
+  if(st.near)return ui.flash('The nut is already nearer the hinge.');
+  st.near=true;st.compression=0;
+  ncStart(st,ui,{kind:'move',x:st.nutX,target:45});
+}
+const ncUI=mountFigure({fig:'18',turn:'full',title:'Nutcrackers',size:[118,86,28],palette:'tomato',state:ncState,scene:ncScene,
+  stats:st=>[{label:'Ideal force gain',value:ncGain(st).toFixed(2)+'x'},{label:'Jaw force at 35 N',value:Math.round(35*ncGain(st))+' N',small:true},{label:'Shell',value:st.specimen==='table'?'not loaded':st.specimen,small:true}],
+  buttons:[{label:'Load',onClick:ncLoad},{label:'Squeeze',onClick:ncSqueeze},{label:'Move nut',onClick:ncMove}],
+  params:(st,q)=>{
+    if(q.get('near')==='1'){st.near=true;st.nutX=45;}
+    if(q.get('loaded')==='1'||q.get('broken')==='1'){st.specimen=q.get('broken')==='1'?'broken':'intact';st.stock=2;st.angle=ncContactAngle(st.nutX);}
+  }
+});
+xrMount(()=>ncUI,()=> '');
+</script></body></html>
