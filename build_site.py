@@ -16,7 +16,7 @@ for d in sorted((ROOT / 'figures').iterdir()):
         shutil.copy(shot, dst / 'front.png'); m['shot'] = f'f/{d.name}/front.png'
     figs.append(m)
 
-ORDER = ['kitchen','home','street','play','music','workshop','electronics','transport','science','other']
+ORDER = ['kitchen','home','street','play','music','workshop','electronics','transport','science','physics','chemistry','biology','space','math','other']
 SRC = {'site': "From April Zhu's examples", 'x': 'Seen on X', 'original': 'Our own'}
 figs.sort(key=lambda m: (ORDER.index(m.get('category','other')) if m.get('category') in ORDER else 99, m['title']))
 
