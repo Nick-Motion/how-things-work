@@ -1,0 +1,771 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>A chemical reaction</title></head><body>
+<script src="core.js"></script>
+<script>
+/* A chemical reaction: methane burning in oxygen, in a sealed glass reaction chamber on a lab bench.
+   x = depth (front face toward +x), y = width (+y toward viewer-left), z = up. 1 unit ~ 3 mm; molecules are drawn huge.
+
+   How it really works (and where every atom is after each step):
+   1. Fill: the vent valve opens and the extract hose pulls the old gas out; then the CH4 and O2 needle valves on the
+      manifold open and gas from the two lecture bottles (each with its regulator) runs down its hose, through the
+      manifold and the flashback arrestor, into the base flange bore and up into the chamber: 4 CH4 + 8 O2 molecules
+      (the 1 : 2 ratio of CH4 + 2 O2 -> CO2 + 2 H2O). At 25 C they bump around and nothing happens: a collision
+      rarely brings the activation energy (Ea ~ 202 kJ/mol).
+   2. Spark: the ignition coil in the control box puts ~20 kV down the HT lead to the spark plug in the top flange; the
+      spark jumps the electrode gap and heats a speck of gas past the hump. Each CH4 that reacts gives out heat
+      (bonds broken 4 C-H + 2 O=O = 2648 kJ/mol in, bonds made 2 C=O + 4 O-H = 3450 kJ/mol out, net -802 kJ/mol),
+      which heats its neighbours past the hump, so a flame front runs out from the gap through the whole chamber.
+      The gas flashes to ~2000 C and the pressure gauge jumps (same number of molecules, hotter), then the gas cools
+      through the glass, the water condenses as mist on the glass and the pressure falls below 1 bar.
+      Atoms only change partners: C + 4 H + 4 O before, the same atoms after.
+   3. Slow motion: one CH4 meets two O2. The bonds stretch (climbing the hump), break, and the atoms snap into one CO2
+      and two H2O, giving out more energy than went in.
+   4. Catalyst: a palladium gauze on a heater pedestal lifts out of its cup on a rod driven by a solenoid under the
+      base flange; the heater holds it at 350 C. On the hot metal surface CH4 and O2 react with a much lower hump
+      (Ea ~ 85 kJ/mol), so the gas burns slowly and flamelessly on the gauze at 350 C, below the 540 C the gas needs
+      on its own, and the gauze glows from the heat of reaction.
+
+   Parts (each held by another):
+   BENCH     lab bench board . fume-extract hose over the back edge
+   CHAMBER   four threaded tie rods standing on rubber feet . lower nuts . base flange (steel, painted) . upper nuts .
+             O-ring gasket . borosilicate glass cylinder . top flange . top nuts . gas inlet bore . vent bore
+   TOP       spark plug (steel shell, ceramic insulator, rubber boot, centre electrode, ground electrode) . pressure
+             gauge on its stem (case, dial, needle, Bourdon tube, link) . burst disc . thermocouple (head, probe)
+   CATALYST  steel cup on the floor . palladium gauze plate . heater under the plate . lift rod . solenoid on its
+             bracket under the base flange
+   GAS       methane bottle (red) . oxygen bottle (black, white shoulder) . bottle stand with two collars . two valves .
+             two regulators . two hoses . manifold block with two needle valves . flashback arrestor . vent valve
+   CONTROL   control box . molecule display . bond-energy meter . spark button . catalyst switch . heater lamp .
+             battery pack . circuit board . ignition coil . heater relay . three side ports . HT lead . thermocouple lead .
+             solenoid and heater lead
+   GAS INSIDE methane CH4 . oxygen O2 . carbon dioxide CO2 . water H2O (carbon black, hydrogen white, oxygen red) */
+
+/* ---------- layout ---------- */
+const W = 70, D = 154, BH = 3, TOPZ = 100;
+const BTOP = boardTop(0, 0, W, D, BH, 6);
+const CX = 34, CY = 90, RF = 26, RG = 21, RGI = 19.5, RR = 24;      // chamber axis, flange, glass outer / inner, tie-rod circle
+const ZF0 = 14, ZF1 = 20, ZG1 = 70, ZT1 = 76;                         // base flange bottom / top, glass top, top flange top
+const RODS = [67.5, 157.5, 247.5, 337.5].map(a => [CX + RR*Math.cos(a*Math.PI/180), CY + RR*Math.sin(a*Math.PI/180)]);
+const GAP = [CX, CY, 56.8];                                            // spark gap
+const GAUGE = [47, 82.5, 92], GR = 7;                                  // pressure gauge dial centre (faces +x), radius
+const TCP = [CX - 13, CY - 11.5], BURST = [24, 104];                   // thermocouple, burst disc
+const BX0 = 22, BX1 = 62, BY0 = 12, BY1 = 56, BZ1 = 33;               // control box
+const OUTB = rrUV(BY0, BH, BY1, BZ1, 3);
+const BOT = [[16, 135, 'CH4'], [16, 146, 'O2']];                       // lecture bottles
+const PORTS = [42, 45, 48];                                            // box side ports (x) on y = BY1: heater, thermocouple, HT
+const VIN = [CX - 16, CY, 24.5], IIN = [CX, CY + 15, 24.5];            // vent and inlet openings in the chamber floor
+const SC = [CX, CY, 42];                                               // where the slow-motion collision is staged
+const LEAD_A = 300, TCL_A = 304;                                       // where the HT and thermocouple leads leave the flange
+const EA = 202, EA_CAT = 85, DH = -802, E_IN = 2648, E_OUT = 3450;     // kJ/mol
+const N0 = 4;                                                          // CH4 molecules in a fresh fill (with 8 O2)
+
+const rad = a => a*Math.PI/180;
+const add3 = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]], scl3 = (a, k) => a.map(v => v*k);
+const lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const dist3 = (a, b) => Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const sstep = (a, b, x) => { const t = clamp((x - a)/(b - a)); return t*t*(3 - 2*t); };
+const polar = (a, r, z) => [CX + r*Math.cos(rad(a)), CY + r*Math.sin(rad(a)), z];
+const ringZ = (x, y, z, r, n = 24) => on(PZ(z), ellUV(x, y, r, r, n));
+const circ = (X, Y, r, c, extra = '') => `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r)}" fill="${c}" ${extra}/>`;
+const clipHull = (pts3, inner) => { const id = 'k' + (++_clipN); return `<clipPath id="${id}"><path d="${sp(hull(pts3.map(p => P(...p))))}"/></clipPath><g clip-path="url(#${id})">${inner}</g>`; };
+const boxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const ghost = (k, caseSvg, inside = '') => k > 0 ? `<g opacity="${f(1 - .78*k)}">${caseSvg}</g><g opacity="${f(k)}">${inside}</g>` : caseSvg;
+const near = a => depthOf([Math.cos(rad(a)), Math.sin(rad(a)), 0]) > 0;    // is this direction from the axis toward the viewer?
+
+const REDM = matOf('#d9473a'), BRASS = matOf('#d8b25a'), RUB = DARK, PDM = { l:'#dfe2e2', m:'#b9bec0', d:'#848c8f' };
+const GLASS = '#cfe9f0', STEEL = METAL;
+
+// a cable cut into short pieces, each with its own box, so it sorts with the solids it runs past
+const bendPts = (pts, r = 1.2) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i-1], pts[i], pts[i+1]];
+    const la = dist3(a, b), lc = dist3(c, b), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = lerp3(b, a, d/la), q = lerp3(b, c, d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+const cable = (pts, col, w = .55, Lmax = 3.5) => { const q = bendPts(pts), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < Lmax){ len += dist3(q[j], q[j-1]); j++; }
+    const seg = q.slice(i, j + 1), d = pd(seg, false);
+    out.push({ box: boxOf(seg), svg: `<path d="${d}" fill="none" stroke="${INK}" style="stroke-width:${f(2*w + .7)}" stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" style="stroke-width:${f(2*w)}" stroke-linecap="round" stroke-linejoin="round"/>` });
+    i = j; }
+  return out; };
+const cableSvg = (pts, col, w) => cable(pts, col, w).map(p => p.svg).join('');
+
+/* ---------- molecules (space-filling balls on sticks; CPK colours) ---------- */
+const MS = 1.55;
+const EL = { C:{ r:1.6*MS, m:{ l:'#625c55', m:'#3a3632', d:'#1f1c19' } },
+             H:{ r:1.05*MS, m:{ l:'#ffffff', m:'#e6e2d6', d:'#b9b2a2' } },
+             O:{ r:1.5*MS, m:{ l:'#f47a68', m:'#e2483d', d:'#a3291f' } } };
+const T3 = 2.3*MS/Math.sqrt(3);
+const MOL = {
+  CH4: { r:4.4*MS/1.3, atoms:[['C',[0,0,0]], ['H',[T3,T3,T3]], ['H',[-T3,-T3,T3]], ['H',[T3,-T3,-T3]], ['H',[-T3,T3,-T3]]], bonds:[[0,1,1],[0,2,1],[0,3,1],[0,4,1]] },
+  O2:  { r:3.6*MS/1.3, atoms:[['O',[-1.25*MS,0,0]], ['O',[1.25*MS,0,0]]], bonds:[[0,1,2]] },
+  CO2: { r:5.0*MS/1.3, atoms:[['C',[0,0,0]], ['O',[-2.35*MS,0,0]], ['O',[2.35*MS,0,0]]], bonds:[[0,1,2],[0,2,2]] },
+  H2O: { r:4.0*MS/1.3, atoms:[['O',[0,0,0]], ['H',[1.6*MS,0,1.25*MS]], ['H',[-1.6*MS,0,1.25*MS]]], bonds:[[0,1,1],[0,2,1]] },
+};
+// quaternions for tumbling
+const qMul = (a, b) => [a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3], a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2], a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1], a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0]];
+const qRot = (q, v) => { const p = qMul(qMul(q, [0, ...v]), [q[0], -q[1], -q[2], -q[3]]); return [p[1], p[2], p[3]]; };
+const qAxis = (ax, a) => { const s2 = Math.sin(a/2); return [Math.cos(a/2), ax[0]*s2, ax[1]*s2, ax[2]*s2]; };
+const qNorm = q => { const l = Math.hypot(...q) || 1; return q.map(v => v/l); };
+const qFromTo = (a, b) => { const c = cross(a, b), d0 = dot(a, b); if (d0 < -.9999) return [0, 0, 0, 1]; return qNorm([1 + d0, ...c]); };
+let seed = 7;
+const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
+const rdir = () => { const z = rnd()*2 - 1, a = rnd()*2*Math.PI, s2 = Math.sqrt(1 - z*z); return [s2*Math.cos(a), s2*Math.sin(a), z]; };
+const rquat = () => qNorm([rnd() - .5, rnd() - .5, rnd() - .5, rnd() - .5]);
+const atomsOf = m => MOL[m.kind].atoms.map(([el, o]) => ({ el, p: add3(m.p, qRot(m.q, o)) }));
+const newMol = (kind, p, v) => ({ kind, p, v: v || rdir(), q: rquat(), w: rdir(), ws: 1.5 + 2*rnd(), mode: null });
+
+// where a molecule may be: inside the glass, above the floor (and the catalyst), below the spark plug
+function limits(st, m, r){
+  const rr = Math.hypot(m.p[0] - CX, m.p[1] - CY), plateTop = 21.8 + 10*st.catK;
+  const lo = (rr < 11 ? Math.max(25, plateTop) : ZF1) + r, hi = (rr < 6.5 ? 54.4 : ZG1) - r;
+  return { rr, lo, hi, rmax: RGI - r };
+}
+function freshSpot(st, list, r){
+  for (let i = 0; i < 400; i++){
+    const a = rnd()*2*Math.PI, rr = Math.sqrt(rnd())*(RGI - r - .5), p = [CX + rr*Math.cos(a), CY + rr*Math.sin(a), ZF1 + r + rnd()*(ZG1 - ZF1 - 2*r)];
+    const lm = limits(st, { p }, r);
+    if (p[2] < lm.lo || p[2] > lm.hi) continue;
+    if (list.every(o => dist3(o.p, p) > MOL[o.kind].r + r + 1.2)) return p;
+  }
+  return [CX + 8, CY, 40];
+}
+function fillGas(st, kinds){
+  const list = [];
+  for (const kind of kinds) list.push(newMol(kind, freshSpot(st, list, MOL[kind].r)));
+  return list;
+}
+const FRESH = ['CH4','O2','O2','CH4','O2','O2','CH4','O2','O2','CH4','O2','O2'];
+const BURNT = ['CO2','H2O','H2O','CO2','H2O','H2O','CO2','H2O','H2O','CO2','H2O','H2O'];
+
+/* ---------- reaction: CH4 + 2 O2 -> CO2 + 2 H2O. The atoms keep their identity; only their partners change ---------- */
+function react(st, ch4, o2s, dur, heat){
+  if (!o2s) o2s = st.mols.filter(m => m.kind === 'O2' && !m.mode).sort((a, b) => dist3(a.p, ch4.p) - dist3(b.p, ch4.p)).slice(0, 2);
+  if (o2s.length < 2) return null;
+  const A = [...atomsOf(ch4), ...atomsOf(o2s[0]), ...atomsOf(o2s[1])];   // 0 C, 1-4 H, 5-6 O (first O2), 7-8 O (second O2)
+  const nearO = (i, j) => dist3(A[i].p, A[0].p) < dist3(A[j].p, A[0].p) ? [i, j] : [j, i];
+  const [oa, oaf] = nearO(5, 6), [ob, obf] = nearO(7, 8);
+  const hs = [1, 2, 3, 4].sort((i, j) => dist3(A[i].p, o2s[0].p) - dist3(A[j].p, o2s[0].p));
+  const co2 = newMol('CO2', ch4.p.slice()); co2.q = qFromTo([1,0,0], norm(sub(o2s[0].p, o2s[1].p)));
+  const wa = newMol('H2O', o2s[0].p.slice()), wb = newMol('H2O', o2s[1].p.slice());
+  const pc = atomsOf(co2), pa = atomsOf(wa), pb = atomsOf(wb);
+  const to = []; to[0] = pc[0].p; to[oa] = pc[1].p; to[ob] = pc[2].p;
+  to[oaf] = pa[0].p; to[hs[0]] = pa[1].p; to[hs[1]] = pa[2].p;
+  to[obf] = pb[0].p; to[hs[2]] = pb[1].p; to[hs[3]] = pb[2].p;
+  const ev = { t:0, dur, heat, c: avg([ch4.p, o2s[0].p, o2s[1].p]), atoms: A.map((a, i) => ({ el: a.el, from: a.p, to: to[i] })),
+    oldB: [[0,1,1],[0,2,1],[0,3,1],[0,4,1],[5,6,2],[7,8,2]],
+    newB: [[0,oa,2],[0,ob,2],[oaf,hs[0],1],[oaf,hs[1],1],[obf,hs[2],1],[obf,hs[3],1]], products:[co2, wa, wb] };
+  st.mols = st.mols.filter(m => m !== ch4 && m !== o2s[0] && m !== o2s[1]);
+  st.events.push(ev);
+  return ev;
+}
+
+/* ---------- slow motion: one collision, staged at the middle of the chamber 1.5x bigger ---------- */
+const SLOW_T = 8;
+const SD = (() => { const t = T3, s2 = 1.62*MS/1.3, u = norm([0, .6, .8]);
+  const ca = [0, 7.4, 1.5], cb = [0, -7.4, -1.5];
+  return {
+    react: [[ 'C', [0,0,0]], ['H',[t,t,t]], ['H',[-t,t,-t]], ['H',[-t,-t,t]], ['H',[t,-t,-t]],
+            ['O', add3(ca, scl3(u, -1.25*MS))], ['O', add3(ca, scl3(u, 1.25*MS))], ['O', add3(cb, scl3(u, 1.25*MS))], ['O', add3(cb, scl3(u, -1.25*MS))]],
+    prod: [[0,0,0], [2.3, 9.9, 4.5], [-2.3, 9.9, 4.5], [-2.3, -9.9, -4.5], [2.3, -9.9, -4.5], [0, 2.35*MS, 0], [0, 8.6, 2.9], [0, -2.35*MS, 0], [0, -8.6, -2.9]],
+    oldB: [[0,1,1],[0,2,1],[0,3,1],[0,4,1],[5,6,2],[7,8,2]],
+    newB: [[0,5,2],[0,7,2],[6,1,1],[6,2,1],[8,3,1],[8,4,1]],
+    mol: [0,0,0,0,0,1,1,2,2], centre: [[0,0,0], ca, cb] }; })();
+// phase of the replay at time t: approach, stretch (climb the hump), break, form (release energy), drift apart
+function slowPhase(t){
+  const ap = sstep(0, 1.8, t), str = sstep(1.8, 3.2, t), brk = sstep(3.2, 3.7, t), frm = sstep(3.7, 5.2, t), dep = sstep(5.2, 7.6, t);
+  const x = t < 1.8 ? .04 + .16*ap : t < 3.2 ? .2 + .3*str : t < 3.7 ? .5 : t < 5.2 ? .5 + .3*frm : .8 + .15*dep;
+  return { ap, str, brk, frm, dep, x, broken: Math.round(E_IN*sstep(1.8, 3.7, t)), made: Math.round(E_OUT*frm) };
+}
+function slowScene(t){
+  const ph = slowPhase(t), s = 1.25, th = .22*t, c = Math.cos(th), sn = Math.sin(th);
+  const W3 = p => add3(SC, scl3([p[0]*c - p[1]*sn, p[0]*sn + p[1]*c, p[2]], s));
+  const atoms = SD.react.map(([el, p0], i) => {
+    const mi = SD.mol[i], cen = SD.centre[mi];
+    let p = p0;
+    if (mi) p = add3(p, scl3([0, Math.sign(cen[1]), Math.sign(cen[2])*.2], 9*(1 - ph.ap)));               // the O2s fly in
+    p = add3(p, scl3(sub(p0, cen), .45*ph.str + .25*ph.brk));                                               // bonds stretch, then break
+    p = lerp3(p, SD.prod[i], ph.frm);                                                                       // new partners
+    if (i !== 0 && i !== 5 && i !== 7) p = add3(p, scl3([0, Math.sign(SD.prod[i][1]), Math.sign(SD.prod[i][2])*.3], 6*ph.dep));
+    return { el, p: W3(p) };
+  });
+  return { atoms, ph, s, oldA: 1 - ph.brk, newA: sstep(.45, 1, ph.frm) };
+}
+
+/* ---------- drawing the molecules ---------- */
+function atomSvg(el, p, s = 1){
+  const [X, Y] = P(...p), R = EL[el].r*s*CAM_K, m = EL[el].m;
+  return circ(X, Y, R, m.m) + circ(X + R*.16, Y - R*.18, R*.72, m.l) + circ(X + R*.34, Y - R*.36, R*.2, '#ffffff', 'opacity=".7"')
+    + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="none" stroke="${INK}" stroke-width=".9"/>`;
+}
+function bondSvg(a, b, ra, rb, order, s = 1, alpha = 1, hot = 0){
+  if (alpha <= .01) return '';
+  const d = norm(sub(b.p || b, a.p || a)), A = add3(a.p || a, scl3(d, ra*.7)), B = sub(b.p || b, scl3(d, rb*.7));
+  const [x0, y0] = P(...A), [x1, y1] = P(...B), Lh = Math.hypot(x1 - x0, y1 - y0) || 1, nx = -(y1 - y0)/Lh, ny = (x1 - x0)/Lh;
+  const offs = order === 2 ? [-.5*s, .5*s] : [0], wo = (order === 2 ? .95 : 1.25)*s, wi = (order === 2 ? .42 : .62)*s;
+  const col = hot ? mix('#d9d3c4', '#ff8a3d', hot) : '#d9d3c4';
+  let o = '';
+  for (const k of offs){ const dd = `M${f(x0 + nx*k)} ${f(y0 + ny*k)}L${f(x1 + nx*k)} ${f(y1 + ny*k)}`;
+    o += `<path d="${dd}" fill="none" stroke="${INK}" style="stroke-width:${f(wo)}" stroke-linecap="round"/><path d="${dd}" fill="none" stroke="${col}" style="stroke-width:${f(wi)}" stroke-linecap="round"/>`; }
+  return alpha < 1 ? `<g opacity="${f(alpha)}">${o}</g>` : o;
+}
+const atomItem = (el, p, s = 1, op = 1) => { const r = EL[el].r*s, svg = atomSvg(el, p, s);
+  return { box: [[p[0]-r, p[1]-r, p[2]-r], [p[0]+r, p[1]+r, p[2]+r]], svg: op < 1 ? `<g opacity="${f(op)}">${svg}</g>` : svg }; };
+const bondItem = (a, b, order, s = 1, alpha = 1, op = 1, hot = 0) => { const svg = bondSvg(a, b, EL[a.el].r*s, EL[b.el].r*s, order, s, alpha*op, hot);
+  return svg ? { box: boxOf([a.p, b.p], -.4), svg } : null; };
+function molItems(st, op){
+  const out = [];
+  for (const m of st.mols){
+    const at = atomsOf(m);
+    for (const a of at) out.push(atomItem(a.el, a.p, 1, op));
+    for (const [i, j, o] of MOL[m.kind].bonds) out.push(bondItem(at[i], at[j], o, 1, 1, op));
+  }
+  for (const e of st.events){
+    const t = clamp(e.t), te = ease(t), bulge = .45*Math.sin(Math.PI*Math.min(1, t*1.4));
+    const at = e.atoms.map(a => ({ el: a.el, p: add3(lerp3(a.from, a.to, te), scl3(sub(a.from, e.c), bulge)) }));
+    for (const a of at) out.push(atomItem(a.el, a.p, 1, op));
+    for (const [i, j, o] of e.oldB) out.push(bondItem(at[i], at[j], o, 1, 1 - sstep(.1, .45, t), op, sstep(0, .4, t)));
+    for (const [i, j, o] of e.newB) out.push(bondItem(at[i], at[j], o, 1, sstep(.55, .9, t), op));
+  }
+  return out;
+}
+function flashes(st){
+  let o = '';
+  for (const e of st.events){ const a = sstep(.35, .6, e.t)*(1 - sstep(.6, 1, e.t)); if (a <= .01) continue;
+    const [X, Y] = P(...e.c), R = (5 + 6*e.t)*CAM_K;
+    o += circ(X, Y, R, '#ffe27a', `opacity="${f(.55*a)}"`) + circ(X, Y, R*.55, '#fff7d6', `opacity="${f(.8*a)}"`); }
+  return o;
+}
+
+/* ---------- the chamber ---------- */
+function rodMid(x, y){ return rod([x, y, ZF1], [x, y, ZG1], 1, STEEL, toneI, .8, 1, 12) + cyl(x, y, ZF1, ZF1 + 1.8, 1.9, STEEL, toneI, .8, 6); }
+function plugSvg(st, k){
+  const hex = cyl(CX, CY, ZT1, ZT1 + 4, 3.2, STEEL, toneI, 1, 6);
+  let ins = rod([CX, CY, ZT1 + 4], [CX, CY, 87], 2, CERAMIC, toneI, .9, 1.4, 18);
+  for (const z of [81.2, 83, 84.8]) ins += cyl(CX, CY, z, z + .7, 2.15 - (z - 81)*.09, CERAMIC, toneI, .6, 18);
+  const boot = cyl(CX, CY, 86.4, 91, 1.9, REDM, toneI, 1, 16);
+  const core = rod([CX, CY, 90], [CX, CY, ZG1 - 4], .45, matOf('#d08a52'), toneI, .5, .45, 8);
+  return ghost(k, hex + ins + boot, core);
+}
+function gaugeSvg(st, k){
+  const [gx, gy, gz] = GAUGE, stem = rod([gx, gy, ZT1], [gx, gy, gz - GR + .4], .9, STEEL, toneI, .8, .9, 10);
+  let cs = cylX(gx - 1.6, gx + 1.6, gy, gz, GR, STEEL, toneI, 1.2, 28);
+  const FR = facing([1, 0, 0]), pb = pressure(st), pt = (r, th, x) => [x, gy - r*Math.sin(rad(th)), gz + r*Math.cos(rad(th))];
+  if (FR){ const x = gx + 1.65;
+    cs += shape(on(PX(x), ellUV(gy, gz, GR*.86, GR*.86, 28)), '#fbfaf3', .7);
+    let tk = ''; for (let b = 0; b <= 12; b += 2){ const th = -135 + 270*b/12; tk += pd([pt(GR*.62, th, x + .02), pt(GR*.8, th, x + .02)], false); }
+    cs += `<path d="${tk}" fill="none" stroke="${INK}" stroke-width=".7"/>`;
+    cs += tx(x + .03, gy, gz - 3.4, 'BAR', 1.5, INK, 800);
+    const th = -135 + 270*clamp(pb/12);
+    cs += line([pt(-1, th, x + .05), pt(GR*.72, th, x + .05)], 1).replace(INK, '#c8352b') + shape(on(PX(x + .06), ellUV(gy, gz, .6, .6, 10)), INK, 0);
+  }
+  // Bourdon tube: a curled flat tube that straightens as the pressure rises; its tip pulls the needle round
+  const uncurl = clamp(pb/12)*14, bt = [];
+  for (let th = -150; th <= 120 + uncurl; th += 15) bt.push(pt(GR*.5, th, gx));
+  const inside = `<path d="${pd([pt(GR - .3, 180, gx), pt(GR*.5, 180, gx), ...bt], false)}" fill="none" stroke="${INK}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>`
+    + `<path d="${pd([pt(GR - .3, 180, gx), pt(GR*.5, 180, gx), ...bt], false)}" fill="none" stroke="#d08a52" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>`
+    + line([bt[bt.length - 1], pt(0, 0, gx)], .6);
+  return stem + ghost(k, cs, inside);
+}
+function topItems(st, k){
+  const items = [];
+  items.push({ box: [[CX - 3.3, CY - 3.3, ZT1], [CX + 3.3, CY + 3.3, 91]], svg: plugSvg(st, k) });
+  items.push({ box: [[GAUGE[0] - 1.7, GAUGE[1] - GR, ZT1], [GAUGE[0] + 1.7, GAUGE[1] + GR, GAUGE[2] + GR]], svg: gaugeSvg(st, k) });
+  items.push({ box: [[BURST[0] - 2.6, BURST[1] - 2.6, ZT1], [BURST[0] + 2.6, BURST[1] + 2.6, 80.6]], svg: cyl(BURST[0], BURST[1], ZT1, 79.5, 2.2, STEEL, toneI, .9, 6) + cyl(BURST[0], BURST[1], 79.5, 80.6, 2.6, REDM, toneI, .9, 18) });
+  items.push({ box: [[TCP[0] - 1.6, TCP[1] - 1.6, ZT1], [TCP[0] + 1.6, TCP[1] + 1.6, 80.5]], svg: cyl(TCP[0], TCP[1], ZT1, 79, 1.6, STEEL, toneI, .9, 6) + cyl(TCP[0], TCP[1], 79, 80.5, 1.1, matOf('#e8c45a'), toneI, .8, 12) });
+  for (const [x, y] of RODS) items.push({ box: [[x - 1.9, y - 1.9, ZT1], [x + 1.9, y + 1.9, 79.5]], svg: cyl(x, y, ZT1, ZT1 + 2, 1.9, STEEL, toneI, .8, 6) + rod([x, y, ZT1 + 2], [x, y, 79.5], 1, STEEL, toneI, .7, 1, 10) });
+  // the HT lead and the thermocouple lead lie on the flange top out to its edge
+  const e1 = polar(LEAD_A, 25.2, ZT1 + .6), e2 = polar(TCL_A, 25.2, ZT1 + .6);
+  items.push(...cable([[CX + .9, CY - 1.4, 89], [CX + 2, CY - 3.4, 86], polar(LEAD_A, 6.8, ZT1 + .6), e1, polar(LEAD_A, 26.6, ZT1 - .6)], st.sparkT > 0 ? '#ffd34d' : '#b8322a', .6));
+  items.push(...cable([[TCP[0], TCP[1], 80.5], [TCP[0] + .6, TCP[1] - .4, ZT1 + .6], polar(262, 18, ZT1 + .6), e2, polar(TCL_A, 26.6, ZT1 - .6)], '#e8c45a', .4));
+  return byDepth(items);
+}
+function leadDown(st){   // HT and thermocouple leads down the outside of both flanges to the bench
+  return cableSvg([polar(LEAD_A, 26.6, ZT1 - .6), polar(LEAD_A, 26.6, 4), polar(LEAD_A, 26.6, BH + .6), [polar(LEAD_A, 26.6, 0)[0], 64.2, BH + .6]], st.sparkT > 0 ? '#ffd34d' : '#b8322a', .6)
+    + cableSvg([polar(TCL_A, 26.6, ZT1 - .6), polar(TCL_A, 26.6, 4), polar(TCL_A, 26.6, BH + .5), [polar(TCL_A, 26.6, 0)[0], 64.2, BH + .5]], '#e8c45a', .4);
+}
+function cupItem(st, k){
+  const pz = 21 + 10*st.catK, A = ringZ(CX, CY, ZF1, 10, 28), B = ringZ(CX, CY, 25, 10, 28);
+  const hot = Math.max(st.plateGlow*.85, clamp((st.plateT - 25)/325)*.28), pm = { l: mix(PDM.l, '#ffb062', hot), m: mix(PDM.m, '#ff8a3d', hot), d: mix(PDM.d, '#c8501f', hot) };
+  let c = rod([CX, CY, ZF1], [CX, CY, pz], .7, STEEL, toneI, .6, .7, 10);
+  // heater element under the gauze (seen in see-through)
+  if (k > 0){ const coil = []; for (let i = 0; i <= 48; i++){ const a = i/48*4*Math.PI, r = 2 + 5.5*i/48; coil.push([CX + r*Math.cos(a), CY + r*Math.sin(a), pz - .35]); }
+    c += `<g opacity="${f(k)}"><path d="${pd(coil, false)}" fill="none" stroke="${INK}" stroke-width="1.5"/><path d="${pd(coil, false)}" fill="none" stroke="${st.plateT > 100 ? '#ff7a2a' : '#9a8f84'}" stroke-width=".7"/></g>`; }
+  c += cyl(CX, CY, pz, pz + .8, 8, pm, toneI, .9, 32);
+  // gauze weave on the top
+  let g = ''; for (let u = -6; u <= 6; u += 2){ const h = Math.sqrt(64 - u*u)*.96;
+    g += pd([[CX + u, CY - h, pz + .82], [CX + u, CY + h, pz + .82]], false) + pd([[CX - h, CY + u, pz + .82], [CX + h, CY + u, pz + .82]], false); }
+  c += `<path d="${g}" fill="none" stroke="${mix(pm.d, INK, .3)}" stroke-width=".45"/>`;
+  const cup = openShell(A, B, n => toneI(n, STEEL), c) + ink(pd(B), .9) + hullInk([...A, ...B], 1.1);
+  return { box: [[CX - 10, CY - 10, ZF1], [CX + 10, CY + 10, Math.max(25, pz + .8)]], svg: cup };
+}
+function electrodeItem(){
+  const parts = [
+    { box: [[CX - 1.5, CY - 1.5, 64], [CX + 1.5, CY + 1.5, ZG1]], svg: rod([CX, CY, ZG1], [CX, CY, 64], 1.5, CERAMIC, toneI, .8, 1.1, 14) },
+    { box: [[CX - .6, CY - .6, 58], [CX + .6, CY + .6, 64]], svg: rod([CX, CY, 64], [CX, CY, 58], .55, STEEL, toneI, .6, .55, 8) },
+    { box: [[CX + 2.2, CY - .6, 55], [CX + 3, CY + .6, ZG1]], svg: rod([CX + 2.6, CY, ZG1], [CX + 2.6, CY, 55.2], .55, STEEL, toneI, .6, .55, 8) },
+    { box: [[CX - .6, CY - .6, 54.6], [CX + 2.6, CY + .6, 55.8]], svg: rod([CX + 2.6, CY, 55.2], [CX - .3, CY, 55.2], .55, STEEL, toneI, .6, .55, 8) } ];
+  return { box: [[CX - 1.6, CY - 1.6, 54.6], [CX + 3.1, CY + 1.6, ZG1]], svg: byDepth(parts) };
+}
+const tcItem = () => ({ box: [[TCP[0] - .7, TCP[1] - .7, 46], [TCP[0] + .7, TCP[1] + .7, ZG1]],
+  svg: rod([TCP[0], TCP[1], ZG1], [TCP[0], TCP[1], 46.6], .5, STEEL, toneI, .6, .5, 8) + cyl(TCP[0], TCP[1], 46, 46.8, .75, matOf('#e8c45a'), toneI, .5, 10) });
+const MIST = (() => { const o = []; let s0 = 3; const r2 = () => (s0 = (s0*16807) % 2147483647)/2147483647; for (let i = 0; i < 70; i++) o.push([r2()*360, ZF1 + 3 + r2()*(ZG1 - ZF1 - 6), .35 + r2()*.5]); return o; })();
+function mistSvg(st, nearSide){
+  const a0 = mistAmt(st); if (a0 < .02) return '';
+  let o = '';
+  for (const [a, z, r] of MIST){ if (near(a - 0) !== nearSide) continue; const [X, Y] = P(...polar(a, RGI + .3, z)); o += circ(X, Y, r*CAM_K, '#ffffff'); }
+  return `<g opacity="${f(.65*a0)}">${o}</g>`;
+}
+function chamber(st, m, k){
+  let s = '';
+  const leadNear = near(LEAD_A);
+  if (!leadNear) s += leadDown(st);
+  // under the base flange: feet, legs, lower nuts, the solenoid on its bracket, its lead along the bench
+  const low = [];
+  for (const [x, y] of RODS) low.push({ box: [[x - 2.1, y - 2.1, BH], [x + 2.1, y + 2.1, ZF0]], svg: cyl(x, y, BH, BH + 1.4, 2.1, RUB, toneI, .8, 14) + rod([x, y, BH + 1.4], [x, y, ZF0], 1, STEEL, toneI, .8, 1, 12) + cyl(x, y, ZF0 - 1.8, ZF0, 1.9, STEEL, toneI, .8, 6) });
+  low.push({ box: [[CX - 3.6, CY - 3.6, 7.5], [CX + 3.6, CY + 3.6, ZF0]], svg: ghost(k, box(CX - 3.5, CY - 3.5, 8, CX + 3.5, CY + 3.5, 12.6, DARK, toneI, .9) + box(CX - 4.5, CY - 1, 12.6, CX + 4.5, CY + 1, ZF0, STEEL, toneI, .7),
+    cyl(CX, CY, 8.4, 12.2, 2.6, matOf('#d08a52'), toneI, .6, 18) + rod([CX, CY, 8.6], [CX, CY, ZF0], .7, STEEL, toneI, .5)) });
+  low.push(...cable([[CX, CY - 3.5, 10], [CX, CY - 5, BH + .6], [CX + 3, CY - 14, BH + .6], [40, 64.2, BH + .6]], '#3a3632', .5));
+  s += byDepth(low);
+  // base flange (with the inlet and vent bores, and the lift rod, seen in see-through)
+  const bores = rod([CX, CY + RF - .3, 17], [CX, CY + 15, 17], .9, DARK, toneI, .5) + rod([CX, CY + 15, 17], [CX, CY + 15, ZF1], .9, DARK, toneI, .5)
+    + rod([CX - RF + .3, CY, 17], [CX - 16, CY, 17], .9, DARK, toneI, .5) + rod([CX - 16, CY, 17], [CX - 16, CY, ZF1], .9, DARK, toneI, .5)
+    + rod([CX, CY, ZF0], [CX, CY, ZF1], .7, STEEL, toneI, .5);
+  s += ghost(k, cyl(CX, CY, ZF0, ZF1, RF, m, tone, 1.8, 48), bores);
+  // gasket ring the glass stands on
+  s += loft(ringZ(CX, CY, ZF1, RG + .6, 40), ringZ(CX, CY, ZF1 + .8, RG + .6, 40), () => '#3a3632');
+  // far tie rods (behind the glass), the glass's far wall, then everything inside
+  const rodsFar = RODS.filter(([x, y]) => depthOf([x - CX, y - CY, 0]) <= 0), rodsNear = RODS.filter(([x, y]) => depthOf([x - CX, y - CY, 0]) > 0);
+  s += rodsFar.map(([x, y]) => rodMid(x, y)).join('');
+  const outer = [...ringZ(CX, CY, ZF1, RG, 32), ...ringZ(CX, CY, ZG1, RG, 32)], inner = [...ringZ(CX, CY, ZF1, RGI, 32), ...ringZ(CX, CY, ZG1, RGI, 32)];
+  s += fill(sp(hull(outer.map(p => P(...p)))), GLASS, 'opacity=".24"') + mistSvg(st, false);
+  const items = [cupItem(st, k), electrodeItem(), tcItem()];
+  const sl = st.slow ? slowScene(st.slow.t) : null;
+  items.push(...molItems(st, sl ? .2 : 1).filter(Boolean));
+  if (sl){
+    const at = sl.atoms;
+    for (const a of at) items.push(atomItem(a.el, a.p, sl.s));
+    for (const [i, j, o] of SD.oldB) items.push(bondItem(at[i], at[j], o, sl.s, sl.oldA, 1, sl.ph.str));
+    for (const [i, j, o] of SD.newB) items.push(bondItem(at[i], at[j], o, sl.s, sl.newA));
+  }
+  let inside = byDepth(items.filter(Boolean)) + flashes(st);
+  // heat glow, flame front, spark
+  const g = clamp((st.T - 25)/2000);
+  if (g > .01) inside += fill(sp(hull(inner.map(p => P(...p)))), '#ff9a3a', `opacity="${f(.34*Math.pow(g, .7))}"`);
+  if (st.flame){ const [X, Y] = P(...GAP), R = st.flame.r*CAM_K, a = 1 - sstep(.7, 1, st.flame.age/st.flame.life);
+    inside += circ(X, Y, R, '#ffcf5a', `opacity="${f(.26*a)}"`) + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="none" stroke="#ff7a2a" stroke-width="2.2" opacity="${f(.8*a)}"/>`; }
+  if (sl){ const a = sstep(3.9, 4.4, st.slow.t)*(1 - sstep(4.6, 5.6, st.slow.t)), [X, Y] = P(...SC);
+    if (a > .01) inside += circ(X, Y, 15*CAM_K*(.6 + .4*a), '#ffe27a', `opacity="${f(.45*a)}"`) + circ(X, Y, 7*CAM_K, '#fff7d6', `opacity="${f(.6*a)}"`);
+    const b = sstep(3.15, 3.35, st.slow.t)*(1 - sstep(3.6, 3.9, st.slow.t));
+    if (b > .01) for (const [i, j] of SD.oldB){ const mp = P(...lerp3(sl.atoms[i].p, sl.atoms[j].p, .5)); inside += circ(mp[0], mp[1], 1.6*CAM_K, '#fff2a8', `opacity="${f(.9*b)}" stroke="#ff7a2a" stroke-width=".6"`); } }
+  if (st.sparkT > 0){ const [X, Y] = P(...GAP), a = clamp(st.sparkT/.3);
+    inside += circ(X, Y, 6*CAM_K, '#fff2a8', `opacity="${f(.7*a)}"`);
+    const zz = []; for (let i = 0; i <= 5; i++) zz.push([CX + (i % 2 ? .6 : -.6)*(i && i < 5 ? 1 : 0), CY, 58 - 2.6*i/5]);
+    inside += `<path d="${pd(zz, false)}" fill="none" stroke="#ffffff" stroke-width="1.4" opacity="${f(a)}"/><path d="${pd(zz, false)}" fill="none" stroke="#7fd3ff" stroke-width=".6" opacity="${f(a)}"/>`; }
+  s += clipHull(inner, inside);
+  // near glass: tint, two white streaks, mist, the walls' edges
+  let gl = fill(sp(hull(outer.map(p => P(...p)))), GLASS, 'opacity=".16"');
+  for (const [a0, a1, o] of [[-38, -30, .34], [-24, -21, .3], [44, 48, .2]]){ const a = YAW + a0, b = YAW + a1;
+    gl += fill(pd([polar(a, RG + .05, ZF1 + 4), polar(b, RG + .05, ZF1 + 4), polar(b, RG + .05, ZG1 - 4), polar(a, RG + .05, ZG1 - 4)]), '#ffffff', `opacity="${o}"`); }
+  gl += mistSvg(st, true);
+  for (const sg of [-1, 1]){ const a = YAW + 90*sg;
+    gl += line([polar(a, RG, ZF1), polar(a, RG, ZG1)], 1.6) + line([polar(a, RGI, ZF1), polar(a, RGI, ZG1)], .5); }
+  const nh = nearHalf(), arcN = (r, z) => arcUV(CX, CY, r, nh[0], nh[1], 24).map(([u, v]) => [u, v, z]);
+  gl += line(arcN(RG, ZF1 + .8), 1);
+  s += `<g pointer-events="none">${gl}</g>`;
+  s += rodsNear.map(([x, y]) => rodMid(x, y)).join('');
+  // top flange and what stands on it
+  s += ghost(k, cyl(CX, CY, ZG1, ZT1, RF, m, tone, 1.8, 48), rod([CX, CY, ZT1], [CX, CY, ZG1], .45, matOf('#d08a52'), toneI, .5));
+  s += topItems(st, k);
+  if (leadNear) s += leadDown(st);
+  return s;
+}
+
+/* ---------- control box: molecule display, bond-energy meter, spark button, catalyst switch ---------- */
+function ctrlBox(st, m, k){
+  const FR = facing([1, 0, 0]), BK = facing([-1, 0, 0]), SD2 = facing([0, 1, 0]);
+  const c = counts(st), e = bondE(st), FX = BX1 + .3;
+  let body = '';
+  if (BK){ const tb = tone([-1, 0, 0], m); body += fill(pd(on(PX(BX0), OUTB)), tb);
+    let v = ''; for (let z = 12; z <= 26; z += 3.5) v += pd([[BX0 - .2, 20, z], [BX0 - .2, 48, z]], false);
+    body += `<path d="${v}" fill="none" stroke="${INK}" stroke-width="1.1" opacity=".7"/>` + ink(pd(on(PX(BX0), OUTB)), 2); }
+  if (FR) body += fill(pd(on(PX(BX1), OUTB)), tone([1, 0, 0], m));
+  body += extrude(OUTB, BX0, BX1, m);
+  if (FR){
+    // molecule display
+    body += shape(on(PX(FX), rrUV(34.5, 14.5, 54, 30.5, 1.6)), '#1d2a26', 1.2);
+    body += tx(FX + .05, 44.25, 27.4, 'MOLECULES', 1.9, '#8af0ae', 800);
+    body += tx(FX + .05, 49.3, 22.6, `CH4 ${c.CH4}`, 2.6, '#8af0ae', 800) + tx(FX + .05, 39.6, 22.6, `O2 ${c.O2}`, 2.6, '#8af0ae', 800);
+    body += tx(FX + .05, 49.3, 17.6, `CO2 ${c.CO2}`, 2.6, '#8af0ae', 800) + tx(FX + .05, 39.6, 17.6, `H2O ${c.H2O}`, 2.6, '#8af0ae', 800);
+    // bond-energy meter: energy taken in breaking bonds, energy given out making them, and the difference
+    body += shape(on(PX(FX), rrUV(14, 14.5, 33.5, 30.5, 1.6)), '#1d2a26', 1.2);
+    body += tx(FX + .05, 23.75, 27.4, 'BOND kJ/mol', 1.9, '#8af0ae', 800);
+    body += tx(FX + .05, 31, 22.6, 'IN', 1.5, '#ffb347', 800) + tx(FX + .05, 31, 19.2, 'OUT', 1.5, '#8af0ae', 800);
+    for (const [z, val, col] of [[23.1, e.broken, '#ffb347'], [19.7, e.made, '#8af0ae']]){
+      body += fill(pd(on(PX(FX + .03), rectUV(16, z - .8, 29, z + .8))), '#2c3b36');
+      const y1 = 29 - 13*clamp(val/E_OUT); if (val > 0) body += fill(pd(on(PX(FX + .04), rectUV(y1, z - .8, 29, z + .8))), col); }
+    body += tx(FX + .05, 23.75, 15.8, `NET ${e.net > 0 ? '+' : ''}${e.net}`, 2, '#8af0ae', 800);
+    // labels under the controls
+    body += tx(FX, 47, 4.4, 'SPARK', 1.6, INK, 800) + tx(FX, 26, 4.4, 'CATALYST', 1.6, INK, 800) + tx(FX, 16.5, 4.4, 'HEAT', 1.4, INK, 800);
+    body += shape(on(PX(FX), ellUV(16.5, 8.5, .9, .9, 12)), st.plateT > 100 ? '#ff8a2e' : '#8d877a', .6);
+  }
+  if (FR) body += ink(pd(on(PX(BX1), OUTB)), 2);
+  body += hullInk([...on(PX(BX0), OUTB), ...on(PX(BX1), OUTB)], 2.6);
+  // side ports the leads plug into
+  let ports = '';
+  if (SD2) for (const x of PORTS) ports += rod([x, BY1, 8], [x, BY1 + 1, 8], 1.1, BRASS, toneI, .7, 1.1, 12);
+  // spark button and catalyst toggle on the front
+  let ctl = '';
+  if (FR){ const pz = st.press > 0 ? .7 : 1.8;
+    ctl += act('spark', cylX(BX1, BX1 + pz, 47, 8.5, 2.6, REDM, toneI, 1.1, 20));
+    const up = st.cat ? 1 : -1;
+    ctl += act('cat', cylX(BX1, BX1 + .7, 26, 8.5, 2, STEEL, toneI, .9, 16) + rod([BX1 + .7, 26, 8.5], [BX1 + 3.2, 26, 8.5 + 2.3*up], .55, STEEL, toneI, .8, .55, 10));
+  }
+  // inside (see-through): battery, circuit board, ignition coil, heater relay, wiring to the side ports
+  let ins = '';
+  if (k > 0){ const pcb = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, its = [];
+    its.push({ box: [[26, 40, BH], [38, 54, 11]], svg: box(26, 40, BH + .5, 38, 54, 11, DARK, toneI, .8) + box(26.5, 40.5, 11, 28, 42, 11.6, STEEL, toneI, .5) });
+    its.push({ box: [[56.5, 14, 12], [58, 54, 31]], svg: box(57, 14, 12, 58, 54, 31, pcb, toneI, .8) + box(56, 20, 16, 57, 28, 22, DARK, toneI, .5) + box(56, 34, 18, 57, 42, 24, DARK, toneI, .5) });
+    its.push({ box: [[27.5, 17.5, BH], [36.5, 26.5, 22.5]], svg: cyl(32, 22, BH + .5, 20, 4.5, DARK, toneI, 1, 20) + cyl(32, 22, 20, 22.5, 1.4, matOf('#d08a52'), toneI, .7, 12) });
+    its.push({ box: [[42, 16, BH], [49, 23, 10]], svg: box(42, 16, BH + .5, 49, 23, 10, matOf('#3f7fc0'), toneI, .7) });
+    its.push(...cable([[32, 22, 22.5], [32, 30, 22.5], [48, 52, 10], [48, BY1 - .2, 8]], '#b8322a', .45));
+    its.push(...cable([[57, 46, 14], [45, 50, 9], [45, BY1 - .2, 8]], '#e8c45a', .35));
+    its.push(...cable([[45.5, 23, 7], [42, 40, 7], [42, BY1 - .2, 8]], '#3a3632', .35));
+    its.push(...cable([[38, 47, 8], [50, 47, 8], [57, 46, 13]], '#3c6fb4', .35));
+    ins = byDepth(its); }
+  const bodyAll = k > 0 ? xrGhost(body, '', k, OUTB, BX0, BX1, m) + `<g opacity="${f(k)}">${ins}</g>` : body;
+  return (SD2 ? bodyAll + ports : ports + bodyAll) + ctl;
+}
+
+/* ---------- gas bottles, hoses, manifold, vent ---------- */
+function bottles(st, k){
+  const items = [];
+  items.push({ box: [[9, 128.5, BH], [23, 153, BH + 1.6]], svg: box(9, 128.5, BH, 23, 153, BH + 1.6, STEEL, toneI, 1) });
+  for (const [x, y, gas] of BOT){
+    const body = gas === 'CH4' ? REDM : DARK, sh = gas === 'CH4' ? REDM : CERAMIC, z0 = BH + 1.6;
+    let b = '';
+    const bottle = cyl(x, y, z0, 38, 5, body, tone, 1.4, 28)
+      + loft(ringZ(x, y, 38, 5, 28), ringZ(x, y, 42, 3.6, 28), n => tone(n, sh)) + loft(ringZ(x, y, 42, 3.6, 28), ringZ(x, y, 43.6, 1.8, 28), n => tone(n, sh))
+      + hullInk([...ringZ(x, y, 38, 5), ...ringZ(x, y, 43.6, 1.8)], 1.2)
+      + cyl(x, y, 43.6, 45.6, 1.5, BRASS, toneI, .8, 14) + cyl(x, y, 45.6, 49, 1.9, BRASS, toneI, .9, 6) + cyl(x, y, 49, 50, 2.6, DARK, toneI, .9, 16);
+    b += openShell(ringZ(x, y, z0, 6, 28), ringZ(x, y, z0 + 4, 6, 28), n => toneI(n, STEEL), bottle) + ink(pd(ringZ(x, y, z0 + 4, 6, 28)), .8);
+    // regulator off the valve's side outlet, with its adjusting knob
+    const reg = cylX(x + 1.8, x + 6.4, y, 47.3, 2.1, BRASS, toneI, 1, 18) + cyl(x + 4.2, y, 49.2, 51.4, 1.1, DARK, toneI, .8, 12);
+    b = facing([1, 0, 0]) ? b + reg : reg + b;
+    items.push({ box: [[x - 6.2, y - 6.2, BH], [x + 6.5, y + 6.2, 52]], svg: b });
+    const col = gas === 'CH4' ? '#e0653a' : '#3c6fb4', px = gas === 'CH4' ? 31 : 37, open = st.inK > .05;
+    items.push(...cable([[x + 6.6, y, 47.3], [24.3, y, 45.5], [24.3, y, 6], [25.6, y, BH + .6], [px, y, BH + .6], [px, 129.6, BH + .6], [px, 128.7, 6.5], [px, 128.25, 8]], open ? mix(col, '#ffffff', .25) : col, .6));
+  }
+  return byDepth(items);
+}
+function manifold(st, k){
+  const items = [], open = st.inK;
+  const blk = box(28, 120, BH, 40, 128, 19, STEEL, toneI, 1.1);
+  const bores = rod([31, 128, 8], [31, 124, 8], .7, DARK, toneI, .4) + rod([37, 128, 8], [37, 124, 8], .7, DARK, toneI, .4) + rod([31, 124, 8], [31, 124, 17], .7, DARK, toneI, .4)
+    + rod([37, 124, 8], [37, 124, 17], .7, DARK, toneI, .4) + rod([31, 124, 17], [37, 124, 17], .7, DARK, toneI, .4) + rod([34, 124, 17], [34, 120, 17], .7, DARK, toneI, .4);
+  items.push({ box: [[28, 120, BH], [40, 128, 19]], svg: ghost(k, blk, bores) });
+  for (const [x, col] of [[31, '#e0653a'], [37, '#3c6fb4']]){
+    const a = rad(90*open), lv = [x + 2.6*Math.cos(a), 124 + 2.6*Math.sin(a), 23.1];
+    items.push({ box: [[x - 2.4, 121.6, 19], [x + 2.4, 126.4, 23.4]], svg: rod([x, 124, 19], [x, 124, 21], .6, STEEL, toneI, .6) + cyl(x, 124, 21, 22.6, 2.2, matOf(col), toneI, .9, 18) + line([[x, 124, 22.65], lv], 1.1) });
+    items.push({ box: [[x - 1, 128, 7], [x + 1, 128.3, 9]], svg: rod([x, 128, 8], [x, 128.3, 8], .9, BRASS, toneI, .6) });
+  }
+  // outlet to the base flange through the flashback arrestor
+  items.push({ box: [[32, 115.75, 15], [36, 120, 19]], svg: rod([CX, 120, 17], [CX, 119, 17], 1.1, STEEL, toneI, .8) + rod([CX, 119, 17], [CX, 116.6, 17], 2, BRASS, toneI, .9, 2, 16) + rod([CX, 116.6, 17], [CX, 115.2, 17], 1.1, STEEL, toneI, .8) });
+  return byDepth(items);
+}
+const HOSE_HI = [[2.8, 90, 17], [1.2, 90, 15.6], [.3, 90, 11], [-.5, 90, 6], [-.7, 90, BH]], HOSE_LO = [[-.7, 90, BH], [-.75, 90, -9]];
+function vent(st){
+  const a = rad(90*st.ventK), lv = [4.25 + 3.4*Math.sin(a), 90 + 3.4*Math.cos(a), 21.2];
+  const items = [
+    { box: [[5.5, 88.8, 15.8], [8.35, 91.2, 18.2]], svg: rod([8.8, 90, 17], [5.5, 90, 17], 1.1, STEEL, toneI, .8) },
+    { box: [[3, 88.3, 14.8], [5.5, 91.7, 21.4]], svg: box(3, 88.3, 14.8, 5.5, 91.7, 19.2, BRASS, toneI, .9) + rod([4.25, 90, 19.2], [4.25, 90, 21.2], .5, STEEL, toneI, .6) + line([[4.25, 90, 21.2], lv], 1.4) },
+    ...cable(HOSE_HI, '#6c6660', 1.2) ];
+  return byDepth(items);
+}
+function benchLeads(st){
+  const hx = polar(LEAD_A, 26.6, 0)[0], tx2 = polar(TCL_A, 26.6, 0)[0];
+  return [...cable([[hx, 64.2, BH + .6], [48, 60, BH + .6], [48, 58.4, 5], [48, BY1 + 1.25, 8]], st.sparkT > 0 ? '#ffd34d' : '#b8322a', .6),
+          ...cable([[tx2, 64.2, BH + .5], [45, 60, BH + .5], [45, 58.4, 5], [45, BY1 + 1.25, 8]], '#e8c45a', .4),
+          ...cable([[40, 64.2, BH + .6], [42, 60, BH + .6], [42, 58.4, 5], [42, BY1 + 1.25, 8]], '#3a3632', .5)];
+}
+
+/* ---------- energy diagram (see-through): energy along the reaction, with the activation hump ---------- */
+const Ecurve = (x, ea) => x < .2 ? 0 : x < .5 ? ea*Math.pow(Math.sin((x - .2)/.3*Math.PI/2), 2) : x < .8 ? ea + (DH - ea)*sstep(.5, .8, x) : DH;
+function energyCard(st){
+  const kk = INK_K, w = 112*kk, h = 76*kk;
+  // under the object, between the two label columns
+  const vb = document.getElementById('fig').viewBox.baseVal, foot = [0, W].flatMap(x => [0, D].map(y => P(x, y, 0)));
+  const cx = vb.x + vb.width/2 + vb.width*.06, cy = Math.min(Math.max(...foot.map(p => p[1])) + h/2 + 3*kk, vb.y + vb.height - h/2 - 2*kk);
+  const Lx = cx - w/2, Ty = cy - h/2, px0 = Lx + 10*kk, px1 = Lx + w - 22*kk, py0 = Ty + 16*kk, py1 = Ty + h - 10*kk;
+  const ex = x => px0 + x*(px1 - px0), ey = E => py0 + (260 - E)/(260 + 880)*(py1 - py0);
+  const txt = (x, y, s, size, col = INK, anchor = 'middle', wgt = 800) => `<text x="${f(x)}" y="${f(y)}" font-size="${f(size*kk)}" text-anchor="${anchor}" font-family="ui-monospace,Menlo,monospace" font-weight="${wgt}" letter-spacing=".03em" fill="${col}">${s}</text>`;
+  const path = ea => { let d = ''; for (let i = 0; i <= 60; i++){ const x = i/60; d += (i ? 'L' : 'M') + f(ex(x)) + ' ' + f(ey(Ecurve(x, ea))); } return d; };
+  const cat = !!st.cat, ea = cat ? EA_CAT : EA;
+  let o = `<rect x="${f(Lx)}" y="${f(Ty)}" width="${f(w)}" height="${f(h)}" rx="${f(5*kk)}" fill="#fff4d6" stroke="${INK}" stroke-width="1.3"/>`;
+  o += txt(Lx + 6*kk, Ty + 9*kk, 'ENERGY  kJ/mol', 5.2, INK, 'start');
+  o += `<path d="M${f(px0)} ${f(Ty + 12*kk)}L${f(px0)} ${f(py1 + 2*kk)}L${f(px1 + 18*kk)} ${f(py1 + 2*kk)}" fill="none" stroke="${INK}" stroke-width=".9"/>`;
+  o += txt((px0 + px1)/2, py1 + 7.5*kk, 'REACTION PROGRESS', 4, '#857d6e');
+  o += `<path d="${path(EA)}" fill="none" stroke="${INK}" stroke-width="${cat ? 1 : 1.8}" stroke-linejoin="round" opacity="${cat ? .55 : 1}"/>`;
+  o += `<path d="${path(EA_CAT)}" fill="none" stroke="#2f8a4a" stroke-width="${cat ? 1.8 : 1}" stroke-dasharray="${f(3*kk)} ${f(2*kk)}" stroke-linejoin="round" opacity="${cat ? 1 : .6}"/>`;
+  o += `<path d="M${f(ex(.07))} ${f(ey(0))}L${f(ex(1))} ${f(ey(0))}" fill="none" stroke="${INK}" stroke-width=".6" stroke-dasharray="${f(1.5*kk)} ${f(1.5*kk)}" opacity=".6"/>`;
+  o += txt(ex(.02), ey(0) + 6*kk, 'CH4 + 2 O2', 4.4, INK, 'start');
+  o += txt(ex(.98), ey(DH) - 2.5*kk, 'CO2 + 2 H2O', 4.4, INK, 'end');
+  o += txt(ex(.5), ey(EA) - 2.5*kk, `Ea ${EA}`, 4.4, INK);
+  o += txt(ex(.5) + 9*kk, ey(EA_CAT) + 1*kk, `Pd ${EA_CAT}`, 4, '#2f8a4a', 'start');
+  // the heat given out
+  const ax = px1 + 9*kk;
+  o += `<path d="M${f(ax)} ${f(ey(0))}L${f(ax)} ${f(ey(DH) - 1.5*kk)}M${f(ax - 1.6*kk)} ${f(ey(DH) - 3.5*kk)}L${f(ax)} ${f(ey(DH) - .5*kk)}L${f(ax + 1.6*kk)} ${f(ey(DH) - 3.5*kk)}" fill="none" stroke="#c8352b" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>`;
+  o += txt(ax + 1.2*kk, (ey(0) + ey(DH))/2, `${DH}`, 4.4, '#c8352b', 'middle');
+  o += txt(ax + 1.2*kk, (ey(0) + ey(DH))/2 + 5*kk, 'HEAT', 3.4, '#c8352b', 'middle');
+  // where the reaction is now
+  const x = progress(st);
+  o += circ(ex(x), ey(Ecurve(x, ea)), 2.6*kk, 'var(--accent,#f4b829)', `stroke="${INK}" stroke-width="1"`);
+  return o;
+}
+
+/* ---------- state readouts ---------- */
+function counts(st){
+  const c = { CH4:0, O2:0, CO2:0, H2O:0 };
+  for (const m of st.mols) if (m.mode !== 'out') c[m.kind]++;
+  for (const e of st.events){ if (e.t < .5){ c.CH4++; c.O2 += 2; } else { c.CO2++; c.H2O += 2; } }
+  return c;
+}
+function bondE(st){
+  if (st.slow){ const ph = slowPhase(st.slow.t); return { broken: ph.broken, made: ph.made, net: ph.broken - ph.made }; }
+  const c = counts(st), fr = clamp(c.CO2/N0), broken = Math.round(E_IN*fr), made = Math.round(E_OUT*fr);
+  return { broken, made, net: broken - made };
+}
+const progress = st => st.slow ? slowPhase(st.slow.t).x : (() => { const c = counts(st), n = c.CH4 + c.CO2; if (!n) return .04;
+  const busy = st.events.length ? Math.max(...st.events.map(e => e.t)) : 0; return st.events.length ? .2 + .6*clamp(busy) : c.CO2 ? .95 : .04; })();
+const mistAmt = st => { const c = counts(st); return clamp((90 - st.T)/50)*c.H2O/8; };
+const pressure = st => { const c = counts(st), n = c.CH4 + c.O2 + c.CO2 + c.H2O*(1 - .93*clamp((90 - st.T)/50)); return (n/12)*(st.T + 273)/298; };
+
+/* ---------- labels ---------- */
+function nearestRod(){ return RODS.slice().sort((a, b) => depthOf([b[0] - CX, b[1] - CY, 0]) - depthOf([a[0] - CX, a[1] - CY, 0]))[0]; }
+function molLabels(st){
+  const out = [], seen = {};
+  const names = { CH4:'METHANE CH4', O2:'OXYGEN O2', CO2:'CARBON DIOXIDE CO2', H2O:'WATER H2O' };
+  const front = st.mols.filter(m => !m.mode).sort((a, b) => depthOf(b.p) - depthOf(a.p));
+  for (const m of front){ if (seen[m.kind]) continue; seen[m.kind] = 1; out.push({ at: m.p, text: names[m.kind], on: !!st.events.length });
+    const at = atomsOf(m);
+    if (m.kind === 'CH4') out.push({ at: lerp3(at[0].p, at[1].p, .55), text: 'C-H BOND', on: false });
+    if (m.kind === 'O2') out.push({ at: lerp3(at[0].p, at[1].p, .5), text: 'O=O BOND', on: false });
+    if (m.kind === 'CO2') out.push({ at: lerp3(at[0].p, at[1].p, .5), text: 'C=O BOND', on: false });
+    if (m.kind === 'H2O') out.push({ at: lerp3(at[0].p, at[1].p, .5), text: 'O-H BOND', on: false }); }
+  return out;
+}
+function insideLabels(st){
+  const gn = YAW - 35, [rx, ry] = nearestRod(), pz = 21 + 10*st.catK, sl = st.slow ? slowScene(st.slow.t) : null;
+  const L = [
+    { at: polar(gn, RG, 62), text: 'GLASS CYLINDER', on: false },
+    { at: polar(YAW - 10, RF, 74), text: 'TOP FLANGE', on: false },
+    { at: polar(YAW + 20, RF, 17), text: 'BASE FLANGE', on: false },
+    { at: [CX, CY, 84], text: 'SPARK PLUG', on: st.sparkT > 0 },
+    { at: [CX, CY, 57], text: 'SPARK GAP', on: st.sparkT > 0 },
+    { at: polar(LEAD_A, 26.6, 40), text: 'HT LEAD', on: st.sparkT > 0 },
+    { at: [GAUGE[0], GAUGE[1], GAUGE[2] + 3], text: 'PRESSURE GAUGE', on: pressure(st) > 1.5 },
+    { at: [GAUGE[0], GAUGE[1] - GR*.5, GAUGE[2] - 2], text: 'BOURDON TUBE', on: pressure(st) > 1.5 },
+    { at: [BURST[0], BURST[1], 80.6], text: 'BURST DISC', on: false },
+    { at: [TCP[0], TCP[1], 50], text: 'THERMOCOUPLE', on: st.T > 60 },
+    { at: [CX + 5, CY, pz + .8], text: 'PALLADIUM GAUZE', on: !!st.cat },
+    { at: [CX, CY, ZF1 + 2], text: 'LIFT ROD', on: st.catK > 0 && st.catK < 1 },
+    { at: [CX, CY - 3.5, 10], text: 'SOLENOID', on: st.catK > 0 && st.catK < 1 },
+    { at: [CX, CY + 20, 17], text: 'GAS INLET', on: st.inK > .05 },
+    { at: [4.25, 90, 19], text: 'VENT VALVE', on: st.ventK > .05 },
+    { at: [16, 135, 30], text: 'METHANE BOTTLE', on: st.inK > .05 },
+    { at: [16, 146, 30], text: 'OXYGEN BOTTLE', on: st.inK > .05 },
+    { at: [34, 124, 19], text: 'GAS MANIFOLD', on: st.inK > .05 },
+    { at: [CX, 117.8, 19], text: 'FLASHBACK ARRESTOR', on: false },
+    { at: [BX1, 44, 30.5], text: 'MOLECULE DISPLAY', on: false },
+    { at: [BX1, 23.75, 30.5], text: 'BOND ENERGY METER', on: !!st.events.length || !!st.slow },
+    { at: [BX1 + 1, 47, 8.5], text: 'SPARK BUTTON', on: st.press > 0 },
+    { at: [32, 22, 18], text: 'IGNITION COIL', on: st.sparkT > 0 } ];
+  if (sl){ L.push({ at: sl.atoms[0].p, text: 'CARBON ATOM', on: true }, { at: sl.atoms[1].p, text: 'HYDROGEN ATOM', on: true }, { at: sl.atoms[6].p, text: 'OXYGEN ATOM', on: true }); }
+  else L.push(...molLabels(st));
+  if (st.flame) L.push({ at: add3(GAP, [0, 0, -Math.min(st.flame.r, 30)]), text: 'FLAME FRONT', on: true });
+  return L;
+}
+function surfaceLabels(st){
+  const L = [
+    { at: polar(YAW - 35, RG, 62), text: 'GLASS CHAMBER', on: false },
+    { at: [CX, CY, 88], text: 'SPARK PLUG', on: st.sparkT > 0 },
+    { at: [GAUGE[0], GAUGE[1], GAUGE[2] + GR], text: 'PRESSURE GAUGE', on: pressure(st) > 1.5 },
+    { at: [16, 135, 30], text: 'METHANE BOTTLE', on: st.inK > .05 },
+    { at: [16, 146, 30], text: 'OXYGEN BOTTLE', on: st.inK > .05 },
+    { at: [34, 124, 19], text: 'GAS MANIFOLD', on: st.inK > .05 },
+    { at: [(BX0 + BX1)/2, (BY0 + BY1)/2, BZ1], text: 'CONTROL BOX', on: false } ];
+  if (facing([1, 0, 0])) L.push({ at: [BX1, 44, 30.5], text: 'MOLECULE DISPLAY', on: false }, { at: [BX1, 23.75, 30.5], text: 'BOND ENERGY METER', on: false }, { at: [BX1 + 1, 47, 8.5], text: 'SPARK BUTTON', on: st.press > 0 }, { at: [BX1 + 2, 26, 9], text: 'CATALYST SWITCH', on: !!st.cat });
+  return [...L, ...molLabels(st)];
+}
+
+/* ---------- scene ---------- */
+// the bench is long, so the label columns only both fit if the end of it that pokes out sideways is left out of the bounds
+function labelBounds(items){
+  const vb = document.getElementById('fig').viewBox.baseVal, k = INK_K, fs = 8.6*k;
+  const wMax = Math.max(...items.map(it => it.text.length))*fs*.62 + fs*1.5 + 12*k;
+  const fits = B => { const xs = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) xs.push(P(x, y, z)[0]);
+    return Math.min(...xs) - vb.x >= wMax && vb.x + vb.width - Math.max(...xs) >= wMax; };
+  let best = [0, W, 0, D, 0, TOPZ];
+  for (let t = 0; t <= 60; t += 5){
+    for (const B of [[0, W, t, D, 0, TOPZ], [0, W, 0, D - t, 0, TOPZ], [0, W, t/2, D - t/2, 0, TOPZ]]) if (fits(B)) return B;
+    best = [0, W, t/2, D - t/2, 0, TOPZ]; }
+  return best;
+}
+function shadows(){
+  const s = castShadow([...ringZ(CX, CY, BH, RF, 16), ...ringZ(CX, CY, 92, RF*.6, 16)], BH)
+    + castShadow([[BX0, BY0, BH], [BX1, BY0, BH], [BX1, BY1, BH], [BX0, BY1, BH], [BX0, BY0, BZ1], [BX1, BY0, BZ1], [BX1, BY1, BZ1], [BX0, BY1, BZ1]], BH)
+    + castShadow([...ringZ(16, 135, BH, 6, 12), ...ringZ(16, 146, BH, 6, 12), ...ringZ(16, 135, 50, 3, 12), ...ringZ(16, 146, 50, 3, 12)], BH)
+    + castShadow([[28, 120, BH], [40, 120, BH], [40, 128, BH], [28, 128, BH], [28, 120, 22], [40, 120, 22], [40, 128, 22], [28, 128, 22]], BH);
+  return clipTo(BTOP, `<g opacity=".8">${s}</g>`);
+}
+function scene(st, m){
+  const k = ease(st.xr || 0), back = facing([-1, 0, 0]);
+  let s = '';
+  if (!back) s += cableSvg(HOSE_LO, '#6c6660', 1.2);
+  s += board(0, 0, W, D, BH, 6);
+  if (back) s += cableSvg(HOSE_LO, '#6c6660', 1.2);
+  s += shadows();
+  s += byDepth([
+    { box: [[8.4, 64.3, 0], [60, 115.7, TOPZ]], svg: chamber(st, m, k) },
+    { box: [[BX0, BY0, BH], [BX1 + 3.3, BY1 + 1.05, BZ1]], svg: ctrlBox(st, m, k) },
+    { box: [[9, 128.1, BH], [38, 153, 52]], svg: bottles(st, k) },
+    { box: [[28, 115.75, BH], [40, 128, 24]], svg: manifold(st, k) },
+    { box: [[-1, 86, 0], [8.35, 94, 22]], svg: vent(st) },
+    ...benchLeads(st) ]);
+  if (k > .02) s += `<g opacity="${f(k)}">${energyCard(st)}</g>`;
+  // in labelled see-through the right label column needs the stats corner (the card and the box screens carry the numbers)
+  document.documentElement.classList.toggle('rx-xr', k > .6);
+  const items = k > .6 ? insideLabels(st) : surfaceLabels(st);
+  s += xrCallouts(items, labelBounds(items));
+  return s;
+}
+
+/* ---------- behaviour (one state object, one clock) ---------- */
+function moveGas(st, dt){
+  const sp2 = 7*Math.sqrt((st.T + 273)/298);
+  for (const m of st.mols){
+    m.q = qNorm(qMul(qAxis(m.w, m.ws*dt*(.6 + .4*sp2/7)), m.q));
+    if (m.steer){ const d = sub(m.steer, m.p), Ld = Math.hypot(...d), stp = Math.min(Ld, m.ss*dt);
+      if (Ld > 1e-3) m.p = add3(m.p, scl3(d, stp/Ld));
+      if (Ld - stp < .05){ if (m.mode === 'in'){ m.mode = null; m.steer = null; m.v = rdir(); } else if (m.mode === 'out') m.gone = true; else m.arrived = true; }
+      continue; }
+    m.p = add3(m.p, scl3(m.v, sp2*dt));
+    const r = MOL[m.kind].r, lm = limits(st, m, r);
+    if (lm.rr > lm.rmax){ const n = [(m.p[0] - CX)/lm.rr, (m.p[1] - CY)/lm.rr, 0], vn = dot(m.v, n);
+      if (vn > 0) m.v = sub(m.v, scl3(n, 2*vn)); m.p = [CX + n[0]*lm.rmax, CY + n[1]*lm.rmax, m.p[2]]; }
+    if (m.p[2] < lm.lo){ m.p[2] = lm.lo; m.v[2] = Math.abs(m.v[2]); }
+    if (m.p[2] > lm.hi){ m.p[2] = lm.hi; m.v[2] = -Math.abs(m.v[2]); }
+  }
+  st.mols = st.mols.filter(m => !m.gone);
+  const free = st.mols.filter(m => !m.steer);
+  for (let i = 0; i < free.length; i++) for (let j = i + 1; j < free.length; j++){
+    const a = free[i], b = free[j], dd = sub(b.p, a.p), dl = Math.hypot(...dd), rm = MOL[a.kind].r + MOL[b.kind].r - 1;
+    if (dl > rm || dl < 1e-6) continue;
+    const n = scl3(dd, 1/dl), va = dot(a.v, n), vb = dot(b.v, n);
+    if (va - vb > 0){ a.v = add3(a.v, scl3(n, vb - va)); b.v = add3(b.v, scl3(n, va - vb)); a.v = norm(a.v); b.v = norm(b.v); }
+    const push = (rm - dl)/2; a.p = sub(a.p, scl3(n, push)); b.p = add3(b.p, scl3(n, push));
+  }
+}
+function simStep(st, dt){
+  st.catK = clamp(st.catK + (st.cat ? 1 : -1)*dt/.9);
+  st.plateT += ((st.cat ? 350 : Math.min(st.plateT, Math.max(25, st.T))) - st.plateT)*Math.min(1, dt/(st.cat ? 1.2 : 3));
+  st.plateGlow = Math.max(0, st.plateGlow - dt/1.4);
+  st.sparkT = Math.max(0, st.sparkT - dt); st.press = Math.max(0, st.press - dt);
+  st.inK = clamp(st.inK + (st.reset && st.reset.t > 1.1 ? 1 : -1)*dt/.3); st.ventK = clamp(st.ventK + (st.reset && st.reset.t < 1.3 ? 1 : -1)*dt/.3);
+  if (st.slow){ if (!st.slow.hold) st.slow.t += dt; if (st.slow.t >= SLOW_T) st.slow = null; return; }   // the gas waits while the replay runs
+  if (st.reset){ const r = st.reset; r.t += dt;
+    if (r.t > 1.2) st.mols = st.mols.filter(m => m.mode !== 'out');
+    while (r.t > 1.2 && r.n < FRESH.length && r.t > 1.2 + r.n*.13){ const kind = FRESH[r.n++], mm = newMol(kind, IIN.slice());
+      mm.steer = freshSpot(st, st.mols, MOL[kind].r); mm.mode = 'in'; mm.ss = 45; st.mols.push(mm); }
+    st.T += (25 - st.T)*Math.min(1, dt/.4);
+    if (r.t > 3.2){ st.reset = null; for (const m of st.mols) if (m.mode === 'in'){ m.mode = null; m.steer = null; } } }
+  moveGas(st, dt);
+  for (const e of st.events){ e.t += dt/e.dur; if (e.t >= 1){ st.mols.push(...e.products); st.T += e.heat; if (e.cat) st.plateGlow = 1;
+    for (const p of e.products) if (e.cat) p.v = norm([rnd() - .5, rnd() - .5, 1.2]); } }
+  st.events = st.events.filter(e => e.t < 1);
+  if (st.flame){ const fl = st.flame; fl.age += dt; fl.r = Math.min(fl.rmax, fl.r + 36*dt);
+    for (const m of st.mols.slice()) if (m.kind === 'CH4' && !m.mode && dist3(m.p, GAP) < fl.r) react(st, m, null, .42, 2775/N0);
+    if (fl.age > fl.life) st.flame = null; }
+  // catalysis: on the hot palladium a CH4 and two O2 meet on the surface and react without a flame
+  if (st.cat && st.catK > .98 && st.plateT > 320 && !st.reset){
+    const onPlate = st.mols.filter(m => m.mode === 'cat');
+    if (onPlate.length === 3 && onPlate.every(m => m.arrived)){ const ch4 = onPlate.find(m => m.kind === 'CH4'), o2 = onPlate.filter(m => m.kind === 'O2');
+      for (const m of onPlate){ m.mode = null; m.steer = null; m.arrived = false; }
+      const ev = react(st, ch4, o2, .8, 110); if (ev) ev.cat = true; st.catT = .5; }
+    else if (!onPlate.length && (st.catT -= dt) <= 0){
+      const top = 21 + 10*st.catK + .8, pc = [CX, CY, top];
+      const ch4 = st.mols.filter(m => m.kind === 'CH4' && !m.mode).sort((a, b) => dist3(a.p, pc) - dist3(b.p, pc))[0];
+      const o2 = st.mols.filter(m => m.kind === 'O2' && !m.mode).sort((a, b) => dist3(a.p, pc) - dist3(b.p, pc)).slice(0, 2);
+      if (ch4 && o2.length === 2){ const spots = [[CX, CY, top + 4.4], [CX + 4.8, CY + 1.5, top + 3.4], [CX - 4.8, CY - 1.5, top + 3.4]];
+        [ch4, ...o2].forEach((m, i) => { m.mode = 'cat'; m.steer = spots[i]; m.ss = 13; m.arrived = false; }); } } }
+  else for (const m of st.mols) if (m.mode === 'cat'){ m.mode = null; m.steer = null; m.arrived = false; }
+  st.T += (25 - st.T)*Math.min(1, dt/(st.flame || st.events.length ? 6 : 2.6));
+}
+
+let ui;
+function spark(st){
+  if (st.reset) return ui.flash('Filling the chamber: one moment');
+  if (st.slow) return ui.flash('The replay is running: wait for it to finish');
+  st.sparkT = .3; st.press = .25;
+  if (!st.mols.some(m => m.kind === 'CH4' && !m.mode)) return ui.flash('No methane left: reset the gas');
+  st.flame = { r: 0, age: 0, life: 1.6, rmax: 46 };
+}
+function slowMo(st){
+  if (st.reset) return ui.flash('Filling the chamber: one moment');
+  if (st.flame || st.events.length) return ui.flash('Let the flame finish first');
+  st.slow = { t: 0 };
+}
+function resetGas(st){
+  st.slow = null; st.flame = null; st.events = [];
+  for (const m of st.mols){ m.mode = 'out'; m.steer = VIN; m.ss = 34; m.arrived = false; }
+  st.reset = { t: 0, n: 0 };
+}
+function setCat(st, on){ st.cat = on ? 1 : 0; }
+
+const STATE = { pal:'cobalt', mols:[], events:[], T:25, flame:null, slow:null, reset:null, sparkT:0, press:0, cat:0, catK:0, plateT:25, plateGlow:0, catT:0, inK:0, ventK:0, freeze:false };
+STATE.mols = fillGas(STATE, FRESH);
+ui = mountFigure({
+  fig:'R1', title:'A chemical reaction', turn:'full',
+  size:[W, D, TOPZ], palette:'cobalt',
+  state: STATE,
+  scene,
+  readout: st => `${Math.round(st.T)} C`,
+  stats: st => { const c = counts(st), e = bondE(st);
+    return [ { label:'CH4 / O2 → CO2 / H2O', value:`${c.CH4} / ${c.O2} → ${c.CO2} / ${c.H2O}`, small:true },
+             { label:'Net bond energy', value:`${e.net > 0 ? '+' : ''}${e.net.toLocaleString('en-US')} kJ/mol`, small:true },
+             { label:'Gas', value:`${Math.round(st.T).toLocaleString('en-US')} °C · ${pressure(st).toFixed(1)} bar`, small:true } ]; },
+  buttons:[
+    { label:'Spark', onClick: st => { spark(st); kick(); } },
+    { label:'Slow motion', onClick: st => { slowMo(st); kick(); } },
+    { label:'Reset gas', onClick: st => { resetGas(st); kick(); } },
+    { label:'Catalyst', choices: st => [ { label:'Off', current: !st.cat, onClick: s2 => { setCat(s2, 0); kick(); } }, { label:'Palladium at 350 C', current: !!st.cat, onClick: s2 => { setCat(s2, 1); kick(); } } ] },
+  ],
+  acts:{ spark: st => { spark(st); kick(); }, cat: st => { setCat(st, !st.cat); kick(); } },
+  params:(st, q) => {
+    if (q.get('state') === 'burnt'){ st.mols = fillGas(st, BURNT); }
+    if (q.has('T')) st.T = +q.get('T');
+    if (q.get('cat') === '1'){ st.cat = 1; st.catK = 1; st.plateT = 350; }
+    if (q.has('slow')) st.slow = { t: +q.get('slow'), hold: true };
+    if (q.get('freeze') === '1') st.freeze = true;
+    if (q.has('flame')){ const fr = +q.get('flame'); st.freeze = true; st.flame = { r: fr*46, age: fr*1.6*.5, life: 1.6, rmax: 46 };
+      for (const m of st.mols.slice()) if (m.kind === 'CH4' && dist3(m.p, GAP) < st.flame.r){ const ev = react(st, m, null, .42, 0); if (ev) ev.t = .55; }
+      st.T = 25 + 2775*(1 - st.mols.filter(m => m.kind === 'CH4').length/N0); st.sparkT = .2; }
+  },
+});
+// the gas keeps moving while anything is happening and for half a minute after (moving the pointer over it wakes it);
+// if the clock barely moves between frames (a headless virtual-time screenshot), the loop gives up instead of spinning
+let looping = false, idleT = 0, frames = 0, clock = 0;
+function kick(){ idleT = 0; if (looping || ui.st.freeze) return; looping = true; frames = 0; clock = 0;
+  ui.animate(dt => { const st = ui.st; simStep(st, dt); frames++; clock += dt;
+    const busy = st.flame || st.events.length || st.slow || st.reset || st.sparkT > 0 || Math.abs(st.T - 25) > 1 || (st.catK > 0 && st.catK < 1) || st.mols.some(m => m.mode);
+    idleT = busy ? 0 : idleT + dt; looping = idleT < 30 && !(frames > 60 && clock < frames*.003); return looping; }); }
+kick();
+document.getElementById('fig').addEventListener('pointermove', kick);
+xrMount(() => ui, () => '');
+document.head.insertAdjacentHTML('beforeend', '<style>html.rx-xr:not(.nolabels) #stats{display:none}</style>');
+</script></body></html>
