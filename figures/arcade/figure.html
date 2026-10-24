@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Arcade cabinet</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Real process (where every coin and every signal is after each step):
+   1. Insert coin: the quarter goes edge-first into the slit of the left coin entry on the coin door, rolls down the coin
+      mech (it checks size and metal; a slug goes to the coin return cup), drops past the coin switch, whose wire arm
+      clicks once, and falls into the cash box. The coin switch grounds a pin on the JAMMA edge connector: the game
+      board adds a credit (CREDIT 1 on screen) and pulses the coin meter on the door, which counts coins for the operator.
+   2. Start: the start button's microswitch takes one credit and the game begins: 3 ships, score 0.
+   3. Play: the joystick's actuator presses one of four microswitches (up, down, left, right); the fire button has its
+      own. The board's CPU reads them, moves the ship, fires, and sends red, green, blue and sync to the monitor chassis,
+      which steers the CRT's electron beams with the deflection yoke. Rocks fall; a shot breaks them (+50 / +100).
+   4. A rock that hits the ship costs a life. After the last one: GAME OVER, the high score is kept, and the board goes
+      back to its attract screen (INSERT COIN, or PUSH START while credit is left).
+
+   Geometry (cm): an upright cabinet 64 wide, 80 deep with the control panel, 178 tall. x = depth (the front face is
+   x = 62, the control panel juts to x = 80), y = width (+y = viewer-left), z = up. The side panels are one profile.
+
+   Parts list (see-through) — each is held by the part named after it:
+   CASE      side panels with T-molding (the frame) . floor . back panel with service door, vents, warning sticker .
+             marquee with backlit plexi . bezel glass . control panel (top, lip, underside) . kick plate
+   MONITOR   CRT tube with its metal rim band (on the monitor frame) . electron gun in the neck . deflection yoke on the
+             neck . neck board on the gun's pins . anode cap on the funnel, high-voltage lead to the flyback .
+             degauss coil round the rim . monitor frame bars, brackets to the side panels . monitor chassis with flyback,
+             heatsink and capacitors (on the monitor shelf) . monitor shelf (on cleats in the side panels)
+   GAME      game PCB (CPU, ROMs, custom chip, RAM) on standoffs on the right side panel . JAMMA edge connector
+   POWER     power cord . AC inlet, fuse, power switch, interlock switch (back panel) . isolation transformer (floor) .
+             switching power supply 5 V / 12 V (floor) . cooling fan (back panel) . fluorescent tube with its sockets
+             and starter (side panels) . ballast (under the top)
+   SOUND     speaker on the marquee floor, firing down through a grille
+   COINS     coin entries, reject buttons, coin return cup (door) . coin mechs with coin lamps (back of the door) .
+             coin switches (under the mechs) . coin meter (door) . cash box (floor, behind the cash door)
+   CONTROLS  joystick: ball top, shaft, mounting plate (under the panel top), actuator, four microswitches .
+             fire button and start button, each in a housing with its microswitch
+   HARNESS   JAMMA to controls, to coin door, to speaker, to monitor chassis; power supply to JAMMA; mains from the inlet
+             to the interlock, transformer, power supply, fan and ballast; transformer to chassis; chassis to neck board */
+
+/* ---------- geometry ---------- */
+const FX = 62, XM = 80, D = 64, H = 178, FL = 1.8, WL = 1.8;      // front face, panel lip, width, height, floor top, wall
+const PROF = [[0,0],[FX,0],[FX,74],[XM,86],[XM,94],[64,100],[52,150],[64,150],[64,H],[0,H]];   // side profile (x, z)
+const zcp = x => 94 + (XM - x) * .375;                             // control-panel top
+const NCP = norm([6, 0, 16]), PCP = ([u, v]) => [u, v, zcp(u)];
+const NS = [.9724, 0, .2334], VS = [-.2334, 0, .9724];             // bezel normal, up the bezel
+const PSc = (off = 0) => ([u, v]) => [64 + VS[0]*v + NS[0]*off, u, 100 + VS[2]*v + NS[2]*off];
+const GW = 38, GH = 28.8, GV0 = 8.74;                               // the picture: 38 x 28.8 cm, 8.74 cm up the bezel
+const G = (gx, gy, off = .15) => PSc(off)([51 - gx, GV0 + gy]);     // game cm (left->right, bottom->top) to 3D
+const CE = [37.5, 26.5];                                            // coin entries (y); coins go in the left one
+const JOY = [71, 44], FIREB = [71.5, 24], STARTB = [66.5, 32];
+const BLK = { l:'#4a4550', m:'#34303a', d:'#221f26' }, SPACE = '#2c1d5c', GOLD = '#ffd23f';
+const COINM = { l:'#eceae2', m:'#c6c2b6', d:'#8f8b80' };
+const edgeQ = i => { const a = PROF[i], b = PROF[(i + 1) % PROF.length];
+  return { n: norm([b[1] - a[1], 0, a[0] - b[0]]), q: [[a[0],0,a[1]],[b[0],0,b[1]],[b[0],D,b[1]],[a[0],D,a[1]]] }; };
+const txOn = (p, U, V, str, size, col, wt = 800) => `<text transform="${txM(P(...p), Dv(...U), Dv(...V))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${wt}" letter-spacing=".05em">${str}</text>`;
+const txS = (gx, gy, str, size, col, wt) => txOn(G(gx, gy, .2), [0,-1,0], [-VS[0], 0, -VS[2]], str, size, col, wt);   // on the screen
+const txCP = (x, y, str, size, col) => txOn([x, y, zcp(x) + .05], [0,-1,0], [NCP[2], 0, -NCP[0]], str, size, col);
+const txB = (x, y, z, str, size, col) => txOn([x, y, z], [0,1,0], [0,0,-1], str, size, col);           // on the back
+const circ = (X, Y, r, c) => `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r)}" fill="${c}"/>`;
+
+/* ---------- state ---------- */
+function fresh(){
+  return { credit:0, coins:0, score:0, hi:1200, lives:0, phase:'idle', t:0, gt:0, overT:0, seed:7,
+    ship:{ x:GW/2, y:3.5 }, shots:[], rocks:[], fx:[], spawn:0, boom:0,
+    coin:null, meterT:0, fireT:0, startT:0, snd:0, tilt:[0,0], tiltDir:[0,0], tiltHold:0, step:null };
+}
+const st = Object.assign({ pal:'mustard' }, fresh());
+const keys = {};
+const rnd = () => (st.seed = (st.seed * 16807) % 2147483647) / 2147483647;
+const STARS = (() => { let s = 3; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  return Array.from({ length:26 }, () => [1 + r() * (GW - 2), r() * GH, 1.5 + r() * 3]); })();
+
+/* ---------- the game on the screen ---------- */
+const SHIP = ['...#...', '..###..', '..###..', '.#####.', '###.###', '##...##'];
+const ROCK = ['.###.', '##.##', '#####', '###.#', '.###.'];
+const pix = (x, y, p) => pd([G(x, y), G(x + p, y), G(x + p, y + p), G(x, y + p)]);
+const sprite = (cx, cy, rows, p) => { let d = ''; const w = rows[0].length, h = rows.length;
+  rows.forEach((r, i) => [...r].forEach((c, j) => { if (c === '#') d += pix(cx + (j - w/2)*p, cy + (h/2 - i - 1)*p, p); })); return d; };
+const pad6 = n => String(n).padStart(6, '0');
+function gameSvg(st){
+  let s = '', d = '';
+  for (const [x, y0, sp] of STARS) d += pix(x, ((y0 - st.gt * sp) % GH + GH) % GH, .3);
+  s += fill(d, '#c9d6ff', 'opacity=".6"');
+  s += txS(7, GH - 2.8, '1UP', 2.2, '#ff5a5a') + txS(7, GH - 5.4, pad6(st.score), 2.2, '#ffffff');
+  s += txS(GW - 7, GH - 2.8, 'HIGH', 2.2, '#ff5a5a') + txS(GW - 7, GH - 5.4, pad6(Math.max(st.hi, st.score)), 2.2, '#ffffff');
+  s += txS(GW - 7, 1.1, `CREDIT ${st.credit}`, 1.9, '#8af0ae');
+  if (st.phase === 'play'){
+    for (const r of st.rocks) s += fill(sprite(r.x, r.y, ROCK, r.r * .4), r.r > 1.5 ? '#ff9a3a' : '#c7a3ff');
+    s += fill(st.shots.map(b => pd([G(b.x - .15, b.y - .6), G(b.x + .15, b.y - .6), G(b.x + .15, b.y + .6), G(b.x - .15, b.y + .6)])).join(''), '#fff36a');
+    if (st.boom <= 0) s += fill(sprite(st.ship.x, st.ship.y, SHIP, .5), '#8af0ff');
+    for (const e of st.fx){ let q = '';
+      for (let i = 0; i < 8; i++){ const a = i * Math.PI / 4, rr = (e.big ? 1.3 : .7) * (.6 + e.t * 7); q += pix(e.x + Math.cos(a) * rr - .25, e.y + Math.sin(a) * rr - .25, .5); }
+      s += fill(q, e.t < .25 ? '#fff36a' : '#ff5a3c', `opacity="${f(Math.max(0, 1 - e.t * 1.4))}"`); }
+    let l = ''; for (let i = 0; i < st.lives - 1; i++) l += sprite(2.6 + i * 2.6, 1.6, SHIP, .3);
+    s += fill(l, '#8af0ff');
+  } else if (st.phase === 'over'){
+    s += txS(GW/2, GH/2, 'GAME OVER', 4, '#ff5a5a') + txS(GW/2, GH/2 - 4.4, `SCORE ${pad6(st.score)}`, 2.2, '#ffffff');
+  } else {
+    s += txS(GW/2, 15.6, 'STAR', 4.6, GOLD, 900) + txS(GW/2, 10.6, 'BLASTER', 4.6, GOLD, 900);
+    s += fill(sprite(9, 16, ROCK, .7) + sprite(29.5, 18, ROCK, .5), '#ff9a3a') + fill(sprite(GW/2, 3.2, SHIP, .5), '#8af0ff');
+    s += txS(GW/2, 6.4, st.credit ? 'PUSH START' : 'INSERT COIN', 2.4, st.credit ? '#8af0ae' : '#ff5a5a');
+  }
+  return s;
+}
+function screen(st, m){
+  const win = on(PSc(.1), rrUV(13, GV0, 51, GV0 + GH, 1.6));
+  let s = `<path d="${pd(on(PSc(.05), rrUV(10.6, GV0 - 2.4, 53.4, GV0 + GH + 2.4, 2.4)))}" fill="none" stroke="${m.l}" stroke-width=".9"/>`;   // printed frame on the bezel glass
+  s += shape(win, '#0d1513', 1.1) + clipTo(win, gameSvg(st));
+  s += fill(pd(on(PSc(.25), [[44, GV0 + GH - 1.5], [47.5, GV0 + GH - 1.5], [36, GV0 + 2], [32.5, GV0 + 2]])), '#ffffff', 'opacity=".07"');   // glare
+  s += txOn(PSc(.1)([32, GV0 + GH + 4.2]), [0,-1,0], [-VS[0], 0, -VS[2]], 'ONE PLAYER', 1.7, m.l);
+  return s;
+}
+
+/* ---------- the cabinet ---------- */
+function sidePanel(y, n, m){
+  const pl = PY(y);
+  let s = shape(on(pl, PROF), tone(n, m), 0);
+  s += shape(on(pl, [[0,34],[0,58],[56,126],[57,104]]), SPACE, .8);                       // a band rising to the screen
+  s += shape(on(pl, [[0,62],[0,66],[55,131],[55.6,128]]), '#e2483d', .6);
+  s += shape(on(pl, ellUV(22, 146, 8, 8, 24)), '#ff9ad1', .9);                            // ringed planet
+  const ring = ellUV(0, 0, 14, 3, 28).map(([u, v]) => [22 + u * .94 - v * .34, 146 + u * .34 + v * .94]);
+  s += `<path d="${pd(on(pl, ring))}" fill="none" stroke="${INK}" stroke-width="1.6"/><path d="${pd(on(pl, ring))}" fill="none" stroke="${GOLD}" stroke-width=".8"/>`;
+  for (const [x, z, r] of [[42, 166, 3], [8, 112, 2.4], [46, 70, 2.6], [28, 22, 3.2], [10, 168, 1.8]])
+    s += shape(on(pl, [0,1,2,3,4,5,6,7].map(i => { const a = i * Math.PI / 4, k = i % 2 ? .35 : 1; return [x + Math.cos(a) * r * k, z + Math.sin(a) * r * k]; })), '#fff4d6', .6);
+  return s + ink(pd(on(pl, PROF)), 2.4);                                                   // black T-molding round the edge
+}
+function coinStand(x, y, z, r = 1.2){
+  const A = on(PY(y - .25), ellUV(x, z, r, r, 16)), B = on(PY(y + .25), ellUV(x, z, r, r, 16)), cap = vis([0,1,0]) ? B : A;
+  return loft(A, B, n => toneI(n, COINM)) + fill(pd(cap), COINM.l) + ink(pd(cap), .6);
+}
+const lock = (x, y, z) => shape(on(PX(x), ellUV(y, z, 1.3, 1.3, 12)), METAL.l, .8) + line([[x + .05, y, z - .7], [x + .05, y, z + .7]], .6);
+function coinDoor(st){
+  const F = PX(FX + .15), F2 = PX(FX + .3), F3 = PX(FX + .45);
+  let s = shape(on(F, rectUV(0, 0, D, 6)), BLK.m, 1);                                      // kick plate
+  s += shape(on(F, rrUV(20, 40, 44, 71, 1.6)), METAL.m, 1.2) + shape(on(F, rrUV(22, 10, 42, 34, 1.2)), METAL.m, 1.1);
+  for (const yc of CE){
+    s += shape(on(F2, rrUV(yc - 3.4, 52, yc + 3.4, 68.5, .8)), METAL.l, .9);
+    s += shape(on(F3, rectUV(yc - 2.6, 64.6, yc + 2.6, 67.6)), '#ff6a3d', .7) + tx(FX + .6, yc, 65.4, '25¢', 2.1, '#fff4d6', 800);
+    s += act('coin', shape(on(F3, rrUV(yc - .9, 58.2, yc + .9, 63.8, .4)), METAL.d, .6) + shape(on(PX(FX + .55), rectUV(yc - .35, 58.8, yc + .35, 63.2)), '#1d1a16', .4));
+    s += shape(on(F3, ellUV(yc, 55, 1.5, 1.5, 14)), '#c43a2a', .7);                       // reject button
+  }
+  s += shape(on(F2, rrUV(28.5, 42, 35.5, 47.5, 1)), '#1d1a16', .9);                       // coin return cup
+  s += lock(FX + .35, 32, 50.5) + lock(FX + .35, 32, 28);
+  if (st.coin != null && st.coin < .36){                                                   // the quarter going in
+    const q = ease(Math.min(1, st.coin / .34)), x = FX + 14 - 15.4 * q, z = 61 + 2.5 * Math.sin(Math.PI * q);
+    s += clipTo([[FX, CE[0], 40], [FX + 30, CE[0], 40], [FX + 30, CE[0], 90], [FX, CE[0], 90]], coinStand(x, CE[0], z));
+  }
+  return s;
+}
+function cpArt(m){
+  let s = shape(on(PCP, rrUV(64.8, 3, 79.2, D - 3, 1.5)), SPACE, 1);
+  s += txCP(76.5, FIREB[1], 'FIRE', 1.5, '#fff4d6') + txCP(68.9, STARTB[1], 'START', 1.2, '#fff4d6');
+  for (const [x, y] of [[66, 56], [77, 12], [75, 52], [67, 8]]) s += fill(pd(on(PCP, ellUV(x, y, .5, .5, 8))), '#fff4d6');
+  return s;
+}
+function cpProps(st){
+  const parts = [], [jx, jy] = JOY, b = [jx, jy, zcp(jx)], [wx, wy] = st.tilt;
+  let j = shape(on(PCP, ellUV(jx, jy, 3.6, 3.6, 22)), DARK.d, .9);                         // dust washer
+  const top = [b[0] + NCP[0] * 10.5 + wx * 4, b[1] + wy * 4, b[2] + NCP[2] * 10.5];
+  j += rod(b, top, .7, METAL, toneI, .9);
+  const [X, Y] = P(...top), r = 2.6 * 1.2247, BALL = matOf('#e2483d');
+  j += circ(X, Y, r, BALL.m) + circ(X + r * .14, Y - r * .16, r * .78, BALL.l)
+    + `<ellipse cx="${f(X + r * .36)}" cy="${f(Y - r * .42)}" rx="${f(r * .22)}" ry="${f(r * .14)}" fill="#ffffff" opacity=".55"/>` + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r)}" fill="none" stroke="${INK}" stroke-width="1.1"/>`;
+  // invisible push zones round the stick: toward the screen is up, toward +y is left
+  j += [[-1,0],[1,0],[0,1],[0,-1]].map(([dx, dy]) => { const a0 = Math.atan2(dy, dx) - Math.PI / 4, pts = [[jx, jy, b[2] + 6]];
+    for (let i = 0; i <= 6; i++){ const a = a0 + i / 6 * Math.PI / 2; pts.push([jx + 10 * Math.cos(a), jy + 10 * Math.sin(a), zcp(jx + 10 * Math.cos(a)) + 6]); }
+    return `<path d="${pd(pts)}" fill="transparent" data-act="stick" data-gx="${-dy}" data-gy="${-dx}"/>`; }).join('');
+  parts.push({ box:[[jx - 4, jy - 4, b[2]], [jx + 4, jy + 4, b[2] + 14]], svg: j });
+  const btn = (c, rr, mm, down, name) => { const b0 = [c[0], c[1], zcp(c[0])], h = down ? .5 : 1.6;
+    const g = shape(on(PCP, ellUV(c[0], c[1], rr + .9, rr + .9, 22)), DARK.m, .9) + rod(b0, b0.map((v, i) => v + NCP[i] * h), rr, mm, toneI, 1);
+    return { box:[[c[0] - rr - 1, c[1] - rr - 1, b0[2] - .5], [c[0] + rr + 1, c[1] + rr + 1, b0[2] + 2]], svg: act(name, g) }; };
+  parts.push(btn(FIREB, 2.4, matOf('#e2483d'), st.fireT > 0, 'fire'), btn(STARTB, 1.4, matOf('#f2efe7'), st.startT > 0, 'start'));
+  return byDepth(parts);
+}
+function marquee(){
+  const F = PX(64.15);
+  let s = shape(on(F, rrUV(2.5, 152.5, D - 2.5, 175.5, 1.5)), SPACE, 1.2);
+  for (const [y, z, r] of [[8, 171, .6], [20, 173, .4], [33, 171.5, .5], [47, 173, .6], [57, 170, .4], [6, 156, .5], [58, 156, .6]])
+    s += fill(pd(on(PX(64.3), ellUV(y, z, r, r, 8))), '#fff4d6');
+  s += shape(on(PX(64.3), [[44, 168], [26, 171.5], [26, 168.6]]), '#ff9ad1', .6) + shape(on(PX(64.35), ellUV(45, 168.8, 1.6, 1.6, 12)), '#ff9a3a', .7);   // a comet
+  s += tx(64.35, D / 2, 158.8, 'STAR BLASTER', 6.2, GOLD, 900);
+  return s;
+}
+function backDetails(m){
+  const B = PX(-.15), bk = tone([-1,0,0], m);
+  let s = shape(on(B, rrUV(10, 24, 54, 92, 1.5)), mix(bk, '#000000', .07), 1.1);            // service door
+  s += shape(on(PX(-.3), ellUV(48, 58, 1.3, 1.3, 12)), METAL.l, .8);
+  for (let i = 0; i < 5; i++) s += shape(on(B, rrUV(22, 121 + i * 2.6, 42, 122.4 + i * 2.6, .6)), mix(bk, '#000000', .5), .5);   // vents over the fan
+  s += shape(on(B, rectUV(16, 100, 48, 108)), GOLD, .8) + txB(-.3, 32, 102.7, 'HIGH VOLTAGE', 2.8, INK);
+  s += shape(on(PX(-.3), rrUV(9.5, 9, 16.5, 15, .8)), DARK.m, .8);                          // AC inlet
+  s += shape(on(PX(-.3), rrUV(19.6, 10.4, 22.4, 13.4, .6)), METAL.d, .6);                    // fuse cap
+  s += shape(on(PX(-.3), rectUV(24.5, 10.5, 27.5, 13.5)), '#e2483d', .7);                    // power switch
+  return s;
+}
+const CORD = [[-.3, 13, 12], [-3, 13, 12], [-4.5, 13, 9], [-4.5, 13.5, .6], [-14, 18, .6]];
+const cord = () => `<path d="${pd(CORD, false)}" fill="none" stroke="${INK}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><path d="${pd(CORD, false)}" fill="none" stroke="#3a3632" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>`
+  + box(-17.5, 16.4, 0, -14, 19.6, 2.4, DARK, toneI, .8);
+function scene(st, m){
+  const pan = (i, mm = m) => { const e = edgeQ(i); return vis(e.n) ? shape(e.q, tone(e.n, mm), 1.1) : ''; };
+  const backV = vis([-1,0,0]);
+  let s = castShadow([...on(PY(0), PROF), ...on(PY(D), PROF)]);
+  if (!backV) s += cord();
+  // front to top, in the order the parts can cover each other from above: the control panel overhangs the coin door,
+  // the joystick stands in front of the screen, the marquee overhangs the screen; then top and back
+  s += pan(1) + (vis([1,0,0]) ? coinDoor(st) : '');
+  s += pan(2, BLK) + pan(3, BLK) + pan(4) + (vis(NCP) ? cpArt(m) : '');
+  s += pan(5, BLK) + (vis(NS) ? screen(st, m) : '');
+  if (vis(NCP) || vis([1,0,0])) s += cpProps(st);
+  s += pan(6, BLK) + pan(7) + (vis([1,0,0]) ? marquee() : '');
+  s += pan(8) + pan(9) + (backV ? backDetails(m) + cord() : '');
+  // a side panel hides everything between the two panels behind it, so it goes last
+  if (vis([0,-1,0])) s += sidePanel(0, [0,-1,0], m);
+  if (vis([0,1,0])) s += sidePanel(D, [0,1,0], m);
+  return s;
+}
+
+/* ---------- behaviour ---------- */
+let ui, looping = false;
+function kick(){
+  if (looping) return; looping = true;
+  ui.animate(dt => { update(dt); const more = active(); if (!more) looping = false; return more; });
+}
+const anyKey = () => keys.ArrowUp || keys.ArrowDown || keys.ArrowLeft || keys.ArrowRight;
+const active = () => st.phase !== 'idle' || st.coin != null || st.meterT > 0 || st.fireT > 0 || st.startT > 0 || st.snd > 0
+  || st.tiltHold > 0 || anyKey() || Math.abs(st.tilt[0]) + Math.abs(st.tilt[1]) > .01 || st.step;
+const SPD = 16;
+function beginGame(){
+  st.credit--; Object.assign(st, { phase:'play', score:0, lives:3, gt:0, spawn:1.2, boom:0, ship:{ x:GW/2, y:3.5 }, shots:[], rocks:[], fx:[] });
+}
+function update(dt){
+  st.t += dt;
+  for (const k of ['meterT', 'fireT', 'startT', 'snd', 'tiltHold']) if (st[k] > 0) st[k] = Math.max(0, st[k] - dt);
+  // the quarter: in through the slot, down the mech, past the coin switch (credit), into the cash box
+  if (st.coin != null){ const was = st.coin; st.coin += dt / 1.6;
+    if (was < .55 && st.coin >= .55){ st.credit = Math.min(9, st.credit + 1); st.coins++; st.meterT = .3; st.snd = .2; }
+    if (st.coin >= 1) st.coin = null; }
+  // joystick: held arrows, a click on the stick, or a tap that only tips it
+  const gx = (keys.ArrowRight ? 1 : 0) - (keys.ArrowLeft ? 1 : 0), gy = (keys.ArrowUp ? 1 : 0) - (keys.ArrowDown ? 1 : 0);
+  const dir = st.step ? st.step.dir : (gx || gy) ? [gx, gy] : st.tiltHold > 0 ? st.tiltDir : [0, 0];
+  const lk = Math.min(1, dt * 16), want = [-dir[1], -dir[0]];                                // up = toward the screen (-x), left = +y
+  st.tilt = st.tilt.map((v, i) => v + (want[i] - v) * lk);
+  if (!(dir[0] || dir[1]) && Math.abs(st.tilt[0]) + Math.abs(st.tilt[1]) < .01) st.tilt = [0, 0];
+  if (st.phase === 'over'){ st.overT -= dt; if (st.overT <= 0) st.phase = 'idle'; }
+  if (st.phase !== 'play'){ st.step = null; return; }
+  st.gt += dt;
+  const sh = st.ship;
+  if (st.boom > 0){
+    st.boom -= dt;
+    if (st.boom <= 0){ if (st.lives <= 0){ st.phase = 'over'; st.overT = 4; st.hi = Math.max(st.hi, st.score); } else { sh.x = GW/2; sh.y = 3.5; } }
+  } else {
+    let mx = 0, my = 0;
+    if (st.step){ const mv = Math.min(st.step.rem, SPD * dt); [mx, my] = st.step.dir.map(v => v * mv); st.step.rem -= mv; if (st.step.rem <= 1e-6) st.step = null; }
+    else if (gx || gy){ const n = Math.hypot(gx, gy); mx = gx / n * SPD * dt; my = gy / n * SPD * dt; }
+    sh.x = Math.max(2, Math.min(GW - 2, sh.x + mx)); sh.y = Math.max(2.2, Math.min(11, sh.y + my));
+  }
+  for (const b of st.shots) b.y += 30 * dt;
+  st.shots = st.shots.filter(b => b.y < GH + 1);
+  st.spawn -= dt;
+  if (st.spawn <= 0 && st.boom <= 0){
+    st.spawn = Math.max(.35, 1.1 - st.gt * .015);
+    const x = rnd() < .4 ? sh.x + (rnd() - .5) * 4 : 2 + rnd() * (GW - 4);
+    st.rocks.push({ x: Math.max(1.5, Math.min(GW - 1.5, x)), y: GH + 2, v: 5 + rnd() * 3 + st.gt * .08, r: 1.1 + rnd() * .7 });
+  }
+  for (const r of st.rocks) r.y -= r.v * dt;
+  st.rocks = st.rocks.filter(r => r.y > -3);
+  for (const r of st.rocks.slice()) for (const b of st.shots.slice())
+    if (Math.abs(b.x - r.x) < r.r + .3 && Math.abs(b.y - r.y) < r.r + .6 && st.rocks.includes(r)){
+      st.rocks.splice(st.rocks.indexOf(r), 1); st.shots.splice(st.shots.indexOf(b), 1);
+      st.score += r.r > 1.5 ? 50 : 100; st.fx.push({ x:r.x, y:r.y, t:0 }); st.snd = .25; }
+  if (st.boom <= 0 && st.rocks.some(r => Math.hypot(r.x - sh.x, r.y - sh.y) < r.r + 1.2)){
+    st.lives--; st.boom = 1.6; st.fx.push({ x:sh.x, y:sh.y, t:0, big:true }); st.rocks = []; st.shots = []; st.snd = .6; }
+  for (const e of st.fx) e.t += dt;
+  st.fx = st.fx.filter(e => e.t < .75);
+}
+
+/* ---------- controls ---------- */
+const idleNote = () => st.phase === 'over' ? 'game over — wait for the attract screen' : st.credit ? 'press Start' : 'insert a coin first';
+function insertCoin(){
+  if (st.coin != null) return ui.flash('one coin at a time');
+  if (st.credit >= 9) return ui.flash('credit is full (9)');
+  st.coin = 0; kick();
+}
+function pressStart(){
+  st.startT = .22; kick();
+  if (st.phase === 'play') return ui.flash('a game is already running');
+  if (st.phase === 'over') return ui.flash(idleNote());
+  if (!st.credit) return ui.flash('no credit — insert a coin first');
+  beginGame();
+}
+function fire(){
+  st.fireT = .18; kick();
+  if (st.phase !== 'play') return ui.flash(idleNote());
+  if (st.boom > 0 || st.shots.length >= 3) return;
+  st.shots.push({ x: st.ship.x, y: st.ship.y + 1.8 }); st.snd = .12;
+}
+function move(gx, gy){
+  st.tiltDir = [gx, gy]; st.tiltHold = .22; kick();
+  if (st.phase !== 'play') return ui.flash(idleNote());
+  if (st.step && st.step.dir[0] === gx && st.step.dir[1] === gy) st.step.rem += 3; else st.step = { dir:[gx, gy], rem:3 };
+}
+function startOver(){ Object.assign(st, fresh()); for (const k in keys) keys[k] = false; ui.flash('switched off and on: no credit, empty cash box'); }
+
+window.GAME_KEYS = true;   // the arrows and space play the game; they don't turn the camera here
+const KEYDIR = { ArrowLeft:[-1,0], ArrowRight:[1,0], ArrowUp:[0,1], ArrowDown:[0,-1] };
+addEventListener('keydown', e => {
+  if (KEYDIR[e.key]){ e.preventDefault(); if (e.repeat) return;
+    if (st.phase !== 'play'){ move(...KEYDIR[e.key]); return; }
+    keys[e.key] = true; kick(); ui.render(); return; }
+  if (e.key === ' ' || (e.key === 'Enter' && !(e.target && e.target.closest && e.target.closest('button')))){ e.preventDefault(); if (!e.repeat){ fire(); ui.render(); } }
+});
+addEventListener('keyup', e => { if (KEYDIR[e.key]) keys[e.key] = false; });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+
+/* ---------- see-through ---------- */
+const COPPER = { l:'#f0b07a', m:'#d08a52', d:'#9a5a2c' }, PCB = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' };
+const GEARM = { l:'#7c8389', m:'#5c6369', d:'#3b4146' }, PLAST = matOf('#e8e4da'), WOODM = { l:'#d9a86c', m:'#bf8a4f', d:'#8e6236' };
+const GLASS = { l:'#dfe9e6', m:'#b9cbc6', d:'#869994' }, LIT = { l:'#ffd27a', m:'#ffb347', d:'#c97a1a' }, MECHM = matOf('#c9b98a');
+const boxOf = pts => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - 1), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + 1)];
+const bend = (pts, r = 2.5) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la/2.2, lc/2.2);
+    const p = a.map((v, k) => b[k] + (v - b[k]) * d/la), q = c.map((v, k) => b[k] + (v - b[k]) * d/lc);
+    for (let j = 0; j <= 5; j++){ const t = j/5; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+// a cable as short pieces, each with its own box, so byDepth can put it behind or in front of the solids it passes
+const wireParts = (pts, col, w = .55, ends = true) => { const q = bend(pts), out = [], SEG = 7;
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < SEG){ len += Math.hypot(...q[j].map((v, k) => v - q[j - 1][k])); j++; }
+    if (len < SEG) while (j < q.length - 1) j++;
+    const seg = q.slice(i, j + 1), d = pd(seg, false);
+    let svg = `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w + 1.1)}" stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    if (ends && i === 0){ const [X, Y] = P(...q[0]); svg += `<circle cx="${f(X)}" cy="${f(Y)}" r="1.1" fill="${INK}"/>`; }
+    if (ends && j === q.length - 1){ const [X, Y] = P(...q[j]); svg += `<circle cx="${f(X)}" cy="${f(Y)}" r="1.1" fill="${INK}"/>`; }
+    out.push({ box: boxOf(seg), svg }); i = j; }
+  return out; };
+// the CRT: d = depth behind the picture, u along y, v up the bezel
+const C0 = [57.43, 32, 123.13];
+const at = (d, u, v) => [C0[0] - NS[0]*d + VS[0]*v, C0[1] + u, C0[2] - NS[2]*d + VS[2]*v];
+const RR = rrUV(-21, -16, 21, 16, 4, 3);
+const tubeP = (d, [u, v]) => { const t = d <= 4 ? 0 : Math.pow(Math.min(1, (d - 4) / 22), .7), k = d <= 4 ? 1 - .05 * d / 4 : .95, l = Math.hypot(u, v);
+  return at(d, u*k*(1 - t) + u/l*3.4*t, v*k*(1 - t) + v/l*3.4*t); };
+const CAPB = tubeP(13, [4, 16]), FLYB = [31, 11, 105], NECK0 = at(26, 0, 0), NECK1 = at(43, 0, 0);
+const arcRun = (pts, ok) => { const n = pts.length, i0 = ok.findIndex((o, i) => !o && ok[(i + 1) % n]);
+  if (i0 < 0) return ok[0] ? pts.concat([pts[0]]) : []; const r = []; for (let i = (i0 + 1) % n; ok[i]; i = (i + 1) % n) r.push(pts[i]); return r; };
+function tube(){
+  const ds = [0, 4, 9, 14, 19, 26], rings = ds.map(d => RR.map(p => tubeP(d, p))), front = vis(NS);
+  let funnel = '';
+  for (const i of front ? [4, 3, 2, 1, 0] : [0, 1, 2, 3, 4]) funnel += loft(rings[i], rings[i + 1], n => toneI(n, i ? GLASS : GEARM));
+  funnel += hullInk(rings.flat(), 1.3);
+  const yoke = rod(at(20.5, 0, 0), at(28, 0, 0), 6.4, DARK, toneI, 1, 3.6) + rod(at(22, 0, 0), at(24.5, 0, 0), 6.1, COPPER, toneI, .6, 5);
+  const neck = rod(NECK0, NECK1, 1.5, GLASS, toneI, .8) + rod(NECK1, at(44.6, 0, 0), 1.7, DARK, toneI, .7);
+  const nb = box(11.2, 27, 107, 12.2, 37, 117, PCB, toneI, .7);                                         // neck board on the gun pins
+  const cap = rod(CAPB, CAPB.map((v, i) => v + VS[i] * 1.4), 1.8, matOf('#8a2a22'), toneI, .8, 1.1);   // anode cap
+  const faceG = front ? shape(rings[0], '#1b2422', 1) : '';
+  const dg = RR.map(([u, v]) => at(3, u * 1.08, v * 1.1)), run = arcRun(dg, RR.map(([u, v]) => vis([VS[0]*v, u, VS[2]*v])));
+  const coil = run.length > 1 ? `<path d="${pd(run, false)}" fill="none" stroke="${INK}" stroke-width="2.3" stroke-linecap="round"/><path d="${pd(run, false)}" fill="none" stroke="#3a3632" stroke-width="1.2" stroke-linecap="round"/>` : '';
+  return front ? nb + neck + yoke + funnel + cap + faceG + coil : funnel + cap + yoke + neck + nb + coil;
+}
+function slabCP(x0, y0, x1, y1, d0, d1, m){       // a plate parallel to the control-panel top, d0..d1 below it
+  const R = rectUV(x0, y0, x1, y1), A = R.map(([u, v]) => [u, v, zcp(u) - d1]), B = R.map(([u, v]) => [u, v, zcp(u) - d0]);
+  return loft(A, B, n => toneI(n, m)) + (vis(NCP) ? shape(B, toneI(NCP, m), .7) : shape(A, m.d, .7));
+}
+function arcMech(st){
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg });
+  const bx = (x0, y0, z0, x1, y1, z1, m, w = .8) => put([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, m, toneI, w));
+  const play = st.phase === 'play', fF = facing([1,0,0]), fY = facing([0,1,0]);
+  const k = st.coin, cz = k == null || k < .3 ? null : k < .5 ? 61 - 5 * (k - .3) / .2 : 56 - 26 * ((k - .5) / .5) ** 2;
+  const cx = k == null || k < .3 ? null : k < .5 ? 61 - 4.5 * (k - .3) / .2 : 56.5, swOn = cz != null && cz < 56 && cz > 48;
+  const sw = d => matOf(d ? '#ff9a3a' : '#d8d2c2');
+  // ---- monitor: tube on its frame, frame bars bolted to brackets on the side panels, chassis on the shelf
+  put([[13, 10.6, 106.8], [62, 53.4, 141]], tube());
+  for (const u of [-22.5, 22.5]){
+    const y = 32 + u, a = at(1, u, -16.5), b = at(1, u, 16.5);
+    put(boxOf([a, b]), rod(a, b, .9, METAL, toneI, .8));
+    const [y0, y1] = u < 0 ? [WL, y - .9] : [y + .9, D - WL];
+    bx(58.2, y0, 108, 61.2, y1, 110.6, GEARM, .7); bx(51.7, y0, 135.2, 54.7, y1, 137.8, GEARM, .7);
+  }
+  bx(2, WL, 95, 58, D - WL, 97, WOODM, .9);                                                               // monitor shelf
+  let ch = box(14, 5, 97.8, 42, 28, 98.6, PCB, toneI, .7);
+  put([[14, 5, 97], [42, 28, 98.6]], ch);
+  put([[28.4, 8.4, 98.6], [33.6, 13.6, 105]], cyl(31, 11, 98.6, 105, 2.6, DARK, toneI, .9, 18) + cyl(31, 11, 105, 105.6, 1, matOf('#c2300a'), toneI, .6, 10));   // flyback
+  let hs = box(18, 20, 98.6, 23, 26, 104, METAL, toneI, .7);
+  if (fF) for (let i = 1; i < 6; i++) hs += line([[23.05, 20 + i, 99], [23.05, 20 + i, 103.6]], .35);
+  put([[18, 20, 98.6], [23, 26, 104]], hs);
+  for (const [x, y] of [[36, 22], [39, 16]]) put([[x - 1.2, y - 1.2, 98.6], [x + 1.2, y + 1.2, 102]], cyl(x, y, 98.6, 102, 1.2, matOf('#3e6fb5'), toneI, .6, 12));
+  bx(14.2, 8, 98.6, 16, 12, 100, PLAST, .5);                                                              // chassis connector
+  // ---- game board on standoffs on the right side panel, JAMMA edge connector at its front edge
+  for (const [x, z] of [[15, 51], [46, 51], [15, 77], [46, 77]]) bx(x - .5, WL, z - .5, x + .5, 2.6, z + .5, METAL, .4);
+  let pcb = box(14, 2.6, 50, 48, 3.4, 78, PCB, toneI, .8);
+  if (fY){
+    for (const [x0, z0, x1, z1, c] of [[17, 66, 27, 70, DARK], [29, 57, 32, 70, DARK], [33.5, 57, 36.5, 70, DARK], [38, 62, 44, 68, DARK], [17, 56, 22, 60, DARK], [23, 56, 27, 60, DARK], [40, 54, 42, 56, METAL]])
+      pcb += box(x0, 3.4, z0, x1, 4.2, z1, c, toneI, .5);
+    pcb += shape(on(PY(3.45), ellUV(44.5, 73, 1.2, 1.2, 12)), METAL.l, .5);   // volume pot
+  }
+  put([[14, 2.6, 50], [48, 4.2, 78]], pcb);
+  bx(47.5, 2.2, 53, 50.5, 6.2, 75, PLAST, .8);
+  // ---- power: inlet, fuse, switch and interlock on the back panel, transformer and supply on the floor, fan
+  bx(WL, 10, 9, 5, 16, 15, DARK, .7);
+  put([[WL, 20.1, 11], [4.6, 21.9, 12.8]], rod([WL, 21, 11.9], [4.6, 21, 11.9], .9, METAL, toneI, .6));
+  bx(WL, 24, 10, 4.2, 28, 14, PLAST, .6);
+  bx(WL, 30, 60, 4.4, 34, 64, PLAST, .6);
+  bx(6, 46, FL, 18, 58, FL + 1.2, GEARM, .7); bx(7.5, 47.5, FL + 1.2, 16.5, 56.5, FL + 13, GEARM, .9);
+  bx(9.5, 45.8, FL + 3.4, 14.5, 47.5, FL + 10.8, COPPER, .7); bx(9.5, 56.5, FL + 3.4, 14.5, 58.2, FL + 10.8, COPPER, .7);
+  let psu = box(24, 44, FL, 44, 58, FL + 7, METAL, toneI, .9);
+  for (let i = 0; i < 6; i++) psu += line([[27 + i * 2.6, 46, FL + 7.05], [27 + i * 2.6, 56, FL + 7.05]], .4);
+  put([[24, 44, FL], [44, 58, FL + 7]], psu);
+  bx(44, 46, FL + 1, 45.4, 56, FL + 4, DARK, .6);
+  let fan = box(WL, 25, 119, 4.6, 39, 133, DARK, toneI, .8);
+  if (fF){ const a0 = st.t * (play ? 9 : 0); fan += shape(on(PX(4.65), ellUV(32, 126, 6, 6, 24)), '#2a2622', .7);
+    for (let i = 0; i < 5; i++){ const a = a0 + i * 2 * Math.PI / 5; fan += fill(pd(on(PX(4.7), [[32, 126], [32 + 5.4 * Math.cos(a), 126 + 5.4 * Math.sin(a)], [32 + 5.4 * Math.cos(a + .7), 126 + 5.4 * Math.sin(a + .7)]])), GEARM.l); }
+    fan += fill(pd(on(PX(4.75), ellUV(32, 126, 1.6, 1.6, 12))), GEARM.d); }
+  put([[WL, 25, 119], [4.6, 39, 133]], fan);
+  // ---- marquee: speaker on its floor, fluorescent tube in sockets on the side panels, starter, ballast under the top
+  put([[53.8, 27.8, 151.8], [62.2, 36.2, 155.8]], cyl(58, 32, 151.8, 153.6, 4.2, DARK, toneI, .8, 22) + cyl(58, 32, 153.6, 155.8, 2.2, METAL, toneI, .7, 16));
+  put([[56.7, 5, 163.7], [59.3, 59, 166.3]], rod([58, 5, 165], [58, 59, 165], 1.3, { l:'#ffffff', m:'#f3f5e6', d:'#d3d8c2' }, toneI, .8));
+  bx(56, WL, 163, 60, 5, 167, PLAST, .6); bx(56, 59, 163, 60, D - WL, 167, PLAST, .6);
+  put([[57.2, 2.6, 167], [58.8, 4.2, 170]], cyl(58, 3.4, 167, 170, .8, matOf('#9aa3a8'), toneI, .5, 10));
+  bx(36, 22, 172, 50, 30, H - WL, GEARM, .8);
+  // ---- coin door: door plate, two coin mechs with lamps, switches, meter; the cash box on the floor
+  bx(60.2, 20, 40, 61.8, 44, 71, GEARM, .8);
+  for (const yc of CE){
+    bx(54, yc - 2.4, 63, 60.2, yc + 2.4, 67, MECHM, .7);                                               // mech head (the sensing coil)
+    bx(54, yc - 1.6, 55, 60.2, yc - 1, 63, MECHM, .6);                                                 // its back plate: the coin rolls down in front of it
+    bx(58.4, yc - 1, 67, 60.2, yc + 1, 68.8, yc === CE[0] && k != null ? LIT : matOf('#ffd27a'), .5);   // coin lamp
+    bx(55.5, yc + 1.4, 51.8, 58.5, yc + 3.4, 55, sw(swOn && yc === CE[0]), .6);                        // coin switch
+    put([[56, yc - .2, 52.5], [57, yc + 1.6, 53.5]], line([[56.5, yc + 1.4, 53], [56.5, yc - .2, 53.4]], .45));   // its wire arm across the coin path
+  }
+  bx(58, 21, 43, 60.2, 24, 48, st.meterT > 0 ? LIT : DARK, .6);                                          // coin meter
+  let cash = box(44, 22, FL, 60.5, 42, 32, GEARM, toneI, .9);
+  cash += shape(on(PZ(32.05), rectUV(55.2, 24, 57.8, 40)), '#1d1a16', .5);
+  put([[44, 22, FL], [60.5, 42, 32]], cash);
+  if (cz != null && cz > 31) put([[cx - 1.3, CE[0] - .3, cz - 1.3], [cx + 1.3, CE[0] + .3, cz + 1.3]], coinStand(cx, CE[0], cz));
+  // ---- controls: joystick plate under the panel top, shaft, actuator, four microswitches; button housings + switches
+  put([[66, 39, zcp(66) - 2.6], [76, 49, zcp(76) - 1.8]], slabCP(66, 39, 76, 49, 1.8, 2.6, GEARM));
+  const [jx, jy] = JOY, piv = [jx, jy, zcp(jx) - 2.2], [wx, wy] = st.tilt, low = [jx - wx * 1.3, jy - wy * 1.3, piv[2] - 4.4];
+  put([[jx - 1.6, jy - 1.6, low[2] - 1], [jx + 1.6, jy + 1.6, piv[2] + 2]], rod(piv, low, .6, METAL, toneI, .6) + rod(low, low.map((v, i) => v + (piv[i] - low[i]) * .35), 1.1, DARK, toneI, .6));
+  for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+    const x = jx + dx * 3.2, y = jy + dy * 3.2, zt = zcp(jx) - 3.6, hit = -(dx * wx + dy * wy) > .5;
+    bx(x - (dx ? .7 : 1.2), y - (dy ? .7 : 1.2), zt - 2.4, x + (dx ? .7 : 1.2), y + (dy ? .7 : 1.2), zt, sw(hit), .5);
+  }
+  for (const [c, r, down] of [[FIREB, 1.6, st.fireT > 0], [STARTB, 1.1, st.startT > 0]]){
+    const top = zcp(c[0]) - 1.8, zb = top - 6.4;
+    put([[c[0] - r, c[1] - r, zb], [c[0] + r, c[1] + r, top]], cyl(c[0], c[1], zb, top, r, PLAST, toneI, .6, 14));
+    bx(c[0] - 1.5, c[1] - 1.6, zb - 2.4, c[0] + 1.5, c[1] + 1.6, zb, sw(down), .6);
+  }
+  // ---- harness, each end on a connector, switch, lamp or terminal
+  const HB = '#3a3632', HON = '#ffb347', MAINS = '#8a5a32', RED = '#c2300a', anyTilt = !!(wx || wy);
+  const ctl = st.fireT > 0 || st.startT > 0 || anyTilt;
+  parts.push(...wireParts([[50.5, 4.5, 74], [60, 4.5, 76], [66, 4.5, 80], [68, 20, 85], [FIREB[0], FIREB[1] - 1, zcp(FIREB[0]) - 10.6]], ctl ? HON : HB));
+  parts.push(...wireParts([[68, 20, 85], [68, 40, 88], [jx - 2, jy - 3.2, zcp(jx) - 6]], anyTilt ? HON : HB, .55, false));
+  parts.push(...wireParts([[68, 20, 85], [65, 29, 87], [STARTB[0], STARTB[1] - 1, zcp(STARTB[0]) - 10.6]], st.startT > 0 ? HON : HB, .55, false));
+  parts.push(...wireParts([[50.5, 4.5, 60], [59, 4.5, 58], [59, 20, 53.5], [57, CE[1] + 2.4, 53.4], [57, CE[0] + 2.4, 53.4]], swOn ? HON : HB));
+  parts.push(...wireParts([[59, 20, 53.5], [59, 22.5, 48]], st.meterT > 0 ? HON : HB, .45, false));
+  parts.push(...wireParts([[50.5, 4.5, 70], [50, 4.5, 94], [50, 4.5, 140], [50, 4.5, 154], [55, 26, 153.6], [56, 28.4, 153]], st.snd > 0 ? HON : HB));
+  parts.push(...wireParts([[50.5, 4.5, 65], [44, 4.5, 80], [40, 4.5, 94], [40, 4.5, 99.2], [15, 10, 100]], play ? HON : '#6f7f99'));
+  parts.push(...wireParts([[17, 26, 98.6], [12, 28, 103], [11.7, 28.5, 107.5]], '#6f7f99', .45));
+  parts.push(...wireParts([[44.7, 47, FL + 3], [43, 44, FL + .8], [43, 4.5, FL + .8], [43, 4.5, 48], [49, 4.5, 53]], RED, .7));
+  parts.push(...wireParts([[5, 13, 12], [6, 40, FL + 1], [10, 45, FL + 5], [12, 45.8, FL + 7]], MAINS, .6));
+  parts.push(...wireParts([[5, 15, 10], [20, 30, FL + .8], [24, 50, FL + 3]], MAINS, .6));
+  parts.push(...wireParts([[4, 16, 14.5], [3.5, 31, 59], [3.5, 31.5, 60]], MAINS, .55));
+  parts.push(...wireParts([[3.5, 32, 64], [3.5, 32, 119]], MAINS, .55, false));
+  parts.push(...wireParts([[3.5, 35, 133], [3.5, 26, 174], [36, 26, 174]], MAINS, .55));
+  parts.push(...wireParts([[50, 26, 174], [57, 10, 173], [58, 4, 167]], MAINS, .5));
+  parts.push(...wireParts([[12, 58.2, FL + 7], [4, 60, 20], [4, 60, 94], [4, 60, 98.5], [14, 26, 98.8]], MAINS, .6));
+  parts.push(...wireParts([FLYB, [33, 13, 114], [38, 30, 126], CAPB.map((v, i) => v + VS[i] * 1.4)], RED, .75));
+  return byDepth(parts) + (st.snd > 0 ? [1, 2, 3].map(i => `<path d="${pd(on(PZ(150 - i * 1.6), arcUV(58, 32, 2 + i * 2, 0, 360, 24)), false)}" fill="none" stroke="${INK}" stroke-width=".7" opacity="${f(.9 - i * .2)}"/>`).join('') : '');
+}
+const XR_OPTS = { getSt: () => { try { return ui.st; } catch (e) { return st; } }, B: [0, XM, 0, D, 0, H], under: true,
+  mech: s => arcMech(s),
+  inside: st => { const play = st.phase === 'play', [wx, wy] = st.tilt, coin = st.coin != null;
+    return [
+      { at: tubeP(8, [21, 0]), text:'CRT TUBE', on: play },
+      { at: at(24, 0, 6.2), text:'DEFLECTION YOKE', on: play },
+      { at: at(36, 0, 1.5), text:'ELECTRON GUN', on: false },
+      { at: [12.2, 37, 114], text:'NECK BOARD', on: false },
+      { at: CAPB, text:'ANODE CAP', on: false },
+      { at: FLYB, text:'FLYBACK', on: false },
+      { at: [40, 26, 98.6], text:'MONITOR CHASSIS', on: play },
+      { at: at(3, 23, 8), text:'DEGAUSS COIL', on: false },
+      { at: at(1, -22.5, 14), text:'MONITOR FRAME', on: false },
+      { at: [56, 6, 97], text:'MONITOR SHELF', on: false },
+      { at: [17, 4, 76], text:'GAME PCB', on: play },
+      { at: [50.5, 5, 74], text:'JAMMA CONNECTOR', on: play },
+      { at: [34, 51, FL + 7], text:'SWITCHING PSU', on: false },
+      { at: [12, 52, FL + 13], text:'ISOLATION TRANSFORMER', on: false },
+      { at: [5, 13, 15], text:'AC INLET + FUSE', on: false },
+      { at: [4.2, 26, 14], text:'POWER SWITCH', on: false },
+      { at: [4.4, 32, 64], text:'INTERLOCK SWITCH', on: false },
+      { at: [4.6, 36, 133], text:'COOLING FAN', on: play },
+      { at: [58, 34, 155.8], text:'SPEAKER', on: st.snd > 0 },
+      { at: [58, 44, 166.3], text:'FLUORESCENT TUBE', on: false },
+      { at: [43, 26, H - WL], text:'BALLAST', on: false },
+      { at: [57, CE[0], 67], text:'COIN MECH', on: coin },
+      { at: [57, CE[0] + 3.4, 55], text:'COIN SWITCH', on: coin && st.coin > .45 && st.coin < .65 },
+      { at: [59, 22.5, 48], text:'COIN METER', on: st.meterT > 0 },
+      { at: [59.3, CE[1], 68.8], text:'COIN LAMP', on: false },
+      { at: [52, 32, 32], text:'CASH BOX', on: false },
+      { at: [JOY[0] + 3.2, JOY[1] + 1.2, zcp(JOY[0]) - 3.6], text:'JOYSTICK SWITCHES', on: !!(wx || wy) },
+      { at: [JOY[0], JOY[1] - 1.1, zcp(JOY[0]) - 6], text:'ACTUATOR', on: !!(wx || wy) },
+      { at: [FIREB[0], FIREB[1] + 1.6, zcp(FIREB[0]) - 10.6], text:'FIRE SWITCH', on: st.fireT > 0 },
+      { at: [STARTB[0], STARTB[1] + 1.6, zcp(STARTB[0]) - 10.6], text:'START SWITCH', on: st.startT > 0 },
+      { at: [43, 4.5, 30], text:'WIRING HARNESS', on: false } ]; },
+  surface: st => facing([1,0,0]) ? [
+      { at:[64, 50, 170], text:'MARQUEE', on: false }, { at: G(4, 20, .2), text:'SCREEN', on: false },
+      { at:[JOY[0] + 4, JOY[1], zcp(JOY[0]) + 10], text:'JOYSTICK', on: false }, { at:[FIREB[0], FIREB[1] - 2.4, zcp(FIREB[0]) + 1.5], text:'FIRE BUTTON', on: false },
+      { at:[STARTB[0], STARTB[1], zcp(STARTB[0]) + 1.5], text:'START BUTTON', on: false }, { at:[FX, CE[0], 61], text:'COIN SLOT', on: false },
+      { at:[FX, 32, 44], text:'COIN RETURN', on: false }, { at:[FX, 24, 20], text:'CASH DOOR', on: false } ]
+    : facing([-1,0,0]) ? [ { at:[0, 20, 80], text:'SERVICE DOOR', on: false }, { at:[0, 40, 126], text:'VENTS', on: false },
+      { at:[0, 13, 12], text:'AC INLET', on: false }, { at:[-10, 16, .6], text:'POWER CORD', on: false } ] : [] };
+const XR_CAPTION = st => {
+  if (st.coin != null) return 'The quarter rolls down the coin mech, which checks its size and metal, then drops past the coin switch: its wire arm clicks once, the game board adds a credit and pulses the coin meter, and the coin falls into the cash box.';
+  if (st.phase === 'play') return 'The joystick’s actuator presses one of four microswitches; the fire button has its own. Each grounds a pin on the JAMMA connector. The CPU moves the ship and sends red, green, blue and sync to the monitor chassis, whose yoke sweeps the CRT’s three electron beams across the screen.';
+  if (st.phase === 'over') return 'Game over: the board keeps the high score and goes back to its attract screen. Every credit it used is now a quarter in the cash box.';
+  return 'Inside: an isolation transformer feeds the CRT monitor, a switching power supply gives the game board 5 V and 12 V, and the wiring harness joins the board’s JAMMA connector to the controls, the coin door, the speaker and the monitor.';
+};
+
+scene = xrWrap(scene, XR_OPTS);
+ui = mountFigure({
+  fig:'19', turn:'full', title:'Arcade cabinet', hint:'insert a coin, press Start, steer with the arrow keys, fire with space',
+  idea:'The game never sees the coin, only a switch: one click of the coin switch’s wire arm is one credit.',
+  size:[XM, D, H], palette:'mustard', state:st,
+  scene,
+  readout: st => st.phase === 'play' ? `playing — ${st.lives} ${st.lives === 1 ? 'ship' : 'ships'} left` : st.phase === 'over' ? 'game over' : st.credit ? `credit ${st.credit} — press Start` : 'attract mode — insert a coin',
+  stats: st => [ { label:'Credit', value: String(st.credit) }, { label:'Score', value: String(st.score) },
+    { label:'Ships', value: String(st.phase === 'play' ? st.lives : 0) }, { label:'Cash box', value: `${st.coins}×25¢`, small: true } ],
+  buttonsLabel:'Play',
+  buttons:[
+    { label:'Insert coin', onClick: insertCoin },
+    { label:'Press Start', onClick: pressStart },
+    { label:'Start over', onClick: startOver },
+  ],
+  acts:{
+    coin: () => insertCoin(),
+    start: () => pressStart(),
+    fire: () => fire(),
+    stick: (st, el) => move(+el.dataset.gx, +el.dataset.gy),
+  },
+  params:(st, q) => {
+    if (q.has('credit')) st.credit = +q.get('credit');
+    if (q.has('coin')) st.coin = +q.get('coin');
+    if (q.get('play') === '1'){ st.credit = Math.max(1, st.credit); beginGame(); }
+    if (q.has('sim')) for (let i = 0, n = +q.get('sim') * 30; i < n; i++){ if (i % 9 === 0 && st.phase === 'play' && st.shots.length < 3) st.shots.push({ x: st.ship.x, y: st.ship.y + 1.8 }); update(1/30); }
+    if (q.has('tilt')){ const [a, b] = q.get('tilt').split(',').map(Number); st.tilt = [-b, -a]; }
+    if (q.get('over') === '1'){ st.phase = 'over'; st.overT = 4; st.score = 2350; st.coins = Math.max(1, st.coins); }
+  },
+});
+if (active()) kick();
+
+mountKeypad({ rows: 3, hub: [1, 1], action: 'FIRE', keys: [
+  { key:'ArrowUp', glyph:'▲', name:'Up', at:[1, 0] }, { key:'ArrowLeft', glyph:'◀', name:'Left', at:[0, 1] },
+  { key:'ArrowRight', glyph:'▶', name:'Right', at:[2, 1] }, { key:'ArrowDown', glyph:'▼', name:'Down', at:[1, 2] } ] });
+xrMount(() => ui, XR_CAPTION);
+</script>
+</body>
+</html>
