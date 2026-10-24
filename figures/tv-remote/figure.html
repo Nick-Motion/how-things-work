@@ -1,0 +1,307 @@
+<!doctype html><html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TV remote</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Colorfigures engine (assets/core.js), https://april-zhu.com/colorfigures
+MIT License
+
+Copyright (c) 2026 April Zhu (Colorfigures: colour, hand-drawn style, 3D props, template, examples)
+Copyright (c) 2026 April Zhu (iso-glow, on which Colorfigures is based)
+Copyright (c) 2026 Tolga Cohce (iso-figure, on which iso-glow is based)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+/* Original figure and lesson by Lantern Learn, Chris Brock LLC. Adapted from the cached original. */
+
+/* A see-through TV remote lying on a low table, pointed at a small TV. Units: mm.
+   x = depth (the TV's screen faces +x, toward the viewer-right), y = width (+y viewer-left), z = up.
+   Example sizes (not facts): the remote is 190 x 50 x 24 mm, the screen 360 mm wide, and the remote sits only
+   about 180 mm from the TV so both fit in the picture. The flashes are slowed right down so you can watch them travel.
+   The real sequence (NASA SOFIA educator notes "Reflection" via Caltech IPAC; NASA "Infrared Waves" and
+   "Understanding Infrared Light"; Exploratorium "Infrared Remote"; Illinois Physics Van):
+   press a button -> an electrical connection tells a computer chip in the remote which button was pressed ->
+   the chip makes a code-like electrical signal, different for each button -> transistors pass it to an LED,
+   which turns it into infrared light that our eyes cannot see -> the pulses (the 0s and 1s) reach the TV's
+   infrared detector -> the TV carries out the command. Clear glass lets the light through; a body in the way
+   blocks it. Many digital and phone cameras can see the light. */
+const BX = 0, BY0 = 0, BW = 345, BD = 280, BH = 12;                      // the table top
+const TV = { x0: 24, x1: 46, y0: 20, y1: 260, z0: 58, z1: 210 };
+const SENS = [TV.x1 + .5, 140, TV.z0 + 5.5];                     // the TV's infrared sensor, on the bottom of the frame
+const RM = { x0: 148, x1: 338, y0: 115, y1: 165, z0: BH, zs: 23, z1: 36, r: 16 };
+const LED = [RM.x0 - 3, 140, 27];
+const BLK = { x0: 92, x1: 100, y0: 96, y1: 184, z1: 112 };
+const BTNS = { power: { x: 180, y: 152, col: { l:'#ef6a4c', m:'#cf5038', d:'#7a2a1c' } }, vol: { x: 208, y: 128, col: { l:'#e9e6dc', m:'#c9c4b6', d:'#8f8a7c' } } };
+const OTHER = [[208, 152], [232, 128], [232, 152]];
+const CODES = { power: [1, 0, 1, 1, 0, 0, 1, 0], vol: [1, 1, 0, 1, 0, 1, 0, 0] };     // example patterns, not real codes
+const NAMES = { power: 'Power', vol: 'Volume up' };
+const PCB = { l:'#4fae6a', m:'#3d8c55', d:'#28603a' }, CELL = { l:'#4c5a66', m:'#3a4650', d:'#252e35' };
+const GLASS = '#cfe9f0', CAM = '#d9a2ff', GOLD = '#e8c35a';
+const PULSE0 = .55, GAP = .16, SPEED = 1 / .5;          // when the LED starts, time between flashes, beam lengths per second
+
+const lerp = (a, b, t) => a + (b - a) * t;
+const beamAt = s => [lerp(LED[0], SENS[0], s), lerp(LED[1], SENS[1], s), lerp(LED[2], SENS[2], s)];
+const S_BLK = (LED[0] - BLK.x1) / (LED[0] - SENS[0]), S_BLK0 = (LED[0] - BLK.x0) / (LED[0] - SENS[0]);
+const stopAt = st => st.block === 'board' ? S_BLK : 1;
+// flash k of the code: on between t0 and t1 (a 1 is a long flash, a 0 a short one)
+const flash = (st, k) => { const t0 = PULSE0 + k * GAP; return [t0, t0 + (CODES[st.btn][k] ? .1 : .04)]; };
+const lastArrive = st => flash(st, 7)[1] + 1 / SPEED;
+
+/* ---------- the scene ---------- */
+function scene(st, m){
+  let s = '';
+  s += board(BX, BY0, BW, BD, BH, 10, WOOD);
+  const top = boardTop(BX, BY0, BW, BD, BH, 10);
+  // shadows
+  let sh = castShadow([[8, 80, BH], [74, 80, BH], [74, 200, BH], [8, 200, BH], [TV.x0, TV.y0, TV.z1], [TV.x1, TV.y0, TV.z1], [TV.x1, TV.y1, TV.z1], [TV.x0, TV.y1, TV.z1], [TV.x0, TV.y0, TV.z0], [TV.x1, TV.y1, TV.z0]], BH);
+  sh += castShadow(on(PZ(BH), rrUV(RM.x0, RM.y0, RM.x1, RM.y1, RM.r)).concat(on(PZ(RM.z1), rrUV(RM.x0, RM.y0, RM.x1, RM.y1, RM.r))), BH);
+  if (st.block !== 'none'){ const bs = castShadow([[BLK.x0, BLK.y0, BH], [BLK.x1, BLK.y0, BH], [BLK.x1, BLK.y1, BH], [BLK.x0, BLK.y1, BH], [BLK.x0, BLK.y0, BLK.z1], [BLK.x1, BLK.y1, BLK.z1], [BLK.x0, BLK.y1, BLK.z1], [BLK.x1, BLK.y0, BLK.z1]], BH);
+    sh += st.block === 'glass' ? `<g opacity=".4">${bs}</g>` : bs; }
+  s += clipTo(top, sh);
+
+  const parts = [
+    {box:[[8,20,BH],[74,260,TV.z1]], svg:tv(st,m)},
+    {box:[[RM.x0,RM.y0,RM.z0],[RM.x1,RM.y1,39]], svg:remote(st,m)},
+  ];
+  if(st.block !== 'none') parts.push({box:[[BLK.x0-8,BLK.y0-4,BH],[BLK.x1+8,BLK.y1+4,BLK.z1]],svg:blocker(st)});
+  // Separate light segments sort on their own side of the obstacle.
+  for(const [lo,hi] of [[0,S_BLK],[S_BLK,S_BLK0],[S_BLK0,1]]){
+    const a=beamAt(lo), b=beamAt(hi);
+    parts.push({box:[[Math.min(a[0],b[0]),140,Math.min(a[2],b[2])],[Math.max(a[0],b[0]),140,Math.max(a[2],b[2])]],svg:beam(st,0,hi,lo)});
+  }
+  s += byDepth(parts);
+  const k=ease(st.xr||0);
+  if(k>.6) s+=remoteCallouts(remoteLabels);
+  else s+=xrCallouts([
+    {at:[180,152,st.btn==='power'?st.btnZ:39],text:'POWER',on:st.btn==='power'&&st.busy},
+    {at:[208,128,st.btn==='vol'?st.btnZ:39],text:'VOLUME UP',on:st.btn==='vol'&&st.busy},
+    {at:SENS,text:'IR RECEIVER',on:st.got>0&&st.busy}
+  ],[0,BW,0,BD,0,TV.z1]);
+  return s;
+}
+// part of the beam, as the stretch of flashes inside beam positions [lo, hi] (0 = the LED, 1 = the TV's sensor)
+function beam(st, _, hi, lo){
+  if (!st.btn || st.t <= 0) return '';
+  const stop = stopAt(st), top = Math.min(hi, stop);
+  let s = '', g = '';
+  for (let k = 0; k < 8; k++){
+    const [t0, t1] = flash(st, k), a = (st.t - t1) * SPEED, b = (st.t - t0) * SPEED;   // tail and head of this flash
+    const s0 = Math.max(lo, a), s1 = Math.min(top, b);
+    if (s1 <= s0) continue;
+    const p0 = beamAt(s0), p1 = beamAt(s1);
+    g += `<path d="${pd([p0, p1], false)}" stroke="${CAM}" stroke-width="7" stroke-linecap="round" fill="none" opacity=".45"/>`
+      + `<path d="${pd([p0, p1], false)}" stroke="#fff" stroke-width="2.6" stroke-linecap="round" fill="none" opacity=".95"/>`;
+  }
+  if (!g) return '';
+  // invisible to our eyes: drawn only when "Show the invisible light" is on
+  if (st.show) s += `<g pointer-events="none">${g}</g>`;
+  return s;
+}
+function tv(st, m){
+  let s = '';
+  s += box(8, 80, BH, 74, 200, BH + 6, DARK, toneI, 1.2);            // foot
+  s += box(26, 128, BH + 6, 44, 152, TV.z0, DARK, toneI, 1);        // neck
+  s += box(TV.x0, TV.y0, TV.z0, TV.x1, TV.y1, TV.z1, DARK, toneI, 1.6);
+  if(facing([1,0,0])){
+  // the screen
+  const scr = on(PX(TV.x1 + .3), rectUV(TV.y0 + 8, TV.z0 + 11, TV.y1 - 8, TV.z1 - 8));
+  if (!st.tvOn) s += shape(scr, '#1d2a26', 1.1) + `<path d="${pd([[TV.x1 + .4, TV.y1 - 40, TV.z1 - 22], [TV.x1 + .4, TV.y1 - 120, TV.z1 - 70]], false)}" stroke="#fff" stroke-width="3" opacity=".12"/>`;
+  else {
+    const Y0 = TV.y0 + 8, Y1 = TV.y1 - 8, Z0 = TV.z0 + 11, Z1 = TV.z1 - 8, X = TV.x1 + .35;
+    s += shape(scr, '#9fd3ef', 1.1);
+    const hill = (yc, w, h, col) => { const pts = []; for (let i = 0; i <= 16; i++){ const t = i / 16, y = yc + w * (1 - 2 * t); pts.push([X, Math.max(Y0, Math.min(Y1, y)), Z0 + h * Math.sin(Math.PI * t)]); } return fill(pd(pts), col); };
+    s += clipTo(scr, hill(Y0 + 150, 100, 52, '#71b693') + hill(Y0 + 46, 90, 40, '#93d3b0')
+      + fill(pd(on(PX(X), ellUV(Y1 - 44, Z1 - 28, 13, 13, 20))), '#f4b829'));
+    if (st.volShow > 0){ const n = 10;
+      for (let i = 0; i < n; i++){ const y = Y1 - 22 - i * 17; s += shape(on(PX(X + .1), rectUV(y - 13, Z0 + 10, y, Z0 + 17 + i * 2.2)), i < st.vol ? '#fff' : '#3f5a66', .7); } }
+  }
+  // the infrared sensor window on the bottom of the frame
+  const lit = st.got > 0 && st.t < lastArrive(st) + .25;
+  s += shape(on(PX(TV.x1 + .4), rrUV(SENS[1] - 10, SENS[2] - 3.5, SENS[1] + 10, SENS[2] + 3.5, 3)), lit && st.show ? CAM : '#4a2a30', .9);
+  // power light
+  const pl = P(TV.x1 + .4, TV.y1 - 20, SENS[2]);
+  s += `<circle cx="${f(pl[0])}" cy="${f(pl[1])}" r="2.6" fill="${st.tvOn ? '#43c25c' : '#e2483d'}" stroke="${INK}" stroke-width=".6"/>`;
+  }
+  return s;
+}
+function blocker(st){
+  if (st.block === 'board') return box(BLK.x0, BLK.y0, BH, BLK.x1, BLK.y1, BLK.z1, { l:'#c98f55', m:'#a8723f', d:'#6e4a28' }, toneI, 1.4);
+  // a pane of clear glass in a small wooden foot
+  let s = box(BLK.x0 - 8, BLK.y0 - 4, BH, BLK.x1 + 8, BLK.y1 + 4, BH + 10, WOOD, toneI, 1.1);
+  const fr = [[BLK.x1, BLK.y0, BH + 10], [BLK.x1, BLK.y1, BH + 10], [BLK.x1, BLK.y1, BLK.z1], [BLK.x1, BLK.y0, BLK.z1]];
+  s += `<g pointer-events="none"><path d="${pd(fr)}" fill="${GLASS}" opacity=".35"/>`
+    + `<path d="${pd([[BLK.x1, BLK.y0 + 16, BH + 40], [BLK.x1, BLK.y0 + 46, BLK.z1 - 20]], false)}" stroke="#fff" stroke-width="3" opacity=".5"/>`
+    + `<path d="${pd([[BLK.x1, BLK.y0 + 30, BH + 30], [BLK.x1, BLK.y0 + 48, BH + 80]], false)}" stroke="#fff" stroke-width="1.6" opacity=".45"/></g>`;
+  s += shape([[BLK.x0, BLK.y1, BLK.z1], [BLK.x1, BLK.y1, BLK.z1], [BLK.x1, BLK.y0, BLK.z1], [BLK.x0, BLK.y0, BLK.z1]], '#e4f2f4', .9);
+  return s + ink(pd(fr), 1.4);
+}
+function remoteCallouts(items){
+  const vb=document.getElementById('fig').viewBox.baseVal, sorted=items.slice().sort((a,b)=>P(...a.at)[0]-P(...b.at)[0]);
+  const half=Math.ceil(sorted.length/2), u=window.LBL_U?LBL_U():0;
+  return [sorted.slice(0,half),sorted.slice(half)].map((col,side)=>col.sort((a,b)=>P(...a.at)[1]-P(...b.at)[1]).map((c,i)=>{
+    const [x,y]=P(...c.at), fs=u?10*u:8.6*INK_K, width=u?24*u:c.text.length*fs*.62+fs*1.5;
+    const px=side?vb.width-width/2-3*INK_K:width/2+3*INK_K, py=vb.height*.34+i*vb.height*.61/Math.max(1,half-1);
+    return tag(c.at,(px-x)/INK_K,(py-y)/INK_K,c.text,c.on);
+  }).join('')).join('');
+}
+let remoteLabels=[];
+/* Parts are mounted on the lower-shell bosses or the PCB. Silicone domes carry
+   conductive pills onto pairs of PCB fingers. Cells sit in molded cradles;
+   springs and tabs connect their ends in series to the board. Component values
+   and code words are illustrative, not a schematic of a particular product.
+   Infrared behavior checked against Exploratorium Infrared Remote, 2026-10-24.
+   https://www.exploratorium.edu/snacks/infrared-remote
+   Parts. Case: shell, lid, seam, bosses, screws, cell divider and cradles.
+   Controls: five keys, silicone domes, carbon pills, paired contact fingers.
+   Electronics: PCB, encoder IC and leads, resonator, driver transistor,
+   current-limiting resistor, decoupling capacitor, traces, IR LED and leads.
+   Power: two cells, positive tabs, negative springs, series link, supply rails.
+   The original scene and animated illustrative pulse sequence are retained. */
+function remote(st,m){
+  const plan=rrUV(RM.x0,RM.y0,RM.x1,RM.y1,RM.r,6), A=on(PZ(RM.z0),plan), B=on(PZ(RM.z1),plan);
+  const k=ease(st.xr||0), parts=[], labels=[];
+  const put=(bounds,svg,text,on=false,at=boxMid(bounds))=>{parts.push({box:bounds,svg});if(text)labels.push({at,text,on});};
+  const bx=(x0,y0,z0,x1,y1,z1,mat,text,on=false)=>put([[x0,y0,z0],[x1,y1,z1]],box(x0,y0,z0,x1,y1,z1,mat,toneI,.6),text,on);
+  const rr=(a,b,r,mat,text,on=false)=>put([[0,1,2].map(i=>Math.min(a[i],b[i])-r),[0,1,2].map(i=>Math.max(a[i],b[i])+r)],rod(a,b,r,mat,toneI,.6),text,on);
+  const trace=(pts,text,on=false)=>{
+    for(let i=1;i<pts.length;i++)rr(pts[i-1],pts[i],.42,matOf(on?'#ffd84a':GOLD),i===1?text:null,on);
+  };
+  const live=st.busy, flashing=st.phase==='flash'&&isFlashing(st);
+  let body=loft(A,B,n=>tone(n,m))+shape(B,tone([0,0,1],m),1.2)+hullInk([...A,...B],2.4);
+  body+=ink(pd(on(PZ(RM.zs),plan)),.7);
+  // The closed model is opaque. Internals are drawn above its ghost only.
+  let out=k>0?xrGhostRings(body,'',k,A,B,m):body;
+  if(k>0){
+    bx(156,120,18.5,284,160,19.5,PCB,'CIRCUIT BOARD',live);
+    for(const [i,x,y] of [[1,160,123],[2,278,157]]){
+      rr([x,y,13],[x,y,18.5],1.6,m,'PCB BOSS '+i);
+      rr([x,y,18.5],[x,y,20],1.1,METAL,'BOARD SCREW '+i);
+    }
+    bx(285,139,13,334,141,20,m,'CELL DIVIDER');
+    for(const [i,y] of [[1,128],[2,152]]){
+      bx(287,y-6,13,334,y+6,15,m,'CELL CRADLE '+i);
+      const reverse=i===2, aa=reverse?[331,y,21]:[290,y,21], bb=reverse?[290,y,21]:[331,y,21];
+      rr(aa,bb,5.2,CELL,'BATTERY '+i,live);
+      rr(bb,[bb[0]+(reverse?-2:2),y,21],2,METAL,'POSITIVE TAB '+i,live);
+      const x=reverse?334:287, coil=[];
+      for(let j=0;j<=40;j++){const t=j/40;coil.push([x+(reverse?-1:1)*3*t,y+2*Math.cos(t*8*Math.PI),21+2*Math.sin(t*8*Math.PI)]);}
+      put([[x-3,y-2,19],[x+3,y+2,23]],line(coil,.8),'NEGATIVE SPRING '+i,live);
+    }
+    trace([[333,128,21],[335,128,17],[335,152,17],[334,152,21]],'SERIES LINK',live);
+    trace([[287,128,21],[285,128,19.8],[282,132,19.8]],'GROUND TRACE',live);
+    trace([[288,152,21],[284,152,19.8],[284,147,19.8],[280,147,19.8]],'SUPPLY TRACE',live);
+    bx(262,131,19.5,280,149,23.5,DARK,'ENCODER CHIP',st.phase==='chip');
+    for(const y of [132,137,142,147])for(const [x0,x1] of [[260,262],[280,282]])bx(x0,y,19.5,x1,y+1,21,METAL,y===132&&x0===260?'CHIP LEADS':null,live);
+    bx(249,122,19.5,257,127,23,METAL,'RESONATOR',live);
+    trace([[253,127,21],[253,132,19.8],[260,132,19.8]],null,live);
+    bx(165,133,19.5,170,138,23,DARK,'LED DRIVER',flashing);
+    bx(176,133,19.5,184,137,22,matOf('#d9bd86'),'LED RESISTOR',flashing);
+    bx(274,122,19.5,280,127,23,matOf('#e0a363'),'DECOUPLING CAP',live);
+    trace([[280,125,21],[282,125,19.8],[282,147,19.8]],null,live);
+    trace([[260,142,19.8],[258,142,19.8],[258,139,19.8],[168,139,19.8],[168,138,21]],'LED CONTROL TRACE',flashing);
+    trace([[282,147,19.8],[283,147,19.8],[283,121,19.8],[184,121,19.8],[184,135,21]],null,flashing);
+    trace([[165,133,21],[164,133,19.8],[164,120,19.8],[282,120,19.8],[282,132,19.8]],null,flashing);
+    trace([[176,135,21],[174,135,19.8],[174,130,19.8],[159,130,19.8],[159,138,27],[151,138,27]],'LED ANODE',flashing);
+    trace([[151,142,27],[159,142,27],[159,142,19.8],[169,142,19.8],[169,138,21]],'LED CATHODE',flashing);
+    rr([160,140,27],LED,3.6,matOf(flashing&&st.show?CAM:'#b89aa0'),'INFRARED LED',flashing);
+    const keys=[...OTHER.map(([x,y],i)=>({x,y,name:'AUX '+(i+1)})),...Object.entries(BTNS).map(([key,b])=>({...b,key,name:key==='power'?'POWER':'VOLUME'}))];
+    for(const b of keys){
+      const down=b.key&&st.btn===b.key?(39-st.btnZ)/3:0, pill=22.5-2.7*down;
+      bx(b.x-6,b.y-6,19.5,b.x-.35,b.y+6,19.8,matOf(GOLD),b.key?b.name+' CONTACT A':null,down>0);
+      bx(b.x+.35,b.y-6,19.5,b.x+6,b.y+6,19.8,matOf(GOLD),b.key?b.name+' CONTACT B':null,down>0);
+      rr([b.x,b.y,pill],[b.x,b.y,pill+.6],4,DARK,b.key?b.name+' CARBON PILL':null,down>0);
+      const dome=loft(on(PZ(19.8),ellUV(b.x,b.y,6.5,6.5,16)),on(PZ(pill+1.2),ellUV(b.x,b.y,4.5,4.5,16)),n=>toneI(n,CERAMIC));
+      put([[b.x-6.5,b.y-6.5,19.8],[b.x+6.5,b.y+6.5,pill+1.2]],'<g opacity=".4">'+dome+'</g>',b.key?b.name+' RUBBER DOME':null,down>0);
+      rr([b.x,b.y,pill+.6],[b.x,b.y,33-3*down],2.5,CERAMIC,null);
+      if(b.key){
+        const row=b.key==='power'?147:137;
+        trace([[b.x+6,b.y,19.9],[b.x+12,b.y,19.9],[b.x+12,row,19.9],[260,row,19.9]],b.name+' KEY TRACE',down>0);
+        trace([[b.x-6,b.y,19.9],[b.x-9,b.y,19.9],[b.x-9,120,19.9]],null,down>0);
+      }
+    }
+    remoteLabels=labels;
+    out+='<g opacity="'+k+'">'+byDepth(parts)+'</g>';
+  }
+  const caps=[...OTHER.map(([x,y])=>({x,y,col:CERAMIC,z:37})),...Object.entries(BTNS).map(([key,b])=>({...b,key,z:st.btn===key?st.btnZ:39}))];
+  out+=byDepth(caps.map(b=>({box:[[b.x-7,b.y-7,30],[b.x+7,b.y+7,b.z]],svg:b.key?act(b.key,cyl(b.x,b.y,30,b.z,7,b.col,toneI,1,16)):cyl(b.x,b.y,30,b.z,7,b.col,toneI,1,16)})));
+  if(!k&&facing([-1,0,0]))out+=cylX(145,148,140,27,3.6,matOf('#4a2a30'),toneI,.6);
+  const v=BTNS.vol,vz=st.btn==='vol'?st.btnZ:39;
+  out+=shape([[v.x+3,v.y,vz+.2],[v.x-3,v.y-3.4,vz+.2],[v.x-3,v.y+3.4,vz+.2]],'#5a82c6',.5);
+  return out;
+}
+const isFlashing = st => { if (!st.btn) return false; for (let k = 0; k < 8; k++){ const [t0, t1] = flash(st, k); if (st.t >= t0 && st.t <= t1) return true; } return false; };
+
+/* ---------- controls ---------- */
+function send(st, ui, k, why){
+  if (st.busy) return ui.flash('wait: the remote is still sending');
+  st.btn = k; st.lbl = why || k; st.t = 0; st.got = 0; st.done = false; st.busy = true; st.phase = 'press';
+  if (st.running) return; st.running = true;
+  ui.animate(dt => {
+    st.t += dt;
+    st.btnZ = st.t < .12 ? lerp(39, 36, st.t / .12) : st.t < PULSE0 + 8 * GAP ? 36 : Math.min(39, 36 + (st.t - PULSE0 - 8 * GAP) * 20);
+    st.phase = st.t < .25 ? 'press' : st.t < PULSE0 ? 'chip' : st.t < flash(st, 7)[1] ? 'flash' : 'travel';
+    // count the flashes that have reached the sensor
+    if (stopAt(st) >= 1) st.got = [...Array(8).keys()].filter(i => (st.t - flash(st, i)[0]) * SPEED >= 1).length;
+    if (!st.done && st.t >= lastArrive(st)){ st.done = true; arrive(st, ui); }
+    if (st.volShow > 0) st.volShow -= dt * (st.t > lastArrive(st) ? 1 : 0);
+
+    const more = st.t < lastArrive(st) + .6 || st.volShow > 0;
+    if (!more){ st.running = false; st.busy = false; st.phase = 'idle'; st.btnZ = 39; }
+    else if (st.t > lastArrive(st) + .6) st.busy = false;
+    return more;
+  });
+}
+function arrive(st, ui){
+  if (stopAt(st) < 1) return;
+  if (st.btn === 'power'){ st.tvOn = !st.tvOn; st.volShow = 0; }
+  else if (st.btn === 'vol'){ if (!st.tvOn) return ui.flash('Press Power first'); st.vol = Math.min(10, st.vol + 1); st.volShow = 2.2; }
+}
+const ui = mountFigure({
+  fig: '15', turn:'full', title: 'TV remote', hint: 'a pattern of invisible flashes',
+  size: [BW, BD, TV.z1], palette: 'cobalt',
+  state: { btn: null, lbl: 'power', t: 0, got: 0, done: false, busy: false, running: false, phase: 'idle', btnZ: 39, tvOn: false, vol: 4, volShow: 0, show: false, block: 'none' },
+  scene,
+  buttons: [
+    { label: 'Press Power', onClick: (st, ui) => send(st, ui, 'power') },
+    { label: 'Press Volume up', onClick: (st, ui) => send(st, ui, 'vol') },
+    { label: 'Show the invisible light', onClick: (st, ui) => { st.show = !st.show; st.lbl = 'show';
+      if (st.show && !st.busy) send(st, ui, st.btn || 'power', 'show'); } },
+    { label: 'Put in the way', choices: st => [
+      { label: 'Nothing', disabled: st.busy, why:'Wait for the remote to finish sending', current: st.block === 'none', onClick: (st, ui) => { st.block = 'none'; st.lbl = 'block'; if (!st.busy) send(st, ui, st.btn || 'power', 'block'); } },
+      { label: 'Clear glass', disabled: st.busy, why:'Wait for the remote to finish sending', current: st.block === 'glass', onClick: (st, ui) => { st.block = 'glass'; st.lbl = 'block'; if (!st.busy) send(st, ui, st.btn || 'power', 'block'); } },
+      { label: 'Wooden board', disabled: st.busy, why:'Wait for the remote to finish sending', current: st.block === 'board', onClick: (st, ui) => { st.block = 'board'; st.lbl = 'block'; if (!st.busy) send(st, ui, st.btn || 'power', 'block'); } } ] },
+  ],
+  stats: st => [{ label: 'Button', value: st.btn ? NAMES[st.btn] : 'None', small: true }, { label: 'Code', value: st.btn ? CODES[st.btn].join('') : '-', small: true },
+    { label: 'TV', value: st.tvOn ? `On, vol ${st.vol}` : 'Off', small: true }],
+  acts: { power(st, el, ui){ send(st, ui, 'power'); }, vol(st, el, ui){ send(st, ui, 'vol'); } },
+  params(st, q){
+    if (q.get('tv') === '1') st.tvOn = true;
+    if (q.get('light') === '1') st.show = true;
+    if (['none', 'glass', 'board'].includes(q.get('block'))) st.block = q.get('block');
+    const k = q.get('send');
+    if (CODES[k]){ st.btn = k; st.lbl = k; st.t = Number.isFinite(+q.get('t')) ? Math.max(0, +q.get('t')) : 1; st.btnZ = 36; st.phase = st.t < PULSE0 ? 'chip' : st.t < flash(st, 7)[1] ? 'flash' : 'travel';
+      if (stopAt(st) >= 1) st.got = [...Array(8).keys()].filter(i => (st.t - flash(st, i)[0]) * SPEED >= 1).length; }
+  },
+});
+if(innerWidth<=560){
+  const svg=document.getElementById('fig'), vb=svg.viewBox.baseVal;
+  svg.setAttribute('viewBox',`0 0 ${vb.width} ${vb.width*1.65}`);
+  svg.style.aspectRatio='1 / 1.65';svg.style.height='auto';svg.style.maxHeight='none';
+}
+xrMount(() => ui, () => "");
+
+</script></body></html>
