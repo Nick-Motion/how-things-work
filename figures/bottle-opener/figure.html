@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bottle opener</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   The book's 1998 and 2016 page 22 show a second-class crown-cap opener.
+   Its far bearing rests on the cap top. The hooked lip fits under the near skirt.
+   Raising the handle lifts the skirt between that bearing and the user's effort.
+   The cap bends clear of the bottle bead, separates, then falls onto the table.
+   Reset supplies a fresh capped specimen. It does not reverse metal deformation.
+   Primary evidence and accepted edition limits are preserved in meta.json.
+   US20200207601A1 paragraphs 0054-0055 support the representative bearing and hook.
+   Its electronics are not part of this simple opener and are not modelled.
+
+   Parts.
+   Structure. One steel shank continues into the ring head and supports the grip.
+   Mechanism. The ring has two side rails, a far bearing edge resting on the cap,
+   a near connecting bridge and its bent-down hook with an inward lifting lip.
+   Controls. The coloured grip encloses the outer shank. There is no hinge pin.
+   Specimen. A crown cap's crimped skirt grips the glass bead. The empty bottle
+   stands on the table. Neither specimen nor table pads the tool anatomy count.
+
+   Geometry. Illustrative enlarged units. Cap centre [35,36], radius 8, top 64.5.
+   Glass bead radius 6.2. Hook starts at x=41.6, outside glass x=41.2 and inside
+   skirt x=43. The lip's top z=61.4 contacts the cap's underside z=61.4.
+   Bearing [29,36,64.5], load x=41.6, effort x=102. The load is between them.
+   Hook slides 5 units inward at constant height, beneath the skirt.
+   Peel turns 18 degrees at the cap-top contact, then the free cap clears the head
+   sideways and drops to [78,60], bottom z=3.2 on the z=3 table.
+   shortcut: the peel and free cap trajectory are prescribed illustrations, use
+   deformable contact physics before predicting force or material deformation.
+*/
+const boPivot = [29,36,64.5], boGold = matOf('#e9b94f'), boGlass = matOf('#6eaa93');
+const boClamp = v => Math.max(0,Math.min(1,v));
+const boRad = a => a*Math.PI/180;
+const boAngle = st => 18*ease(boClamp(st.lift/.4)) + 12*ease(boClamp((st.lift-.4)/.6));
+function boRotate(p, angle, origin=boPivot){
+  const a=boRad(angle), x=p[0]-origin[0], z=p[2]-origin[2];
+  return [origin[0]+x*Math.cos(a)-z*Math.sin(a),p[1],origin[2]+x*Math.sin(a)+z*Math.cos(a)];
+}
+const boToolPoint = (st,p) => { const q=boRotate(p,boAngle(st)); q[0]+=5*(1-st.seat); return q; };
+function boCapPoint(st,p){
+  if(st.lift<=.4) return boRotate(p,boAngle(st));
+  const q=boClamp((st.lift-.4)/.6), start=boRotate([35,36,64.5],18);
+  const c=[start[0]+(78-start[0])*q,36+24*ease(boClamp(q*2)),start[2]+(6.2-start[2])*q*q+18*Math.sin(Math.PI*q)];
+  const r=boRotate(p,18*(1-q),[35,36,64.5]);
+  return r.map((v,i)=>v-[35,36,64.5][i]+c[i]);
+}
+const boBounds = ps => [[0,1,2].map(i=>Math.min(...ps.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...ps.map(p=>p[i])))];
+function boSolid(a,b,material){
+  const n=norm(cross(sub(a[1],a[0]),sub(a[2],a[1])));
+  let out=loft(a,b,nr=>tone(nr,material));
+  if(vis(n)) out+=shape(b,tone(n,material),.7);
+  if(vis(n.map(v=>-v))) out+=shape(a,tone(n.map(v=>-v),material),.7);
+  return out+hullInk([...a,...b],2.2);
+}
+function boRing(z,r,n=48){ return on(PZ(z),ellUV(35,36,r,r,n)); }
+function boScene(st,m){
+  const parts=[], k=ease(st.xr||0), moving=st.phase==='hooking'||st.phase==='lifting';
+  const put=(pts,svg)=>parts.push({box:boBounds(pts),svg});
+  const toolSlab=(xy,z0,z1,material,opacity=1)=>{
+    const a=on(PZ(z0),xy).map(p=>boToolPoint(st,p)), b=on(PZ(z1),xy).map(p=>boToolPoint(st,p));
+    put([...a,...b],`<g opacity="${opacity}">${boSolid(a,b,material)}</g>`);
+  };
+  const toolBox=(x0,y0,z0,x1,y1,z1,material,opacity=1)=>toolSlab(rectUV(x0,y0,x1,y1),z0,z1,material,opacity);
+  let out=board(0,0,118,82,3,5,WOOD);
+  const bottleLevels=[[3,12.2],[5,14],[39,14],[44,12.5],[53,6],[60.2,6],[61,6.2],[63.5,6.2]];
+  const bottleShadow=[...boRing(3,14),...boRing(43,13),...boRing(63.5,6.2)];
+  out+=castShadow(bottleShadow,3,boardTop(0,0,118,82,3,5));
+  const toolOutline=[[26,26,65],[48,26,65],[109,31,65],[109,41,65],[48,46,65],[26,46,65]].map(p=>boToolPoint(st,p));
+  out+=castShadow(toolOutline,3,boardTop(0,0,118,82,3,5));
+  if(st.lift>.4) out+=castShadow([...boRing(61.4,8),...boRing(64.5,7.4)].map(p=>boCapPoint(st,p)),3,boardTop(0,0,118,82,3,5));
+  for(let i=0;i<bottleLevels.length-1;i++){
+    const [z0,r0]=bottleLevels[i], [z1,r1]=bottleLevels[i+1], a=boRing(z0,r0), b=boRing(z1,r1);
+    let glass=loft(a,b,n=>tone(n,boGlass))+hullInk([...a,...b],1.6);
+    if(i===0) glass+=shape(a,boGlass.d,.6);
+    put([...a,...b],`<g opacity="${1-.85*k}">${glass}</g>`);
+  }
+  const bandA=boRing(16,14.06),bandB=boRing(31,14.06);
+  put([...bandA,...bandB],`<g opacity="${1-.9*k}">${loft(bandA,bandB,n=>toneI(n,CERAMIC))+ink(pd(bandB),.5)+ink(pd(bandA),.5)}</g>`);
+  const rimOuter=boRing(63.5,6.2),rimInner=boRing(63.5,4.65);
+  let rim=`<path d="${pd(rimOuter)}${pd(rimInner)}" fill="${boGlass.l}" fill-rule="evenodd"/>`+ink(pd(rimOuter),.8)+ink(pd(rimInner),.7);
+  rim+=loft(boRing(58,4.65),rimInner,n=>toneI(n,boGlass),true);
+  put([...rimOuter,...boRing(58,4.65)],`<g opacity="${1-.75*k}">${rim}</g>`);
+  const capBottom=Array.from({length:84},(_,i)=>{const a=i/84*Math.PI*2,r=i%4<2?8:7.65;return boCapPoint(st,[35+r*Math.cos(a),36+r*Math.sin(a),61.4]);});
+  const capTop=Array.from({length:84},(_,i)=>{const a=i/84*Math.PI*2;return boCapPoint(st,[35+7.4*Math.cos(a),36+7.4*Math.sin(a),64.5]);});
+  let cap=loft(capBottom,capTop,n=>tone(n,boGold))+shape(capTop,boGold.l,.7)+hullInk([...capBottom,...capTop],1.8);
+  const capInner=boRing(63.4,6.8).map(p=>boCapPoint(st,p));
+  const capNormal=norm(cross(sub(capTop[1],capTop[0]),sub(capTop[2],capTop[1])));
+  if(vis(capNormal.map(v=>-v))) cap=shape(capInner,'#ede4c5',.7)+cap;
+  put([...capBottom,...capTop],`<g opacity="${1-.72*k}">${cap}</g>`);
+  toolBox(46,33,64.5,60,39,65.8,METAL);
+  if(k>0) toolBox(60,33,64.5,107,39,65.8,METAL,k);
+  toolSlab(rrUV(60,30.5,110,41.5,4),63.3,67,m,1-.8*k);
+  toolBox(26,26,64.5,29,46,66,METAL,1-.45*k);
+  for(const y of [26,44]) toolBox(29,y,64.5,46,y+2,66,METAL,1-.6*k);
+  toolBox(46,26,64.5,49,46,66,METAL,1-.45*k);
+  toolBox(44.5,33,60.4,46,39,66,METAL);
+  toolBox(41.6,33,60.4,44.5,39,61.4,k>.3?boGold:METAL);
+  out+=byDepth(parts);
+  if(k>.01){
+    const bearing=boToolPoint(st,[29,36,64.5]), lip=boToolPoint(st,[41.6,36,61.4]);
+    const marker=(p,c)=>{const [x,y]=P(...p);return `<circle cx="${f(x)}" cy="${f(y)}" r="${f(2.4*INK_K)}" fill="${c}" stroke="${INK}" stroke-width=".8"/>`;};
+    out+=`<g opacity="${k}">${marker(bearing,'#e66d52')}${marker(lip,'#f4b829')}</g>`;
+    const arm=(x0,x1,y,z,col)=>{
+      const pts=[[x0,y,z+1.4],[x0,y,z],[x1,y,z],[x1,y,z+1.4]].map(p=>boToolPoint(st,p));
+      return `<path d="${pd(pts,false)}" stroke="${col}" stroke-width="1.2" fill="none"/>`;
+    };
+    out+=`<g opacity="${k}" data-overlay="moment-arms">${arm(29,41.6,23,61,'#bd6544')}${arm(29,102,49,63,'#55718f')}</g>`;
+  }
+  if(k>.6) out+=xrCallouts([
+    {at:boToolPoint(st,[89,36,67]),text:'HANDLE GRIP',on:moving},
+    {at:boToolPoint(st,[55,36,65.8]),text:'STEEL SHANK',on:st.phase==='lifting'},
+    {at:boToolPoint(st,[36,45,66]),text:'RING HEAD',on:st.phase==='hooking'},
+    {at:boToolPoint(st,[29,36,64.5]),text:'FULCRUM BEARING',on:st.phase==='lifting'&&st.lift<.4},
+    {at:boToolPoint(st,[41.6,36,61.4]),text:'HOOKED LIP',on:st.seat===1&&st.lift<.4}
+  ],[24,110,25,48,55,104]);
+  return out;
+}
+function boStart(st,ui,phase){
+  const id=++st.generation; st.phase=phase;
+  ui.animate(dt=>{
+    if(id!==st.generation) return false;
+    if(phase==='hooking'){
+      st.seat=Math.min(1,st.seat+dt/.65);
+      if(st.seat===1){st.phase='hooked';return false;}
+    }else{
+      st.lift=Math.min(1,st.lift+dt/1.8);
+      if(st.lift===1){st.phase='open';return false;}
+    }
+    return true;
+  });
+}
+const boUI=mountFigure({
+  fig:'22',turn:'full',title:'Bottle opener',size:[118,82,108],palette:'tomato',
+  state:{phase:'ready',seat:0,lift:0,generation:0},scene:boScene,
+  stats:st=>[{label:'Cap',value:st.phase==='open'?'Off':st.phase==='lifting'?'Peeling':'Seated'},{label:'Handle',value:Math.round(boAngle(st))+' deg',small:true}],
+  buttons:[
+    {label:'Hook',onClick:(st,ui)=>{
+      if(st.phase==='open') return ui.flash('Reset for a fresh capped bottle');
+      if(st.phase!=='ready') return ui.flash(st.phase==='hooked'?'The lip is seated beneath the cap':'The opener is moving');
+      boStart(st,ui,'hooking');
+    }},
+    {label:'Lift',onClick:(st,ui)=>{
+      if(st.phase!=='hooked') return ui.flash(st.phase==='ready'?'Hook the lip beneath the cap first':st.phase==='open'?'The cap is off. Reset to replace it':'The opener is moving');
+      boStart(st,ui,'lifting');
+    }},
+    {label:'Reset',onClick:(st,ui)=>{
+      st.generation++;st.phase='ready';st.seat=0;st.lift=0;
+      ui.flash('Fresh capped bottle');
+    }}
+  ],
+  params:(st,q)=>{
+    if(q.get('hooked')==='1'){st.phase='hooked';st.seat=1;}
+    if(q.has('lift')){const v=Number(q.get('lift'));if(Number.isFinite(v)){st.lift=boClamp(v);st.seat=1;st.phase=st.lift===1?'open':st.lift===0?'hooked':'lifting';}}
+  }
+});
+xrMount(()=>boUI,()=> '');
+</script></body></html>
