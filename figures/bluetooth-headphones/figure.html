@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bluetooth headphones</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Bluetooth headphones: an over-ear pair standing on a desk, a phone lying beside them and a USB-C charger.
+   How it really works (and where the energy / the music is after each step):
+   1. Charge: the USB-C plug goes into the port on the left cup's rim. 5 V from the charger -> USB-C receptacle on the
+      button board -> flex cable -> charger chip on the main board (constant current, then constant voltage to 4.2 V)
+      -> the cup cable up through the left yoke, across the headband and down the right yoke -> the protection board ->
+      the Li-ion pouch cell in the right cup. The status LED is red while it charges. Full: the chip stops, unplug.
+      (While plugged in the headphones stay off.)
+   2. Power on: hold the power button; its tact switch on the button board wakes the Bluetooth chip, which runs from
+      the battery (power back down the cup cable). LED blue. A new pair has no phone yet, so it starts advertising:
+      the LED flashes red/blue and the chip sends advertising packets at 2.4 GHz from the antenna along the cup's top.
+   3. Pair: the phone sees "WH-40" and you tap it. The phone and the chip exchange keys over the radio (a link key both
+      remember), then hold an A2DP audio link. LED blinks blue every few seconds.
+   4. Play: the phone encodes the song (AAC, ~256 kbit/s) and sends packets over the radio -> antenna -> antenna feed ->
+      Bluetooth chip (decodes, buffers in RAM, firmware in the flash chip, timing from the crystal) -> DAC + amplifier ->
+      left driver directly, right driver down the cup cable. In each driver the current in the voice coil sits in the
+      magnet's gap, so the coil and the diaphragm glued to it push in and out: sound, sealed to the ear by the cushion.
+   Parts (each held by another):
+   CASE      two cup shells . two ear cushions (protein leather over foam) . headband cover . headband pad . two sliders .
+             two hubs . two yokes . four hinge pivots . power button, two volume buttons, status LED window, USB-C port
+   LEFT CUP  main board on bosses: Bluetooth chip, flash memory, crystal, charger chip, DAC + amplifier, passives .
+             button board (flex, along the front rim): three tact switches, LED, USB-C receptacle . flex cable to the main
+             board . antenna strip along the shell top . antenna feed . microphone . baffle plate . left driver
+   RIGHT CUP battery (pouch cell on the shell wall) . protection board . battery leads . baffle plate . driver: magnet,
+             voice coil, diaphragm, driver terminals . cushion foam
+   HEADBAND  spring steel band . cup cable (left board -> right cup) through yokes, hubs and band
+   DESK      board . phone . USB-C charger . USB-C cable . mains cord */
+
+/* ---------- geometry (x = depth, y = width, z = up; 1 unit = 1 mm) ---------- */
+const BW = 245, BY = 30, BD = 330, BH = 6, BTOP = boardTop(0, BY, BW, BD, BH, 8);   // desk board x 0..BW, y BY..BD
+const HX = 100, RA = 40, RB = 50, CZ = BH + RB, MIDD = 37;          // cup centre x, half width, half height, centre z; yoke plane
+const CUPS = { L: { id:'L', inner:250, s:1 }, R: { id:'R', inner:110, s:-1 } };   // ear face y; s = outward along y
+const HPR = [[0, .84], [5, .96], [13, 1], [22, 1], [44, 1], [49, .95], [52, .82]];  // [distance out from the ear face, scale]
+const BY0 = 180, BRY = 107, BZ0 = 140, BRZ = 125, HTOP = BZ0 + BRZ + 5;
+const PH = { x0:160, x1:232, y0:107, y1:253 }, PHZ = BH + 8;          // phone lying flat, screen up
+const CG = [203, 290, BH, 233, 322, BH + 22], SOCK = [203, 306, BH + 11];   // charger brick, its USB-C socket
+const PAD = { l:'#615b55', m:'#48433e', d:'#2d2a26' }, PHM = { l:'#eceef0', m:'#c6cbce', d:'#8f979b' }, CABM = { l:'#5b5650', m:'#433f3a', d:'#2b2825' };
+const HM = { pcb: matOf('#3e9a5a'), chip: matOf('#2f2d31'), gold: matOf('#e3b64c'), copper: matOf('#de8c4a'), magnet: matOf('#73787d'),
+  bat: matOf('#5f93dc'), foam: matOf('#f1d68c'), film: matOf('#dfe9ee'), baffle: matOf('#8b9198'), flex: matOf('#e59a3a'), pas: matOf('#cdb48a') };
+const BT = '#2f7be0', LIVE = '#ff8a3d', SOUND = '#f0812b';
+
+const cy = (c, d) => c.inner + c.s * d;
+const YM = c => cy(c, MIDD);
+const cring = (c, d, k, n = 32) => on(PY(cy(c, d)), ellUV(HX, CZ, RA * k, RB * k, n));
+const rimAt = (a, d, k = 1, c = CUPS.L) => { const r = a * Math.PI / 180; return [HX + RA * k * Math.cos(r), cy(c, d), CZ + RB * k * Math.sin(r)]; };
+const rimN = a => { const r = a * Math.PI / 180; return norm([Math.cos(r) / RA, 0, Math.sin(r) / RB]); };
+const addS = (p, n, t) => p.map((v, i) => v + n[i] * t);
+const bboxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const PORT = rimAt(-24, MIDD), PN = rimN(-24);
+const txYm = (x, y, z, str, size, col = INK, weight = 700) => `<text transform="${txM(P(x, y, z), Dv(-1,0,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+const txZ = (x, y, z, str, size, col = INK, weight = 700, anchor = 'middle') => `<text transform="${txM(P(x, y, z), Dv(1,0,0), Dv(0,1,0))}" font-size="${size}" fill="${col}" text-anchor="${anchor}" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}">${str}</text>`;
+
+/* ---------- a swept bar: cross-sections (4 points each) joined into segments, each its own sorted part ---------- */
+function sweepParts(secs, M, shade = tone, w = 1.1, caps = [true, true]){
+  const out = [];
+  for (let i = 0; i < secs.length - 1; i++){
+    const A = secs[i], B = secs[i + 1], cen = avg([...A, ...B]), vs = [];
+    let s = '';
+    for (let j = 0; j < 4; j++){
+      const q = [A[j], A[(j + 1) % 4], B[(j + 1) % 4], B[j]];
+      let nr = norm(cross(sub(q[1], q[0]), sub(q[3], q[0])));
+      if (dot(nr, sub(avg(q), cen)) < 0) nr = nr.map(v => -v);
+      vs.push(vis(nr));
+      if (vs[j]) s += face(pd(q), shade(nr, M));
+    }
+    for (let j = 0; j < 4; j++) if (vs[j] !== vs[(j + 3) % 4]) s += ink(pd([A[j], B[j]], false), w);
+    for (const [end, Q, other] of [[0, A, B], [1, B, A]]){
+      if (!caps[end] || i !== (end ? secs.length - 2 : 0)) continue;
+      let nr = norm(cross(sub(Q[1], Q[0]), sub(Q[2], Q[0]))); if (dot(nr, sub(avg(Q), avg(other))) < 0) nr = nr.map(v => -v);
+      if (vis(nr)) s += shape(Q, shade(nr, M), w * .8);
+    }
+    out.push({ box: bboxOf([...A, ...B]), svg: s });
+  }
+  return out;
+}
+// headband: an ellipse in the y-z plane through both slider tops
+const bandC = t => [BY0 + BRY * Math.cos(t), BZ0 + BRZ * Math.sin(t)];
+const bandN = t => { const a = Math.cos(t) / BRY, b = Math.sin(t) / BRZ, l = Math.hypot(a, b); return [a / l, b / l]; };
+const bandAt = (t, r = 0, x = HX) => { const [y, z] = bandC(t), [ny, nz] = bandN(t); return [x, y + ny * r, z + nz * r]; };
+function bandSecs(t0, t1, n, x0, x1, r0, r1){
+  return Array.from({ length: n + 1 }, (_, i) => { const t = t0 + (t1 - t0) * i / n;
+    return [bandAt(t, r0, x0), bandAt(t, r0, x1), bandAt(t, r1, x1), bandAt(t, r1, x0)]; });
+}
+// yoke: a fork in the cup's mid plane, round the cup from the rear pivot over the top to the front pivot
+function yokeSecs(c){ const y = YM(c), out = [];
+  for (let i = 0; i <= 14; i++){ const a = (8 + 164 * i / 14) * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
+    const pt = (k, yy) => [HX + (RA + k) * ca, yy, CZ + (RB + k) * sa];
+    out.push([pt(3, y - 5), pt(9, y - 5), pt(9, y + 5), pt(3, y + 5)]); }
+  return out; }
+// rounded block along x (hubs)
+function rblock(x0, x1, y0, z0, y1, z1, r, M){
+  const pr = rrUV(y0, z0, y1, z1, r, 4), A = on(PX(x0), pr), B = on(PX(x1), pr);
+  let s = extrude(pr, x0, x1, M);
+  if (facing([1,0,0])) s += fill(pd(B), tone([1,0,0], M)) + ink(pd(B), 1); else if (facing([-1,0,0])) s += fill(pd(A), tone([-1,0,0], M)) + ink(pd(A), 1);
+  return s + hullInk([...A, ...B], 1.6);
+}
+
+/* ---------- the visible half of a ring round the y axis (a seam on a cup) ---------- */
+function hpArc(pts, w){
+  let s = '', run = [];
+  const flush = () => { if (run.length > 1) s += ink(pd(run, false), w); run = []; };
+  for (const p of [...pts, pts[0]]){ if (vis([p[0] - HX, 0, p[2] - CZ])) run.push(p); else flush(); }
+  flush(); return s;
+}
+
+/* ---------- status LED ---------- */
+function ledCol(st){
+  if (st.charging) return '#e2483d';
+  if (st.pw === 'boot') return BT;
+  if (st.pw === 'pair') return Math.floor(st.t * 3) % 2 ? '#e2483d' : BT;
+  if (st.pw === 'link') return Math.floor(st.t * 8) % 2 ? BT : null;
+  if (st.pw === 'conn') return (st.t % 2.2) < .25 ? BT : null;
+  return null;
+}
+
+/* ---------- a cup: shell + cushion swept round the y axis, both faces ---------- */
+function cupBody(c, m){
+  const R = HPR.map(([d, k]) => cring(c, d, k));
+  let s = '';
+  for (let i = 0; i < R.length - 1; i++) s += loft(R[i], R[i + 1], n => tone(n, HPR[i][0] < 22 ? PAD : m));
+  const nO = [0, c.s, 0], nI = [0, -c.s, 0], tO = c.s > 0 ? txY : txYm, tI = c.s > 0 ? txYm : txY;
+  if (facing(nO)){ const o = R[R.length - 1], yo = cy(c, 52.2), fc = tone(nO, m);
+    s += fill(pd(o), fc) + ink(pd(o), 1.1);
+    s += ink(pd(on(PY(yo), ellUV(HX, CZ, RA * .6, RB * .6, 28))), .8);                     // touch panel trim
+    s += tO(HX, cy(c, 52.3), CZ - 3, 'WH-40', 9, mix(fc, '#000000', .45), 800);
+    if (c.s > 0) for (const dx of [-2.2, 2.2]) s += fill(pd(on(PY(yo), ellUV(HX + 16 + dx, CZ + 34, .9, .9, 8))), '#1d1a17');   // mic holes
+  }
+  if (facing(nI)){ const o = R[0], yi = cy(c, -.1);
+    s += fill(pd(o), tone(nI, PAD)) + ink(pd(o), 1.1);
+    const hole = on(PY(yi), ellUV(HX, CZ + 2, RA * .46, RB * .58, 28));
+    s += shape(hole, '#2a2724', 1) + tI(HX, cy(c, -.2), CZ + 6, c.id, 9, '#8d877d', 800);
+  }
+  s += hpArc(R[3], 1.3);
+  s += hullInk(R.flat(), 2.6);
+  return s;
+}
+// controls on the left cup's front rim
+function rimCtl(st){
+  let s = '';
+  const add = (a, d, fn) => { if (facing(rimN(a))) s += fn(rimAt(a, d), rimN(a)); };
+  add(18, MIDD, (p, n) => act('power', rod(p, addS(p, n, st.pressT > 0 ? .7 : 2.4), 3.1, DARK, toneI, 1)));
+  add(34, 31, (p, n) => rod(p, addS(p, n, 1.5), 2.1, DARK, toneI, .9));
+  add(34, 43, (p, n) => rod(p, addS(p, n, 1.5), 2.1, DARK, toneI, .9));
+  add(6, MIDD, (p, n) => { const c = ledCol(st), q = P(...addS(p, n, .5));
+    return (c ? `<circle cx="${f(q[0])}" cy="${f(q[1])}" r="${f(4.5)}" fill="${c}" opacity=".35"/>` : '') + rod(p, addS(p, n, .5), 1.6, matOf(c || '#6e6a63'), toneI, .7); });
+  add(-24, MIDD, (p, n) => { const r = -24 * Math.PI / 180, tg = norm([-Math.sin(r) * RA, 0, Math.cos(r) * RB]);
+    const pl = (uv, o) => uv.map(([u, v]) => [p[0] + n[0] * o + tg[0] * v, p[1] + u, p[2] + n[2] * o + tg[2] * v]);
+    return act('charge', shape(pl(rrUV(-4.4, -1.7, 4.4, 1.7, 1.6, 3), .15), '#1a1714', .8) + fill(pd(pl(rectUV(-2.6, -.4, 2.6, .4), .2)), '#6c6862')); });
+  return s;
+}
+
+/* ---------- USB-C plug and cable ---------- */
+function plugPose(u){
+  const tIn = addS(PORT, PN, -6), tR = [160, 296, BH + 3.6];
+  const tip = tIn.map((v, i) => tR[i] + (v - tR[i]) * u); tip[2] += 26 * Math.sin(Math.PI * u);
+  const dir = norm([1 + (PN[0] - 1) * u, 0, PN[2] * u]);
+  return { tip, dir, tail: addS(tip, dir, 20) };
+}
+function plugSvg(pp){
+  const a = pp.tip, b = addS(pp.tip, pp.dir, 6);
+  const tongue = rod(a, b, 1.6, METAL, toneI, .7), mold = rod(b, pp.tail, 3.4, CABM, toneI, 1.1);
+  return vis(pp.dir) ? tongue + mold : mold + tongue;
+}
+function cablePts(pp){
+  const S0 = [196, 306, BH + 11], S1 = [178, 306, BH + 11], E0 = pp.tail, E1 = addS(pp.tail, pp.dir, 22), out = [SOCK];
+  for (let i = 0; i <= 28; i++){ const t = i / 28, a = (1 - t) ** 3, b = 3 * (1 - t) ** 2 * t, c = 3 * (1 - t) * t * t, d = t ** 3;
+    const p = [0,1,2].map(k => a * S0[k] + b * S1[k] + c * E1[k] + d * E0[k]); p[2] = Math.max(BH + 1.8, p[2] - 30 * Math.sin(Math.PI * t)); out.push(p); }
+  return out;
+}
+const cordSvg = (pts, r = 1.7, col = CABM.l) => { const d = pd(pts, false), cap = 'fill="none" stroke-linecap="round" stroke-linejoin="round"';
+  return `<path d="${d}" ${cap} stroke="${INK}" style="stroke-width:${f(2 * r + 1.6 * INK_K)}"/><path d="${d}" ${cap} stroke="${col}" style="stroke-width:${f(2 * r)}"/>`; };
+const CORD_ON = [[233, 306, BH + 7], [239, 306, BH + 2], [244, 304, BH + 1.6], [249.6, 303, BH + 1.6]];
+const CORD_OFF = [[249.6, 303, BH + 1.6], [251.4, 303, BH - 1], [251.8, 303, -14]];
+
+/* ---------- phone ---------- */
+const scr = (u, v, dz = .06) => [PH.x0 + 4 + u, PH.y0 + 5 + v, PHZ + dz];
+const rS = (u0, v0, u1, v1, col, r = 0, extra = '') => fill(pd(on(PZ(PHZ + .06), rrUV(PH.x0 + 4 + u0, PH.y0 + 5 + v0, PH.x0 + 4 + u1, PH.y0 + 5 + v1, r, 3))), col, extra);
+const cS = (u, v, r, col) => fill(pd(on(PZ(PHZ + .08), ellUV(PH.x0 + 4 + u, PH.y0 + 5 + v, r, r, 14))), col);
+const polyS = (pts, col) => fill(pd(pts.map(([u, v]) => scr(u, v, .09))), col);
+const tS = (u, v, str, size, col = '#ffffff', w = 700, anchor = 'start') => { const [x, y, z] = scr(u, v, .1); return txZ(x, y, z, str, size, col, w, anchor); };
+function phoneUI(st){
+  let s = rS(0, 0, 64, 136, '#202630', 5);
+  const conn = st.pw === 'conn';
+  s += tS(5, 7, '9:41', 4.6) + (conn ? tS(59, 7, 'BT', 4.4, '#7fb2ff', 800, 'end') : '');
+  if (st.pw === 'pair' || st.pw === 'link'){
+    s += tS(4, 22, 'Bluetooth', 7.4, '#ffffff', 800);
+    s += rS(47, 16.5, 60, 23.5, '#43c25c', 3.5) + cS(56.5, 20, 2.8, '#ffffff');
+    s += tS(4, 36, 'OTHER DEVICES', 4, '#9aa3ad');
+    const lk = st.pw === 'link';
+    s += rS(2, 40, 62, 56, lk ? '#2e4b78' : '#2b313b', 3);
+    s += cS(9, 48, 3.4, '#7fb2ff') + tS(15, 50, 'WH-40', 6.2, '#ffffff', 800);
+    s += lk ? tS(59, 50, 'PAIRING', 3.6, '#7fb2ff', 800, 'end') : tS(59, 50, 'TAP', 4, '#f4b829', 800, 'end');
+    if (lk) for (let i = 0; i < 3; i++) s += cS(26 + 6 * i, 64, 1.2, Math.floor(st.t * 4) % 3 === i ? '#7fb2ff' : '#3b4452');
+  } else if (conn){
+    s += tS(32, 15, 'WH-40 CONNECTED', 3.6, '#7fb2ff', 800, 'middle');
+    s += rS(10, 20, 54, 64, '#f4b829', 4) + cS(32, 40, 9, '#ef6a4c');
+    for (let i = 0; i < 4; i++) s += rS(14, 50 + 3 * i, 50, 51.4 + 3 * i, '#ef6a4c');
+    if (st.play) for (let i = 0; i < 5; i++){ const h = 4 + 5 * Math.abs(Math.sin(st.t * 6 + i * 1.7)); s += rS(19 + 6 * i, 62 - h, 22 + 6 * i, 62, '#ffffff', 0, 'opacity=".8"'); }
+    s += tS(32, 75, 'SUNNY LOOP', 6.4, '#ffffff', 800, 'middle') + tS(32, 82, 'THE PAPER CUPS', 4, '#9aa3ad', 700, 'middle');
+    const pg = st.song;
+    s += rS(6, 89, 58, 90.6, '#4a5260', .8) + rS(6, 89, 6 + 52 * Math.max(.02, pg), 90.6, '#ffffff', .8) + cS(6 + 52 * Math.max(.02, pg), 89.8, 1.6, '#ffffff');
+    const sec = Math.round(pg * 198);
+    s += tS(6, 96, `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`, 3.4, '#9aa3ad') + tS(58, 96, '3:18', 3.4, '#9aa3ad', 700, 'end');
+    s += cS(32, 110, 7.5, '#ffffff');
+    s += st.play ? rS(29, 106, 31, 114, '#202630') + rS(33, 106, 35, 114, '#202630') : polyS([[29.5, 106], [36.5, 110], [29.5, 114]], '#202630');
+    s += polyS([[18, 110], [22, 107], [22, 113]], '#ffffff') + polyS([[46, 110], [42, 107], [42, 113]], '#ffffff');
+    s += tS(32, 128, `WH-40  ${Math.round(st.bat)}%`, 3.6, '#9aa3ad', 700, 'middle');
+  } else {
+    s += tS(32, 40, '9:41', 16, '#ffffff', 800, 'middle') + tS(32, 49, 'SAT 24 OCT', 4.4, '#c9d0d8', 700, 'middle');
+    s += rS(4, 100, 60, 114, '#2f3743', 3) + tS(8, 109, 'Bluetooth: on', 4.2, '#ffffff', 700);
+  }
+  return s;
+}
+function phone(st){
+  const A = on(PZ(BH), rrUV(PH.x0, PH.y0, PH.x1, PH.y1, 9, 5)), B = on(PZ(PHZ), rrUV(PH.x0, PH.y0, PH.x1, PH.y1, 9, 5));
+  let s = loft(A, B, n => tone(n, PHM)) + fill(pd(B), '#141317') + ink(pd(B), 1);
+  s += phoneUI(st);
+  if (facing([1,0,0])) s += box(PH.x1, PH.y0 + 40, BH + 3, PH.x1 + .9, PH.y0 + 54, BH + 5, PHM, tone, .6) + box(PH.x1, PH.y0 + 60, BH + 3, PH.x1 + .9, PH.y0 + 74, BH + 5, PHM, tone, .6);
+  s += hullInk([...A, ...B], 2);
+  return act('phone', s);
+}
+function charger(){
+  let s = box(...CG, CERAMIC, tone, 1);
+  if (facing([0,0,1])) s += txZ(218, 303, CG[5] + .1, '5V 3A', 6, '#857d6e', 800) + txZ(218, 311, CG[5] + .1, 'USB-C PD', 4, '#857d6e', 700);
+  if (facing([-1,0,0])) s += shape(on(PX(CG[0] - .1), rrUV(301.6, BH + 9.3, 310.4, BH + 12.7, 1.5, 3)), '#1a1714', .8);
+  s += hullInk([[CG[0], CG[1], CG[2]], [CG[3], CG[4], CG[5]], [CG[0], CG[4], CG[2]], [CG[3], CG[1], CG[5]], [CG[0], CG[1], CG[5]], [CG[3], CG[4], CG[2]], [CG[0], CG[4], CG[5]], [CG[3], CG[1], CG[2]]], 1.8);
+  return act('charge', s);
+}
+
+/* ---------- the headphones (body), sorted part by part ---------- */
+function bodyParts(st, m){
+  const parts = [];
+  for (const c of [CUPS.L, CUPS.R]){
+    const y0 = Math.min(cy(c, 0), cy(c, 52)), y1 = Math.max(cy(c, 0), cy(c, 52)), y = YM(c);
+    parts.push({ box: [[HX - RA, y0, BH], [HX + RA, y1, CZ + RB]], svg: cupBody(c, m) + (c.s > 0 ? rimCtl(st) : '') });
+    parts.push(...sweepParts(yokeSecs(c), m, tone, 1.1));
+    for (const sx of [1, -1]){ const xa = HX + sx * (RA + .5), xb = HX + sx * (RA + 9.5);
+      parts.push({ box: [[Math.min(xa, xb), y - 5.5, CZ - 5.5], [Math.max(xa, xb), y + 5.5, CZ + 5.5]], svg: cylX(Math.min(xa, xb), Math.max(xa, xb), y, CZ, 5.5, m, tone, 1.1, 18) }); }
+    parts.push({ box: [[HX - 9, y - 6, 109], [HX + 9, y + 6, 122]], svg: rblock(HX - 9, HX + 9, y - 6, 109, y + 6, 122, 3, m) });
+    parts.push({ box: [[HX - 7, y - 1.5, 122], [HX + 7, y + 1.5, 141]], svg: box(HX - 7, y - 1.5, 122, HX + 7, y + 1.5, 141, METAL, tone, .9)
+      + (facing([0, c.s, 0]) || facing([0, -c.s, 0]) ? [126, 130, 134].map(z => line([[HX - 5, y + (facing([0,1,0]) ? 1.6 : -1.6), z], [HX + 5, y + (facing([0,1,0]) ? 1.6 : -1.6), z]], .5)).join('') : '') });
+  }
+  parts.push(...sweepParts(bandSecs(0, Math.PI, 26, HX - 16, HX + 16, -4.5, 4.5), m, tone, 1.2));
+  parts.push(...sweepParts(bandSecs(.2 * Math.PI, .8 * Math.PI, 14, HX - 13, HX + 13, -12, -4.5), PAD, tone, 1.1));
+  return parts;
+}
+
+/* ---------- see-through: the working parts ---------- */
+const boxIn = (x0, y0, z0, x1, y1, z1, M, w = .7, extra = '') => ({ box: [[x0, y0, z0], [x1, y1, z1]], svg: box(x0, y0, z0, x1, y1, z1, M, toneI, w) + extra });
+const cbx = (c, x0, x1, d0, d1, z0, z1, M, w = .7, extra = '') => { const a = cy(c, d0), b = cy(c, d1); return boxIn(x0, Math.min(a, b), z0, x1, Math.max(a, b), z1, M, w, extra); };
+function ycyl(c, d0, d1, rx, rz, M, x = HX, z = CZ, w = .8, n = 24, op = 1){
+  const A = on(PY(cy(c, d0)), ellUV(x, z, rx, rz, n)), B = on(PY(cy(c, d1)), ellUV(x, z, rx, rz, n)), nB = [0, c.s, 0], nA = [0, -c.s, 0];
+  let s = loft(A, B, nr => toneI(nr, M));
+  if (facing(nB)) s += shape(B, toneI(nB, M), w * .8); else if (facing(nA)) s += shape(A, toneI(nA, M), w * .8);
+  s += hullInk([...A, ...B], w);
+  return { box: bboxOf([...A, ...B]), svg: op < 1 ? `<g opacity="${op}">${s}</g>` : s };
+}
+const rodIn = (a, b, r, M, w = .6, n = 12) => ({ box: bboxOf([addS(a, [1,1,1], -r), addS(a, [1,1,1], r), addS(b, [1,1,1], -r), addS(b, [1,1,1], r)]), svg: rod(a, b, r, M, toneI, w, r, n) });
+const hpBend = (pts, r = 3) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la / 2.2, lc / 2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k]) * d / la), q = c.map((v, k) => b[k] + (v - b[k]) * d / lc);
+    for (let j = 0; j <= 4; j++){ const t = j / 4; out.push([0,1,2].map(k => (1 - t) * (1 - t) * p[k] + 2 * (1 - t) * t * b[k] + t * t * q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+// a wire cut into short pieces, each with its own box, so it sorts with the solids it passes
+const wireParts = (pts, col, w = .5, L = 7) => { const q = hpBend(pts), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < L){ len += Math.hypot(...q[j].map((v, k) => v - q[j - 1][k])); j++; }
+    const seg = q.slice(i, j + 1), d = pd(seg, false);
+    let svg = `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2 * w + .8)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2 * w)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    for (const e of [i === 0 ? q[0] : null, j === q.length - 1 ? q[j] : null]) if (e){ const [X, Y] = P(...e); svg += `<circle cx="${f(X)}" cy="${f(Y)}" r=".9" fill="${INK}"/>`; }
+    out.push({ box: bboxOf(seg), svg }); i = j; }
+  return out; };
+// driver: baffle plate (see-through grey), magnet pot behind it, voice coil, cone diaphragm toward the ear
+function driverParts(c, v){
+  const out = [ycyl(c, 20, 22, RA * .93, RB * .93, HM.baffle, HX, CZ, .8, 32, .5), ycyl(c, 22, 30, 11, 11, HM.magnet, HX, CZ, .9, 24),
+    ycyl(c, 17.6 - v, 21.6, 8.2, 8.2, HM.copper, HX, CZ, .7, 20)];
+  const A = on(PY(cy(c, 18.2 - v * .3)), ellUV(HX, CZ, 19.5, 19.5, 28)), B = on(PY(cy(c, 16 - v)), ellUV(HX, CZ, 8.2, 8.2, 28)), D = on(PY(cy(c, 14.6 - v)), ellUV(HX, CZ, 5, 5, 28));
+  const film = `<g opacity=".78">${loft(A, B, n => toneI(n, HM.film))}${loft(B, D, n => toneI(n, HM.film))}${facing([0, -c.s, 0]) ? fill(pd(D), HM.film.l) : ''}</g>`;
+  out.push({ box: bboxOf([...A, ...D]), svg: film + ink(pd(A), .8) + ink(pd(B), .5) + hullInk([...A, ...B, ...D], .8) });
+  for (const dx of [-4, 2]) out.push(cbx(c, HX + dx, HX + dx + 2.4, 22, 23.4, CZ + 22, CZ + 25, HM.gold, .5));     // driver terminals
+  return out;
+}
+function foamRing(c){
+  const o0 = cring(c, 2, .82, 28), o1 = cring(c, 19, .93, 28), i0 = on(PY(cy(c, 2)), ellUV(HX, CZ + 2, RA * .5, RB * .6, 28));
+  const fe = facing([0, -c.s, 0]) ? `<path d="${pd(o0)}${pd(i0)}" fill="${HM.foam.l}" fill-rule="evenodd"/>` : '';
+  const a = cy(c, 2), b = cy(c, 13);
+  return { box: [[HX - RA, Math.min(a, b), CZ - RB], [HX + RA, Math.max(a, b), CZ + RB]], svg: `<g opacity=".5">${loft(o0, o1, n => toneI(n, HM.foam))}${fe}</g>` + `<g opacity=".7">${ink(pd(o0), .6)}${ink(pd(i0), .6)}</g>` };
+}
+function cupRoute(c, start){ const y = YM(c), pts = [start, [64, y, start[2] - 6], [60, y, CZ + 8], [HX - RA - 6, y, CZ]];
+  for (let i = 1; i <= 8; i++){ const a = Math.PI - Math.PI / 2 * i / 8; pts.push([HX + (RA + 6) * Math.cos(a), y, CZ + (RB + 6) * Math.sin(a)]); }
+  pts.push([HX, y, 122], [HX, y, BZ0]); return pts; }
+let MECH_ITEMS = [];
+function hpMech(st){
+  const L = CUPS.L, R = CUPS.R, parts = [], dO = 35.6, live = st.charging || st.pw !== 'off';
+  const v = st.play && st.pw === 'conn' ? 1.1 * Math.sin(st.t * 2 * Math.PI * 7) : 0;
+  // ---- left cup: main board and its chips
+  parts.push(cbx(L, 72, 128, 34, dO, 46, 84, HM.pcb));
+  parts.push(cbx(L, 92, 106, dO, dO + 1.4, 58, 72, HM.chip, .7, facing([0,1,0]) ? txY(99, cy(L, dO + 1.45), 63.5, 'BT', 4.4, '#d8d4cc', 800) : ''));
+  parts.push(cbx(L, 110, 118, dO, dO + 1.1, 66, 72, HM.chip));
+  parts.push(cbx(L, 110, 116, dO, dO + 1.2, 57.5, 61, METAL));
+  parts.push(cbx(L, 78, 86, dO, dO + 1, 49, 57, st.charging ? matOf('#ff9a3a') : HM.chip));
+  parts.push(cbx(L, 78, 88, dO, dO + 1.1, 64, 73, st.play && st.pw === 'conn' ? matOf('#ff9a3a') : HM.chip));
+  for (const [x, z] of [[89, 54], [107, 52], [121, 56], [121, 76], [91, 78], [100, 52]]) parts.push(cbx(L, x, x + 2.6, dO, dO + .9, z, z + 1.4, HM.pas, .4));
+  // antenna strip along the inside of the shell top, and its feed from the board
+  parts.push(...sweepParts(Array.from({ length: 9 }, (_, i) => { const a = (55 + 70 * i / 8) * Math.PI / 180, pt = (r, d) => [HX + (RA * .9 + r) * Math.cos(a), cy(L, d), CZ + (RB * .9 + r) * Math.sin(a)];
+    return [pt(-.6, 44), pt(.6, 44), pt(.6, 48), pt(-.6, 48)]; }), HM.gold, toneI, .6));
+  parts.push(...wireParts([[116, cy(L, 36.8), 84], [116, cy(L, 41), 90], rimAt(62, 46, .89)], '#8f8a84', .45));
+  // button board along the front rim: tact switches, LED, USB-C receptacle; flex cable to the main board
+  parts.push(...sweepParts(Array.from({ length: 9 }, (_, i) => { const a = (-36 + 80 * i / 8) * Math.PI / 180, pt = (r, d) => [HX + (RA * .9 + r) * Math.cos(a), cy(L, d), CZ + (RB * .9 + r) * Math.sin(a)];
+    return [pt(-.6, 27), pt(.6, 27), pt(.6, 47), pt(-.6, 47)]; }), HM.pcb, toneI, .6));
+  for (const [a, d] of [[18, MIDD], [34, 31], [34, 43]]) parts.push(rodIn(rimAt(a, d, .91), rimAt(a, d, .955), 2.2, METAL, .5));
+  { const c = ledCol(st); parts.push(rodIn(rimAt(6, MIDD, .91), rimAt(6, MIDD, .945), 1.4, matOf(c || '#d8d4cc'), .5)); }
+  parts.push(rodIn(rimAt(-24, MIDD, .86), rimAt(-24, MIDD, .995), 2.4, METAL, .6));
+  parts.push(...wireParts([rimAt(2, MIDD, .89), [131, cy(L, 35.5), 62], [128, cy(L, 35.2), 62]], HM.flex.l, .9));
+  parts.push(rodIn(rimAt(-62, 40, .9), rimAt(-62, 40, .975), 2.4, HM.chip, .6));       // microphone capsule behind its port
+  parts.push(...driverParts(L, v));
+  // ---- right cup: battery on the shell wall, protection board, leads, driver, cushion foam
+  parts.push(cbx(R, 74, 126, 33, 41, 28, 64, live ? matOf('#7fb0f0') : HM.bat, .8, facing([0,1,0]) ? txY(HX, cy(R, 32.9), 44, '3.7V 800mAh', 4.6, '#ffffff', 800) + txY(HX, cy(R, 32.9), 50, 'LI-ION', 4.6, '#ffffff', 800) : ''));
+  parts.push(cbx(R, 80, 120, 36, 38, 68, 76, HM.pcb), cbx(R, 96, 103, 35.2, 36, 70, 74, HM.chip));
+  parts.push(...wireParts([[86, cy(R, 36.2), 64], [86, cy(R, 36.2), 68]], '#d23a2a', .6), ...wireParts([[93, cy(R, 36.2), 64], [93, cy(R, 36.2), 68]], '#2a2622', .6));
+  parts.push(...wireParts([[110, cy(R, 36.5), 76], [110, cy(R, 32), 80], [HX + 3, cy(R, 24), CZ + 25], [HX + 3, cy(R, 23.4), CZ + 23.6]], '#8f8a84', .4));
+  parts.push(...driverParts(R, v), foamRing(R), foamRing(L));
+  // ---- headband: spring steel band, hinge pivots, the cup cable from the left board to the right cup
+  parts.push(...sweepParts(bandSecs(0, Math.PI, 24, HX - 11, HX + 11, -.8, .8), METAL, toneI, .6));
+  for (const c of [L, R]){ const y = YM(c);
+    parts.push(rodIn([HX + RA - 3, y, CZ], [HX + RA + 11, y, CZ], 1.8, METAL, .6), rodIn([HX - RA + 3, y, CZ], [HX - RA - 11, y, CZ], 1.8, METAL, .6)); }
+  const band = Array.from({ length: 25 }, (_, i) => bandAt(Math.PI * i / 24, 1.6));
+  parts.push(...wireParts([...cupRoute(L, [76, cy(L, 36.6), 84]), ...band, ...cupRoute(R, [80, cy(R, 37), 72]).reverse()], live ? LIVE : '#7a736b', .7, 9));
+  return byDepth(parts);
+}
+const XR_ITEMS = st => { const L = CUPS.L, R = CUPS.R, play = st.play && st.pw === 'conn', live = st.charging || st.pw !== 'off', radio = st.pw === 'pair' || st.pw === 'link' || play;
+  return [
+    { at:[74, cy(L, 35.6), 80], text:'MAIN BOARD', on: live },
+    { at:[99, cy(L, 37), 66], text:'BLUETOOTH CHIP', on: radio },
+    { at:[82, cy(L, 36.6), 53], text:'CHARGER CHIP', on: st.charging },
+    { at:[83, cy(L, 37), 69], text:'DAC + AMPLIFIER', on: play },
+    { at: rimAt(90, 46, .9), text:'ANTENNA', on: radio },
+    { at: rimAt(-8, 47, .9), text:'BUTTON BOARD', on: st.pressT > 0 },
+    { at: rimAt(18, MIDD, 1.05), text:'POWER BUTTON', on: st.pressT > 0 },
+    { at: rimAt(34, 43, 1.04), text:'VOLUME BUTTONS', on: false },
+    { at: rimAt(6, MIDD, 1.01), text:'STATUS LED', on: !!ledCol(st) },
+    { at: PORT, text:'USB-C PORT', on: st.charging },
+    { at: rimAt(-62, 40, .97), text:'MICROPHONE', on: false },
+    { at:[HX, cy(L, 30), CZ - 11], text:'LEFT DRIVER', on: play },
+    { at:[76, cy(R, 33), 34], text:'BATTERY', on: live },
+    { at:[118, cy(R, 37), 76], text:'PROTECTION BOARD', on: live },
+    { at:[86, cy(R, 36.2), 66], text:'BATTERY LEADS', on: live },
+    { at:[HX + 12, cy(R, 17), CZ + 9], text:'DIAPHRAGM', on: play },
+    { at:[HX - 8.2, cy(R, 19), CZ], text:'VOICE COIL', on: play },
+    { at:[HX - 11, cy(R, 26), CZ - 3], text:'MAGNET', on: play },
+    { at:[HX - 32, cy(R, 21), CZ - 22], text:'BAFFLE PLATE', on: false },
+    { at:[HX + 22, cy(R, 4), CZ - 34], text:'CUSHION FOAM', on: false },
+    { at:[HX, cy(R, 0), CZ + 42], text:'EAR CUSHION', on: false },
+    { at: bandAt(.62 * Math.PI, 0, HX + 11), text:'SPRING STEEL BAND', on: false },
+    { at: bandAt(.72 * Math.PI, -12, HX + 8), text:'HEADBAND PAD', on: false },
+    { at: bandAt(.82 * Math.PI, 1.6), text:'CUP CABLE', on: live },
+    { at:[HX + 7, YM(L), 132], text:'SLIDER', on: false },
+    { at:[HX + 46 * Math.cos(.5), YM(L), CZ + 56 * Math.sin(.5)], text:'YOKE', on: false },
+    { at:[HX + RA + 10, YM(R), CZ], text:'HINGE PIVOT', on: false },
+    { at:[196, 125, PHZ], text:'PHONE', on: radio },
+    { at:[180, 306, BH + 2], text:'USB-C CABLE', on: st.charging },
+    { at:[CG[3], 306, CG[5]], text:'CHARGER', on: st.charging } ]; };
+const SURF_ITEMS = st => [
+  { at: bandAt(.5 * Math.PI, 4.5), text:'HEADBAND', on: false },
+  { at:[HX, cy(CUPS.R, 0), CZ + 40], text:'EAR CUSHION', on: false },
+  { at:[HX + 46 * Math.cos(.5), YM(CUPS.L), CZ + 56 * Math.sin(.5)], text:'YOKE', on: false },
+  { at: rimAt(18, MIDD, 1.05), text:'POWER BUTTON', on: st.pressT > 0 },
+  { at: rimAt(6, MIDD, 1.01), text:'STATUS LED', on: !!ledCol(st) },
+  { at: PORT, text:'USB-C PORT', on: st.charging },
+  { at:[196, 125, PHZ], text:'PHONE', on: false },
+  { at:[CG[3], 306, CG[5]], text:'CHARGER', on: st.charging } ];
+
+/* ---------- radio and sound, drawn over everything ---------- */
+function overlays(st){
+  let s = '';
+  const ANT = rimAt(90, 46, .9 * 1.04), PHA = [196, 117, PHZ + 1], t = st.t, play = st.play && st.pw === 'conn';
+  const ring = (c, r, op, col) => `<path d="${pd(on(PZ(c[2]), ellUV(c[0], c[1], r, r, 28)))}" fill="none" stroke="${col}" stroke-width="1.4" opacity="${f(op)}"/>`;
+  if (st.pw === 'pair') for (let i = 0; i < 3; i++){ const fr = (t * .8 + i / 3) % 1; s += ring(ANT, 6 + 36 * fr, (1 - fr) * .85, BT); }
+  if (st.pw === 'link' || play){
+    for (let i = 0; i < 3; i++){ const fr = (t * .9 + i / 3) % 1; s += ring(PHA, 5 + 22 * fr, (1 - fr) * .7, BT); }
+    const n = play ? 6 : 4;
+    for (let i = 0; i < n; i++){ let fr = (t * .8 + i / n) % 1; const back = st.pw === 'link' && i % 2;
+      if (back) fr = 1 - fr;
+      const p = PHA.map((v, k) => v + (ANT[k] - v) * fr); p[2] += 22 * Math.sin(Math.PI * fr);
+      const [X, Y] = P(...p), w = 7 * INK_K, h = 4 * INK_K, op = Math.min(1, 6 * Math.min(fr, 1 - fr));
+      s += `<rect x="${f(X - w / 2)}" y="${f(Y - h / 2)}" width="${f(w)}" height="${f(h)}" rx="${f(h / 2)}" fill="${back ? '#7fb2ff' : BT}" stroke="${INK}" stroke-width=".8" opacity="${f(op)}"/>`; }
+  }
+  if (play) for (const c of [CUPS.L, CUPS.R]) for (let i = 0; i < 3; i++){ const fr = (t * 1.3 + i / 3) % 1;
+    s += `<path d="${pd(on(PY(cy(c, -3 - 30 * fr)), ellUV(HX, CZ + 2, RA * .42 + 7 * fr, RB * .52 + 7 * fr, 28)))}" fill="none" stroke="${SOUND}" stroke-width="1.5" opacity="${f((1 - fr) * .75)}"/>`; }
+  return s;
+}
+
+/* ---------- shadows ---------- */
+function hpShadows(){
+  const pts = c => [...cring(c, 0, .84, 16), ...cring(c, 52, .82, 16), ...cring(c, 22, 1, 16)];
+  const band = bandSecs(0, Math.PI, 12, HX - 16, HX + 16, -4.5, 4.5).flat();
+  const ph = [...on(PZ(BH), rrUV(PH.x0, PH.y0, PH.x1, PH.y1, 9, 3)), ...on(PZ(PHZ), rrUV(PH.x0, PH.y0, PH.x1, PH.y1, 9, 3))];
+  const cg = []; for (const x of [CG[0], CG[3]]) for (const y of [CG[1], CG[4]]) for (const z of [CG[2], CG[5]]) cg.push([x, y, z]);
+  return clipTo(BTOP, [pts(CUPS.L), pts(CUPS.R), band, ph, cg].map(p => castShadow(p, BH)).join(''));
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0), pp = plugPose(st.plug), inPort = st.plug > .97;
+  const front = facing([1,0,0]);
+  let s = (front ? '' : cordSvg(CORD_OFF)) + board(0, BY, BW, BD, BH, 8, WOOD) + (front ? cordSvg(CORD_OFF) : '') + hpShadows();
+  const hpParts = bodyParts(st, m);
+  if (inPort) hpParts.push({ box: [[140.1, PORT[1] - 3.5, PORT[2] - 10], [158, PORT[1] + 3.5, PORT[2] + 4]], svg: plugSvg(pp) });
+  let hp = byDepth(hpParts);
+  if (k > 0) hp = `<g opacity="${f(1 - .8 * k)}">${hp}</g><g opacity="${f(k)}">${hpMech(st)}</g>` + `<g opacity="${f(k)}">${rimCtl(st)}${inPort ? plugSvg(pp) : ''}</g>`;
+  const cp = cablePts(pp);
+  const items = [
+    { box: [[50, 58, BH], [150, 302, HTOP]], svg: hp },
+    { box: [[PH.x0, PH.y0, BH], [PH.x1, PH.y1, PHZ]], svg: phone(st) },
+    { box: [[CG[0], CG[1], CG[2]], [CG[3], CG[4], CG[5]]], svg: charger(st) },
+    { box: bboxOf(CORD_ON), svg: cordSvg(CORD_ON) },
+    { box: bboxOf(cp), svg: cordSvg(cp) } ];
+  if (!inPort) items.push({ box: bboxOf([addS(pp.tip, [1,1,1], -3.4), addS(pp.tail, [1,1,1], 3.4), addS(pp.tip, [1,1,1], 3.4), addS(pp.tail, [1,1,1], -3.4)]), svg: plugSvg(pp) });
+  s += byDepth(items) + overlays(st);
+  s += xrCallouts(k > .6 ? XR_ITEMS(st) : SURF_ITEMS(st), [50, 150, 58, 302, 0, HTOP]);
+  return s;
+}
+
+/* ---------- behaviour (one state object, one clock) ---------- */
+let ui, loopOn = false;
+function setPw(st, p){ st.pw = p; st.ph = 0; if (p !== 'conn') st.play = false; }
+function hpStep(st, dt){
+  st.t += dt; st.ph += dt;
+  st.pressT = Math.max(0, st.pressT - dt);
+  if (st.plug !== st.plugT){ const g = Math.sign(st.plugT - st.plug); st.plug = Math.min(1, Math.max(0, st.plug + g * dt / .7)); if (st.plug === 1 && st.plugT === 1) st.charging = true; }
+  if (st.plugT === 0) st.charging = false;
+  if (st.charging){ st.bat = Math.min(100, st.bat + dt * (st.bat < 80 ? 30 : 15));   // constant current, then the slower constant-voltage top-up
+    if (st.bat >= 100){ st.charging = false; st.plugT = 0; ui.flash('Full: the charger chip stops at 4.2 V. Unplugged.', 2200); } }
+  if (st.pw === 'boot' && st.ph > 1.3) setPw(st, st.paired ? 'conn' : 'pair');
+  if (st.pw === 'link' && st.ph > 1.8){ st.paired = true; setPw(st, 'conn'); ui.flash('Paired: both now keep the same link key', 2000); }
+  if (st.pw !== 'off'){ st.bat = Math.max(0, st.bat - dt * (st.play ? .35 : .08));
+    if (st.bat <= 0){ setPw(st, 'off'); ui.flash('Battery flat: charge it'); } }
+  if (st.play && st.pw === 'conn') st.song = (st.song + dt / 198) % 1;
+}
+const busy = st => st.plug !== st.plugT || st.charging || st.pw !== 'off' || st.pressT > 0;
+function hpRun(){ if (loopOn) return; loopOn = true;
+  ui.animate(dt => { hpStep(ui.st, dt); if (!busy(ui.st)){ loopOn = false; return false; } return true; }); }
+function charge(st){
+  if (st.plugT === 1){ st.plugT = 0; st.charging = false; hpRun(); return ui.flash(`Unplugged at ${Math.round(st.bat)}%`); }
+  if (st.bat >= 99.5) return ui.flash('The battery is already full');
+  if (st.pw !== 'off'){ setPw(st, 'off'); ui.flash('Plugged in: they switch off while charging'); }
+  st.plugT = 1; hpRun();
+}
+function power(st){
+  st.pressT = .25; hpRun();
+  if (st.plugT === 1) return ui.flash('They stay off while charging');
+  if (st.pw !== 'off'){ setPw(st, 'off'); return ui.flash('Power off'); }
+  if (st.bat < 1) return ui.flash('Battery is flat: charge them first');
+  setPw(st, 'boot');
+}
+function pair(st){
+  if (st.pw === 'off') return ui.flash('Turn the headphones on first');
+  if (st.pw === 'boot') return ui.flash('Still starting up');
+  if (st.pw === 'link' || st.pw === 'conn') return ui.flash('Already paired with this phone');
+  setPw(st, 'link'); hpRun();
+}
+function play(st){
+  if (st.pw === 'off') return ui.flash('Turn the headphones on first');
+  if (st.pw === 'pair') return ui.flash('Pair the phone first');
+  if (st.pw !== 'conn') return ui.flash('One moment: still connecting');
+  st.play = !st.play; hpRun();
+}
+
+ui = mountFigure({
+  fig:'52', title:'Bluetooth headphones',
+  size:[BW, BD, HTOP], palette:'cobalt', turn:'full',
+  state:{ bat:0, plug:0, plugT:0, charging:false, pw:'off', paired:false, play:false, t:0, ph:0, pressT:0, song:0 },
+  scene,
+  stats: st => [
+    { label:'Battery', value: `${Math.round(st.bat)} %` },
+    { label:'Cell', value: `${(3.0 + 1.2 * st.bat / 100 + (st.charging ? .05 : 0)).toFixed(2)} V`, small:true },
+    { label:'Bluetooth', small:true, value: st.charging ? 'off, charging' : { off:'off', boot:'starting', pair:'advertising', link:'pairing', conn: st.play ? 'AAC 256 kbps' : 'connected' }[st.pw] } ],
+  buttons:[
+    { label:'Charge', onClick:(st) => charge(st) },
+    { label:'Power on / off', onClick:(st) => power(st) },
+    { label:'Pair the phone', onClick:(st) => pair(st) },
+    { label:'Play / pause', onClick:(st) => play(st) },
+  ],
+  acts:{ power:(st) => power(st), charge:(st) => charge(st), phone:(st) => (st.pw === 'pair' ? pair(st) : st.pw === 'conn' ? play(st) : null) },
+  params:(st, q) => {
+    if (q.has('bat')) st.bat = Math.max(0, Math.min(100, +q.get('bat')));
+    if (q.get('plug') === '1'){ st.plug = st.plugT = 1; st.charging = st.bat < 100; }
+    if (['off', 'boot', 'pair', 'link', 'conn'].includes(q.get('pw'))){ st.pw = q.get('pw'); if (st.pw !== 'off' && st.bat < 1) st.bat = 80; }
+    if (q.get('paired') === '1' || st.pw === 'conn') st.paired = true;
+    if (q.get('play') === '1' && st.pw === 'conn') st.play = true;
+    if (q.has('t')) st.t = +q.get('t');
+    if (q.has('song')) st.song = +q.get('song');
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
