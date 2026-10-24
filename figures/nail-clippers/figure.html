@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nail clippers</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Source is Macaulay and Ardley, The Way Things Work Now, 2016, printed p.23,
+   and the saved 1998 p.23 OCR. The 1988 edition is inaccessible and unverified.
+   The second-class operating handle loads the blades between its pivot and thumb.
+   The post pulls the lower blade up while the cam pushes the upper blade down.
+   Both spring-steel blades bend from their joined heel, forming paired third-class levers.
+   Release removes effort and the same blades spring apart. There is no separate return spring.
+   Representative post, cross-bar and cam construction is supported by US2664624A.
+   https://patents.google.com/patent/US2664624A/en
+   Parts. Structure: joined heel on table, lower spring blade, upper spring blade.
+   Mechanism: lower cutting lip, upper cutting lip, pull post and its bottom head,
+   cross-bar retained in post slot, operating handle and integral cam toe, thumb pad.
+   Every lip belongs to its blade; the cross-bar holds the handle on the post.
+   Teaching adaptation: enlarged clipper on a table, supported imitation-nail strip.
+   shortcut: Fold lifts the handle into operating position, add the full flip-and-swivel for a storage lesson.
+   Press cuts one strip. The detached tip moves sideways out of the open sides then falls.
+   Release never restores a cut specimen. Reload the page for another specimen.
+   Anatomy has 11 real component/feature labels. The table, specimen and force overlay do not count.
+   Data shape: one phase in folded, folding, ready, pressing, held, releasing;
+   deployment and squeeze are bounded progress values, cut is irreversible within this page load.
+*/
+const ncBounds=[17,104,25,47,3,60];
+const ncLower=(x,p)=>6+(x-18)/84*(2+2*p);
+const ncUpper=(x,p)=>8+(x-18)/84*(11-3.5*p);
+const ncCutX=y=>101+2*Math.pow((y-36)/10,2);
+const ncBB=pts=>[0,1].map(side=>[0,1,2].map(i=>(side?Math.max:Math.min)(...pts.map(p=>p[i]))+(side?.06:-.06)));
+function ncSolid(A,B,material,w=1.8){
+ const points=A.concat(B), cap=norm(cross(sub(A[1],A[0]),sub(A[2],A[0])));
+ let svg=loft(A,B,n=>tone(n,material));
+ for(const ring of [A,B]){let n=cap;if(dot(n,sub(avg(ring),avg(points)))<0)n=n.map(v=>-v);if(vis(n))svg+=shape(ring,tone(n,material),w?.7:0);}
+ return {box:ncBB(points),svg:svg+(w?hullInk(points,w):'')};
+}
+function ncBox(a,b,material){return {box:[a,b],svg:box(...a,...b,material,tone,.8)};}
+function ncRod(a,b,r,material){return {box:ncBB([a.map(v=>v-r),a.map(v=>v+r),b.map(v=>v-r),b.map(v=>v+r)]),svg:rod(a,b,r,material,tone,.7)};}
+function ncGeometry(st){
+ const p=st.squeeze, postZ=ncLower(94,p)+11;
+ let lo=0,hi=.9;
+ for(let i=0;i<35;i++){const a=(lo+hi)/2,x=94-8*Math.cos(a)-8*Math.sin(a),z=postZ+8*Math.sin(a)-8*Math.cos(a);if(z>ncUpper(x,p)+.7)hi=a;else lo=a;}
+ const work=(lo+hi)/2,angle=-.12+(work+.12)*st.deploy;
+ const h=(u,v,w=0)=>[94-u*Math.cos(angle)+w*Math.sin(angle),36+v,postZ+u*Math.sin(angle)+w*Math.cos(angle)];
+ return {p,postZ,work,h,cam:h(8,0,-8)};
+}
+function ncParts(st,m,xray=false){
+ const g=ncGeometry(st),p=g.p,parts=[],bladeM=xray?matOf('#8abec7'):METAL;
+ for(const [top,zfn] of [[false,ncLower],[true,ncUpper]]){
+  for(let i=0;i<1;i++){
+   const x0=18,x1=102,w0=5+5*(x0-18)/84,w1=5+5*(x1-18)/84;
+   const ring=(x,w)=>[[x,36-w,zfn(x,p)-.7],[x,36+w,zfn(x,p)-.7],[x,36+w,zfn(x,p)+.7],[x,36-w,zfn(x,p)+.7]];
+   const leaf=ncSolid(ring(x0,w0),ring(x1,w1),bladeM);
+   leaf.svg=`<g opacity="${xray?.28:1}">${leaf.svg}</g>`;parts.push(leaf);
+  }
+  for(let i=0;i<10;i++){
+   const y0=26+i*2,y1=y0+2,x0=ncCutX(y0),x1=ncCutX(y1),edge=top?16.2-3.5*p:10.7+2*p;
+   const base=y=>zfn(ncCutX(y),p)+(top?-.7:.7);
+   parts.push(ncSolid([[x0-2,y0,base(y0)],[x0,y0,base(y0)],[x0,y0,edge],[x0-.45,y0,edge]],[[x1-2,y1,base(y1)],[x1,y1,base(y1)],[x1,y1,edge],[x1-.45,y1,edge]],xray?matOf('#e7ac56'):METAL));
+  }
+ }
+ parts.push(ncBox([17,31,3],[24,41,9.5],METAL));
+ const low=ncLower(94,p);
+ parts.push(ncRod([94,36,low-.7],[94,36,g.postZ],1.65,xray?matOf('#da9e4e'):METAL));
+ parts.push(ncRod([94,36,low-1.8],[94,36,low-.7],3,METAL));
+ parts.push(ncRod([94,31,g.postZ],[94,41,g.postZ],1.1,METAL));
+ const hand=rrUV(0,-5.5,66,5.5,3,4),A=hand.map(([u,v])=>g.h(u,v,0)),B=hand.map(([u,v])=>g.h(u,v,1.5));
+ const handle=ncSolid(A,B,m);handle.svg=`<g opacity="${xray?.16:1}">${handle.svg}</g>`;parts.push(handle);
+ {
+  const profile=[[0,0],[8,-8],[11,-5],[14,0]];
+  parts.push(ncSolid(profile.map(([u,w])=>g.h(u,-3,w)),profile.map(([u,w])=>g.h(u,3,w)),xray?matOf('#edb65a'):METAL));
+ }
+ for(let u=47;u<62;u+=3)parts.push({box:ncBB([g.h(u,-4,1.6),g.h(u,4,1.6)]),svg:`<g opacity="${xray?.25:1}">${line([g.h(u,-4,1.6),g.h(u,4,1.6)],.7)}</g>`});
+ return byDepth(parts);
+}
+function ncSpecimen(st){
+ const parts=[ncBox([117,28,3],[142,44,12.1],matOf('#b59978'))],mat=matOf('#efb4bc'),z=12.7;
+ for(let i=0;i<8;i++){
+  const y0=29+i*1.75,y1=y0+1.75,cut0=ncCutX(y0),cut1=ncCutX(y1);
+  parts.push(ncSolid([[cut0,y0,z-.35],[145,y0,z-.35],[145,y0,z+.35],[cut0,y0,z+.35]],[[cut1,y1,z-.35],[145,y1,z-.35],[145,y1,z+.35],[cut1,y1,z+.35]],mat,0));
+  const t=st.fall,dy=24*Math.min(1,t/.45),dz=t<.45?0:-9.2*ease((t-.45)/.55);
+  parts.push(ncSolid([[98,y0+dy,z+dz-.35],[cut0,y0+dy,z+dz-.35],[cut0,y0+dy,z+dz+.35],[98,y0+dy,z+dz+.35]],[[98,y1+dy,z+dz-.35],[cut1,y1+dy,z+dz-.35],[cut1,y1+dy,z+dz+.35],[98,y1+dy,z+dz+.35]],mat,0));
+ }
+ return parts;
+}
+function ncScene(st,m){
+ const g=ncGeometry(st),k=ease(st.xr||0),parts=ncSpecimen(st);
+ parts.push({box:[[17,26,3],[104,46,60]],svg:ncParts(st,m,k>.01)});
+ let svg=board(0,0,158,76,3,5,WOOD)+castShadow([[18,31,6],[102,26,19],[102,46,19],g.h(66,5,1.5),g.h(66,-5,1.5)],3,boardTop(0,0,158,76,3,5));
+ svg+=byDepth(parts);
+ if(k>.6){
+  const moving=['pressing','releasing'].includes(st.phase),labels=[
+   {at:g.h(40,0,1.5),text:'OPERATING HANDLE',on:st.deploy>0},
+   {at:g.h(57,0,1.5),text:'THUMB PAD',on:st.phase==='pressing'},
+   {at:[94,36,g.postZ],text:'HANDLE CROSS-BAR',on:moving},
+   {at:g.cam,text:'CAM TOE',on:st.deploy>0},
+   {at:[94,36,13],text:'PULL POST',on:moving},
+   {at:[94,36,ncLower(94,g.p)-1.5],text:'POST HEAD',on:moving},
+   {at:[56,36,ncUpper(56,g.p)],text:'UPPER SPRING BLADE',on:moving},
+   {at:[60,36,ncLower(60,g.p)],text:'LOWER SPRING BLADE',on:moving},
+   {at:[102,36,16.2-3.5*g.p],text:'UPPER CUTTING EDGE',on:st.cut},
+   {at:[102,36,10.7+2*g.p],text:'LOWER CUTTING EDGE',on:st.cut},
+   {at:[21,36,8],text:'JOINED HEEL',on:false}
+  ];
+  svg+=xrCallouts(labels,ncBounds);
+  if(st.deploy>.99){const a=g.h(58,0,8),b=g.h(58,0,2);svg+=`<g data-overlay="effort" stroke="#ba5137" fill="#ba5137">${line([a,b],2).replace(INK,'#ba5137')}${shape([b,[b[0]-2,b[1],b[2]+3],[b[0]+2,b[1],b[2]+3]],'#ba5137',0)}</g>`;}
+ }
+ return svg;
+}
+function ncRun(st,ui){
+ if(st.running)return;st.running=true;
+ ui.animate(dt=>{
+  if(st.phase==='folding'){st.deploy=Math.min(1,st.deploy+dt/.85);if(st.deploy===1)st.phase='ready';}
+  if(st.phase==='pressing'){st.squeeze=Math.min(1,st.squeeze+dt/.85);if(st.squeeze===1){st.cut=true;st.phase='held';}}
+  if(st.phase==='releasing'){st.squeeze=Math.max(0,st.squeeze-dt/.65);if(st.squeeze===0)st.phase='ready';}
+  if(st.cut)st.fall=Math.min(1,st.fall+dt/.9);
+  const busy=['folding','pressing','releasing'].includes(st.phase)||(st.cut&&st.fall<1);if(!busy)st.running=false;return busy;
+ });
+}
+const ui=mountFigure({fig:'23',turn:'full',title:'Nail clippers',size:[158,76,60],palette:'cobalt',state:{phase:'folded',deploy:0,squeeze:0,cut:false,fall:0,running:false},scene:ncScene,
+ buttons:[
+  {label:'Fold',onClick(st,u){if(st.phase==='folded'){st.phase='folding';ncRun(st,u);}else u.flash('The operating handle is already open.');}},
+  {label:'Press',onClick(st,u){if(st.phase==='folded'||st.phase==='folding')return u.flash('Open the operating handle with Fold first.');if(st.phase!=='ready')return u.flash('Release the handle first.');if(st.cut)return u.flash('This specimen is already cut. Reload for a fresh strip.');st.phase='pressing';ncRun(st,u);}},
+  {label:'Release',onClick(st,u){if(st.phase==='held'||st.phase==='pressing'){st.phase='releasing';ncRun(st,u);}else u.flash('The jaws are already released.');}}
+ ],
+ params(st,q){if(q.get('open')==='1'){st.deploy=1;st.phase='ready';}if(q.get('squeezed')==='1'){st.deploy=1;st.squeeze=1;st.phase='held';st.cut=true;st.fall=1;}if(q.get('cut')==='1'){st.cut=true;st.fall=1;}}
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
