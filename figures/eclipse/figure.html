@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sun, Earth and Moon</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   A bench tellurion holds a lamp inside a translucent Sun globe. A hand crank
+   turns six meshing spur gears and the Moon carrier around the fixed Earth.
+   One carrier revolution represents a 29.53-day phase cycle with the Sun-Earth
+   direction held fixed. The dial pointer shares the carrier shaft through two
+   equal pulleys and a belt. The dial is printed with the phases seen from Earth.
+   New Moon lies between lamp and Earth. Full Moon lies beyond Earth. Shadows
+   extend away from the lamp, with umbra and penumbra computed from tangent rays.
+   The hinged carrier can be level or inclined 5.1 degrees. Its line of nodes is
+   perpendicular to the lamp direction. Orbit height is exaggerated fourfold
+   to make the missed alignments visible, as named in the tilt readout.
+   Eclipse controls level the carrier to demonstrate alignment at a node.
+   This is an original teaching apparatus, not a reconstruction of a historic
+   instrument. Bodies and distances are not astronomical scale. The large Sun
+   globe is a diffuser enclosure; the small lamp defines the drawn shadow cones.
+   Atmospheric reddening, annual motion and nodal precession are not simulated.
+   References https://science.nasa.gov/moon/eclipses/
+   https://eclipse.gsfc.nasa.gov/LEsaros/LEperiodicity.html
+   Parts and attachments.
+   Structure: wooden board, four feet, base plate, six shaft bearings and axles,
+   brass cover with four screws, Sun column and socket, Earth support arm and
+   column, carrier hinge and locking screw, orbit hoop on hinge crossbar.
+   Drive: crank shaft, crank arm and grip, six equal spur gears in rim contact,
+   output collar and Moon arm, Moon stem, equal dial pulleys, belt, dial spindle,
+   dial rim, printed phase scale and pointer. All shafts terminate in bearings.
+   Power: low-voltage socket, cable along board and up Sun column, bulb in socket.
+   Globes: translucent Sun enclosure, Earth sphere and Moon sphere on stems.
+   Overlays: lamp rays, umbra and penumbra are optical guides, not machine parts.
+   Geometry: pitch radii 9, gear centres x=26,44,62,80,98,116 at y=65.
+   Moon orbit radius 44, Earth [116,65,65], Sun [26,65,65]. At 5.1 degrees
+   the displayed new Moon is 15.65 below Earth after the height exaggeration.
+*/
+const ecBrass = {l:'#efd18a',m:'#c69a43',d:'#725322'}, ecBlue=matOf('#5097c5');
+const ecEarth=[116,65,65], ecSun=[26,65,65], ecOrbit=44, ecTau=2*Math.PI;
+const ecState={angle:Math.PI*1.5,tilt:0,motion:null,xr:0,xrT:0};
+let ecUI, ecLoop=false;
+const ecAdd=(a,b)=>a.map((v,i)=>v+b[i]);
+const ecScale=(a,k)=>a.map(v=>v*k);
+const ecBounds=(points,r=0)=>[0,1].map(side=>[0,1,2].map(i=>(side?Math.max:Math.min)(...points.map(p=>p[i]))+(side?r:-r)));
+function ecMoon(st,angle=st.angle){
+  const t=st.tilt*Math.PI/180;
+  return [116+ecOrbit*Math.cos(angle)*Math.cos(t),65+ecOrbit*Math.sin(angle),65+4*ecOrbit*Math.cos(angle)*Math.sin(t)];
+}
+const ecFraction=st=>(1+Math.cos(st.angle))/2;
+function ecEclipse(st){
+  const moon=ecMoon(st), solar=moon[0]<116, source=solar?moon:ecEarth, target=solar?ecEarth:moon;
+  const sourceR=solar?1.1:5, targetR=solar?5:1.1, axis=norm(sub(source,ecSun));
+  const delta=sub(target,source), along=dot(delta,axis), offset=Math.hypot(...sub(delta,ecScale(axis,along)));
+  const distance=Math.hypot(...sub(source,ecSun));
+  const umbra=sourceR+along*(sourceR-.45)/distance;
+  return {solar,offset,umbra,hit:along>0&&offset+targetR<umbra,partial:along>0&&offset<umbra+targetR};
+}
+function ecAdvance(st,dt){
+  const m=st.motion;if(!m)return false;
+  m.elapsed=Math.min(m.duration,m.elapsed+dt);const k=ease(m.elapsed/m.duration);
+  st.angle=m.from+(m.to-m.from)*k;st.tilt=m.tiltFrom+(m.tiltTo-m.tiltFrom)*k;
+  if(m.elapsed===m.duration){st.angle=m.to;st.tilt=m.tiltTo;st.motion=null;return false;}return true;
+}
+function ecMove(st,ui,to,tilt,duration){
+  st.motion={from:st.angle,to,tiltFrom:st.tilt,tiltTo:tilt,elapsed:0,duration};
+  if(ecLoop)return;ecLoop=true;
+  ui.animate(dt=>{const more=ecAdvance(st,dt);if(!more)ecLoop=false;return more;});
+}
+function ecAlign(st,ui,solar){
+  const phase=solar?Math.PI:0, turns=Math.ceil((st.angle-phase)/ecTau);
+  ecMove(st,ui,phase+turns*ecTau,0,1.3);
+}
+function ecGear(x,angle){
+  const profile=Array.from({length:72},(_,i)=>{const a=angle+i/72*ecTau,r=i%4===0||i%4===3?8.25:9.6;return [x+r*Math.cos(a),65+r*Math.sin(a)];});
+  const a=on(PZ(11),profile),b=on(PZ(13),profile);
+  let svg=loft(a,b,n=>toneI(n,ecBrass))+shape(b,ecBrass.l,.7)+hullInk([...a,...b],1.2);
+  for(let i=0;i<3;i++){const t=angle+i/3*ecTau;svg+=shape(on(PZ(13.04),ellUV(x+5*Math.cos(t),65+5*Math.sin(t),1.7,1.7,12)),'#725322',.45);}
+  return svg;
+}
+function ecGlobe(at,r,kind,st){
+  const faces=[],lat=10,lon=24, light=kind==='sun'?null:norm(sub(ecSun,at));
+  const point=(i,j)=>{const a=-Math.PI/2+i/lat*Math.PI,b=j/lon*ecTau;return ecAdd(at,[r*Math.cos(a)*Math.cos(b),r*Math.cos(a)*Math.sin(b),r*Math.sin(a)]);};
+  for(let i=0;i<lat;i++)for(let j=0;j<lon;j++){
+    const q=[point(i,j),point(i,j+1),point(i+1,j+1),point(i+1,j)],n=norm(sub(avg(q),at));if(!vis(n))continue;
+    let col=toneI(n,{l:'#ffe39b',m:'#ffd168',d:'#c89b40'});
+    if(kind!=='sun'){
+      const land=kind==='earth'&&((i>=4&&i<=7&&j>=2&&j<=6)||(i>=2&&i<=5&&j>=13&&j<=16)||(i>=6&&j>=18&&j<=21));
+      const m=matOf(kind==='moon'?'#ded8c4':land?'#78b990':'#529bc9');
+      col=dot(n,light)>.08?m.l:dot(n,light)>-.08?m.m:m.d;
+      if(kind==='moon'&&ecEclipse(st).hit&&!ecEclipse(st).solar)col=mix(col,'#311d19',.8);
+    }
+    faces.push({at:avg(q),box:ecBounds(q),svg:face(pd(q),col)});
+  }
+  const center=P(...at);
+  return byDepth(faces)+`<circle cx="${f(center[0])}" cy="${f(center[1])}" r="${f(r*Math.sqrt(1.5))}" fill="none" stroke="${INK}" stroke-width="1.3"/>`;
+}
+function ecCallouts(items){
+  const element=document.getElementById('fig'),vb=element.viewBox.baseVal,rect=element.getBoundingClientRect(),matrix=element.getScreenCTM(),unit=1/matrix.a;
+  const local=(x,y)=>new DOMPoint(x,y).matrixTransform(matrix.inverse()),zoom=document.querySelector('.zchip');
+  const columns=items.slice().sort((a,b)=>P(...a.at)[0]-P(...b.at)[0]),half=Math.ceil(columns.length/2);
+  return [columns.slice(0,half),columns.slice(half)].map((column,side)=>{
+    const controls=document.getElementById(side?'stats':'btns').getBoundingClientRect();
+    const top=Math.max(14*unit,local(0,controls.bottom+14).y),bottom=Math.min(vb.height-55*unit,zoom?local(0,zoom.getBoundingClientRect().top-16).y:Infinity);
+    const x=local(side?rect.right-80:rect.left+80,0).x;
+    return column.sort((a,b)=>P(...a.at)[1]-P(...b.at)[1]).map((item,i)=>{
+      const p=P(...item.at),y=top+i*(bottom-top)/Math.max(1,column.length-1);
+      return tag(item.at,(x-p[0])/INK_K,(y-p[1])/INK_K,item.text,item.on);
+    }).join('');
+  }).join('');
+}
+function ecPhaseShape(x,y,z,r,angle){
+  const phase=(1+Math.cos(angle))/2, waxing=Math.sin(angle)<0;
+  const disc=on(PZ(z),ellUV(x,y,r,r,32));let svg=shape(disc,'#373b46',.55);
+  const pts=[];
+  for(let i=0;i<=24;i++){const t=-Math.PI/2+i/24*Math.PI;pts.push([x+(waxing?1:-1)*r*Math.cos(t),y+r*Math.sin(t),z+.03]);}
+  for(let i=24;i>=0;i--){const t=-Math.PI/2+i/24*Math.PI;pts.push([x+(waxing?1:-1)*(1-2*phase)*r*Math.cos(t),y+r*Math.sin(t),z+.03]);}
+  return svg+fill(pd(pts),'#fff3c5');
+}
+function ecShadows(st){
+  const moon=ecMoon(st), out=[];
+  for(const [at,r,length,col] of [[ecEarth,5,53,'#48405b'],[moon,1.1,65,'#48405b']]){
+    const axis=norm(sub(at,ecSun)), dist=Math.hypot(...sub(at,ecSun));
+    const u=norm(cross(axis,[0,0,1])),v=cross(axis,u);
+    const ring=(d,rr)=>Array.from({length:32},(_,i)=>ecAdd(ecAdd(at,ecScale(axis,d)),ecAdd(ecScale(u,rr*Math.cos(i/32*ecTau)),ecScale(v,rr*Math.sin(i/32*ecTau)))));
+    const a=ring(0,r),b=ring(length,r+length*(r-.45)/dist),p=ring(length,r+length*(r+.45)/dist);
+    out.push(`<g data-overlay="shadow" opacity=".14">${loft(a,p,()=>col,true)}${loft(a,p,()=>col)}</g><g data-overlay="umbra" opacity=".23">${loft(a,b,()=>col,true)}${loft(a,b,()=>col)}</g>`);
+  }
+  return out.join('');
+}
+function ecScene(st,m){
+  const parts=[],labels=[],moon=ecMoon(st),k=ease(st.xr||0),moving=!!st.motion;
+  const put=(points,svg,r=0)=>parts.push({box:ecBounds(points,r),svg});
+  const label=(at,text,on=false)=>{if(!/^(FOOT |COVER SCREW |SHAFT [1-5]|BEARING [2-6]|BULB STEM|EARTH STEM|HOOP BRACE|BASE PLATE)/.test(text))labels.push({at,text,on});};
+  const cylinder=(x,y,z0,z1,r,material,name,on=false)=>{put([[x-r,y-r,z0],[x+r,y+r,z1]],cyl(x,y,z0,z1,r,material,toneI,.8));if(name)label([x,y,z1],name,on);};
+  const link=(a,b,r,material,name,on=false)=>{const n=Math.max(1,Math.ceil(Math.hypot(...sub(b,a))/8));for(let i=0;i<n;i++){const q=ecAdd(a,ecScale(sub(b,a),i/n)),p=ecAdd(a,ecScale(sub(b,a),(i+1)/n));put([q,p],rod(q,p,r,material,toneI,.65),r);}if(name)label(avg([a,b]),name,on);};
+  let svg=[[8,8],[170,8],[8,116],[170,116]].map(([x,y])=>cyl(x,y,-2,0,3,DARK)).join('')+board(0,0,178,124,3,6,WOOD);
+  svg+=castShadow([[15,53,3],[39,77,3],[26,65,78],[116,65,3],[116,65,70],[160,65,65]],3,boardTop(0,0,178,124,3,6));
+  label([8,8,3],'WOODEN BOARD');
+  put([[14,51,3],[128,79,5]],box(14,51,3,128,79,5,METAL));label([20,55,5],'BASE PLATE');
+  const cover=box(13,50,5,129,80,19,m,tone,1.2);
+  put([[13,50,5],[129,80,19]],`<g opacity="${1-.88*k}">${cover}</g>`);
+  for(const [i,x] of [26,44,62,80,98,116].entries()){
+    const a=(i%2?1:-1)*st.angle+(i%2?Math.PI/18:0);
+    if(k>0){
+      put([[x-10,55,11],[x+10,75,13]],`<g opacity="${k}">${ecGear(x,a)}</g>`);label([x,71,13],i===5?'CARRIER GEAR':'SPUR GEAR '+(i+1),moving);
+      cylinder(x,65,5,8,3,METAL,'BEARING '+(i+1));
+      cylinder(x,65,8,18,1,ecBrass,'SHAFT '+(i+1),moving);
+    }
+  }
+  label([128,66,19],'BRASS COVER');
+  for(const [i,x,y] of [[1,17,54],[2,125,54],[3,17,76],[4,125,76]])cylinder(x,y,19,19.6,1,METAL,'COVER SCREW '+i);
+  cylinder(26,65,19,23,3,ecBrass,'CRANK COLLAR',moving);
+  const crank=[26+13*Math.cos(-st.angle),65+13*Math.sin(-st.angle),23];
+  link([26,65,23],crank,1,ecBrass,'CRANK ARM',moving);cylinder(crank[0],crank[1],23,30,1.5,DARK,'CRANK GRIP',moving);
+  link([26,65,23],[26,65,50],2,ecBrass,'SUN COLUMN');
+  link([26,65,50],[26,65,55],2.5,DARK,'LAMP SOCKET',true);
+  link([26,65,55],[26,65,65],.55,METAL,'BULB STEM',true);
+  put([[13,52,52],[39,78,78]],`<g opacity="${1-.82*k}">${ecGlobe(ecSun,13,'sun',st)}</g>`);label([26,65,77],'SUN DIFFUSER',true);
+  if(k>0){put([[24,63,63],[28,67,67]],ecGlobe(ecSun,2,'sun',st));label(ecSun,'LAMP BULB',true);}
+  link([4,48,4],[26,48,4],.65,DARK,'LOW VOLTAGE CABLE',true);
+  link([26,48,4],[26,65,4],.65,DARK);link([26,65,4],[26,65,55],.35,DARK);
+  put([[0,46,3],[5,50,6]],box(0,46,3,5,50,6,DARK));label([3,48,5],'POWER SOCKET',true);
+  link([26,65,32],[116,65,32],1.6,ecBrass,'EARTH SUPPORT ARM');
+  cylinder(116,65,19,53,2.3,ecBrass,'EARTH COLUMN');
+  cylinder(116,65,53,59.5,.8,METAL,'EARTH STEM');
+  put([ecEarth],ecGlobe(ecEarth,5,'earth',st),5);label(ecEarth,'EARTH GLOBE',ecEclipse(st).solar&&ecEclipse(st).partial);
+  link([116,60,49],[116,70,49],2,METAL,'TILT HINGE');
+  link([116,70,49],[116,73,49],1,ecBrass,'TILT LOCK SCREW');
+  const tip=[moon[0],moon[1],moon[2]-13];
+  link([116,65,52],tip,1.1,ecBrass,'MOON CARRIER',moving);
+  link(tip,[moon[0],moon[1],moon[2]-1.1],.5,METAL,'MOON STEM',moving);
+  put([moon],ecGlobe(moon,1.1,'moon',st),1.1);label(moon,'MOON GLOBE',moving||ecEclipse(st).hit);
+  for(let i=0;i<72;i++){
+    const a=ecMoon(st,i/72*ecTau).map((v,j)=>v-(j===2?13:0));
+    const b=ecMoon(st,(i+1)/72*ecTau).map((v,j)=>v-(j===2?13:0));
+    put([a,b],rod(a,b,.25,ecBrass,toneI,.45),.25);
+  }
+  label([116,109,52],'ORBIT HOOP');
+  link([116,65,52],[116,109,52],.45,ecBrass,'HOOP BRACE');
+  cylinder(116,65,21,23,3,METAL,'DRIVE PULLEY',moving);
+  cylinder(116,22,21,23,3,METAL,'DIAL PULLEY',moving);
+  for(const x of [113,119])link([x,22,22],[x,65,22],.25,DARK,x===113?'DIAL BELT':null,moving);
+  cylinder(116,22,3,24,1,ecBrass,'DIAL SPINDLE',moving);
+  // The printed face and pointer share the dial's paint order at every yaw.
+  let dial=cyl(116,22,24,25,13,ecBrass,toneI,.8)+shape(on(PZ(25.1),ellUV(116,22,12,12,48)),'#f7edce',.7);
+  for(let i=0;i<8;i++){const a=i/8*ecTau;dial+=ecPhaseShape(116+9*Math.cos(a),22+9*Math.sin(a),25.2,1.8,a);}
+  const pointer=[116+6.5*Math.cos(st.angle),22+6.5*Math.sin(st.angle),25.5];
+  dial+=rod([116,22,25.5],pointer,.3,DARK,toneI,.65);
+  put([[103,9,24],[129,35,25.8]],dial);
+  label([116,22,25],'PHASE DIAL RIM');
+  label([116,31,25.3],'PRINTED PHASE SCALE');
+  label(avg([[116,22,25.5],pointer]),'PHASE POINTER',moving);
+  svg+=byDepth(parts);
+  const eclipse=ecEclipse(st);
+  if(k>.05)svg+=`<g opacity="${k}">${ecShadows(st)}</g>`;
+  if(eclipse.solar&&eclipse.partial){
+    const direction=norm(sub(moon,ecSun)),t=(116-moon[0])/direction[0];
+    const impact=ecAdd(moon,ecScale(direction,t));
+    const rr=Math.min(2.2,eclipse.umbra),c=P(...impact);
+    svg+=`<g data-overlay="earth-shadow-spot"><circle cx="${f(c[0])}" cy="${f(c[1])}" r="${f(rr*1.2247)}" fill="#302941" opacity=".85"/></g>`;
+  }
+  if(k>.6)svg+=ecCallouts(labels);
+  else svg+=xrCallouts([{at:ecSun,text:'SUN LAMP',on:true},{at:ecEarth,text:'EARTH'},{at:moon,text:'MOON',on:moving},{at:[116,22,25],text:'PHASE DIAL'}],[10,164,10,110,20,78]);
+  return svg;
+}
+ecUI=mountFigure({fig:'E',turn:'full',title:'Sun, Earth and Moon',size:[178,124,90],palette:'cobalt',state:ecState,scene:ecScene,
+  stats:st=>[{label:'Phase fullness',value:(ecFraction(st)*100).toFixed(0)+'%',small:true},{label:'Lunar age',value:(((st.angle+Math.PI)%ecTau+ecTau)%ecTau/ecTau*29.53).toFixed(1)+' d',small:true},{label:'Tilt (height x4)',value:st.tilt.toFixed(1)+' deg',small:true},{label:'Alignment',value:ecEclipse(st).partial?(ecEclipse(st).solar?'Solar eclipse':'Lunar eclipse'):'No eclipse',small:true}],
+  buttons:[
+    {label:'Run a month',onClick:(st,ui)=>ecMove(st,ui,st.angle+ecTau,st.tilt,10)},
+    {label:'Solar eclipse',onClick:(st,ui)=>ecAlign(st,ui,true)},
+    {label:'Lunar eclipse',onClick:(st,ui)=>ecAlign(st,ui,false)},
+    {label:'Tilt orbit',onClick:(st,ui)=>ecMove(st,ui,st.angle,st.tilt>2?0:5.1,1.1)}
+  ],
+  params:(st,q)=>{for(const key of ['angle','tilt'])if(q.has(key)){const value=Number(q.get(key));if(Number.isFinite(value))st[key]=key==='tilt'?Math.max(0,Math.min(5.1,value)):value%ecTau;}if(q.get('eclipse')==='solar')st.angle=Math.PI;if(q.get('eclipse')==='lunar')st.angle=0;}
+});
+xrMount(()=>ecUI,()=> '');
+new ResizeObserver(()=>ecUI.render()).observe(document.getElementById('fig'));
+</script></body></html>
