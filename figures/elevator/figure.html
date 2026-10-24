@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Elevator</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Elevator: a three-stop traction lift (machine room on top), its shaft cut open on the left side.
+   1 unit = 5 cm. x = depth (landing doors on the front face x = 48), y = width (+y = the cut-open side), z = up.
+
+   How it really works (where everything is after each step):
+   1. Someone presses a floor button (a hall call button at a landing, or the button for that floor): the controller
+      in the machine room registers the call and the button lights.
+   2. If the doors are open the car door operator closes the car door; the vane on the car door is engaged with the
+      landing door, so that landing's door closes with it; the door interlock proves the landing door shut.
+   3. The controller lifts the machine brake and runs the motor. The motor turns a worm in the gearbox, the worm turns
+      the wheel on the drive sheave shaft, and the sheave drives the hoist ropes by friction in its grooves.
+   4. The ropes run car - up over the drive sheave - over the deflector sheave - down to the counterweight (1:1).
+      Car goes up, counterweight comes down by the same distance (it weighs the car plus ~45 % of the rated load).
+      Car and counterweight both run on their own T-section guide rails, held by guide shoes.
+   5. Near the floor the levelling sensor on the car top meets that floor's vane; the car slows, stops level, the
+      brake drops and the doors open (car door operator opens car door and, through the vane, the landing door).
+   6. Safety: the overspeed governor in the machine room is turned by the governor rope, which is tied to the safety
+      linkage on the car and loops round a tension sheave in the pit. If the car runs down too fast (115 % of rated
+      speed) the governor's flyweights fly out, its jaw grips the governor rope, the rope stops, the car keeps falling
+      for a moment so the rope lifts the safety lever, and the wedges of the safety gear clamp both car rails.
+      Resetting: the car is driven up off the wedges. Spring buffers in the pit catch an overrunning car or counterweight.
+
+   Parts list (each held by something; see the code for what):
+   SHAFT     back wall . right wall . front wall with three landing openings . ring beams at each floor on the cut side .
+             pit floor . machine room slab
+   MACHINE   bedplates . gearbox (worm) . drive sheave . outboard bearing . deflector sheave on pedestals . brake drum,
+   ROOM      brake shoes, arms, spring, solenoid . coupling . traction motor . encoder . controller . main switch .
+             overspeed governor (sheave, flyweights, jaw) . lifting beam . power and control cables
+   ROPES     4 hoist ropes . governor rope . travelling cable . junction box . conduit
+   CAR       platform . cab (COP, handrail) . car sling: crosshead, stiles, plank . rope hitch with shackle springs .
+             guide shoes (4) . safety gear (2) . safety linkage and lever . car door (2 panels) . door header . door
+             vane . door operator and its motor . levelling sensor . limit cam . toe guard . car sill
+   COUNTERWT frame (uprights, beams) . filler weights . guide shoes . hitch
+   RAILS     2 car rails (flange + blade) . 2 counterweight rails . brackets
+   LANDINGS  landing doors (2 panels each) . header . door interlock . sill . architrave . hall call buttons .
+             floor indicator . floor slabs and columns of the building in front
+   PIT       2 car buffers . counterweight buffer . governor tension sheave, arm and weight . pit ladder
+   LIMITS    levelling vanes (one per floor) . final limit switches (top, bottom) */
+
+const EW = 48, ED = 52, ET = 4, BX = 60;                     // shaft outer depth (x), width (y), wall thickness; building front
+const FL = [24, 84, 144];                                    // landing floor levels: floor to floor 60 = 3 m
+const MRZ = 216, MRF = 220, MRR = 266;                       // machine room: slab underside, floor, roof top
+const DOOR = [18, 34], DH = 40;                              // door opening (y) and height (2 m)
+const CAR = { x0:14, x1:42, y0:10, y1:42, h:45 };
+const ROPES = [23, 25, 27, 29];
+const SHV = { x:22, z:234, r:6, y0:21, y1:31 }, DEF = { x:12, z:226, r:4, y0:22, y1:30 };
+const GOV = { x:39, z:232, r:3 }, TEN = { x:39, z:8, r:3 }, GRY = 45.5;
+const CWX = 8;
+const U = 20, VMAX = 32, ACC = 20, TRIP = 36.8;              // 20 units a metre: 1.6 m/s rated, 1 m/s², trip at 115 %
+const BEAMZ = [18, 78, 138, 198];                            // ring beams on the cut side (bottom z, 6 deep)
+// the rope leaves the drive sheave and meets the deflector on their common outer tangent (same angle on both)
+const RT = Math.atan2(SHV.z - DEF.z, SHV.x - DEF.x) + Math.acos((SHV.r - DEF.r) / Math.hypot(SHV.x - DEF.x, SHV.z - DEF.z));
+
+const SLABM = { l:'#ebe6da', m:'#d2cbbb', d:'#a9a192' };
+const RAILM = { l:'#aab2b5', m:'#7f888c', d:'#4f575b' };
+const MACH  = { l:'#9cc0b3', m:'#76998d', d:'#44615a' };
+const CWM   = { l:'#77716a', m:'#57524c', d:'#34302c' };
+const REDM  = matOf('#e2483d'), HOT = matOf('#ff9a3a');
+const ROPEC = '#d6dbdc', CABLEC = '#3a3632';
+
+/* ---------- small helpers ---------- */
+const itm = (b, svg) => ({ box: b, svg });
+const bI = (x0, y0, z0, x1, y1, z1, m, w = .8) => itm([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, m, toneI, w));
+const yOrd = ys => ys.slice().sort((a, b) => (a - b) * (CAM_V[1] >= 0 ? 1 : -1));
+const ropeLine = (pts, w = .9, col = ROPEC) => { const d = pd(pts, false);
+  return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(w + .7)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(w)}" stroke-linecap="round" stroke-linejoin="round"/>`; };
+// a cable or rope polyline cut into short pieces, so each piece sorts with the solids beside it
+const wireItems = (pts, col, w = .9) => { const o = [];
+  for (let i = 0; i < pts.length - 1; i++){ const a = pts[i], b = pts[i + 1], r = w/2 + .1;
+    o.push(itm([[0,1,2].map(k => Math.min(a[k], b[k]) - r), [0,1,2].map(k => Math.max(a[k], b[k]) + r)], ropeLine([a, b], w, col))); }
+  return o; };
+// the near half of a horizontal ring (for coil springs)
+const nearRing = (x, y, z, r, n = 20) => { const pts = ellUV(x, y, r, r, n).map(([u, v]) => [u, v, z]), vs = pts.map(p => vis([p[0] - x, p[1] - y, 0]));
+  const s0 = vs.findIndex((v, i) => v && !vs[(i + n - 1) % n]); if (s0 < 0) return [];
+  const o = []; for (let i = 0; i < n; i++){ const j = (s0 + i) % n; if (!vs[j]) break; o.push(pts[j]); } return o; };
+// a cut face on the open side (plane y = const): pale with hatching, like a section drawing
+function cutY(y, x0, x1, z0, z1, m){
+  const q = on(PY(y), rectUV(x0, z0, x1, z1)), hgt = z1 - z0; let h = '';
+  for (let t = x0 - hgt; t < x1; t += 2.6) h += pd([[t, y, z0], [t + hgt, y, z1]], false);
+  return fill(pd(q), mix(m.l, '#ffffff', .55)) + clipTo(q, `<path d="${h}" fill="none" stroke="${m.d}" stroke-width=".45" opacity=".55"/>`) + ink(pd(q), 1);
+}
+// topological back-to-front order: only pairs that overlap on screen are compared (separating axis first, then depth)
+function elvSort(list){
+  const it = list.filter(Boolean), n = it.length;
+  for (const p of it){ const b = p.box; let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    for (const x of [b[0][0], b[1][0]]) for (const y of [b[0][1], b[1][1]]) for (const z of [b[0][2], b[1][2]]){ const q = P(x, y, z);
+      if (q[0] < x0) x0 = q[0]; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; if (q[1] > y1) y1 = q[1]; }
+    p._s = [x0, x1, y0, y1]; p._d = depthOf(boxMid(b)); }
+  const out = it.map(() => []), deg = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++){ const a = it[i]._s, b = it[j]._s;
+    if (a[1] <= b[0] || b[1] <= a[0] || a[3] <= b[2] || b[3] <= a[2]) continue;
+    const s = sepOrder(it[i], it[j]) || (it[i]._d <= it[j]._d ? -1 : 1);
+    if (s < 0){ out[i].push(j); deg[j]++; } else { out[j].push(i); deg[i]++; } }
+  const done = new Array(n).fill(false), res = [];
+  for (let c = 0; c < n; c++){ let best = -1;
+    for (let i = 0; i < n; i++) if (!done[i] && deg[i] === 0 && (best < 0 || it[i]._d < it[best]._d)) best = i;
+    if (best < 0) for (let i = 0; i < n; i++) if (!done[i] && (best < 0 || deg[i] < deg[best] || (deg[i] === deg[best] && it[i]._d < it[best]._d))) best = i;
+    done[best] = true; res.push(it[best].svg); for (const j of out[best]) deg[j]--; }
+  return res.join('');
+}
+const grp = (b, list) => itm(b, elvSort(list));
+
+/* ---------- state helpers ---------- */
+const atFloor = st => FL.findIndex(z => Math.abs(st.zc - z) < .3);
+const nearest = st => FL.reduce((bi, z, i) => Math.abs(st.zc - z) < Math.abs(st.zc - FL[bi]) ? i : bi, 0);
+const cwB = st => 14 + (FL[2] - st.zc);                     // counterweight underside: falls as the car rises
+const cabM = st => st.pal === 'mustard' ? PALS.mint : PALS.mustard;
+
+/* ---------- a sheave: drum along y, spokes on the visible end, rope in its grooves where the rim faces us ---------- */
+function sheaveSvg(cx, cz, y0, y1, r, ang, m, ys, a0, a1, rw = .8){
+  let s = rod([cx, y0, cz], [cx, y1, cz], r, m, toneI, .9, r, 22);
+  const cy = vis([0, 1, 0]) ? y1 : vis([0, -1, 0]) ? y0 : null;
+  if (cy != null){ const o = cy === y1 ? .06 : -.06;
+    for (let i = 0; i < 4; i++){ const a = ang + i*Math.PI/2; s += line([[cx + .25*r*Math.cos(a), cy + o, cz + .25*r*Math.sin(a)], [cx + .8*r*Math.cos(a), cy + o, cz + .8*r*Math.sin(a)]], .6); }
+    s += shape(on(PY(cy + o), ellUV(cx, cz, r*.22, r*.22, 12)), m.d, .5); }
+  for (const y of yOrd(ys)){ let run = [];
+    const flush = () => { if (run.length > 1) s += ropeLine(run, rw); run = []; };
+    for (let i = 0; i <= 24; i++){ const a = a0 + (a1 - a0)*i/24, nn = [Math.cos(a), 0, Math.sin(a)];
+      if (vis(nn)) run.push([cx + (r + .2)*nn[0], y, cz + (r + .2)*nn[2]]); else flush(); }
+    flush(); }
+  return s;
+}
+// vertical rope tails leaving a sheave at angle 0 (front, +x) or PI (back): in front of the drum or behind it
+function withTails(drum, cx, cz, r, ys, tails, rw = .8){
+  let fr = '', bk = '';
+  for (const t of tails){ const x = cx + r*Math.cos(t.a), svg = yOrd(ys).map(y => ropeLine([[x, y, cz], [x, y, t.z1]], rw)).join('');
+    if ((Math.cos(t.a) > 0) === (CAM_V[0] > 0)) fr += svg; else bk += svg; }
+  return bk + drum + fr;
+}
+function springSvg(x, y, z0, z1, r){
+  let s = cyl(x, y, z0, z1, r, RAILM, toneI, .8, 16);
+  for (let z = z0 + 1.1; z < z1 - .4; z += 1.2) s += ink(pd(nearRing(x, y, z, r + .05, 16), false), .5);
+  return s;
+}
+
+/* ---------- the shell: walls, ring beams, machine room, the building in front ---------- */
+function frontWall(st, m){
+  const x0 = EW - ET, x1 = EW; let s = '';
+  for (const z of FL){
+    if (vis([0, 1, 0])) s += face(pd([[x0, DOOR[0], z], [x1, DOOR[0], z], [x1, DOOR[0], z + DH], [x0, DOOR[0], z + DH]]), tone([0, 1, 0], m));
+    if (vis([0, -1, 0])) s += face(pd([[x0, DOOR[1], z], [x1, DOOR[1], z], [x1, DOOR[1], z + DH], [x0, DOOR[1], z + DH]]), tone([0, -1, 0], m));
+    if (vis([0, 0, 1])) s += face(pd([[x0, DOOR[0], z], [x1, DOOR[0], z], [x1, DOOR[1], z], [x0, DOOR[1], z]]), tone([0, 0, 1], m));
+  }
+  for (const [n, xx] of [[[1, 0, 0], x1], [[-1, 0, 0], x0]]) if (vis(n)){
+    const d = pd(on(PX(xx), rectUV(0, 0, ED, MRZ))) + FL.map(z => pd(on(PX(xx), rectUV(DOOR[0], z, DOOR[1], z + DH)))).join('');
+    s += `<path d="${d}" fill="${tone(n, m)}" fill-rule="evenodd"/>` + ink(d, 1.1);
+    if (n[0] > 0) for (const z of [FL[1] - 4, FL[2] - 4, 200]) s += line([[xx + .05, 0, z], [xx + .05, 4, z]], .5);
+  }
+  if (vis([0, 1, 0])) s += cutY(ED, x0, x1, 0, MRZ, m);
+  if (vis([0, -1, 0])) s += shape(on(PY(0), rectUV(x0, 0, x1, MRZ)), tone([0, -1, 0], m), 1);
+  return itm([[x0, 0, 0], [x1, ED, MRZ]], s + frontDetails(st, m));
+}
+// on the front face: architraves, floor indicators, hall call buttons, painted floor numbers
+function frontDetails(st, m){
+  if (!vis([1, 0, 0])) return '';
+  const X = EW + .06, cur = nearest(st), mov = st.phase === 'run' || st.phase === 'test' || st.phase === 'reset';
+  let s = '';
+  FL.forEach((z, i) => {
+    const o = on(PX(X), rectUV(DOOR[0] - 1.6, z, DOOR[1] + 1.6, z + DH + 1.6)), h = on(PX(X), rectUV(DOOR[0], z, DOOR[1], z + DH));
+    s += `<path d="${pd(o) + pd(h)}" fill="${METAL.l}" fill-rule="evenodd"/>` + ink(pd(o), .8) + ink(pd(h), 1);
+    s += shape(on(PX(X), rectUV(21, z + 43, 31, z + 48.5)), '#1d2a26', .8) + tx(X + .05, 26, z + 44.3, String(cur + 1), 4.2, '#8af0ae', 800);
+    if (mov && st.dir) { const az = z + 45.7, d = st.dir > 0 ? 1 : -1;
+      s += fill(pd([[X + .05, 23.6, az + 1.2*d], [X + .05, 22.4, az - 1.1*d], [X + .05, 24.8, az - 1.1*d]]), '#8af0ae'); }
+    s += shape(on(PX(X), rrUV(9, z + 17.5, 13, z + 27.5, 1, 3)), METAL.l, .8);
+    const lit = st.calls[i] ? '#ffb02e' : '#efe9dc';
+    for (const bz of i < 2 ? [z + 24.6] : []) s += act('call', shape(on(PX(X + .05), ellUV(11, bz, 1.25, 1.25, 14)), lit, .7), `data-f="${i}"`);
+    for (const bz of i > 0 ? [z + 20.4] : []) s += act('call', shape(on(PX(X + .05), ellUV(11, bz, 1.25, 1.25, 14)), lit, .7), `data-f="${i}"`);
+    s += tx(X + .05, 43.5, z + 27, String(i + 1), 9, mix(m.d, m.l, .25), 800);
+  });
+  return s;
+}
+function mrBox(st, m){
+  let s = box(0, 0, MRZ, EW, ED, MRR, m, tone, 1.1);
+  if (vis([1, 0, 0])){ const X = EW + .06;
+    s += shape(on(PX(X), rectUV(36, MRF, 46, MRF + 34)), mix(DARK.l, '#ffffff', .25), 1) + shape(on(PX(X + .05), rectUV(37.5, MRF + 16, 38.5, MRF + 19)), METAL.l, .5);
+    s += shape(on(PX(X), rectUV(8, 246, 30, 253)), '#fff4d6', .8) + tx(X + .05, 19, 248.2, 'LIFT ROOM', 3.2, INK, 800);
+    s += line([[X, 0, MRF], [X, 36, MRF]], .5) + line([[X, 46, MRF], [X, ED, MRF]], .5); }
+  if (vis([0, 1, 0])){ const Y = ED + .06;
+    s += shape(on(PY(Y), rectUV(14, 236, 34, 250)), tone([0, 1, 0], DARK), .9);
+    for (let z = 238; z < 249; z += 2) s += line([[15, Y + .05, z], [33, Y + .05, z]], .5);
+    s += line([[0, Y, MRF], [EW, Y, MRF]], .5); }
+  if (vis([-1, 0, 0])){ s += shape(on(PX(-.06), rectUV(18, 238, 34, 248)), tone([-1, 0, 0], DARK), .9);
+    for (let z = 240; z < 247; z += 2) s += line([[-.1, 19, z], [-.1, 33, z]], .5); }
+  return itm([[0, 0, MRZ], [EW, ED, MRR]], s);
+}
+function shellItems(st, m){
+  const o = [];
+  o.push(itm([[ET, ET, -.01], [EW - ET, ED, 0]], shape(on(PZ(0), rectUV(ET, ET, EW - ET, ED)), mix(SLABM.d, '#8a8273', .3), 1)));
+  // back wall, right wall (full height), front wall (three openings)
+  let bw = box(0, 0, 0, ET, ED, MRZ, m, tone, 1.1); if (vis([0, 1, 0])) bw += cutY(ED, 0, ET, 0, MRZ, m);
+  if (vis([-1, 0, 0])) for (const z of [FL[1] - 4, FL[2] - 4, 200]) bw += line([[-.05, 0, z], [-.05, ED, z]], .5);
+  o.push(itm([[0, 0, 0], [ET, ED, MRZ]], bw));
+  let rw = box(ET, 0, 0, EW - ET, ET, MRZ, m, tone, 1.1);
+  if (vis([0, -1, 0])) for (const z of [FL[1] - 4, FL[2] - 4, 200]) rw += line([[ET, -.05, z], [EW - ET, -.05, z]], .5);
+  o.push(itm([[ET, 0, 0], [EW - ET, ET, MRZ]], rw));
+  o.push(frontWall(st, m));
+  // ring beams across the cut side at each floor and at the roof
+  for (const z of BEAMZ){ let b = box(ET, ED - ET, z, EW - ET, ED, z + 6, m, tone, 1); if (vis([0, 1, 0])) b += cutY(ED, ET, EW - ET, z, z + 6, m);
+    o.push(itm([[ET, ED - ET, z], [EW - ET, ED, z + 6]], b)); }
+  o.push(mrBox(st, m));
+  return o;
+}
+// the building in front of the shaft (all of it at x >= EW, so it is wholly in front of or behind the shaft)
+function bldgItems(st, m){
+  const o = [];
+  // the building in front: ground floor, two floor slabs and the roof, on columns
+  o.push(itm([[EW, 0, 0], [BX, ED, FL[0]]], box(EW, 0, 0, BX, ED, FL[0], SLABM, tone, 1.1)));
+  for (const z of [FL[1], FL[2], 204]) o.push(itm([[EW, 0, z - 4], [BX - 2, ED, z]], box(EW, 0, z - 4, BX - 2, ED, z, SLABM, tone, 1)));
+  for (const [z0, z1] of [[FL[0], FL[1] - 4], [FL[1], FL[2] - 4], [FL[2], 200]]) for (const y of [0, ED - 4])
+    o.push(itm([[BX - 6, y, z0], [BX - 2, y + 4, z1]], box(BX - 6, y, z0, BX - 2, y + 4, z1, m, tone, 1)));
+  return o;
+}
+
+/* ---------- inside the shaft (also seen through the cut side) ---------- */
+function cabSvg(st, z, k){
+  const { x0, x1, y0, y1, h } = CAR, t = 1, z1 = z + h, cm = cabM(st), inC = n => mix(toneI(n, cm), '#ffffff', .45);
+  const hole = (xx) => pd(on(PX(xx), rectUV(DOOR[0], z, DOOR[1], z + DH)));
+  let s = '';
+  // far walls seen from inside, the floor, then what is in the cab
+  if (vis([0, 0, 1])) s += shape(on(PZ(z + .05), rectUV(x0 + t, y0 + t, x1 - t, y1 - t)), '#c9b48f', .6);
+  if (vis([1, 0, 0])) s += face(pd(on(PX(x0 + t), rectUV(y0 + t, z, y1 - t, z1 - t))), inC([1, 0, 0]));
+  if (vis([-1, 0, 0])) s += `<path d="${pd(on(PX(x1 - t), rectUV(y0 + t, z, y1 - t, z1 - t))) + hole(x1 - t)}" fill="${inC([-1, 0, 0])}" fill-rule="evenodd"/>`;
+  if (vis([0, 1, 0])) s += face(pd(on(PY(y0 + t), rectUV(x0 + t, z, x1 - t, z1 - t))), inC([0, 1, 0]));
+  if (vis([0, -1, 0])) s += face(pd(on(PY(y1 - t), rectUV(x0 + t, z, x1 - t, z1 - t))), inC([0, -1, 0]));
+  if (vis([1, 0, 0])) s += rod([x0 + 1.8, y0 + 2, z + 18], [x0 + 1.8, y1 - 2, z + 18], .45, METAL, toneI, .5);
+  if (vis([0, 1, 0])){ const Y = y0 + t + .06;
+    s += shape(on(PY(Y), rectUV(34, z + 14, 38, z + 30)), METAL.l, .6);
+    FL.forEach((_, i) => s += shape(on(PY(Y + .05), ellUV(36, z + 18 + 4*i, .9, .9, 12)), st.calls[i] || (st.phase === 'run' && st.target === i) ? '#ffb02e' : '#efe9dc', .5));
+    s += shape(on(PY(Y + .05), rectUV(34.6, z + 27, 37.4, z + 29.2)), '#1d2a26', .4); }
+  // outer walls toward us (pale in see-through, so the cab's inside shows)
+  let o = '';
+  for (const [n, q] of [[[-1, 0, 0], on(PX(x0), rectUV(y0, z, y1, z1))], [[0, 1, 0], on(PY(y1), rectUV(x0, z, x1, z1))],
+                        [[0, -1, 0], on(PY(y0), rectUV(x0, z, x1, z1))], [[0, 0, 1], on(PZ(z1), rectUV(x0, y0, x1, y1))]])
+    if (vis(n)) o += shape(q, toneI(n, cm), .9);
+  if (vis([1, 0, 0])){ const d = pd(on(PX(x1), rectUV(y0, z, y1, z1))) + hole(x1); o += `<path d="${d}" fill="${toneI([1, 0, 0], cm)}" fill-rule="evenodd"/>` + ink(d, .9); }
+  return s + (k > 0 ? `<g opacity="${f(1 - .6*k)}">${o}</g>` : o);
+}
+function shaftItems(st, k){
+  const o = [], push = (...a) => o.push(...a), zc = st.zc, cb = cwB(st), d = st.door, here = atFloor(st);
+  // ---- car guide rails (flange on the wall / ring beams, blade toward the car) and their brackets
+  for (const [fy, by] of [[[ET, ET + 1], [ET + 1, ET + 3]], [[ED - ET - 1, ED - ET], [ED - ET - 3, ED - ET - 1]]]){
+    push(bI(26, fy[0], 0, 30, fy[1], MRZ, RAILM, .8), bI(27.2, by[0], 0, 28.8, by[1], MRZ, RAILM, .8));
+    for (const z of BEAMZ) for (const x of [23.5, 30]) push(bI(x, fy[0], z + 1, x + 2.5, fy[1] + .4, z + 5, DARK, .6));
+  }
+  // ---- counterweight rails on brackets from the back wall
+  for (const [fy, by] of [[[12, 13], [13, 15.4]], [[39, 40], [36.6, 39]]]){
+    push(bI(6, fy[0], 0, 10, fy[1], MRZ, RAILM, .7), bI(7.2, by[0], 0, 8.8, by[1], MRZ, RAILM, .7));
+    for (const z of BEAMZ) push(bI(ET, fy[0] - 1, z + 1, 5, fy[1] + (fy[0] === 12 ? 0 : 1), z + 5, DARK, .6));
+  }
+  // ---- the car: platform, cab, sling, hitch, doors, operator, shoes, safety gear
+  const cm = cabM(st);
+  push(itm([[CAR.x0, CAR.y0, zc], [CAR.x1, CAR.y1, zc + CAR.h]], cabSvg(st, zc, k)));
+  push(bI(CAR.x0, CAR.y0, zc - 3, CAR.x1, CAR.y1, zc, DARK, .9));                                  // platform
+  push(bI(41.5, 12, zc - 12, 42.3, 40, zc - 3, METAL, .6));                                          // toe guard
+  push(bI(42, 16, zc - 1, 43.1, 36, zc, METAL, .6));                                                 // car sill
+  for (const y of [8, 42]) push(bI(26, y, zc - 3, 30, y + 2, zc + 49, RAILM, .8));                    // stiles
+  push(bI(26, 8, zc + 49, 30, 44, zc + 52, RAILM, .9), bI(26, 8, zc - 8, 30, 44, zc - 3, RAILM, .9)); // crosshead, plank
+  push(bI(26, 21, zc + 52, 30, 31, zc + 53, DARK, .6));                                              // hitch plate
+  push(itm([[27, 22, zc + 53], [29, 30, zc + 56]], yOrd(ROPES).map(y => springSvg(28, y, zc + 53, zc + 56, .75)).join('')));
+  push(itm([[27.5, 22.5, zc + 56], [28.5, 29.5, MRF - .01]], yOrd(ROPES).map(y => ropeLine([[28, y, zc + 56], [28, y, MRF - .01]])).join('')));
+  // car door: two panels from the header, the vane on the leading panel; door operator and its motor on the cab top
+  const pA = DOOR[0] - 8*d, pB = 26 + 8*d;
+  push(bI(42, pA, zc, 42.8, pA + 8, zc + DH, METAL, .8), bI(42, pB, zc, 42.8, pB + 8, zc + DH, METAL, .8));
+  push(bI(42.8, pA + 5.5, zc + 10, 43.15, pA + 6.5, zc + 32, DARK, .5));                              // door vane
+  push(bI(42, CAR.y0, zc + DH, 42.8, CAR.y1, zc + 44, RAILM, .7));                                    // door header
+  push(bI(35, 12, zc + 45, 42, 40, zc + 48, MACH, .8));                                              // door operator
+  push(itm([[36.5, 14.5, zc + 48], [39.5, 17.5, zc + 51]], cyl(38, 16, zc + 48, zc + 51, 1.5, st.phase === 'opening' || st.phase === 'closing' ? HOT : MACH, toneI, .7, 14)));
+  push(bI(36, 9, zc + 45, 39, 12, zc + 48, matOf('#e8e2d2'), .6));                                   // levelling sensor
+  push(bI(29, 6.5, zc + 28, 33, 8, zc + 42, DARK, .6));                                              // limit cam on the stile
+  // guide shoes: a housing on the stile and two side rollers on the rail blade, top and bottom, both rails
+  for (const side of [0, 1]){ const hy = side ? [44, 45] : [7, 8], ry = side ? [45.4, 46.4] : [5.6, 6.6];
+    for (const z of [zc + 44, zc - 2]){
+      push(bI(25, hy[0], z, 31, hy[1], z + 5, DARK, .6));
+      for (const [x0, x1] of [[24.8, 27.2], [28.8, 31.2]]) push(itm([[x0, ry[0], z + 1.3], [x1, ry[1], z + 3.7]], rod([(x0 + x1)/2, ry[0], z + 2.5], [(x0 + x1)/2, ry[1], z + 2.5], 1.2, DARK, toneI, .5)));
+    }
+    // safety gear: block under the plank end, two wedges either side of the blade that rise and pinch it
+    const sm = st.wedge > .5 ? REDM : matOf('#d9b86a'), wz = zc - 8 + 1.6*st.wedge;
+    push(bI(25, hy[0], zc - 9, 31, hy[1], zc - 3, RAILM, .7));
+    const wy = side ? [45, 46.8] : [5.2, 7];
+    for (const [x0, x1] of [[25.6 + .3*st.wedge, 27.2], [28.8, 30.4 - .3*st.wedge]]) push(bI(x0, wy[0], wz, x1, wy[1], wz + 4, sm, .5));
+  }
+  // safety linkage across under the car, and the lever the governor rope pulls
+  push(itm([[31, 6, zc - 6.5], [32, 46, zc - 5.5]], rod([31.5, 6, zc - 6], [31.5, 46, zc - 6], .5, RAILM, toneI, .5)));
+  const lv = 2*st.wedge, lvz = zc - 6 + lv;
+  push(itm([[32, 45, zc - 7], [36.4, 46, lvz + 1]], rod([31.8, GRY, zc - 6], [36, GRY, lvz], .5, st.wedge > .05 ? REDM : RAILM, toneI, .5)));
+  // travelling cable: clamp under the car, hanging loop, fixed end in the junction box on the right wall
+  const zb = (zc - 14)/2;
+  push(bI(17, 11, zc - 6, 19, 13, zc - 3, DARK, .5));
+  push(...wireItems([[18, 12, zc - 6], [18, 12, zb + 3]], CABLEC, 1.4), ...wireItems([[18, 6, 110], [18, 6, zb + 3]], CABLEC, 1.4));
+  { const lp = []; for (let i = 0; i <= 10; i++){ const a = Math.PI*i/10; lp.push([18, 9 + 3*Math.cos(a), zb + 3 - 3*Math.sin(a)]); }
+    push(itm([[17.2, 5.2, zb - .7], [18.8, 12.8, zb + 3]], ropeLine(lp, 1.4, CABLEC))); }
+  push(bI(15, ET, 110, 21, 6.5, 116, matOf('#d8d2c2'), .7));                                          // junction box
+  push(itm([[17.5, ET, 116], [18.5, 5, MRZ]], rod([18, 4.5, 116], [18, 4.5, MRZ], .5, RAILM, toneI, .4)));   // conduit
+  // levelling vanes (one per floor) and the final limit switches on the right wall
+  for (const z of FL) push(bI(37, ET, z + 44, 38, 9, z + 50, matOf('#e8e2d2'), .6));
+  for (const z of [45, 187.5]) push(bI(32.5, ET, z, 35.5, 6.5, z + 4.5, matOf('#f2c230'), .6));
+  // ---- counterweight: frame, filler weights, shoes, hitch, ropes up to the machine room
+  push(bI(5, 16, cb, 11, 36, cb + 2, CWM, .8), bI(5, 16, cb + 40, 11, 36, cb + 42, CWM, .8));
+  push(bI(5, 16, cb + 2, 11, 17, cb + 40, CWM, .8), bI(5, 35, cb + 2, 11, 36, cb + 40, CWM, .8));
+  { let fw = box(5.5, 17, cb + 2, 10.5, 35, cb + 40, matOf('#8a847b'), toneI, .8);
+    for (let z = cb + 5; z < cb + 40; z += 3){ if (vis([1, 0, 0])) fw += line([[10.55, 17, z], [10.55, 35, z]], .45); if (vis([0, 1, 0])) fw += line([[5.5, 35.05, z], [10.5, 35.05, z]], .45); if (vis([-1, 0, 0])) fw += line([[5.45, 17, z], [5.45, 35, z]], .45); }
+    push(itm([[5.5, 17, cb + 2], [10.5, 35, cb + 40]], fw)); }
+  for (const z of [cb + 1, cb + 36]){ push(bI(6, 15.4, z, 10, 16, z + 5, DARK, .5), bI(6, 36, z, 10, 36.6, z + 5, DARK, .5)); }
+  push(bI(7, 22, cb + 42, 9, 30, cb + 43, DARK, .6));
+  push(itm([[7, 22, cb + 43], [9, 30, cb + 46]], yOrd(ROPES).map(y => springSvg(CWX, y, cb + 43, cb + 46, .75)).join('')));
+  push(itm([[7.5, 22.5, cb + 46], [8.5, 29.5, MRF - .01]], yOrd(ROPES).map(y => ropeLine([[CWX, y, cb + 46], [CWX, y, MRF - .01]])).join('')));
+  // ---- governor rope: governor (machine room) down to the tension sheave (pit); the car side is tied to the lever
+  push(...wireItems([[36, GRY, lvz], [36, GRY, MRF - .01]], ROPEC, .6), ...wireItems([[36, GRY, TEN.z], [36, GRY, lvz]], ROPEC, .6));
+  push(...wireItems([[42, GRY, TEN.z], [42, GRY, MRF - .01]], ROPEC, .6));
+  // ---- pit: buffers, tension sheave on its weighted arm, ladder
+  for (const y of [18, 34]) push(itm([[25, y - 3, 0], [31, y + 3, 11.5]], box(25, y - 3, 0, 31, y + 3, 3, SLABM, toneI, .8) + springSvg(28, y, 3, 10, 1.9) + cyl(28, y, 10, 11.5, 2.6, DARK, toneI, .8, 16)));
+  push(itm([[5, 22, 0], [11, 30, 11.5]], box(5, 22, 0, 11, 30, 3, SLABM, toneI, .8) + springSvg(CWX, 26, 3, 10, 1.9) + cyl(CWX, 26, 10, 11.5, 2.6, DARK, toneI, .8, 16)));
+  push(bI(30, 43, 0, 32, 45, 9, DARK, .7), bI(31, 43.5, 7.4, 40, 44.5, 8.6, DARK, .6), bI(37, 43, .5, 41, 44.5, 4.5, CWM, .7), bI(39.4, 43.6, 4.5, 40, 44.4, 7.4, DARK, .4));
+  push(itm([[36, 44.5, 5], [42, 46.5, 11]], withTails(sheaveSvg(TEN.x, TEN.z, 44.5, 46.5, TEN.r, st.tenA, METAL, [GRY], Math.PI, 2*Math.PI, .6), TEN.x, TEN.z, TEN.r, [GRY], [], .6)));
+  { let ld = ''; for (const y of [44, 47]) ld += rod([43.5, y, 0], [43.5, y, FL[0] - 1], .35, RAILM, toneI, .4);
+    for (let z = 3; z < FL[0] - 1; z += 3.5) ld += rod([43.5, 44, z], [43.5, 47, z], .3, RAILM, toneI, .35);
+    push(itm([[43, 43.6, 0], [44, 47.4, FL[0] - 1]], ld)); }
+  // ---- landing doors (behind the front wall): two panels, header, interlock, sill
+  FL.forEach((z, i) => { const dd = i === here ? d : 0, a = DOOR[0] - 8*dd, b = 26 + 8*dd, lock = dd > .01 ? matOf('#ff9a3a') : matOf('#f2c230');
+    push(bI(43.2, a, z, 44, a + 8, z + DH, METAL, .8), bI(43.2, b, z, 44, b + 8, z + DH, METAL, .8));
+    push(bI(43.2, 10, z + DH, 44, 42, z + 44, RAILM, .7), bI(43.2, 27, z + 44, 44, 31, z + 46.5, lock, .6), bI(43.2, 16, z - 1, 44, 36, z, METAL, .6)); });
+  return o;
+}
+
+/* ---------- machine room (shown in see-through) ---------- */
+function machineItems(st){
+  const o = [], push = (...a) => o.push(...a), run = st.phase === 'run' || st.phase === 'test' || st.phase === 'reset';
+  let fl = shape(on(PZ(MRF), rectUV(ET, ET, EW - ET, ED - ET)), mix(SLABM.l, '#ffffff', .2), 1);
+  for (const [x0, y0, x1, y1] of [[26, 22, 30, 30], [6, 22, 10, 30], [35.4, 44.8, 36.6, 46.2], [41.4, 44.8, 42.6, 46.2]]) fl += shape(on(PZ(MRF + .02), rectUV(x0, y0, x1, y1)), '#2b2523', .6);
+  push(itm([[ET, ET, MRF - .01], [EW - ET, ED - ET, MRF]], fl));
+  push(bI(16, 10, MRF, 26, 36, 223, MACH, .9), bI(26, 10, MRF, 42, 21, 223, MACH, .9));             // bedplates
+  push(bI(16, 12, 223, 26, 20, 240, MACH, .9), bI(18, 13, 240, 24, 19, 241, MACH, .6));             // gearbox + cover
+  push(itm([[20.8, 20, 232.8], [23.2, 21, 235.2]], rod([SHV.x, 20, SHV.z], [SHV.x, 21, SHV.z], 1.2, METAL, toneI, .5)));
+  push(bI(19, 31.5, 223, 25, 34, 236, MACH, .8));                                                    // outboard bearing
+  // drive sheave with the ropes over it: car side straight down (front), deflector side off at the tangent
+  const ta = [SHV.x + SHV.r*Math.cos(RT), SHV.z + SHV.r*Math.sin(RT)], tb = [DEF.x + DEF.r*Math.cos(RT), DEF.z + DEF.r*Math.sin(RT)];
+  const diag = yOrd(ROPES).map(y => ropeLine([[ta[0], y, ta[1]], [tb[0], y, tb[1]]])).join('');
+  push(itm([[16, 21, SHV.z - SHV.r], [28.4, 31.5, SHV.z + SHV.r + .4]], withTails(sheaveSvg(SHV.x, SHV.z, SHV.y0, SHV.y1, SHV.r, st.shA, METAL, ROPES, 0, RT, .9), SHV.x, SHV.z, SHV.r, ROPES, [{ a:0, z1:SHV.z - SHV.r }], .9) + diag));
+  push(itm([[27.5, 22.5, MRF], [28.5, 29.5, SHV.z - SHV.r]], yOrd(ROPES).map(y => ropeLine([[28, y, MRF], [28, y, SHV.z - SHV.r]])).join('')));
+  // deflector sheave on two pedestals; the counterweight side drops down through the floor
+  { const ped = y => bI(10, y, MRF, 14, y + 1.5, DEF.z, MACH, .7), far = CAM_V[1] >= 0 ? 20.5 : 30, near = far === 20.5 ? 30 : 20.5;
+    push(itm([[7.5, 20.5, MRF], [16, 31.5, DEF.z + DEF.r + .4]], ped(far).svg + withTails(sheaveSvg(DEF.x, DEF.z, DEF.y0, DEF.y1, DEF.r, st.defA, METAL, ROPES, RT, Math.PI, .9), DEF.x, DEF.z, DEF.r, ROPES, [{ a:Math.PI, z1:MRF }], .9) + ped(near).svg)); }
+  // brake: drum on the worm shaft, two shoes on arms, spring across the top, solenoid lifts them
+  { const g = .4*(1 - st.brake), bp = [];
+    bp.push(itm([[26.3, 12, 224], [29.7, 20, 232]], cylX(26.3, 29.7, 16, 228, 4, METAL, toneI, .8, 20)));
+    bp.push(bI(26.5, 11.4 - g, 225, 29.5, 12 - g, 231, matOf('#c98a52'), .5), bI(26.5, 20 + g, 225, 29.5, 20.6 + g, 231, matOf('#c98a52'), .5));
+    bp.push(bI(27.5, 11 - g, 223, 28.5, 11.4 - g, 237, MACH, .6), bI(27.5, 20.6 + g, 223, 28.5, 21 + g, 237, MACH, .6));
+    bp.push(itm([[27.6, 11.4, 236.2], [28.4, 20.6, 236.8]], rod([28, 11.4 - g, 236.5], [28, 20.6 + g, 236.5], .35, RAILM, toneI, .4)));
+    bp.push(bI(26.6, 14, 232.5, 29.4, 18, 236, run ? HOT : DARK, .7));
+    push(grp([[26, 10.6, 223], [30, 21.4, 237]], bp)); }
+  push(itm([[30, 14.4, 226.4], [31, 17.6, 229.6]], cylX(30, 31, 16, 228, 1.6, RAILM, toneI, .6, 14)));        // coupling
+  { const mm = run ? { l:'#ffc07a', m:'#ff9a3a', d:'#b85a1a' } : MACH, mp = [];
+    mp.push(itm([[31, 11, 223], [41, 21, 233]], cylX(31, 41, 16, 228, 5, mm, toneI, 1, 24) + (vis([1, 0, 0]) ? [0, 1, 2].map(i => { const a = st.motA + i*2.09; return line([[41.05, 16 + 2*Math.cos(a), 228 + 2*Math.sin(a)], [41.05, 16 + 4*Math.cos(a), 228 + 4*Math.sin(a)]], .5); }).join('') : '')));
+    mp.push(bI(34, 21, 225, 38, 22.5, 229, DARK, .6));                                              // terminal box
+    push(grp([[31, 11, 223], [41, 22.5, 233]], mp)); }
+  push(itm([[41, 14.4, 226.4], [42.6, 17.6, 229.6]], cylX(41, 42.6, 16, 228, 1.6, DARK, toneI, .6, 14)));      // encoder
+  // overspeed governor: base, pillar, sheave turned by the governor rope, flyweights, jaw on the front wall
+  { const gp = [], spread = Math.min(1, Math.abs(st.v)/TRIP);
+    gp.push(bI(37, 42.5, MRF, 41, 47.5, 222, MACH, .7), bI(38, 42.5, 222, 40, 44, GOV.z + 1, MACH, .7));
+    let gs = withTails(sheaveSvg(GOV.x, GOV.z, 44.5, 46.5, GOV.r, st.govA, METAL, [GRY], 0, Math.PI, .6), GOV.x, GOV.z, GOV.r, [GRY], [{ a:0, z1:GOV.z - GOV.r }, { a:Math.PI, z1:GOV.z - GOV.r }], .6);
+    if (vis([0, 1, 0])) for (const s0 of [0, Math.PI]){ const a = st.govA + s0, rr = 1 + 1.1*spread;
+      gs += line([[GOV.x, 46.6, GOV.z], [GOV.x + rr*Math.cos(a), 46.6, GOV.z + rr*Math.sin(a)]], .6) + shape(on(PY(46.65), ellUV(GOV.x + rr*Math.cos(a), GOV.z + rr*Math.sin(a), .7, .7, 10)), st.gov ? REDM.l : '#f2c230', .5); }
+    gp.push(itm([[36, 44.5, GOV.z - GOV.r], [42, 46.5, GOV.z + GOV.r + .4]], gs));
+    gp.push(bI(42.6 + .6*(1 - st.gov), 44.6, 227.5, 44, 46.4, 230.5, st.gov ? REDM : DARK, .6));
+    for (const x of [36, 42]) gp.push(itm([[x - .4, GRY - .4, MRF], [x + .4, GRY + .4, GOV.z - GOV.r]], ropeLine([[x, GRY, MRF], [x, GRY, GOV.z - GOV.r]], .6)));
+    push(grp([[35.6, 42.5, MRF], [44, 47.5, GOV.z + GOV.r + .4]], gp)); }
+  // controller cabinet against the back wall, main switch on the right wall, lifting beam under the roof
+  { let c = box(ET, 37, MRF, 10, 47, 248, matOf('#c9cfd2'), toneI, .9);
+    if (vis([1, 0, 0])){ c += line([[10.05, 42, MRF + 1], [10.05, 42, 247]], .6);
+      [0, 1, 2].forEach(i => c += shape(on(PX(10.1), ellUV(39 + 1.6*i, 244, .5, .5, 10)), i === 0 ? '#43c25c' : i === 1 && run ? '#ffb02e' : i === 2 && st.gov ? '#e2483d' : '#555', .3)); }
+    push(itm([[ET, 37, MRF], [10, 47, 248]], c)); }
+  push(bI(32, ET, 234, 38, 6, 243, matOf('#e2483d'), .8), bI(36.6, 6, 238, 37.6, 7.5, 241, DARK, .5));
+  push(bI(19, ET, 258, 25, ED - ET, 262, RAILM, .9), itm([[21.4, 25.4, 254], [22.6, 26.6, 258]], rod([22, 26, 258], [22, 26, 254.5], .5, DARK, toneI, .5)));
+  // cables: main switch to controller, controller to motor, conduit (travelling cable) to controller
+  push(...wireItems([[35, 4.6, 243], [35, 4.6, 252], [4.6, 4.6, 252], [4.6, 40, 252], [4.6, 40, 248]], '#c2300a', .9));
+  push(...wireItems([[10, 44, MRF + .6], [33, 44, MRF + .6], [33, 23, MRF + .6], [36, 23, MRF + .6], [36, 22.8, 225]], CABLEC, .9));
+  push(...wireItems([[18, 4.5, MRF], [18, 4.5, MRF + .6], [4.6, 4.5, MRF + .6], [4.6, 37, MRF + .6]], CABLEC, .9));
+  return o;
+}
+
+/* ---------- labels ---------- */
+function insideLabels(st){
+  const zc = st.zc, cb = cwB(st), run = st.phase === 'run' || st.phase === 'test' || st.phase === 'reset', dm = st.phase === 'opening' || st.phase === 'closing';
+  const L0 = [
+    { at:[36, 16, 233], text:'TRACTION MOTOR', on: run },
+    { at:[28, 16, 236], text:'BRAKE', on: run },
+    { at:[19, 12, 238], text:'GEARBOX', on: run },
+    { at:[SHV.x, 31, SHV.z + 3], text:'DRIVE SHEAVE', on: run },
+    { at:[DEF.x, 30, DEF.z + 2], text:'DEFLECTOR SHEAVE', on: run },
+    { at:[10, 42, 246], text:'CONTROLLER', on: run || dm },
+    { at:[35, 6, 241], text:'MAIN SWITCH', on: false },
+    { at:[GOV.x, 46.5, GOV.z + 2], text:'OVERSPEED GOVERNOR', on: st.gov > 0 },
+    { at:[28, 26, (zc + 56 + MRZ)/2], text:'HOIST ROPES', on: run },
+    { at:[42, 30, zc + 48], text:'DOOR OPERATOR', on: dm },
+    { at:[37.5, 12, zc + 48], text:'LEVELLING SENSOR', on: atFloor(st) >= 0 },
+    { at:[CAR.x0 + 4, CAR.y1, zc + 34], text:'CAR', on: run },
+    { at:[42.8, 22 - 8*st.door, zc + 24], text:'CAR DOOR', on: dm },
+    { at:[28, 45, zc + 47], text:'GUIDE SHOE', on: run },
+    { at:[28, 44, zc + 22], text:'CAR SLING', on: false },
+    { at:[28, 46, zc - 6], text:'SAFETY GEAR', on: st.wedge > .05 },
+    { at:[18, 12, (zc - 6 + (zc - 14)/2)/2], text:'TRAVELLING CABLE', on: run },
+    { at:[28, 46, zc > 100 ? 60 : 170], text:'CAR GUIDE RAIL', on: run },
+    { at:[11, 36, cb + 32], text:'COUNTERWEIGHT', on: run },
+    { at:[10.5, 30, cb + 14], text:'FILLER WEIGHTS', on: false },
+    { at:[8, 39, cb > 90 ? 50 : 160], text:'CW GUIDE RAIL', on: run },
+    { at:[42, GRY, zc > 100 ? 100 : 130], text:'GOVERNOR ROPE', on: st.gov > 0 },
+    { at:[44, 30, FL[2] + 20], text:'LANDING DOOR', on: dm },
+    { at:[44, 29, FL[2] + 46.5], text:'DOOR INTERLOCK', on: dm },
+    { at:[34, 6.5, 192], text:'FINAL LIMIT SWITCH', on: false },
+    { at:[28, 34, 11.5], text:'CAR BUFFER', on: false },
+    { at:[CWX, 26, 11.5], text:'CW BUFFER', on: false },
+    { at:[TEN.x, 46.5, TEN.z + 2], text:'TENSION SHEAVE', on: st.gov > 0 },
+  ];
+  if (vis([1, 0, 0])) L0.push({ at:[EW, 11, FL[0] + 25], text:'HALL BUTTONS', on: st.calls.some(Boolean) }, { at:[EW, 26, FL[1] + 48], text:'FLOOR INDICATOR', on: run });
+  return L0;
+}
+function surfaceLabels(st){
+  const o = [{ at:[24, ED, MRR - 8], text:'MACHINE ROOM', on: false }];
+  if (vis([0, 1, 0])) o.push({ at:[CAR.x0 + 4, CAR.y1, st.zc + 34], text:'CAR', on: false }, { at:[11, 36, cwB(st) + 30], text:'COUNTERWEIGHT', on: false },
+    { at:[28, 26, (st.zc + 56 + MRZ)/2], text:'HOIST ROPES', on: false }, { at:[28, 34, 11.5], text:'BUFFERS', on: false });
+  if (vis([1, 0, 0])) o.push({ at:[EW, 11, FL[0] + 25], text:'HALL BUTTONS', on: false }, { at:[EW, 26, FL[1] + 48], text:'FLOOR INDICATOR', on: false }, { at:[EW, 30, FL[0] + 20], text:'LANDING DOOR', on: false });
+  return o;
+}
+
+/* ---------- scene ---------- */
+const SHAFT_PTS = (() => { const p = []; for (const x of [0, EW]) for (const y of [0, ED]) for (const z of [0, MRR]) p.push([x, y, z]); return p; })();
+const BLDG_PTS = (() => { const p = []; for (const y of [0, ED]) p.push([EW, y, 0], [BX, y, 0], [BX, y, FL[0]], [BX - 2, y, 204], [EW, y, 204]); return p; })();
+// the See-through / Labels switches sit over the top right of the drawing: blank slots keep the right column below them
+function padTags(B){
+  const els = [document.querySelector('.vset'), document.getElementById('stats')].filter(Boolean), svgEl = document.getElementById('fig');
+  if (!els.length || !svgEl.getScreenCTM() || (window.LBL_U && LBL_U())) return [];
+  const q = new DOMPoint(0, Math.max(...els.map(e => e.getBoundingClientRect().bottom)) + 6).matrixTransform(svgEl.getScreenCTM().inverse());
+  const fs = 8.6*INK_K, gap = fs*1.8 + 3*INK_K, n = Math.max(0, Math.ceil((q.y - fs - 30*INK_K)/gap));
+  let c = null; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]){ const X = P(x, y, B[5])[0]; if (!c || X > c[3]) c = [x, y, B[5] + 400, X]; }
+  return Array.from({ length: n }, (_, i) => ({ at:[c[0], c[1], c[2] + i], text:'PAD' }));
+}
+function scene(st, m){
+  const k = ease(st.xr || 0), B = [0, EW, 0, ED, 0, MRR];
+  let s = castShadow([...SHAFT_PTS, ...BLDG_PTS]);
+  const shaft = shaftItems(st, k);
+  const sh = elvSort([...shellItems(st, m), ...shaft]) + hullInk(SHAFT_PTS, 2.8), bl = elvSort(bldgItems(st, m)) + hullInk(BLDG_PTS, 2.4);
+  const base = CAM_V[0] > 0 ? sh + bl : bl + sh;
+  if (k > 0){
+    const fd = itm([[EW, 0, 0], [EW + .3, ED, MRZ]], frontDetails(st, m));
+    s += `<g opacity="${f(1 - .8*k)}">${base}</g><g opacity="${f(k)}">${elvSort([...shaft, ...machineItems(st), fd])}</g>`;
+  } else s += base;
+  s += xrCallouts([...(k > .6 ? insideLabels(st) : surfaceLabels(st)), ...padTags(B)], B).replace(/<g class="tag" data-n="\d+" data-t="PAD">.*?<\/g>/g, '');
+  return s;
+}
+
+/* ---------- behaviour ---------- */
+let ui, looping = false;
+const busy = st => !['idle', 'stuck'].includes(st.phase);
+function kick(){ if (looping) return; looping = true;
+  ui.animate(dt => { elUpdate(ui.st, dt); if (!busy(ui.st)) looping = false; return busy(ui.st); }); }
+function moveCar(st, dz){
+  st.zc += dz; st.shA += dz/SHV.r; st.defA += dz/DEF.r; st.motA += dz/SHV.r*8;
+  if (!st.gov){ st.govA -= dz/GOV.r; st.tenA -= dz/TEN.r; }
+}
+function nextJob(st){
+  if (st.after === 'test'){ st.after = null; return startTest(st); }
+  if (st.queue.length){ st.target = st.queue.shift(); st.phase = atFloor(st) === st.target ? 'opening' : 'run'; }
+  else st.phase = 'idle';
+}
+function elUpdate(st, dt){
+  const ph = st.phase;
+  // the car parks with its doors open; it only closes them when there is somewhere to go
+  if (ph === 'opening'){ st.door = Math.min(1, st.door + dt/1.1); if (st.door >= 1){ st.calls[atFloor(st)] = 0; st.dwell = 2.6; st.phase = st.queue.length || st.after ? 'open' : 'idle'; } }
+  else if (ph === 'open'){ st.dwell -= dt; if (st.dwell <= 0) st.phase = 'closing'; }
+  else if (ph === 'closing'){ st.door = Math.max(0, st.door - dt/1.1); if (st.door <= 0) nextJob(st); }
+  else if (ph === 'run'){
+    st.brake = 0; const goal = FL[st.target], dist = Math.abs(goal - st.zc), dir = Math.sign(goal - st.zc); st.dir = dir;
+    st.v = Math.min(VMAX, st.v + ACC*dt, Math.sqrt(2*ACC*dist));
+    const stp = Math.min(dist, st.v*dt); moveCar(st, dir*stp);
+    if (dist - stp < .02){ moveCar(st, goal - st.zc); st.v = 0; st.dir = 0; st.brake = 1; st.phase = 'opening'; }
+  }
+  else if (ph === 'test'){
+    st.brake = 0; st.dir = -1;
+    if (!st.gov){ st.v += 60*dt; if (st.v >= TRIP){ st.v = TRIP; st.gov = 1; st.zGrip = st.zc; ui.flash('1.84 m/s: the governor trips and its jaw grips the governor rope', 2600); } }
+    else { st.wedge = Math.min(1, (st.zGrip - st.zc)/2); st.brake = 1; if (st.wedge >= 1) st.v = Math.max(0, st.v - 120*dt); }
+    moveCar(st, -st.v*dt);
+    if (st.gov && st.wedge >= 1 && st.v <= 0){ st.phase = 'stuck'; st.dir = 0; ui.flash('Safety gear set: its wedges clamp the rails. Press a floor to reset', 3200); }
+  }
+  else if (ph === 'reset'){
+    st.brake = 0; st.gov = 0; st.dir = 1; st.v = 4; moveCar(st, 4*dt); st.wedge = Math.max(0, st.wedge - dt/.75);
+    if (st.wedge <= 0){ st.v = 0; st.phase = 'run'; }
+  }
+}
+function callFloor(st, i){
+  if (st.phase === 'stuck'){ st.target = i; st.calls[i] = 1; st.phase = 'reset'; ui.flash('Reset: the car is driven up off the safety wedges'); return kick(); }
+  const here = atFloor(st) === i;
+  if (here && st.phase === 'idle' && st.door >= 1) return ui.flash(`The car is already at floor ${i + 1}`);
+  if (here && ['idle', 'open', 'closing', 'opening'].includes(st.phase)){ if (st.phase !== 'opening') st.phase = 'opening'; return kick(); }
+  if (st.phase === 'run' && st.target === i) return;
+  if (!st.queue.includes(i)) st.queue.push(i); st.calls[i] = 1;
+  if (st.phase === 'open' || st.phase === 'idle'){ if (st.door > 0) st.phase = 'closing'; else nextJob(st); }
+  kick();
+}
+function startTest(st){ st.phase = 'test'; st.v = 0; st.gov = 0; st.wedge = 0; st.queue = []; ui.flash('Overspeed test: the car is driven down too fast', 2000); kick(); }
+function overspeed(st){
+  if (st.phase === 'stuck') return ui.flash('The safety gear is already set: press a floor to reset');
+  if (['run', 'test', 'reset'].includes(st.phase)) return ui.flash('Wait for the car to stop at a floor');
+  if (nearest(st) === 0) return ui.flash('Send the car up first: the test drives it down');
+  if (st.door > 0){ st.after = 'test'; st.queue = []; st.phase = 'closing'; return kick(); }
+  startTest(st);
+}
+
+ui = mountFigure({
+  fig:'E1', title:'Elevator',
+  size:[BX, ED, MRR], palette:'tomato', turn:'full',
+  state:{ zc: FL[1], v:0, dir:0, phase:'idle', target:1, door:1, dwell:0, queue:[], calls:[0, 0, 0], after:null,
+    shA:0, defA:0, govA:0, tenA:0, motA:0, gov:0, wedge:0, zGrip:0, brake:1 },
+  scene,
+  stats: st => [{ label:'Floor', value: String(nearest(st) + 1) }, { label:'Speed', value: `${(st.v/U).toFixed(2)} m/s`, small:true }],
+  buttons:[
+    { label:'Floor 1', onClick: st => callFloor(st, 0) },
+    { label:'Floor 2', onClick: st => callFloor(st, 1) },
+    { label:'Floor 3', onClick: st => callFloor(st, 2) },
+    { label:'Overspeed test', onClick: st => overspeed(st) },
+  ],
+  acts:{ call: (st, el) => callFloor(st, +el.dataset.f) },
+  params:(st, q) => {
+    if (q.has('floor')) st.zc = FL[Math.max(0, Math.min(2, (+q.get('floor') | 0) - 1))];
+    if (q.has('z')) st.zc = +q.get('z');
+    if (atFloor(st) < 0 || q.get('door') === '0') st.door = 0;
+    if (q.has('v')) st.v = +q.get('v') * U;
+    if (q.get('stuck') === '1'){ st.phase = 'stuck'; st.gov = 1; st.wedge = 1; st.door = 0; }
+    if (q.has('call')) for (const c of q.get('call')) st.calls[+c - 1] = 1;
+  },
+});
+xrMount(() => ui, st => ({
+  idle: 'The car waits at a floor, doors open, with the machine brake on. The counterweight, on the far side of the drive sheave, balances the car plus about half a load.',
+  opening: 'The door operator on the car top opens the car door; its vane drags the landing door open with it.',
+  open: 'Doors open. The levelling sensor has stopped the car flush with the floor.',
+  closing: 'The doors close and the interlock proves the landing door locked before the car may move.',
+  run: 'Brake lifted, the motor turns the drive sheave through the worm gearbox; friction in the grooves pulls the ropes, so the car and counterweight move in opposite directions.',
+  test: 'Too fast: the governor sheave spins up until its flyweights trip the jaw, which grips the governor rope. The rope stops, the car does not, so the safety lever is pulled up.',
+  stuck: 'The safety gear wedges are jammed between the car and both guide rails; the car is held by the rails, not the ropes.',
+  reset: 'The machine drives the car upward, pulling the wedges back out of the rails.',
+})[st.phase] || '');
+</script></body></html>
