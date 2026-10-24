@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Molecules and bonds</title>
+<script>document.documentElement.dataset.errors = document.documentElement.dataset.errors || '';</script>
+</head><body><script src="core.js"></script><script>
+/* Truth first.
+   The bench kit substitutes coloured balls and connectors for atoms and bonds.
+   Water is bent, 104.5 degrees, with two O lone pairs. Ammonia is pyramidal,
+   about 107 degrees, with one N lone pair. Methane is tetrahedral, 109.5 degrees.
+   CO2 is linear, 180 degrees, with two double bonds and two lone pairs on each O.
+   A bond dipole points toward greater electron density. The water and ammonia
+   vectors add; the CO2 and methane vectors cancel. C-H polarity is weak.
+   Source https://openstax.org/books/chemistry-2e/pages/7-6-molecular-structure-and-polarity
+   See-through replaces opaque kit balls with schematic density clouds, nuclei,
+   shared valence pairs and lone pairs. Dots count electrons, not fixed positions
+   or classical orbits. Cloud shapes, atomic radii and the kit scale are schematic.
+   Vibration is a slowed, exaggerated symmetric stretch, not a frequency measurement.
+   Rotation turns the mounted kit on its spindle; the central atom stays clamped.
+   Parts. Structure: bench, rotating plinth, spindle, sleeve, central clamp.
+   Kit: open tray and divider on the bench, four spare atom balls, two spare rods.
+   Model: one central ball and 2-4 terminal balls, single/double connectors.
+   Overlays: nuclear centres, density clouds, shared pairs, lone pairs, dipoles,
+   protractor arcs. Electron overlays are chemical features, not mechanical parts.
+*/
+const molRad = a => a*Math.PI/180;
+const molAdd = (a,b) => a.map((v,i)=>v+b[i]);
+const molScale = (a,k) => a.map(v=>v*k);
+const molCenter = [64,48,57];
+const molPyramid = angle => {
+  const z = -Math.sqrt((Math.cos(molRad(angle))+.5)/1.5), r = Math.sqrt(1-z*z);
+  return [0,120,240].map(a=>[r*Math.cos(molRad(a)),r*Math.sin(molRad(a)),z]);
+};
+const molModels = {
+ water:{name:'Water',formula:'H2O',center:'O',outer:'H',angle:104.5,length:28,order:1,dipole:'1.85 D',shape:'Bent',
+  dirs:[[-Math.sin(molRad(52.25)),0,-Math.cos(molRad(52.25))],[Math.sin(molRad(52.25)),0,-Math.cos(molRad(52.25))]],
+  lone:[{atom:0,dir:[0,.82,.57]},{atom:0,dir:[0,-.82,.57]}]},
+ co2:{name:'Carbon dioxide',formula:'CO2',center:'C',outer:'O',angle:180,length:32,order:2,dipole:'0 D',shape:'Linear',dirs:[[-1,0,0],[1,0,0]],
+  lone:[{atom:1,dir:[-.6,.8,0]},{atom:1,dir:[-.6,-.8,0]},{atom:2,dir:[.6,.8,0]},{atom:2,dir:[.6,-.8,0]}]},
+ methane:{name:'Methane',formula:'CH4',center:'C',outer:'H',angle:109.5,length:29,order:1,dipole:'0 D',shape:'Tetrahedral',
+  dirs:[[0,0,1],...molPyramid(Math.acos(-1/3)*180/Math.PI)],lone:[]},
+ ammonia:{name:'Ammonia',formula:'NH3',center:'N',outer:'H',angle:107,length:28,order:1,dipole:'1.47 D',shape:'Pyramidal',
+  dirs:molPyramid(107),lone:[{atom:0,dir:[0,0,1]}]}
+};
+const molAtoms = {H:{color:'#f8f5e9',radius:5.4},O:{color:'#e96750',radius:8.6},C:{color:'#5c6571',radius:8},N:{color:'#678fd2',radius:8.2}};
+const molBounds = (pts,r=0) => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))-r),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i]))+r)];
+function molBall(p,r,color,letter=''){
+ const [x,y]=P(...p), rr=r*Math.sqrt(1.5), m=matOf(color);
+ return `<circle cx="${f(x)}" cy="${f(y)}" r="${f(rr)}" fill="${m.d}"/>`
+  + `<circle cx="${f(x+rr*.1)}" cy="${f(y-rr*.12)}" r="${f(rr*.87)}" fill="${m.m}"/>`
+  + `<circle cx="${f(x+rr*.2)}" cy="${f(y-rr*.26)}" r="${f(rr*.62)}" fill="${m.l}"/>`
+  + `<circle cx="${f(x)}" cy="${f(y)}" r="${f(rr)}" fill="none" stroke="${INK}" stroke-width="1.6"/>`
+  + (letter?`<text x="${f(x)}" y="${f(y+rr*.28)}" text-anchor="middle" fill="${letter==='C'?'#fff4d6':INK}" font-size="${f(rr*.8)}" font-family="monospace" font-weight="800">${letter}</text>`:'');
+}
+function molGeometry(st){
+ const model=molModels[st.model], angle=st.spin, ct=Math.cos(angle), sn=Math.sin(angle);
+ const rotate=p=>[p[0]*ct-p[1]*sn,p[0]*sn+p[1]*ct,p[2]];
+ const stretch=st.vibrate ? 1+.045*Math.sin(st.phase) : 1;
+ const dirs=model.dirs.map(rotate), atoms=[molCenter,...dirs.map(v=>molAdd(molCenter,molScale(v,model.length*stretch)))];
+ return {model,dirs,atoms,rotate};
+}
+function molArrow(a,b,color){
+ const dir=norm(sub(b,a)), side=norm(cross(dir,Math.abs(dir[2])>.9?[1,0,0]:[0,0,1]));
+ const back=molAdd(b,molScale(dir,-3));
+ return `<path d="${pd([a,b],false)}" fill="none" stroke="${color}" stroke-width="2"/>`
+  + shape([b,molAdd(back,molScale(side,1.6)),molAdd(back,molScale(side,-1.6))],color,.4)
+  + `<path d="${pd([molAdd(a,molScale(side,-1.6)),molAdd(a,molScale(side,1.6))],false)}" fill="none" stroke="${color}" stroke-width="1.3"/>`;
+}
+function molScene(st,m){
+ const {model,dirs,atoms,rotate}=molGeometry(st), k=ease(st.xr||0), parts=[], labels=[];
+ const put=(pts,r,svg)=>parts.push({box:molBounds(pts,r),at:avg(pts),svg});
+ const label=(at,text,on=false)=>labels.push({at,text,on});
+ let svg=board(0,0,124,96,3,5,WOOD);
+ svg+=castShadow([[54,38,3],[74,58,3],...atoms],3,boardTop(0,0,124,96,3,5));
+ put([[64,48,3],[64,48,7]],13,cyl(64,48,3,7,13,m));label([64,59,7],'ROTATING PLINTH',st.rotating);
+ for(const [lo,hi] of [[7,21],[21,35],[35,49]])put([[64,48,lo],[64,48,hi]],1.5,rod([64,48,lo],[64,48,hi],1.5,METAL));
+ label([64,48,19],'SUPPORT SPINDLE');
+ put([[64,48,28],[64,48,32]],3,cyl(64,48,28,32,3,DARK));label([64,48,31],'SPINDLE SLEEVE');
+ put([[64,48,49],[64,48,51]],4,cyl(64,48,49,51,4,METAL));label([64,48,50],'CENTRAL BALL CLAMP');
+ label([110,80,3],'BENCH');
+ put([[10,10,3],[32,85,5]],0,box(10,10,3,32,85,5,m));label([11,80,5],'KIT TRAY');
+ for(const [x0,y0,x1,y1] of [[10,10,11,85],[31,10,32,85],[11,10,31,11],[11,84,31,85],[11,64,31,65]]){
+  put([[x0,y0,5],[x1,y1,8]],0,box(x0,y0,5,x1,y1,8,m));
+ }
+ label([20,64.5,8],'TRAY DIVIDER');
+ ['H','O','C','N'].forEach((el,i)=>{
+  const p=[21,18+i*13,10],a=molAtoms[el];put([p],4.5,molBall(p,4.5,a.color,el));label(p,'SPARE '+el+' BALL');
+ });
+ [72,79].forEach((y,i)=>{const a=[15,y,6.2],b=[27,y,6.2];put([a,b],1,rod(a,b,1,METAL));label(avg([a,b]),'SPARE CONNECTOR '+(i+1));});
+ atoms.forEach((p,i)=>{
+  const el=i?model.outer:model.center, a=molAtoms[el], r=a.radius;
+  put([p],r,`<g opacity="${f(1-.87*k)}">${molBall(p,r,a.color,el)}</g>`);
+  if(k>.001){
+   const [x,y]=P(...p), rr=r*1.45;
+   put([p],r*1.2,`<g opacity="${f(k)}"><circle cx="${f(x)}" cy="${f(y)}" r="${f(rr)}" fill="${a.color}" fill-opacity=".18" stroke="${a.color}" stroke-width=".8"/>${molBall(p,1.6,a.color)}</g>`);
+   label(p,el+' NUCLEUS '+i);label(molAdd(p,[0,0,r]),el+' DENSITY CLOUD '+i);
+  }
+ });
+ dirs.forEach((d,i)=>{
+  const outer=atoms[i+1], side=rotate([0,1,0]), offsets=model.order===2?[-2.3,2.3]:[0];
+  offsets.forEach((off,j)=>{
+   const shift=molScale(side,off), a=molAdd(molCenter,shift),b=molAdd(outer,shift);
+   const start=molAdd(a,molScale(d,molAtoms[model.center].radius-.3)),end=molAdd(b,molScale(d,-molAtoms[model.outer].radius+.3));
+   for(let segment=0;segment<6;segment++){
+    const p=molAdd(start,molScale(sub(end,start),segment/6)),q=molAdd(start,molScale(sub(end,start),(segment+1)/6));
+    put([p,q],1.5,`<g opacity="${f(1-.85*k)}">${rod(p,q,1.5,METAL)}</g>`);
+   }
+   if(k>.001){
+    const mid=molAdd(a,molScale(sub(b,a),model.outer==='O'?.62:.42));
+    const cloudA=molAdd(a,molScale(sub(b,a),.23)),cloudB=molAdd(a,molScale(sub(b,a),.77));
+    put([cloudA,cloudB],3.3,`<g opacity="${f(k*.3)}">${rod(cloudA,cloudB,3.3,matOf('#e7b647'),toneI,.5)}</g>`);
+    label(mid,'BOND '+(i+1)+' SHARED PAIR '+(j+1),st.vibrate);
+    [-1,1].forEach((sg,n)=>{const p=molAdd(mid,molScale(side,sg*1.25));put([p],.85,`<g opacity="${f(k)}">${molBall(p,.85,'#d39b22')}</g>`);if(model.order===1)label(p,'BOND '+(i+1)+' PAIR '+(j+1)+' E'+(n+1));});
+   }
+  });
+ });
+ if(k>.001)model.lone.forEach((lp,i)=>{
+  const origin=atoms[lp.atom],d=rotate(norm(lp.dir)),p=molAdd(origin,molScale(d,15));
+  put([origin,p],4.5,`<g opacity="${f(k*.23)}">${rod(molAdd(origin,molScale(d,4)),p,4.5,matOf('#899dcf'),toneI,.5)}</g>`);
+  label(p,'LONE PAIR '+(i+1));
+  const side=norm(cross(d,Math.abs(d[2])>.9?[1,0,0]:[0,0,1]));
+  [-1,1].forEach((sg,n)=>{const e=molAdd(p,molScale(side,sg*1.3));put([e],.9,`<g opacity="${f(k)}">${molBall(e,.9,'#6589cf')}</g>`);label(e,'LONE '+(i+1)+' ELECTRON '+(n+1));});
+ });
+ svg+=byDepth(parts);
+ const u=dirs[0],v=dirs[1],angle=Math.acos(Math.max(-1,Math.min(1,dot(u,v))));
+ const perpendicular=norm(sub(v,molScale(u,dot(u,v))));
+ const axis=Math.abs(Math.sin(angle))<.001?rotate([0,0,1]):perpendicular;
+ const arc=Array.from({length:33},(_,i)=>molAdd(molCenter,molScale(molAdd(molScale(u,Math.cos(angle*i/32)),molScale(axis,Math.sin(angle*i/32))),14)));
+ svg+=`<path d="${pd(arc,false)}" fill="none" stroke="#bb8221" stroke-width="1.3"/>`;
+ for(let i=0;i<=8;i++){
+  const d=norm(sub(arc[i*4],molCenter));svg+=line([molAdd(molCenter,molScale(d,13)),molAdd(molCenter,molScale(d,15))],.55);
+ }
+ svg+=tag(arc[16],0,15,model.angle+' DEG');
+ if(st.polarity){
+  dirs.forEach((d,i)=>{
+   const shift=molScale(rotate([0,1,0]),5),a=molAdd(molAdd(molCenter,molScale(sub(atoms[i+1],molCenter),.23)),shift),b=molAdd(molAdd(molCenter,molScale(sub(atoms[i+1],molCenter),.78)),shift);
+   svg+=model.outer==='O'?molArrow(a,b,'#ad3f55'):molArrow(b,a,st.model==='methane'?'#9d7c70':'#ad3f55');
+  });
+  if(st.model==='water'||st.model==='ammonia'){
+   const direction=norm(molScale(dirs.reduce((acc,d)=>molAdd(acc,d),[0,0,0]),-1));
+   const a=molAdd(molCenter,molScale(direction,22)),b=molAdd(molCenter,molScale(direction,36));
+   svg+=molArrow(a,b,'#ad3f55')+tag(b,15,-10,'NET DIPOLE');
+  }else svg+=tag(molAdd(molCenter,[0,0,25]),0,-15,'DIPOLES CANCEL');
+ }
+ if(k>.6){
+  const ordered=labels.sort((a,b)=>P(...a.at)[1]-P(...b.at)[1]),vb=document.getElementById('fig').viewBox.baseVal;
+  const columns=[ordered.filter((_,i)=>i%2===0),ordered.filter((_,i)=>i%2===1)];
+  const fig=document.getElementById('fig'),matrix=fig.getScreenCTM(),controls=['btns','stats'].map(id=>document.getElementById(id).getBoundingClientRect().bottom);
+  const top=matrix?Math.max(vb.height*.17,new DOMPoint(0,Math.max(...controls)+18).matrixTransform(matrix.inverse()).y):vb.height*.3;
+  columns.forEach((column,side)=>column.forEach((item,i)=>{
+   const [x,y]=P(...item.at), targetX=vb.width*(side?.88:.12),targetY=top+i*Math.min(vb.height*.042,(vb.height*.93-top)/Math.max(1,column.length-1));
+   const pill=tag(item.at,(targetX-x)/INK_K,(targetY-y)/INK_K,item.text,item.on);
+   const phone=window.LBL_U?LBL_U():0,width=phone?22.1*phone:(item.text.length*.62+1.5)*8.6*INK_K;
+   svg+=pill.replace(/d="[^"]*"/,`d="M${f(x)} ${f(y)}L${f(targetX+(side?-1:1)*width/2)} ${f(targetY)}"`);
+  }));
+ }
+ return svg;
+}
+let molLoop=false;
+function molKick(st,ui){
+ if(molLoop)return;molLoop=true;
+ ui.animate(dt=>{if(st.vibrate)st.phase+=dt*5;if(st.rotating)st.spin+=dt*.6;
+  molLoop=st.vibrate||st.rotating;return molLoop;});
+}
+const ui=mountFigure({fig:'M',title:'Molecules and bonds',turn:'full',size:[124,96,100],palette:'mint',
+ state:{model:'water',vibrate:false,rotating:false,polarity:false,phase:0,spin:0},scene:molScene,
+ stats:st=>[{label:molModels[st.model].formula,value:molModels[st.model].angle+' deg'},{label:'Net dipole',value:molModels[st.model].dipole,small:true}],
+ buttons:[
+  {label:'Molecule',choices:st=>Object.entries(molModels).map(([id,model])=>({label:model.name,current:st.model===id,onClick:st=>{st.model=id;}}))},
+  {label:'Vibrate',onClick:(st,ui)=>{st.vibrate=!st.vibrate;molKick(st,ui);}},
+  {label:'Rotate',onClick:(st,ui)=>{st.rotating=!st.rotating;molKick(st,ui);}},
+  {label:'Polarity arrows',onClick:st=>{st.polarity=!st.polarity;}}
+ ],
+ params:(st,q)=>{if(Object.hasOwn(molModels,q.get('molecule')))st.model=q.get('molecule');st.polarity=q.get('polarity')==='1';st.vibrate=q.get('vibrate')==='1';st.rotating=q.get('rotate')==='1';}
+});
+xrMount(()=>ui,()=> '');
+if(ui.st.vibrate||ui.st.rotating)molKick(ui.st,ui);
+</script></body></html>
