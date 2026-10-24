@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Optical mouse</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Optical mouse — a wired USB optical mouse on a mouse pad, on a wooden desk.
+   Scale: the mouse is 64 units long (a real one is ~115 mm, so 1 unit ~ 1.8 mm), 34 wide, 20 high.
+   Mouse frame: x = 0 at the back (palm) to 64 at the nose (buttons, cable), y = 0 down the middle (+y = the user's
+   left), z = 0 on the pad. The world is the mouse frame moved by (MX, MY, MZ).
+
+   HOW IT REALLY WORKS
+   1. A red LED (~630 nm) on the circuit board shines into the clear lens piece. Its light pipe bends the beam down
+      through the opening in the base so it grazes the desk at a low angle: every fibre and bump casts a shadow.
+   2. The imaging lens in the same clear piece focuses a ~1 mm patch of desk onto the camera sensor's tiny pixel
+      array (18x18 to 30x30 pixels), a few millimetres above the desk.
+   3. The sensor takes 1500-10000 pictures a second. Its built-in processor compares each picture with the last one,
+      finds the shift that makes them line up (correlation), and turns it into dx, dy counts (~1000 counts per inch).
+   4. The USB controller chip reads the counts and the switches and sends reports over the 4-wire cable
+      (red +5 V, white D-, green D+, black ground). A crystal keeps its USB clock. The cursor moves by the counts.
+   5. Click: the button is a flexible tongue of the top shell hinged at the back; a stalk under it presses the
+      plunger of a microswitch on the board, which snaps shut with the click you hear and feel.
+   6. Lift: the lens is focused on the desk. A couple of millimetres up the picture blurs and dims, there is no
+      detail left to match, and the sensor stops reporting motion (lift-off detection), so the cursor stays put.
+   7. Scroll wheel: a rubber tyre on an axle in a bracket. A slotted encoder disk on the axle chops the beam between
+      an IR emitter and an IR detector; a detent spring gives the steps; the bracket rocks down on a middle switch.
+
+   PARTS (held by)
+   CASE        top shell . left button . right button (tongues of the shell, hinge across them) . rubber side
+               grips . base plate . glide feet (PTFE, on the base) . screw post (base, shell screwed to it)
+   OPTICS      red LED (board) . lens piece = light pipe + imaging lens (sits in the base opening) . aperture
+               (opening in the base) . camera sensor (soldered to the board over the board's hole) . sensor clip
+   BOARD       circuit board (on two screw posts, PCB screws) . USB controller chip . crystal . capacitors .
+               resistor . cable header . board traces
+   BUTTONS     two button stalks (under the buttons) . left / right microswitches with plungers (board)
+   WHEEL       tyre . axle . two brackets (board) . encoder disk (axle) . IR emitter + IR detector (board) .
+               detent spring (bracket) . middle switch under the bracket's arm (board)
+   CABLE       strain relief (in the nose) . USB cable to a desk grommet . four USB wires to the header */
+
+const MSL = 64, ZB = 1, HPK = 20, SE = 2.6;                   // length, underside of the shell, peak height, section roundness
+const DESK = [0, 0, 104, 72], DESK_H = 3;
+const PADR = [4, 5, 94, 67], PAD_T = 3.8;                      // mouse pad on the desk, its top
+const HOME = [16, 36], GROM = [98.5, 8], LIFT = 8, CPI_U = 70;  // where the mouse rests; desk grommet; lift height; counts per unit
+const ZR = 5.4;                                                // height of the cable at the nose
+const GRIP = matOf('#77716a'), GRIPD = matOf('#4c4845'), RUBBER = matOf('#4a4542'), PTFE = matOf('#f4f2ec');
+const PCBM = matOf('#3f8a58'), CHIPM = matOf('#3a3633'), WHITEP = matOf('#eee9dd'), LEDM = matOf('#ff4a3d'), PLUNG = matOf('#e0503f');
+const SENS = [34, 0];                                          // camera sensor / lens axis in the mouse frame
+
+/* ---------- the shell: sections across x, each a flat-bottomed superellipse ---------- */
+const msS = x => (x - 32) / 32;
+const msHW = x => { const s = Math.min(1, Math.abs(msS(x))), b = 15.5 - .6*msS(x); return b * Math.pow(Math.max(0, 1 - Math.pow(s, 3.2)), 1/3.2); };
+const msH = x => { const s = msS(x), d = (s + .2) / (s > -.2 ? 1.35 : .92);
+  return ZB + (HPK - ZB) * Math.sqrt(Math.max(0, 1 - d*d)) * Math.pow(Math.max(0, 1 - Math.pow(Math.abs(s), 4)), 1/4); };
+const msTop = (x, y) => { const w = msHW(x), a = Math.min(1, Math.abs(y) / Math.max(w, 1e-6));
+  return ZB + (msH(x) - ZB) * Math.pow(Math.max(0, 1 - Math.pow(a, SE)), 1/SE); };
+const XS = [0, .25, .8, 1.8, 3.2, 5, 7.5, 10.5, 14, 18, 22, 26, 30, 34, 38, 42, 46, 50, 53.5, 56.5, 59, 61, 62.5, 63.4, 63.85, 64];
+const TS = [0, .04, .09, .15, .22, .29, .36, .43, .5, .57, .64, .71, .78, .85, .91, .96, 1];
+const IH = XS.indexOf(38);                                     // the buttons' hinge line
+const GRID = XS.map(x => { const w = msHW(x), h = msH(x); return TS.map(t => { const a = t*Math.PI, c = Math.cos(a), s = Math.sin(a);
+  return [x, -w*Math.sign(c)*Math.pow(Math.abs(c), 2/SE), ZB + (h - ZB)*Math.pow(Math.abs(s), 2/SE)]; }); });
+// scroll wheel: centre, radius, half width; it stands 2.6 above the shell
+const WX = 50.5, WR = 5.2, WW = 2, ZW = msTop(WX, 0) + 2.6 - WR;
+
+let MX = HOME[0], MY = HOME[1], MZ = 0;
+const wp = (x, y, z) => [MX + x, MY + y, MZ + z];
+const msF2 = v => v.toFixed(2);
+const msBoxOf = (pts, r = 0) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - r), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + r)];
+const dzL = (st, x) => -st.press * .9 * Math.max(0, x - 38) / 26;          // the left button flexes down from its hinge
+
+function msBody(st, m){
+  const nI = XS.length - 1, nJ = TS.length - 1, ctr = wp(32, 0, 7);
+  const kind = (i, j) => j < 4 || j >= 12 ? 'grip' : i < IH ? 'shell' : j >= 8 ? 'left' : 'right';
+  const vtx = (i, j, low) => { const [x, y, z] = GRID[i][j]; return wp(x, y, z + (low ? dzL(st, x) : 0)); };
+  const quad = (i, j, low) => [vtx(i, j, low), vtx(i+1, j, low), vtx(i+1, j+1, low), vtx(i, j+1, low)];
+  const nrm = q => { let n = norm(cross(sub(q[2], q[0]), sub(q[3], q[1]))); if (dot(n, sub(avg(q), ctr)) < 0) n = n.map(v => -v); return n; };
+  let under = '', btn = '', rest = '', far = '';
+  const seen = {}, pts = [];
+  for (let i = 0; i < nI; i++) for (let j = 0; j < nJ; j++){
+    const kd = kind(i, j), low = kd === 'left', q = quad(i, j, low), n = nrm(q);
+    pts.push(...q);
+    if (!vis(n)){ far += face(pd(q), mix(toneI(n.map(v => -v), kd === 'grip' ? GRIP : m), '#f2efe7', .55)); continue; }
+    seen[i + ',' + j] = 1;
+    const c = face(pd(q), tone(n, kd === 'grip' ? GRIP : m));
+    if (low){ btn += c; if (st.press > .01){ const q0 = quad(i, j, false); under += face(pd(q0), '#2a2522'); } }
+    else rest += c;
+  }
+  // seams: grip edge all along, the buttons' outer edges and the gap between them, the hinge
+  let seam = '';
+  const sv = (i, j) => seen[i + ',' + j];
+  for (let i = 0; i < nI; i++) for (const j of [4, 8, 12]){
+    if (j === 8 && (i < IH || (XS[i] >= 42 && XS[i+1] <= 57))) continue;
+    if (!(sv(i, j - 1) || sv(i, j))) continue;
+    const low = j === 8 && i >= IH;
+    seam += pd([vtx(i, j, low), vtx(i+1, j, low)], false);
+  }
+  for (let j = 4; j < 12; j++) if (sv(IH - 1, j) || sv(IH, j)) seam += pd([vtx(IH, j, false), vtx(IH, j+1, false)], false);
+  let s = under + act('btn', btn) + rest + `<path d="${seam}" fill="none" stroke="${INK}" stroke-width=".9" stroke-linecap="round"/>`;
+  // the wheel's opening between the buttons, then the tyre standing out of it
+  const gz = (msTop(WX + .5, 0) - msTop(WX - .5, 0)), slotN = norm([-gz, 0, 1]);
+  if (vis(slotN)){
+    const edge = []; for (let x = 44; x <= 57; x += 1) edge.push([x, -2.8]); for (let x = 57; x >= 44; x -= 1) edge.push([x, 2.8]);
+    s += shape(edge.map(([x, y]) => wp(x, y, msTop(x, y) + .06 + (y > 0 ? dzL(st, x) : 0))), '#25211e', 1);
+    s += msWheelOut(st);
+  }
+  return { svg: s, far, pts };
+}
+
+// the part of the tyre above the shell (closed view)
+function msWheelOut(st){
+  const n = 30, ring = y => Array.from({length: n}, (_, i) => { const a = i/n*2*Math.PI, x = WX + WR*Math.cos(a), z = ZW + WR*Math.sin(a);
+    return wp(x, y, Math.max(z, msTop(x, 0) - .3)); });
+  const A = ring(-WW), B = ring(WW);
+  let s = loft(A, B, nr => toneI(nr, RUBBER));
+  const capN = vis([0,1,0]) ? [0,1,0] : [0,-1,0], cap = capN[1] > 0 ? B : A;
+  s += shape(cap, toneI(capN, RUBBER), .8);
+  let rd = '';
+  for (let kk = 0; kk < 18; kk++){ const a = st.wheelA + kk/18*2*Math.PI, x = WX + (WR + .03)*Math.cos(a), z = ZW + (WR + .03)*Math.sin(a);
+    if (z > msTop(x, 0) + .25 && vis([Math.cos(a), 0, Math.sin(a)])) rd += pd([wp(x, -WW + .3, z), wp(x, WW - .3, z)], false); }
+  return s + `<path d="${rd}" fill="none" stroke="${INK}" stroke-width=".7" opacity=".7"/>` + hullInk([...A, ...B], 1.2);
+}
+
+/* ---------- small helpers in the mouse frame ---------- */
+const lcyl = (x, y, z0, z1, r, m, w = .7, n = 16) => cyl(MX + x, MY + y, MZ + z0, MZ + z1, r, m, toneI, w, n);
+const lrod = (a, b, r, m, w = .7, r1 = r) => rod(wp(...a), wp(...b), r, m, toneI, w, r1);
+// plan outline of the shell between xa and xb, pulled in by d (optionally cut to ya..yb)
+const msOutline = (xa, xb, d, ya = -99, yb = 99) => { const xs = []; for (let x = xa; x < xb - .3; x += 1.5) xs.push(x); xs.push(xb);
+  return [...xs.map(x => [x, Math.max(ya, -(msHW(x) - d))]), ...xs.slice().reverse().map(x => [x, Math.min(yb, msHW(x) - d)])]; };
+// a flat slab on a plan outline, with holes (each with its far inner wall showing through)
+function msSlab(uv, z0, z1, m, w = .8, holes = []){
+  const at = (p, z) => p.map(([x, y]) => wp(x, y, z)), A = at(uv, z0), B = at(uv, z1);
+  let s = loft(A, B, n => toneI(n, m));
+  for (const h of holes) s += loft(at(h, z0), at(h, z1), n => toneI(n, m), true);
+  s += fill(pd(B) + holes.map(h => pd(at(h, z1))).join(''), toneI([0,0,1], m), 'fill-rule="evenodd"');
+  return s + ink(pd(B), w) + holes.map(h => ink(pd(at(h, z1)), w*.8)).join('') + hullInk([...A, ...B], w*1.3);
+}
+// a wire in short pieces so it sorts with the solids around it
+function msWire(pts, col, r = .22, seg = 2.5){
+  const q = [];
+  for (let i = 0; i < pts.length - 1; i++){ const a = pts[i], b = pts[i+1], n = Math.max(1, Math.ceil(Math.hypot(b[0]-a[0], b[1]-a[1], b[2]-a[2]) / seg));
+    for (let t = 0; t < n; t++) q.push(a.map((v, kk) => v + (b[kk] - v)*t/n)); }
+  q.push(pts[pts.length - 1]);
+  const out = [];
+  for (let i = 0; i < q.length - 1; i++){ const sg = [wp(...q[i]), wp(...q[i+1])], d = pd(sg, false);
+    out.push({ box: msBoxOf(sg, r), svg: `<path d="${d}" fill="none" stroke="${INK}" style="stroke-width:${msF2(2*r + 1.1*INK_K)}" stroke-linecap="butt"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" style="stroke-width:${msF2(2*r)}" stroke-linecap="round"/>` }); }
+  return out;
+}
+// offset a path sideways (in plan) by o, for wires laid side by side
+function msSide(pts, o){
+  return pts.map((p, i) => { const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)], dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1;
+    return [p[0] - dy/l*o, p[1] + dx/l*o, p[2]]; });
+}
+// a chip with legs down both long sides (legs on the far side first, then the body, then the near legs)
+function msChip(x0, y0, x1, y1, z0, z1, m, nLeg){
+  const legs = side => { let s = ''; const y = side > 0 ? y1 : y0;
+    for (let i = 0; i < nLeg; i++){ const x = x0 + (x1 - x0)*(i + .5)/nLeg;
+      s += box(...wp(x - .25, Math.min(y, y + side*.6), z0 - .5), ...wp(x + .25, Math.max(y, y + side*.6), z0 + .5), METAL, toneI, .4); }
+    return s; };
+  const near = CAM_V[1] >= 0 ? 1 : -1;
+  return legs(-near) + box(...wp(x0, y0, z0), ...wp(x1, y1, z1), m, toneI, .8) + legs(near);
+}
+
+/* ---------- sorting many small parts: only pairs that overlap on screen are ordered (box separation first, then
+   depth), then a topological sort; a plain sort with that rule is not transitive and misplaces whole layers ---------- */
+function msSort(parts){
+  parts = parts.filter(Boolean);
+  const n = parts.length, sb = parts.map(p => { const xs = [], ys = [];
+    for (const x of [p.box[0][0], p.box[1][0]]) for (const y of [p.box[0][1], p.box[1][1]]) for (const z of [p.box[0][2], p.box[1][2]]){ const q = P(x, y, z); xs.push(q[0]); ys.push(q[1]); }
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; });
+  const dep = parts.map(p => depthOf(boxMid(p.box))), after = parts.map(() => []), need = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++){
+    const a = sb[i], b = sb[j]; if (a[2] <= b[0] || b[2] <= a[0] || a[3] <= b[1] || b[3] <= a[1]) continue;
+    const o = sepOrder(parts[i], parts[j]) || (dep[i] - dep[j]);
+    if (o < 0){ after[i].push(j); need[j]++; } else if (o > 0){ after[j].push(i); need[i]++; } }
+  const done = new Array(n).fill(false), out = [];
+  for (let c = 0; c < n; c++){
+    let pick = -1; for (let i = 0; i < n; i++) if (!done[i] && !need[i] && (pick < 0 || dep[i] < dep[pick])) pick = i;
+    if (pick < 0) for (let i = 0; i < n; i++) if (!done[i] && (pick < 0 || dep[i] < dep[pick])) pick = i;   // a loop: nearest-last wins
+    done[pick] = true; out.push(parts[pick].svg); for (const j of after[pick]) need[j]--; }
+  return out.join('');
+}
+
+/* ---------- see-through: the real insides ---------- */
+const NUDGES = [[1.4, -.9], [-1.6, .7], [.4, 1.3], [-.3, -1.1]];
+function msMech(st, k){
+  // layers from the bottom up (feet, base plate, under the board, the board); everything above the board is sorted
+  const layers = [[], [], [], []], parts = [], put = (b, svg, ly = 4) => (ly < 4 ? layers[ly] : parts).push({ box: [wp(...b[0]), wp(...b[1])], svg });
+  const bx = (x0, y0, z0, x1, y1, z1, m, w = .7) => put([[x0, y0, z0], [x1, y1, z1]], box(...wp(x0, y0, z0), ...wp(x1, y1, z1), m, toneI, w));
+  const moving = st.slide != null || st.nudge != null, tracking = st.lift < 1, pressed = st.press > .3;
+  const m = PALS[st.pal], shellIn = { l: m.m, m: m.d, d: mix(m.d, '#000000', .3) };
+  // ---- base: glide feet under it, the base plate with its opening, the screw post for the top shell
+  for (const [xa, xb, ya, yb] of [[52, 61, 3.5, 99], [52, 61, -99, -3.5], [3, 10, -8, 8]])
+    put([[xa, -14, 0], [xb, 14, ZB]], msSlab(msOutline(xa, xb, .8, ya, yb), 0, ZB, PTFE, .6), 0);
+  const OPEN = rrUV(26, -5, 42, 5, 3, 4);
+  put([[.8, -16, ZB], [63.2, 16, 2.2]], msSlab(msOutline(.8, 63.2, .6), ZB, 2.2, GRIPD, .9, [OPEN]), 1);
+  put([[4.4, -1.6, 2.2], [7.6, 1.6, 5.5]], lcyl(6, 0, 2.2, 5.5, 1.6, shellIn, .8), 2);
+  put([[4.4, -1.6, 5.5], [7.6, 1.6, msTop(6, 0) - 1.2]], lcyl(6, 0, 5.5, msTop(6, 0) - 1.2, 1.6, shellIn, .8));
+  // ---- the lens piece: clear flange over the opening, imaging lens under the sensor, light pipe rising to the LED
+  { let s = `<g opacity=".78">` + box(...wp(23, -5.5, 2.2), ...wp(43, 5.5, 3.9), CLEAR, toneI, .7) + lcyl(SENS[0], SENS[1], 3.9, 4.5, 1.8, CLEAR, .6) + `</g>`;
+    // the light inside it: down the pipe and out at a low angle to the desk, back up through the lens
+    s += `<path d="${pd([wp(25, 0, 4.5), wp(25, 0, 3.3), wp(28, 0, 2.2)], false)}" fill="none" stroke="#ff3b2f" style="stroke-width:${msF2(1.1)}" opacity=".45" stroke-linecap="round" stroke-linejoin="round"/>`;
+    put([[23, -5.5, 2.2], [43, 5.5, 4.5]], s, 2); }
+  put([[23.2, -1.8, 5.5], [26.8, 1.8, 8.6]], `<g opacity=".78">` + box(...wp(23.2, -1.8, 4.5), ...wp(26.8, 1.8, 8.6), CLEAR, toneI, .7) + `</g>`
+    + `<path d="${pd([wp(23.4, 0, 7.5), wp(25, 0, 7.5), wp(25, 0, 4.6)], false)}" fill="none" stroke="#ff3b2f" style="stroke-width:${msF2(1.1)}" opacity=".5" stroke-linecap="round" stroke-linejoin="round"/>`);
+  // ---- the circuit board, with its hole for the lens piece, screwed to the base
+  const HOLE = rrUV(22.5, -3.6, 40, 3.6, 1.2, 3);
+  let tr = '';
+  for (const t of [[[16, 5], [16, 2.6], [14.5, 1.2]], [[13, 5], [12, 3], [12, -7.5]], [[42, -8.5], [42, -6.2], [46.5, -6.2], [48.5, -4]],
+                   [[56.5, 5.5], [54.5, 3.6], [53, 3.6]], [[56.5, -5.5], [54.5, -3.4], [53, -3.4]], [[20.8, 7.5], [22.5, 5.6], [29, 5.6]]])
+    tr += pd(t.map(([x, y]) => wp(x, y, 5.52)), false);
+  put([[10, -14, 4.5], [61, 14, 5.5]], msSlab(msOutline(10, 61, 2.2), 4.5, 5.5, PCBM, .8, [HOLE])
+    + `<path d="${tr}" fill="none" stroke="#d6b45a" stroke-width=".8" stroke-linecap="round" stroke-linejoin="round" opacity=".9"/>`, 3);
+  for (const y of [9.2, -9.2]) put([[22.9, y - 1.1, 5.5], [25.1, y + 1.1, 6.2]], lcyl(24, y, 5.5, 6.2, 1.1, METAL, .6)
+    + line([wp(23.3, y, 6.22), wp(24.7, y, 6.22)], .6));
+  // ---- optics on the board: red LED lying in its legs, aimed into the light pipe; the camera sensor over the hole
+  { let s = line([wp(16, .6, 7.5), wp(14.5, .6, 7.5), wp(14.5, .6, 5.5)], .9) + line([wp(16, -.6, 7.5), wp(14.5, -.6, 7.5), wp(14.5, -.6, 5.5)], .9);
+    s += lrod([16, 0, 7.5], [16.5, 0, 7.5], 1.65, LEDM, .7) + lrod([16.5, 0, 7.5], [20.6, 0, 7.5], 1.35, LEDM, .8) + lrod([20.6, 0, 7.5], [22.2, 0, 7.5], 1.35, LEDM, .8, .45);
+    { const [X, Y] = P(...wp(21.6, 0, 7.5)); s += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(3.2)}" fill="#ff5a40" opacity=".28"/><circle cx="${f(X)}" cy="${f(Y)}" r="${f(1.6)}" fill="#ffd2c4" opacity=".7"/>`; }
+    put([[14.3, -1.7, 5.5], [22.3, 1.7, 9.2]], s); }
+  put([[30, -4.8, 5.5], [38, 4.8, 8.2]], msChip(30, -4, 38, 4, 6, 8.2, CHIPM, 4));
+  bx(33.3, -4.6, 8.2, 34.7, 4.6, 8.55, METAL, .5);                                                   // sensor clip strap
+  for (const s of [1, -1]) bx(33.3, s > 0 ? 4.6 : -5, 5.5, 34.7, s > 0 ? 5 : -4.6, 8.55, METAL, .5);  // its legs through the board
+  // ---- USB controller, crystal, capacitors, resistor, cable header
+  put([[12, 4.4, 5.5], [19, 11.6, 6.6]], msChip(12, 5, 19, 11, 6, 6.6, CHIPM, 5));
+  put([[12, -10.5, 5.5], [16.5, -7.5, 7]], box(...wp(12.6, -10.5, 5.5), ...wp(15.9, -7.5, 7), METAL, toneI, .7)
+    + lcyl(12.6, -9, 5.5, 7, 1.5, METAL, .6) + lcyl(15.9, -9, 5.5, 7, 1.5, METAL, .6));
+  bx(20, 7, 5.5, 21.6, 8, 6.3, matOf('#c39463'), .5);
+  bx(20, -5.2, 5.5, 21.6, -4.2, 6.3, matOf('#c39463'), .5);
+  bx(18, -6.2, 5.5, 19.8, -5.4, 6.1, CHIPM, .5);
+  put([[40, -12, 5.5], [44, -8.5, 7.6]], box(...wp(40, -12, 5.5), ...wp(44, -8.5, 7.6), WHITEP, toneI, .7)
+    + (vis([0,0,1]) ? [40.6, 41.5, 42.5, 43.4].map(x => shape([wp(x - .3, -9.6, 7.62), wp(x + .3, -9.6, 7.62), wp(x + .3, -8.8, 7.62), wp(x - .3, -8.8, 7.62)], '#3a3633', .3)).join('') : ''));
+  // ---- the USB wires from the strain relief to the header
+  const route = [[61, 0, 6.3], [56, 0, 6.3], [52.8, 0, 6.2], [47, -2.2, 6.2], [44.4, -6, 6.2], [43, -8.2, 6.2]];
+  ['#d8443a', '#f4f1e8', '#3f9a55', '#2b2826'].forEach((c, i) => parts.push(...msWire(msSide(route, (i - 1.5)*.48), c, .2)));
+  put([[60.5, -.9, ZR - .9], [63.4, .9, ZR + .9]], lrod([60.6, 0, ZR], [63.4, 0, ZR], .9, GRIPD, .6));
+  // ---- buttons: a stalk under each presses its microswitch's plunger
+  for (const sd of [1, -1]){
+    const y = 7.5*sd, dz = sd > 0 ? dzL(st, 57) : 0, bot = 8.75 + dz, ptop = Math.min(8.6, bot), inner = msTop(57, y) - 1.3 + dz;
+    bx(54.5, y - 2, 5.5, 59.5, y + 2, 7.8, CHIPM, .7);
+    put([[56.2, y - .8, 7.8], [57.8, y + .8, ptop]], lcyl(57, y, 7.8, ptop, .8, PLUNG, .5, 12));
+    bx(56.3, y - .7, bot, 57.7, y + .7, inner, shellIn, .6);
+  }
+  // ---- scroll wheel: axle in two brackets, tyre, encoder disk between an IR emitter and detector, detent spring
+  bx(48.8, 4, 5.5, 52.2, 5.5, ZW + 1.2, WHITEP, .6);
+  bx(48.8, -9.9, 5.5, 52.2, -8.6, ZW + 1.2, WHITEP, .6);
+  bx(49.5, 5.5, 8.3, 51.5, 7.8, 8.9, WHITEP, .5);                                                   // bracket arm over the middle switch
+  bx(47, 5.8, 5.5, 53, 9.4, 7.6, CHIPM, .6);
+  put([[49.4, 6.8, 7.6], [51, 8.4, 8.3]], lcyl(50.2, 7.6, 7.6, 8.3, .7, PLUNG, .5, 12));
+  for (const [ya, yb] of [[2, 4], [-5.6, -2], [-8.6, -6.2]]) put([[WX - .6, ya, ZW - .6], [WX + .6, yb, ZW + .6]], lrod([WX, ya, ZW], [WX, yb, ZW], .55, METAL, .5));
+  { let s = lrod([WX, -WW, ZW], [WX, WW, ZW], WR, RUBBER, 1);
+    const capY = vis([0,1,0]) ? WW + .02 : -WW - .02;
+    s += shape(on(PY(MY + capY), ellUV(MX + WX, MZ + ZW, 3.1, 3.1, 20)), '#8b8580', .6);
+    let rd = ''; for (let kk = 0; kk < 18; kk++){ const a = st.wheelA + kk/18*2*Math.PI;
+      if (vis([Math.cos(a), 0, Math.sin(a)])) rd += pd([wp(WX + (WR + .03)*Math.cos(a), -WW + .3, ZW + (WR + .03)*Math.sin(a)), wp(WX + (WR + .03)*Math.cos(a), WW - .3, ZW + (WR + .03)*Math.sin(a))], false); }
+    put([[WX - WR, -WW, ZW - WR], [WX + WR, WW, ZW + WR]], s + `<path d="${rd}" fill="none" stroke="${INK}" stroke-width=".7" opacity=".7"/>`); }
+  { let s = lrod([WX, -6.2, ZW], [WX, -5.6, ZW], 4, WHITEP, .7);
+    const yc = vis([0,1,0]) ? -5.58 : -6.22; let sl = '';
+    for (let kk = 0; kk < 12; kk++){ const a = st.wheelA*1 + kk/12*2*Math.PI, c = Math.cos(a), sn = Math.sin(a), t = .22;
+      sl += pd([[3, -t], [3.8, -t], [3.8, t], [3, t]].map(([r, o]) => wp(WX + r*c - o*sn, yc, ZW + r*sn + o*c))); }
+    put([[WX - 4, -6.2, ZW - 4], [WX + 4, -5.6, ZW + 4]], s + fill(sl, '#3a3633')); }
+  bx(49.3, -5.2, 5.5, 51.7, -3.8, 11.2, matOf('#9cc8e6'), .6);
+  bx(49.3, -8.1, 5.5, 51.7, -6.7, 11.2, matOf('#454a52'), .6);
+  parts.push(...msWire([[52.2, 4.6, 8.5], [55.6, 3.4, 9.5], [54.2, 2.15, 11.2]], '#cfd6d8', .16, 1.5));
+  const items = [
+    { at: wp(16, 0, msTop(16, 0)), text: 'TOP SHELL', on: false },
+    { at: wp(24, msHW(24) - .3, 4.5), text: 'SIDE GRIP', on: false },
+    { at: wp(54, 7, msTop(54, 7) + dzL(st, 54)), text: 'LEFT BUTTON', on: pressed },
+    { at: wp(54, -7, msTop(54, -7)), text: 'RIGHT BUTTON', on: false },
+    { at: wp(38, -4, msTop(38, -4)), text: 'BUTTON HINGE', on: pressed },
+    { at: wp(57, -7.5, 10.4), text: 'BUTTON STALK', on: false },
+    { at: wp(57, 7.5, 8.2), text: 'PLUNGER', on: pressed },
+    { at: wp(59.5, 9.5, 6.6), text: 'LEFT SWITCH', on: pressed },
+    { at: wp(59.5, -9.5, 6.6), text: 'RIGHT SWITCH', on: false },
+    { at: wp(47, 9.4, 6.6), text: 'MIDDLE SWITCH', on: false },
+    { at: wp(WX, WW, ZW + 3.5), text: 'SCROLL WHEEL', on: false },
+    { at: wp(WX, 3.2, ZW), text: 'WHEEL AXLE', on: false },
+    { at: wp(52.2, -9.3, 9), text: 'WHEEL BRACKET', on: false },
+    { at: wp(55.6, 3.4, 9.5), text: 'DETENT SPRING', on: false },
+    { at: wp(WX, -5.6, ZW + 3.4), text: 'ENCODER DISK', on: false },
+    { at: wp(51.7, -4.5, 10.4), text: 'IR EMITTER', on: false },
+    { at: wp(51.7, -7.4, 10.4), text: 'IR DETECTOR', on: false },
+    { at: wp(13, -12, 5.5), text: 'CIRCUIT BOARD', on: false },
+    { at: wp(24, 9.2, 6.2), text: 'PCB SCREW', on: false },
+    { at: wp(19, 0, 8.85), text: 'RED LED', on: moving && tracking },
+    { at: wp(25, 1.8, 8.3), text: 'LIGHT PIPE', on: moving && tracking },
+    { at: wp(39.5, 2.5, 3.9), text: 'LENS', on: moving && tracking },
+    { at: wp(28.5, 3.5, 2.2), text: 'APERTURE', on: false },
+    { at: wp(36, -4, 8.2), text: 'CAMERA SENSOR', on: moving && tracking },
+    { at: wp(34, 4.6, 8.55), text: 'SENSOR CLIP', on: false },
+    { at: wp(15.5, 8, 6.6), text: 'USB CHIP', on: (moving && tracking) || pressed },
+    { at: wp(14, -7.5, 7), text: 'CRYSTAL', on: false },
+    { at: wp(20.8, 7.5, 6.3), text: 'CAPACITOR', on: false },
+    { at: wp(18.9, -5.8, 6.1), text: 'RESISTOR', on: false },
+    { at: wp(40, -10.2, 7.6), text: 'CABLE HEADER', on: false },
+    { at: wp(47, -2.2, 6.4), text: 'USB WIRES', on: (moving && tracking) || pressed },
+    { at: wp(66, msHW(64) + 1.4, ZR + 1.2), text: 'STRAIN RELIEF', on: false },
+    { at: wp(10, -msHW(10) + .8, 2.2), text: 'BASE PLATE', on: false },
+    { at: wp(57, msHW(57) - .8, .3), text: 'GLIDE FEET', on: moving && tracking },
+    { at: wp(6, 0, msTop(6, 0) - 1.2), text: 'SCREW POST', on: false },
+  ];
+  return { svg: layers.map(msSort).join('') + msSort(parts), items };
+}
+
+/* ---------- the desk patch the camera sees ---------- */
+const msHash = (i, j) => { let h = (i*374761393 + j*668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+const msNoise = (x, y) => { const i = Math.floor(x), j = Math.floor(y), u = x - i, v = y - j, su = u*u*(3 - 2*u), sv = v*v*(3 - 2*v);
+  const a = msHash(i, j), b = msHash(i + 1, j), c = msHash(i, j + 1), d = msHash(i + 1, j + 1); return a + (b - a)*su + (c - a)*sv + (a - b - c + d)*su*sv; };
+const msTex = (x, y) => .62*msNoise(x*1.4, y*1.4) + .38*msNoise(x*3.1 + 17, y*3.1 + 5);
+const FN = 14, FPITCH = .42, OFF9 = [[0,0],[1,0],[-1,0],[0,1],[0,-1],[.7,.7],[-.7,.7],[.7,-.7],[-.7,-.7]];
+// one picture: rows run back along the mouse (forward is up), columns to the mouse's right; lifting blurs and dims it
+function msFrame(pos, lift){
+  const blur = lift*.34, con = 1/(1 + lift*.7), lit = 1/(1 + lift*.1), out = [];
+  for (let r = 0; r < FN; r++){ const row = [];
+    for (let c = 0; c < FN; c++){ const X = pos[0] - (r - FN/2 + .5)*FPITCH, Y = pos[1] - (c - FN/2 + .5)*FPITCH;
+      let v = 0; if (blur < .02) v = msTex(X, Y); else { for (const [a, b] of OFF9) v += msTex(X + a*blur, Y + b*blur); v /= 9; }
+      row.push(Math.max(0, Math.min(1, (.5 + (v - .5)*2*con)*lit))); }
+    out.push(row); }
+  return out;
+}
+// the shift that lines the new picture up with the old one: B(c, r) = A(c + ux, r + uy)
+function msMatch(A, B){
+  let best = null;
+  for (let uy = -5; uy <= 5; uy++) for (let ux = -5; ux <= 5; ux++){ let e = 0, n = 0;
+    for (let r = 0; r < FN; r++){ const r2 = r + uy; if (r2 < 0 || r2 >= FN) continue;
+      for (let c = 0; c < FN; c++){ const c2 = c + ux; if (c2 < 0 || c2 >= FN) continue; e += Math.abs(B[r][c] - A[r2][c2]); n++; } }
+    e /= n; if (!best || e < best.e) best = { ux, uy, e }; }
+  const all = B.flat(), mu = all.reduce((a, v) => a + v, 0)/all.length, sd = Math.sqrt(all.reduce((a, v) => a + (v - mu)*(v - mu), 0)/all.length);
+  best.ok = sd > .07; return best;
+}
+const msSensorPos = st => [HOME[0] + st.off[0] + SENS[0], HOME[1] + st.off[1] + SENS[1]];
+
+// the two pictures side by side, on a card at the lower left, with a leader to the camera
+function msPanel(st){
+  const k = INK_K, vb = document.getElementById('fig').viewBox.baseVal, cs = 4.6*k, gw = FN*cs, pad = 6*k, gap = 20*k;
+  const pw = pad*2 + gw*2 + gap, ph = pad*2 + gw, x0 = vb.x + 4*k, y0 = vb.y + vb.height - ph - 4*k;
+  const A = msFrame(st.fa, st.fla), B = msFrame(st.fb, st.flb), mt = msMatch(A, B);
+  const grid = (F, gx) => { let s = ''; for (let r = 0; r < FN; r++) for (let c = 0; c < FN; c++)
+    s += `<rect x="${f(gx + c*cs)}" y="${f(y0 + pad + r*cs)}" width="${f(cs + .05)}" height="${f(cs + .05)}" fill="${mix('#1f0806', '#ff7c5e', F[r][c])}"/>`;
+    return s + `<rect x="${f(gx)}" y="${f(y0 + pad)}" width="${f(gw)}" height="${f(gw)}" fill="none" stroke="${INK}" stroke-width="1.2"/>`; };
+  const ax = x0 + pad, bx2 = x0 + pad + gw + gap, my2 = y0 + pad + gw/2;
+  const [SX, SY] = P(...wp(SENS[0], SENS[1], st.lift > 0 ? 0 : 2.2));
+  let s = `<path d="M${f(x0 + pw)} ${f(y0 + ph*.3)}L${f(SX)} ${f(SY)}" fill="none" stroke="${INK}" stroke-width="1"/><circle cx="${f(SX)}" cy="${f(SY)}" r="${f(1.4*k)}" fill="${INK}"/>`;
+  s += `<rect x="${f(x0 + 2*k)}" y="${f(y0 + 2*k)}" width="${f(pw)}" height="${f(ph)}" rx="${f(5*k)}" fill="${INK}"/>`
+    + `<rect x="${f(x0)}" y="${f(y0)}" width="${f(pw)}" height="${f(ph)}" rx="${f(5*k)}" fill="#f2efe7" stroke="${INK}" stroke-width="1.5"/>`;
+  s += grid(A, ax) + grid(B, bx2);
+  // between them: an arrow (this picture, then the next)
+  const g0 = ax + gw + 5*k, g1 = bx2 - 5*k;
+  s += `<path d="M${f(g0)} ${f(my2)}L${f(g1)} ${f(my2)}M${f(g1 - 3.5*k)} ${f(my2 - 3*k)}L${f(g1)} ${f(my2)}L${f(g1 - 3.5*k)} ${f(my2 + 3*k)}" fill="none" stroke="${INK}" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>`;
+  if (mt.ok){
+    // where the old picture sits in the new one once they line up, and which way the mouse moved
+    const rx0 = Math.max(bx2, bx2 - mt.ux*cs), rx1 = Math.min(bx2 + gw, bx2 - mt.ux*cs + gw), ry0 = Math.max(y0 + pad, y0 + pad - mt.uy*cs), ry1 = Math.min(y0 + pad + gw, y0 + pad - mt.uy*cs + gw);
+    s += `<rect x="${f(rx0)}" y="${f(ry0)}" width="${f(rx1 - rx0)}" height="${f(ry1 - ry0)}" fill="none" stroke="#fff4d6" stroke-width="1.3" stroke-dasharray="${f(2.5*k)} ${f(2*k)}"/>`;
+    const cx = bx2 + gw/2, cy = my2, ex = cx + mt.ux*cs*1.6, ey = cy + mt.uy*cs*1.6, l = Math.hypot(ex - cx, ey - cy);
+    if (l > 1e-3){ const ux = (ex - cx)/l, uy = (ey - cy)/l;
+      s += `<path d="M${f(cx)} ${f(cy)}L${f(ex)} ${f(ey)}M${f(ex - ux*3.5*k - uy*2.6*k)} ${f(ey - uy*3.5*k + ux*2.6*k)}L${f(ex)} ${f(ey)}L${f(ex - ux*3.5*k + uy*2.6*k)} ${f(ey - uy*3.5*k - ux*2.6*k)}" fill="none" stroke="#fff4d6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`; }
+    else s += `<circle cx="${f(cx)}" cy="${f(cy)}" r="${f(1.6*k)}" fill="#fff4d6"/>`;
+  } else {
+    const q = 4*k;
+    s += `<path d="M${f(bx2 + q)} ${f(y0 + pad + q)}L${f(bx2 + gw - q)} ${f(y0 + pad + gw - q)}M${f(bx2 + gw - q)} ${f(y0 + pad + q)}L${f(bx2 + q)} ${f(y0 + pad + gw - q)}" fill="none" stroke="#fff4d6" stroke-width="2.4" stroke-linecap="round"/>`;
+  }
+  return s;
+}
+
+/* ---------- labels: two columns, clear of the buttons (left) and the switches and stats (right) ---------- */
+function msCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0]));
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal;
+  let fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 3*k);
+  const top = { [-1]: fs, [1]: fs }, bottom = vb.y + vb.height - hgt*.6;
+  const ctm = svgEl.getScreenCTM(), toSvg = yPx => ctm ? new DOMPoint(0, yPx).matrixTransform(ctm.inverse()).y : -1e9;
+  const btn = document.getElementById('btns');
+  if (btn && ctm){ const y = toSvg(btn.getBoundingClientRect().bottom + 14) + hgt/2; if (y > top[-1]) top[-1] = y; }
+  for (const el of [document.getElementById('stats'), document.querySelector('.vset')]) if (el && ctm && !u){
+    const r = el.getBoundingClientRect(); if (r.height){ const y = toSvg(r.bottom + 10) + hgt/2; if (y > top[1]) top[1] = y; } }
+  // the built page adds a zoom chip at the bottom right of the figure: keep the right column above it
+  const bot = { [-1]: bottom, [1]: bottom }, zc = document.querySelector('.zchip');
+  if (zc && ctm){ const r = zc.getBoundingClientRect(); if (r.height) bot[1] = Math.min(bottom, toSvg(r.top - 6) - hgt/2); }
+  const cap = side => Math.max(1, Math.floor((bot[side] - top[side]) / gap) + 1);
+  if (items.length > cap(-1) + cap(1)){ const sc = Math.max(.72, (cap(-1) + cap(1)) / items.length); fs *= sc; hgt *= sc; gap *= sc; }
+  const cL = cap(-1), cR = cap(1), sorted = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  const nL = Math.max(items.length - cR, Math.min(cL, Math.round(items.length * cL / (cL + cR))));
+  let s = '';
+  for (const [col, side] of [[sorted.slice(0, nL), -1], [sorted.slice(nL), 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    let yb = bot[side] + gap; for (let i = col.length - 1; i >= 0; i--){ col[i].py = Math.min(col[i].py, yb - gap); yb = col[i].py; }
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1));
+      const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+
+/* ---------- the desk, the pad, the cable ---------- */
+let msDots = null;
+function msPadDots(){
+  if (!msDots){ msDots = []; let sd = 7; const rnd = () => (sd = (sd*16807) % 2147483647) / 2147483647;
+    for (let i = 0; i < 520; i++) msDots.push([PADR[0] + 2 + rnd()*(PADR[2] - PADR[0] - 4), PADR[1] + 2 + rnd()*(PADR[3] - PADR[1] - 4), .16 + .2*rnd()]); }
+  let d = ''; for (const [x, y, r] of msDots) d += pd([[x - r, y, PAD_T + .01], [x, y - r, PAD_T + .01], [x + r, y, PAD_T + .01], [x, y + r, PAD_T + .01]]);
+  return fill(d, '#5d6a80');
+}
+function msCablePts(st){
+  const E = wp(68.6, 0, ZR), P1 = [E[0] + 10, E[1]], P2 = [GROM[0], GROM[1] + 18], G = GROM, out = [];
+  for (let i = 0; i <= 28; i++){ const t = i/28, a = (1-t)**3, b = 3*(1-t)**2*t, c = 3*(1-t)*t*t, d = t**3;
+    const x = a*E[0] + b*P1[0] + c*P2[0] + d*G[0], y = a*E[1] + b*P1[1] + c*P2[1] + d*G[1];
+    const onPad = x > PADR[0] && x < PADR[2] && y > PADR[1] && y < PADR[3], zc = (onPad ? PAD_T : DESK_H) + .9;
+    out.push([x, y, t > .96 ? DESK_H + .5 : zc + (E[2] - zc)*Math.max(0, 1 - t/.24)**2]); }
+  return out;
+}
+const msStroke = (pts, col, r) => { const d = pd(pts, false);
+  return `<path d="${d}" fill="none" stroke="${INK}" style="stroke-width:${msF2(2*r + 1.6*INK_K)}" stroke-linecap="round" stroke-linejoin="round"/>`
+    + `<path d="${d}" fill="none" stroke="${col.m}" style="stroke-width:${msF2(2*r)}" stroke-linecap="round" stroke-linejoin="round"/>`
+    + `<path d="${d}" fill="none" stroke="${col.l}" style="stroke-width:${msF2(r*.5)}" stroke-linecap="round" stroke-linejoin="round" opacity=".5" transform="translate(${msF2(-r*.35)} ${msF2(-r*.35)})"/>`; };
+
+function scene(st, m){
+  MX = HOME[0] + st.off[0]; MY = HOME[1] + st.off[1]; MZ = st.lift;
+  const k = ease(st.xr || 0);
+  // desk, grommet, pad
+  let s = board(DESK[0], DESK[1], DESK[2], DESK[3], DESK_H, 6, WOOD);
+  let grain = ''; for (const y of [9, 21, 33, 47, 60]) grain += pd([[DESK[0] + 3, y, DESK_H + .01], [DESK[2] - 3, y + 1.5, DESK_H + .01]], false);
+  s += `<path d="${grain}" fill="none" stroke="${WOOD.d}" stroke-width=".8" opacity=".45"/>`;
+  s += shape(on(PZ(DESK_H + .02), ellUV(GROM[0], GROM[1], 4.6, 4.6, 24)), '#3b3733', 1.1) + fill(pd(on(PZ(DESK_H + .03), ellUV(GROM[0], GROM[1], 3.2, 3.2, 24))), '#14110f');
+  const PA = on(PZ(DESK_H), rrUV(PADR[0], PADR[1], PADR[2], PADR[3], 4)), PB = on(PZ(PAD_T), rrUV(PADR[0], PADR[1], PADR[2], PADR[3], 4));
+  const PADM = matOf('#465166');
+  s += loft(PA, PB, n => toneI(n, PADM)) + fill(pd(PB), PADM.l) + msPadDots() + ink(pd(PB), 1.1) + hullInk([...PA, ...PB], 1.3);
+  // shadow, then the red light from underneath
+  const body = msBody(st, m);
+  const shPts = []; for (let i = 0; i < XS.length; i++) for (const j of [0, 8, 16]) shPts.push(wp(...GRID[i][j]));
+  s += castShadow(shPts, PAD_T, PB);
+  const [sx, sy] = msSensorPos(st), gk = 1 + st.lift*.09;
+  s += fill(pd(on(PZ(PAD_T + .02), ellUV(sx, sy, 17*gk, 12.5*gk, 28))), '#ff3a2a', 'opacity=".11"')
+    + fill(pd(on(PZ(PAD_T + .03), ellUV(sx, sy, 10*gk, 7*gk, 24))), '#ff4a30', 'opacity=".14"')
+    + fill(pd(on(PZ(PAD_T + .04), ellUV(sx - .8, sy, 2.4 + st.lift*.45, 1.8 + st.lift*.35, 18))), '#ff6a50', 'opacity=".8"');
+  if (st.lift > .2){ const a = Math.min(1, st.lift/2);
+    const cone = [...on(PZ(PAD_T + .05), ellUV(sx - .8, sy, 2.4 + st.lift*.45, 1.8 + st.lift*.35, 12)), ...on(PZ(MZ + ZB), ellUV(sx, sy, 5, 4, 12))];
+    s += fill(sp(hull(cone.map(p => P(...p)))), '#ff4030', `opacity="${f(.2*a)}"`); }
+  // the mouse (closed, or ghosted with its insides), the strain relief and the cable, sorted
+  const feet = [[52, 61, 3.5, 99], [52, 61, -99, -3.5], [3, 10, -8, 8]].map(([xa, xb, ya, yb]) => msSlab(msOutline(xa, xb, .8, ya, yb), 0, ZB, PTFE, .6)).join('');
+  let mouse, items = [];
+  if (k > 0){
+    const mech = msMech(st, k); items = mech.items;
+    mouse = `<g opacity="${f(.5*k)}">${body.far}</g><g opacity="${f(1 - .8*k)}">${feet + body.svg}</g>`
+      + `<g opacity="${f(.6*k)}">${hullInk(body.pts, 2.8)}</g><g opacity="${f(k)}">${mech.svg}</g>`;
+  } else mouse = feet + body.svg + hullInk(body.pts, 2.6);
+  const relief = lrod([63.2, 0, ZR], [68.8, 0, ZR], 1.9, GRIPD, 1.1, 1.25);
+  const cp = msCablePts(st);
+  const dive = clipTo(on(PZ(DESK_H + .03), ellUV(GROM[0], GROM[1], 3.2, 3.2, 24)), msStroke([[GROM[0], GROM[1], DESK_H + .5], [GROM[0], GROM[1], -2]], GRIPD, .9));
+  s += byDepth([
+    { box: [wp(0, -17, 0), wp(63.3, 17, HPK + 1)], svg: mouse },
+    { box: [wp(63.3, -1.9, ZR - 1.9), wp(68.8, 1.9, ZR + 1.9)], svg: relief },
+    { box: msBoxOf(cp, .9), svg: dive + msStroke(cp, GRIPD, .9) },
+  ]);
+  if (k > .6) s += msCallouts(items, [MX, MX + 69, MY - 17, MY + 17, MZ, MZ + HPK]);
+  else {
+    const zt = msTop(55, 7) + dzL(st, 55);
+    s += tag(wp(55, 7, zt), -46, -34, 'LEFT BUTTON', st.press > .3) + tag(wp(55, -7, msTop(55, -7)), 44, -40, 'RIGHT BUTTON')
+      + tag(wp(WX, 0, ZW + WR), 6, -58, 'SCROLL WHEEL') + tag(cp[12], 40, 26, 'USB CABLE')
+      + tag([PADR[0] + 10, PADR[3] - 6, PAD_T], -30, 36, 'MOUSE PAD', st.slide != null && st.lift < 1);
+  }
+  if (st.cmp) s += msPanel(st);
+  return s;
+}
+
+/* ---------- behaviour: one state, one clock ---------- */
+let ui, msLoopOn = false;
+function msMoveTo(st, x, y){
+  const dx = x - st.off[0], dy = y - st.off[1]; st.off = [x, y];
+  if (st.lift < 1){ st.cur[0] = Math.max(0, Math.min(1919, st.cur[0] - dy*CPI_U)); st.cur[1] = Math.max(0, Math.min(1079, st.cur[1] - dx*CPI_U)); }
+}
+function msStep(st, dt){
+  let busy = false;
+  if (st.slide != null){ st.slide = Math.min(1, st.slide + dt/2.8); const u = st.slide;
+    msMoveTo(st, st.base[0]*(1 - u) + 8*Math.sin(2*Math.PI*u), st.base[1]*(1 - u) + 6*Math.sin(4*Math.PI*u));
+    st.frT += dt; if (st.frT > .05){ st.frT = 0; st.fa = st.fb; st.fla = st.flb; st.fb = msSensorPos(st); st.flb = st.lift; }
+    if (u >= 1) st.slide = null; busy = true; }
+  if (st.nudge != null){ st.nudge = Math.min(1, st.nudge + dt/.4); const e = ease(st.nudge);
+    msMoveTo(st, st.n0[0] + st.nd[0]*e, st.n0[1] + st.nd[1]*e);
+    if (st.nudge >= 1){ st.nudge = null; st.fa = st.nA; st.fla = st.lift; st.fb = msSensorPos(st); st.flb = st.lift; } busy = true; }
+  if (st.liftK !== st.liftT){ st.liftK = st.liftT > st.liftK ? Math.min(1, st.liftK + dt/.5) : Math.max(0, st.liftK - dt/.5);
+    st.lift = LIFT*ease(st.liftK); if (st.slide == null && st.nudge == null){ st.fla = st.flb = st.lift; } busy = true; }
+  if (st.clickT != null){ st.clickT += dt; const t = st.clickT;
+    st.press = t < .07 ? t/.07 : t < .2 ? 1 : Math.max(0, 1 - (t - .2)/.12); if (t > .34){ st.clickT = null; st.press = 0; } busy = true; }
+  return busy;
+}
+function msRun(){
+  if (msLoopOn) return; msLoopOn = true;
+  ui.animate(dt => { const busy = msStep(ui.st, dt); if (!busy) msLoopOn = false; return busy; });
+}
+function msSlide(st){
+  if (st.slide != null) return;
+  st.nudge = null; st.slide = 0; st.base = st.off.slice(); st.frT = 0; st.fb = msSensorPos(st); st.flb = st.lift;
+  if (st.lift >= 1) ui.flash('Lifted: the camera sees only blur, so the cursor stays put', 2200);
+  msRun();
+}
+function msCompare(st){
+  st.cmp = true;
+  if (st.slide != null || st.nudge != null) return;
+  st.nA = msSensorPos(st); st.fa = st.fb = st.nA; st.fla = st.flb = st.lift;
+  st.n0 = st.off.slice(); st.nd = NUDGES[st.nudgeN++ % NUDGES.length]; st.nudge = 0;
+  if (st.lift >= 1) ui.flash('Lifted: both pictures are blurred, nothing to match', 2200);
+  msRun();
+}
+function msClick(st){ st.clicks++; st.clickT = 0; msRun(); }
+function msLift(st){ st.liftT = st.liftT ? 0 : 1; msRun(); }
+
+ui = mountFigure({
+  fig:'21', title:'Optical mouse',
+  size:[DESK[2], DESK[3], 30], palette:'cobalt',
+  // off: how far the mouse is from its resting spot; lift 0..LIFT; press 0..1 (left button); cur: cursor on a 1920x1080 screen
+  state:{ off:[0, 0], lift:0, liftK:0, liftT:0, press:0, clickT:null, clicks:0, cur:[960, 540], slide:null, base:[0, 0], frT:0,
+    nudge:null, n0:[0, 0], nd:[0, 0], nA:null, nudgeN:0, cmp:false, fa:null, fb:null, fla:0, flb:0, wheelA:.2 },
+  scene,
+  buttons:[
+    { label:'Slide the mouse', onClick:(st) => msSlide(st) },
+    { label:'Compare pictures', onClick:(st) => msCompare(st) },
+    { label:'Click', onClick:(st) => msClick(st) },
+    { label:'Lift the mouse', onClick:(st) => msLift(st) },
+  ],
+  stats: st => [
+    { label:'Cursor', value:`${Math.round(st.cur[0])}, ${Math.round(st.cur[1])}`, small:true },
+    { label:'Clicks', value:st.clicks, small:true },
+    { label:'Camera', value:st.lift >= 1 ? 'no focus' : 'tracking', small:true },
+  ],
+  acts:{ btn:(st) => msClick(st) },
+  turn:'full',
+  params:(st, q) => {
+    if (q.has('off')){ const [x, y] = q.get('off').split(',').map(Number); st.off = [x || 0, y || 0]; }
+    if (q.has('lift')){ st.liftK = st.liftT = Math.max(0, Math.min(1, +q.get('lift') || 0)); st.lift = LIFT*ease(st.liftK); }
+    if (q.has('push')) st.press = Math.max(0, Math.min(1, +q.get('push') || 0));
+    st.fa = st.fb = msSensorPos(st); st.fla = st.flb = st.lift;
+    if (q.get('cmp') === '1'){ st.cmp = true; const d = NUDGES[0]; st.fa = [st.fb[0] - d[0], st.fb[1] - d[1]]; }
+  },
+});
+xrMount(() => ui, () => '');
+// the zoom chip arrives after the first draw: redraw once it is there so the labels clear it
+addEventListener('load', () => setTimeout(() => ui.render(), 60));
+</script></body></html>
