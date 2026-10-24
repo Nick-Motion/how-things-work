@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wedge</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Teaching adaptation of the wedge principle, not a reproduction of a book illustration.
+   Evidence. The Way Things Work Now, 2016, printed p.11, audit now-pages.json index 12.
+   1988 is access restricted and unverified. 1998 was not individually verified.
+   Research. https://engineeringstatics.org/Chapter_09-block-and-wedge-friction.html
+   Truth. Insert first aligns the model door, then pushes the thin tip under its lower edge.
+   The moving inclined plane raises the whole door on two long lift-off hinge pintles.
+   Pull lowers the door onto the hinge shoulders before swinging it clear of the wedge.
+   Load transfers one of three bench masses onto the door's top spindle. Nothing is consumed.
+   The ideal force overlay resolves the slope normal into upward and sideways components.
+   Ideal horizontal effort is weight times 0.15. Real insertion needs additional friction force.
+   Rubber underneath supplies static friction that resists ejection. Load increases its limit.
+   The lift-off hinges restrain sideways motion but carry no vertical load once the door lifts.
+   Parts and attachments. Bench board supports the post foot, brace and four bolts.
+   Post holds two hinge leaves, pintles and shoulders. Each leaf has two fixing screws.
+   Door sleeves ride on the pintles. Their leaves and screws attach to the hinge stile.
+   Door has two stiles, three rails and two inset panels. A spindle seat bridges its top rail.
+   Spindle holds the added masses. Spare masses stand on a storage peg fixed to the board.
+   Wedge has a sloped wooden body, thin tip, heel, bonded rubber sole and a bonded rubber sole.
+   Contact. Board top z=3, initial door bottom z=4.5. Wedge top is
+   3.4 + 0.15*(x-tip). Door's first contact is x=46 at y=80.
+   Insertion moves tip from x=64 to x=15. At full insertion lift is 3.55 model units.
+   Moving masses are moved by the implied demonstrator, above the door before being lowered.
+   shortcut: prescribed motion and ideal force components omit elastic deformation and top friction,
+   use a force solver if quantitative insertion effort is added. */
+const wgSlope=.15, wgFloor=3, wgContact=46;
+const wgBounds=pts=>[0,1].map(j=>[0,1,2].map(i=>(j?Math.max:Math.min)(...pts.map(p=>p[i]))));
+const wgState={slide:0,swing:0,load:0,moving:false,transfer:null,serial:0};
+const wgTip=st=>64-49*st.slide;
+const wgLift=st=>Math.max(0,3.4+(wgContact-wgTip(st))*wgSlope-4.5);
+const wgWeight=st=>20*(1+st.load);
+function wgLabels(items){
+  const vb=document.getElementById('fig').viewBox.baseVal,phone=innerWidth<=560;
+  const sorted=items.slice().sort((a,b)=>P(...a.at)[0]-P(...b.at)[0]),half=Math.ceil(sorted.length/2);
+  return [sorted.slice(0,half),sorted.slice(half)].map((col,side)=>col.sort((a,b)=>P(...a.at)[1]-P(...b.at)[1]).map((it,i)=>{
+    const [x,y]=P(...it.at),cx=phone?vb.width*(side?.92:.08):side?vb.width-140*INK_K:140*INK_K;
+    const cy=vb.height*(.24+.7*i/Math.max(1,col.length-1));
+    return tag(it.at,(cx-x)/INK_K,(cy-y)/INK_K,it.text,it.on);
+  }).join('')).join('');
+}
+const wgPoint=(st,x,y,z)=>{const a=st.swing*Math.PI/180;return [48+(x-48)*Math.cos(a)-(y-20)*Math.sin(a),20+(x-48)*Math.sin(a)+(y-20)*Math.cos(a),z+wgLift(st)];};
+function wgSolid(points,material){
+  const ids=[[0,3,2,1],[4,5,6,7],[0,1,5,4],[1,2,6,5],[2,3,7,6],[3,0,4,7]],c=avg(points);
+  return ids.map(ii=>{const p=ii.map(i=>points[i]);let n=norm(cross(sub(p[1],p[0]),sub(p[2],p[0])));if(dot(n,sub(avg(p),c))<0)n=n.map(v=>-v);return vis(n)?shape(p,tone(n,material),.8):'';}).join('')+hullInk(points,2.5);
+}
+function wgScene(st,m){
+  const parts=[],labels=[],k=ease(st.xr||0),lift=wgLift(st),tip=wgTip(st);
+  const put=(pts,svg,name,at,on=false)=>{parts.push({box:wgBounds(pts),svg});if(name)labels.push({at:at||avg(pts),text:name,on});};
+  const cub=(a,b,mat,name,move=false,opacity=1)=>{const ps=[[a[0],a[1],a[2]],[b[0],a[1],a[2]],[b[0],b[1],a[2]],[a[0],b[1],a[2]],[a[0],a[1],b[2]],[b[0],a[1],b[2]],[b[0],b[1],b[2]],[a[0],b[1],b[2]]].map(p=>move?wgPoint(st,...p):p);put(ps,`<g opacity="${opacity}">${wgSolid(ps,mat)}</g>`,name,null,move&&st.moving);};
+  const pin=(a,b,r,mat,name,move=false)=>{if(move){a=wgPoint(st,...a);b=wgPoint(st,...b);}const pts=[a.map(v=>v-r),a.map(v=>v+r),b.map(v=>v-r),b.map(v=>v+r)];put(pts,rod(a,b,r,mat,toneI,.8),name,avg([a,b]),move&&st.moving);};
+  const iron=matOf('#697883'),rubber=matOf('#51483f');
+  let s=board(0,0,118,118,3,5,WOOD);
+  const shadowPts=[[43,14,3],[53,22,81],wgPoint(st,46,98,4.5),wgPoint(st,50,98,80.5),[tip,72,3],[tip+42,90,9.5]];
+  s+=castShadow(shadowPts,3,boardTop(0,0,118,118,3,5));
+  labels.push({at:[20,105,3],text:'BENCH TOP'});
+  cub([37,6,3],[57,23,5],iron,'POST FOOT');
+  cub([40,10,5],[47,18,84],m,'HINGE POST');
+  pin([28,10,3],[42,10,42],1.5,iron,'POST BRACE');
+  for(const [i,x,y] of [[1,39,8],[2,54,8],[3,39,21],[4,54,21]])pin([x,y,4],[x,y,5.8],.9,METAL,i===1?'FOOT BOLT':null);
+  for(const [i,z] of [[1,18],[2,55]]){
+    cub([46.8,13,z],[48,20,z+10],METAL,'HINGE '+i+' POST LEAF');
+    pin([48,20,z],[48,20,z+17],.8,METAL,'HINGE '+i+' PINTLE');
+    pin([48,20,z],[48,20,z+1.2],1.9,iron,'HINGE '+i+' SHOULDER');
+    pin([48,20,z+1.2],[48,20,z+9.2],1.7,METAL,'HINGE '+i+' SLEEVE',true);
+    cub([48,20,z+2],[50.4,27,z+9],METAL,'HINGE '+i+' DOOR LEAF',true);
+    for(const dz of [3,8]){
+      pin([46.6,15,z+dz],[48.2,15,z+dz],.65,iron,null);
+      pin([49.5,25,z+dz],[51,25,z+dz],.65,iron,null,true);
+    }
+  }
+  cub([46,23,4.5],[50,99,80.5],m,null,true,1-.88*k);
+  if(k>0){
+    cub([46.2,23,4.5],[49.8,29,80.5],WOOD,'HINGE STILE',true,k);
+    cub([46.2,93,4.5],[49.8,99,80.5],WOOD,'LATCH STILE',true,k);
+    for(const [name,z]of [['BOTTOM RAIL',4.5],['LOCK RAIL',39.5],['TOP RAIL',74.5]])cub([46.2,29,z],[49.8,93,z+6],WOOD,name,true,k);
+    for(const [name,z0,z1]of [['LOWER PANEL',10.5,39.5],['UPPER PANEL',45.5,74.5]])cub([47.6,29,z0],[48.4,93,z1],m,name,true,.4*k);
+  }
+  pin([50,89,40],[54,89,40],1.2,METAL,'HANDLE SPINDLE',true);
+  pin([54,84,40],[54,92,40],1,METAL,'DOOR HANDLE',true);
+  cub([40,57,80.5],[56,69,82.5],iron,'MASS SEAT',true);
+  pin([48,63,82.5],[48,63,94],.9,METAL,'LOAD SPINDLE',true);
+  pin([92,26,3],[92,26,15],.9,METAL,'STORAGE PEG');
+  for(let i=0;i<3;i++){
+    let p=i<st.load?wgPoint(st,48,63,82.5+3*i):[92,26,3+3*(i-st.load)];
+    if(st.transfer&&i===st.load){const t=st.transfer.t,d=wgPoint(st,48,63,82.5+3*i),a=[92,26,3];if(t<.3)p=[92,26,3+104*ease(t/.3)];else if(t<.7){const u=ease((t-.3)/.4);p=[92+(d[0]-92)*u,26+(d[1]-26)*u,107];}else p=[d[0],d[1],107+(d[2]-107)*ease((t-.7)/.3)];}
+    pin(p,[p[0],p[1],p[2]+3],6,iron,'ADDED MASS '+(i+1));
+  }
+  const wa=[[tip,72,3.2],[tip+42,72,3.2],[tip+42,90,3.2],[tip,90,3.2]],wb=[[tip,72,3.4],[tip+42,72,9.7],[tip+42,90,9.7],[tip,90,3.4]];
+  put([...wa,...wb],`<g opacity="${1-.72*k}">${wgSolid([...wa,...wb],m)}</g>`,'WEDGE BODY',[tip+29,81,6],st.moving);
+  cub([tip,72,3],[tip+42,90,3.2],rubber,'RUBBER SOLE');
+  labels.push({at:wb[0],text:'THIN TIP'},{at:wb[2],text:'WEDGE HEEL'});
+  if(k>0){
+    put([...wb],`<g opacity="${k}">${shape(wb,'#f6ba58',.7)}</g>`,'SLOPING FACE',avg(wb),st.slide>.5);
+  }
+  s+=byDepth(parts);
+  if(k>.6){
+    const arrow=(a,b,col)=>{const d=norm(sub(b,a)),u=norm(cross(d,Math.abs(d[2])>.9?[0,1,0]:[0,0,1])),l=2.8;return `<path d="${pd([a,b],false)}" fill="none" stroke="${col}" stroke-width="2.3"/>`+shape([b,b.map((v,i)=>v-l*d[i]+1.5*u[i]),b.map((v,i)=>v-l*d[i]-1.5*u[i])],col,.3);};
+    if(lift>0){const p=[46,81,4.5+lift],up=13+st.load*3,side=up*wgSlope;
+      s+=arrow(p,[46-side,81,p[2]+up],'#d35838')+arrow(p,[46,81,p[2]+up],'#378269')+arrow(p,[46-side,81,p[2]],'#5a78bc');
+      s+=arrow([tip+42,81,7],[tip+29,81,7],'#d35838')+arrow([tip+23,92,3.3],[tip+12,92,3.3],'#5a78bc');
+      labels.push({at:[46,81,p[2]+up],text:'UPWARD COMPONENT',on:true},{at:[46-side,81,p[2]],text:'SIDEWAYS COMPONENT',on:true},{at:[tip+12,92,3.3],text:'FLOOR GRIP',on:true},{at:[tip+29,81,7],text:'PUSH',on:st.moving});
+    }
+    s+=wgLabels(labels);
+  }
+  return s;
+}
+function wgMove(st,ui,insert){
+  const id=++st.serial,from=st.slide,angle=st.swing;let t=0;st.moving=true;
+  ui.animate(dt=>{if(id!==st.serial)return false;t=Math.min(1,t+dt/1.5);
+    if(insert){st.swing=angle*(1-ease(Math.min(1,t/.3)));st.slide=from+(1-from)*ease(Math.max(0,(t-.3)/.7));}
+    else {st.slide=from*(1-ease(Math.min(1,t/.7)));st.swing=angle+(24-angle)*ease(Math.max(0,(t-.7)/.3));}
+    if(t===1){st.moving=false;return false;}return true;});
+}
+function wgLoad(st,ui){
+  if(st.transfer)return ui.flash('One mass at a time');
+  if(st.load===3)return ui.flash('All three masses are on the door');
+  st.transfer={t:0};ui.animate(dt=>{st.transfer.t=Math.min(1,st.transfer.t+dt/1.3);if(st.transfer.t===1){st.load++;st.transfer=null;return false;}return true;});
+}
+const ui=mountFigure({fig:'W',title:'Wedge',size:[118,118,112],palette:'mustard',turn:'full',state:wgState,scene:wgScene,
+  buttons:[{label:'Insert',onClick:(st,u)=>wgMove(st,u,true)},{label:'Pull',onClick:(st,u)=>wgMove(st,u,false)},{label:'Load',onClick:wgLoad}],
+  stats:st=>[{label:'Door weight',value:wgWeight(st)+' N'},{label:'Lift',value:wgLift(st).toFixed(2)+' cm',small:true},{label:'Ideal push',value:(wgLift(st)>0?wgWeight(st)*wgSlope:0).toFixed(1)+' N',small:true},{label:'Grip limit (mu 0.4)',value:(wgLift(st)>0?wgWeight(st)*.4:0).toFixed(0)+' N',small:true}],
+  params:(st,q)=>{for(const key of ['slide','swing','load']){const v=Number(q.get(key));if(q.has(key)&&Number.isFinite(v))st[key]=Math.max(0,Math.min(key==='load'?3:key==='swing'?24:1,key==='load'?Math.floor(v):v));}if(st.slide>.01)st.swing=0;}
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
