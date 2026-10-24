@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The inclined plane</title><style>
+#stats .stat:last-child .v{font-size:12px!important}
+@media(max-width:560px){#stats{display:grid!important;grid-template-columns:1fr 1fr;gap:8px!important;width:100%}#stats .stat{min-width:0}#stats .stat .v{font-size:16px!important}#stats .stat .k{font-size:9px}#stats .stat:last-child .v{font-size:11px!important}}
+</style></head><body>
+<script src="core.js"></script>
+<script>
+/* Teaching adaptation of the inclined-plane principle, not a reproduction of a book illustration.
+   Source audit supports The Way Things Work Now, 2016, printed page 10. Other editions were not verified.
+   https://archive.org/details/the-way-things-work-now-david-macaulay-neil-ardley-z-library/page/n11/mode/1up
+   Physics reference https://openstax.org/books/physics/pages/9-3-simple-machines
+   A 2 kg load moves 74 cm along a 20 or 35 degree ramp. Its vertical rise is 74 sin(angle) cm.
+   The ideal, quasistatic model neglects carriage mass, friction and acceleration. F = mg sin(angle).
+   Raise uses the same load, start height and vertical rise. F = mg. Both give Fd = mgh.
+   The spring gauges are tared for their own mass. The automatic return and ramp adjustment are setup,
+   excluded from the measured upward trial. Changing the rig angle also changes the target height.
+   Raise returns the load to the foot, connects the vertical sling and winds the lift drum.
+   Ramp returns the load to the foot, connects the uphill eye and winds the ramp drum.
+   Steepen returns the load, moves the screw jack to 35 degrees, then repeats the ramp trial.
+   Switching ropes is a bench setup operation at the foot, represented by selecting the taut rope.
+   All supports and ropes are actual 3D parts. Only the active rope is under tension.
+   Parts and attachments.
+   Structure. Table board, rubber feet, base plate, hinge lugs, hinge pin, ramp deck, side beams,
+   cross ties, jack foot, telescoping screw jack, saddle and handwheel. These hold the inclined track.
+   Carriage. Two guide rails, two sliding shoes, carriage plate, load clamp, load shell, dense insert,
+   uphill eye, two sling eyes, two sling legs and lifting ring. The load is bolted to the carriage.
+   Pull. Ramp pulley, axle, two cheeks, drum shaft, drum, bearing pedestals, crank and rope.
+   Lift. Two gantry posts, beam, pulley, axle, cheeks, return rope, drum, bearings and crank.
+   Measurement. Inline force gauge shell, fixed anchor, coil spring, moving plunger, pointer,
+   scale, end eyes, travel rule and height rule. Gauge halves share the same rope axis.
+   Data shape. mode is raise or ramp. phase is idle, return, adjust or pull. travel is 0..1.
+   The single animation driver owns all phase transitions and blocks reentrant actions. */
+const ipMass = 2, ipGravity = 9.81, ipTravel = 74, ipStart = 9;
+const ipSteel = matOf('#89999d'), ipBrass = matOf('#ddad53'), ipRope = matOf('#d98754');
+const ipBlue = matOf('#719bcd'), ipRed = matOf('#df6d51');
+const ipRadians = a => a * Math.PI / 180;
+const ipBounds = pts => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i])))];
+function ipGeometry(st){
+  const a=ipRadians(st.angle), c=Math.cos(a), s=Math.sin(a);
+  const q=(t,y,n=0)=>[18+t*c-n*s,y,10+t*s+n*c];
+  const p=q(ipStart+(st.mode==='ramp'?ipTravel*st.travel:0),44,10);
+  if(st.mode==='raise') p[2]+=ipTravel*s*st.travel;
+  return {a,c,s,q,p,rise:ipTravel*s/100,force:ipMass*ipGravity*(st.mode==='raise'?1:s),distance:(st.mode==='raise'?ipTravel*s:ipTravel)/100*st.travel};
+}
+const ipLabelNames=new Set(['BASE PLATE','HINGE PIN','RAMP DECK','LEFT SIDE BEAM','CROSS TIE','LEFT GUIDE RAIL','RIGHT GUIDE RAIL','JACK FOOT','SCREW JACK','JACK SADDLE','JACK HANDWHEEL','LEFT SLIDING SHOE','RIGHT SLIDING SHOE','CARRIAGE','LOAD SHELL','DENSE INSERT','UPHILL EYE','LIFTING SLING','LIFTING RING','GANTRY POST','GANTRY BEAM','LIFT PULLEY','LIFT DRUM','RAMP PULLEY','RAMP DRUM','FORCE GAUGE','GAUGE SPRING','MOVING PLUNGER','NEWTON SCALE','TRAVEL RULE','HEIGHT RULE','RAMP ROPE','LIFT ROPE']);
+function ipLabels(items){
+  const fig=document.getElementById('fig'),r=fig.getBoundingClientRect(),inv=fig.getScreenCTM()?.inverse();
+  if(!inv||!r.width)return '';
+  const phone=innerWidth<=560;
+  const top=side=>phone?r.top+15:Math.max(r.top+20,document.getElementById(side?'stats':'btns').getBoundingClientRect().bottom+18);
+  const bottom=r.bottom-28,leftRoom=bottom-top(0),rightRoom=bottom-top(1);
+  const sorted=items.filter(it=>ipLabelNames.has(it.text)).map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  const cut=phone?Math.ceil(sorted.length/2):Math.round(sorted.length*leftRoom/(leftRoom+rightRoom));
+  return [sorted.slice(0,cut),sorted.slice(cut)].map((col,side)=>col.sort((a,b)=>a.p[1]-b.p[1]).map((it,i)=>{
+    const x=phone?(side?r.right-16:r.left+16):(side?r.right-77:r.left+77);
+    const y=top(side)+(bottom-top(side))*(i+.5)/col.length;
+    const point=new DOMPoint(x,y).matrixTransform(inv);
+    return tag(it.at,(point.x-it.p[0])/INK_K,(point.y-it.p[1])/INK_K,it.text,it.on);
+  }).join('')).join('');
+}
+function ipScene(st,m){
+  const g=ipGeometry(st), q=g.q, parts=[], names=[];
+  const xr=ease(st.xr||0), active=st.phase==='pull';
+  const add=(name,pts,svg,cover=false,lit=false)=>{
+    parts.push({box:ipBounds(pts),svg:cover?`<g opacity="${1-.84*xr}">${svg}</g>`:svg});
+    if(name) names.push({at:avg(pts),text:name,on:lit});
+  };
+  const cube=(name,a,b,mat,cover=false,extra='',lit=false)=>add(name,[a,b],box(...a,...b,mat,toneI,1)+extra,cover,lit);
+  const shaft=(name,a,b,r,mat=METAL,lit=false)=>{
+    const bounds=[a.map((v,i)=>Math.min(v,b[i])-r),a.map((v,i)=>Math.max(v,b[i])+r)];
+    add(name,bounds,rod(a,b,r,mat,toneI,.85),false,lit);
+  };
+  const beam=(name,t0,y0,n0,t1,y1,n1,mat,cover=false,lit=false)=>{
+    const local=[[t0,y0,n0],[t1,y0,n0],[t1,y1,n0],[t0,y1,n0],[t0,y0,n1],[t1,y0,n1],[t1,y1,n1],[t0,y1,n1]];
+    const p=local.map(v=>q(...v)), normals=[[0,0,-1],[0,0,1],[-1,0,0],[1,0,0],[0,-1,0],[0,1,0]];
+    const faces=[[0,3,2,1],[4,5,6,7],[0,4,7,3],[1,2,6,5],[0,1,5,4],[3,7,6,2]];
+    let svg='';
+    normals.forEach((n,i)=>{ const world=[n[0]*g.c-n[2]*g.s,n[1],n[0]*g.s+n[2]*g.c]; if(vis(world)) svg+=shape(faces[i].map(j=>p[j]),toneI(world,mat),.9); });
+    add(name,p,svg+hullInk(p,1.6),cover,lit);
+  };
+  const rope=(name,pts,lit=false)=>{
+    pts.slice(1).forEach((p,i)=>shaft(i===0?name:null,pts[i],p,.33,ipRope,lit));
+  };
+  let svg=castShadow([[0,0,0],[146,0,0],[146,85,0],[0,85,0],[29,44,113]])+board(0,0,146,85,3,5,WOOD);
+  svg+=castShadow([[18,28,10],q(112,28,0),q(112,60,0),[18,60,10],[29,44,110]],3,boardTop(0,0,146,85,3,5));
+  for(const x of [12,130])for(const y of [20,68])cube(null,[x-3,y-3,3],[x+3,y+3,5],DARK);
+  cube('BASE PLATE',[9,18,5],[137,70,8],ipSteel);
+  svg+=byDepth(parts.splice(0));
+  for(const y of [28,58]) cube(y===28?'HINGE LUG':null,[14,y,8],[22,y+3,13],ipSteel);
+  shaft('HINGE PIN',[18,27,10],[18,62,10],1.3,ipBrass);
+  for(const y of [29,58]){
+    for(let t=0;t<110;t+=11)beam(t===0?(y===29?'LEFT SIDE BEAM':'RIGHT SIDE BEAM'):null,t,y,-4,t+11,y+2,-1,ipBlue);
+  }
+  for(const t of [10,42,75,105])beam(t===42?'CROSS TIE':null,t-1,31,-3,t+1,58,-1,ipSteel);
+  for(let t=0;t<110;t+=11)beam(t===0?'RAMP DECK':null,t,29,-1,t+11,60,0,m,true);
+  for(const y of [33,54])for(let t=0;t<110;t+=11)beam(t===0?(y===33?'LEFT GUIDE RAIL':'RIGHT GUIDE RAIL'):null,t,y,0,t+11,y+1.5,1.5,METAL);
+  const jack=q(91,44,-4), foot=[jack[0],44,8];
+  cube('JACK FOOT',[foot[0]-5,39,8],[foot[0]+5,49,10],ipSteel);
+  shaft('JACK BARREL',[foot[0],44,10],[foot[0],44,20],2.5,ipBlue);
+  shaft('SCREW JACK',[foot[0],44,19],jack,1.1,ipBrass,st.phase==='adjust');
+  shaft('JACK SADDLE',[jack[0],38,jack[2]],[jack[0],50,jack[2]],1.4,ipSteel);
+  shaft('JACK HANDWHEEL',[foot[0],44,17],[foot[0],51,17],.6,ipSteel);
+  shaft(null,[foot[0]-4,51,17],[foot[0]+4,51,17],.6,ipRed);
+  const direct=st.mode==='raise', loadS=ipStart+(direct?0:ipTravel*st.travel), dz=direct?ipTravel*g.s*st.travel:0;
+  const lq=(t,y,n)=>{const p=q(t,y,n);p[2]+=dz;return p;};
+  const loadBeam=(name,t0,y0,n0,t1,y1,n1,mat,cover=false)=>{
+    const before=parts.length;
+    beam(null,t0,y0,n0,t1,y1,n1,mat,cover);
+    const entry=parts.pop();
+    if(dz){
+      // A vertical translation in 3D projects to a constant SVG translation.
+      const shift=Dv(0,0,dz);entry.svg=`<g transform="translate(${shift[0]} ${shift[1]})">${entry.svg}</g>`;
+      entry.box=entry.box.map(p=>[p[0],p[1],p[2]+dz]);
+    }
+    parts.splice(before,0,entry);
+    if(name)names.push({at:lq((t0+t1)/2,(y0+y1)/2,(n0+n1)/2),text:name,on:active});
+  };
+  for(const y of [32.8,53.8])loadBeam(y<40?'LEFT SLIDING SHOE':'RIGHT SLIDING SHOE',loadS-5,y,1.5,loadS+5,y+2,3.5,ipBrass);
+  loadBeam('CARRIAGE',loadS-7,32,3.5,loadS+7,57,5,ipSteel);
+  loadBeam('LOAD SHELL',loadS-6,36,5,loadS+6,52,17,m,true);
+  if(xr>0){
+    const before=parts.length;
+    loadBeam('DENSE INSERT',loadS-5.5,36.5,5.5,loadS+5.5,51.5,16.5,ipSteel);
+    parts[before].svg=`<g opacity="${xr}">${parts[before].svg}</g>`;
+  }
+  for(const y of [35,52])loadBeam(y===35?'LOAD CLAMP':null,loadS-1,y,5,loadS+1,y+1,18,ipRed);
+  const eye=lq(loadS+6,44,11), slingA=lq(loadS,36,17), slingB=lq(loadS,52,17);
+  const ring=[g.p[0],44,g.p[2]+17];
+  shaft('UPHILL EYE',eye,lq(loadS+7,44,11),.8,ipBrass);
+  for(const [i,p]of[slingA,slingB].entries()){
+    shaft(i===0?'SLING EYES':null,p,[p[0],p[1],p[2]+1],.65,ipBrass);
+    rope(i===0?'LIFTING SLING':null,[[p[0],p[1],p[2]+1],ring],active&&direct);
+  }
+  shaft('LIFTING RING',ring,[ring[0],44,ring[2]+1],.7,ipBrass);
+  for(const y of [24,65]){
+    cube(y===24?'GANTRY FOOT':null,[24,y-3,8],[34,y+3,11],ipBlue);
+    for(const [z0,z1]of[[11,45],[45,80],[80,109]])cube(y===24&&z0===45?'GANTRY POST':null,[27,y-1.5,z0],[30,y+1.5,z1],ipBlue);
+  }
+  cube('GANTRY BEAM',[24,22,109],[34,68,113],ipBlue);
+  const liftX=q(ipStart,44,0)[0]-10*g.s;
+  cube('LIFT PULLEY BRACKET',[liftX+1,41,105],[liftX+5,47,109],ipSteel);
+  shaft('LIFT AXLE',[liftX+3,40,103],[liftX+3,48,103],.7,ipBrass);
+  shaft('LIFT PULLEY',[liftX+3,42.5,103],[liftX+3,45.5,103],3,METAL);
+  for(const x of [liftX+5]){
+    for(const y of [39,48])cube(y===39?'LIFT BEARING':null,[x-2,y,8],[x+2,y+2,14],ipBlue);
+    shaft('LIFT DRUM SHAFT',[x,38,12],[x,53,12],.7,ipSteel);
+    shaft('LIFT DRUM',[x,41,12],[x,48,12],2.2,ipBrass,active&&direct);
+    shaft('LIFT CRANK',[x,53,12],[x+4*Math.cos(st.travel*18),53,12+4*Math.sin(st.travel*18)],.7,ipRed,active&&direct);
+  }
+  const pc=q(108,44,8), pulleyR=3;
+  for(const y of [40.5,46.5])beam(y<44?'RAMP PULLEY CHEEK':null,105,y,0,111,y+1,8,ipSteel);
+  shaft('RAMP AXLE',[pc[0],40,pc[2]],[pc[0],48,pc[2]],.7,ipBrass);
+  shaft('RAMP PULLEY',[pc[0],42.5,pc[2]],[pc[0],45.5,pc[2]],pulleyR,METAL);
+  const drumX=pc[0]+3;
+  for(const y of [39,48])cube(y===39?'RAMP BEARING':null,[drumX-2,y,8],[drumX+2,y+2,14],ipBlue);
+  shaft('RAMP DRUM SHAFT',[drumX,38,12],[drumX,53,12],.7,ipSteel);
+  shaft('RAMP DRUM',[drumX,41,12],[drumX,48,12],2.2,ipBrass,active&&!direct);
+  shaft('RAMP CRANK',[drumX,53,12],[drumX+4*Math.cos(st.travel*18),53,12+4*Math.sin(st.travel*18)],.7,ipRed,active&&!direct);
+  const gaugeAt=direct?[ring[0],44,ring[2]+2]:lq(loadS+8,44,11);
+  const gaugeDir=direct?[0,0,1]:[g.c,0,g.s];
+  const ga=t=>gaugeAt.map((v,i)=>v+gaugeDir[i]*t);
+  const gn=direct?[1,0,0]:[-g.s,0,g.c];
+  const gaugeBody=rod(ga(1),ga(14),2,matOf('#f5e9c9'),toneI,1.2);
+  add('FORCE GAUGE',[ga(1).map(v=>v-2),ga(14).map(v=>v+2)],`<g opacity="${1-.84*xr}">${gaugeBody}</g>`);
+  rope('GAUGE LOWER EYE',[direct?[ring[0],44,ring[2]+1]:lq(loadS+7,44,11),ga(1)],active);
+  if(xr>0){
+    const tension=g.force/(ipMass*ipGravity), springEnd=8+3*tension;
+    const coil=Array.from({length:61},(_,i)=>ga(2+(springEnd-2)*i/60).map((v,j)=>v+gn[j]*.8*Math.cos(i/60*12*Math.PI)+(j===1?.8*Math.sin(i/60*12*Math.PI):0)));
+    add('GAUGE SPRING',[ga(2),ga(springEnd)],`<g opacity="${xr}">${line(coil,.8)}</g>`,false,active);
+    shaft('FIXED ANCHOR',ga(1),ga(2),.6,ipBrass);
+    shaft('MOVING PLUNGER',ga(springEnd),ga(15),.5,ipSteel,active);
+    const p=ga(springEnd);shaft('GAUGE POINTER',p,[p[0]+gn[0]*2.2,p[1],p[2]+gn[2]*2.2],.4,ipRed,active);
+    const a=ga(3),b=ga(13);shaft('NEWTON SCALE',[a[0],41.9,a[2]],[b[0],41.9,b[2]],.15,ipSteel);
+  }
+  rope('GAUGE UPPER EYE',[ga(14),ga(15)],active);
+  if(direct){
+    rope('LIFT ROPE',[ga(15),[liftX,44,103]],active);
+    const arc=Array.from({length:17},(_,i)=>{const a=Math.PI-i/16*Math.PI;return[liftX+3+3*Math.cos(a),44,103+3*Math.sin(a)];});
+    rope(null,arc);rope('LIFT RETURN ROPE',[[liftX+6,44,103],[liftX+6,44,14],[liftX+5,44,14]],active);
+  }else{
+    const tangent=q(108,44,11);
+    rope('RAMP ROPE',[ga(15),tangent],active);
+    const arc=Array.from({length:14},(_,i)=>{const a=(g.a+Math.PI/2)*(1-i/13);return[pc[0]+3*Math.cos(a),44,pc[2]+3*Math.sin(a)];});
+    rope(null,arc);rope('RAMP RETURN ROPE',[[pc[0]+3,44,pc[2]],[drumX+2.2,44,12]],active);
+  }
+  for(let t=0;t<110;t+=11)beam(t===0?'TRAVEL RULE':null,t,60.5,0,t+11,63,1,CERAMIC);
+  for(let t=0;t<=100;t+=5){const a=q(t,60.5,1.1),b=q(t,t%10?61.5:62.8,1.1);add(null,[a,b],line([a,b],.5));}
+  cube('HEIGHT RULE',[133,56,8],[135,60,80],CERAMIC);
+  for(let z=10;z<80;z+=5)cube(null,[135.05,56,z],[135.1,z%10?58:59.5,z+.2],ipSteel);
+  svg+=byDepth(parts);
+  if(xr>.6)svg+=ipLabels(names);
+  else svg+=xrCallouts([{at:g.p,text:'2 KG LOAD',on:active},{at:ga(7),text:'FORCE GAUGE',on:active},{at:q(60,61,1),text:'RAMP',on:!direct&&active}],[9,137,20,70,5,113]);
+  return svg;
+}
+function ipAction(st,ui,action){
+  if(st.phase!=='idle')return ui.flash('The load is moving. Wait for this trial to finish.');
+  if(action==='Steepen'&&st.angle===35)return ui.flash('The ramp is already at its steepest setting, 35 degrees.');
+  st.nextMode=action==='Raise'?'raise':'ramp';
+  st.nextAngle=action==='Steepen'?35:st.angle;
+  st.phase='return';st.elapsed=0;st.from=st.travel;
+  ui.animate(dt=>{
+    st.elapsed+=dt;
+    if(st.phase==='return'){
+      st.travel=st.from*(1-ease(Math.min(1,st.elapsed/.65)));
+      if(st.elapsed>=.65){st.travel=0;st.mode=st.nextMode;st.phase='adjust';st.fromAngle=st.angle;st.elapsed=0;}
+    }else if(st.phase==='adjust'){
+      st.angle=st.fromAngle+(st.nextAngle-st.fromAngle)*ease(Math.min(1,st.elapsed/.7));
+      if(st.elapsed>=.7){st.angle=st.nextAngle;st.phase='pull';st.elapsed=0;}
+    }else if(st.phase==='pull'){
+      st.travel=Math.min(1,st.elapsed/1.8);
+      if(st.travel>=1){st.phase='idle';return false;}
+    }
+    return true;
+  });
+}
+const ui=mountFigure({
+  fig:'01',turn:'full',title:'The inclined plane',size:[146,85,114],palette:'mustard',
+  state:{mode:'ramp',phase:'idle',angle:20,travel:0},scene:ipScene,
+  stats:st=>{const g=ipGeometry(st),work=g.force*g.distance,output=ipMass*ipGravity*g.rise*st.travel;return[
+    {label:'Ideal pull at '+Math.round(st.angle)+' deg',value:g.force.toFixed(2)+' N'},
+    {label:'Travel / target rise',value:g.distance.toFixed(3)+' / '+g.rise.toFixed(3)+' m',small:true},
+    {label:'Work in / gain',value:work.toFixed(2)+' / '+output.toFixed(2)+' J',small:true},
+    {label:'Model',value:'Friction neglected',small:true}
+  ];},
+  buttons:['Raise','Ramp','Steepen'].map(label=>({label,onClick:(st,ui)=>ipAction(st,ui,label)})),
+  params:(st,q)=>{
+    if(q.get('mode')==='raise')st.mode='raise';
+    if(q.get('steep')==='1')st.angle=35;
+    const progress=Number(q.get('travel'));if(Number.isFinite(progress))st.travel=Math.max(0,Math.min(1,progress));
+  }
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
