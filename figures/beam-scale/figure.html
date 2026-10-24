@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Beam scale</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   The book's off-centre fulcrum and sliding weight are the mechanism. The supported bench stand,
+   suspended pan, one specimen and calibrated graduations are a teaching adaptation.
+   Primary evidence is Macaulay and Ardley, 2016 and 1998, printed page 22. The 1988 edition is unverified.
+   Representative pan and suspension construction is supported by the Horniman Museum object 21.4.61/59.
+   https://www.horniman.ac.uk/object/21.4.61/59/
+   1. Empty assembly is tared with the 1 kg poise 8 cm from the pivot. Specimen rests on the table.
+   2. Load carries the specimen up, over the pan rim, and down onto its floor. The short arm lowers.
+   3. Slide moves the hanging poise out along the long arm from 8 to 48 cm. The beam returns to level.
+   4. Read lights the 2 kg engraving only after balance. No material leaves the pan.
+   The specimen's 2 kg * 20 cm equals the poise's 1 kg * 40 cm travel from the tared position.
+   The fixed pan, suspension and beam have a net short-side tare moment of 8 kg cm.
+   The beam's tilt and settling are illustrative, not a calibrated dynamic or friction model.
+   Parts and attachments.
+   Structure. Base on table, upright on base, two bearing cheeks on upright, fulcrum pin through cheeks and beam.
+   Mechanism. Graduated beam on pin, load eye at +20 cm, three suspension cords to pan rim,
+   pan floor and raised rim, poise carrier sliding on beam, 1 kg counterweight hanging from carrier.
+   Power. Gravity and the user's hand. No motors or hidden transmission.
+   Controls. Load, Slide and Read stage manual actions. The specimen is not an anatomy label.
+   Data shape. A single phase in empty/loading/loaded/sliding/balanced/read, elapsed seconds,
+   specimen transfer 0..1, poise distance in cm and beam angle in radians.
+*/
+const beamPivot = [32,94,68], beamShort = 20, beamTare = 8, beamMass = 2;
+const beamBounds = [0,70,0,146,0,83];
+const beamBrass = matOf('#d2ac5b'), beamCord = matOf('#8a7254');
+const beamPoint = (st, d, dx=0, dz=0) => [32+dx,94+d*Math.cos(st.angle)-dz*Math.sin(st.angle),68+d*Math.sin(st.angle)+dz*Math.cos(st.angle)];
+const beamBoxOf = (pts, r=0) => [0,1].map(end=>[0,1,2].map(i=>(end ? Math.max : Math.min)(...pts.map(p=>p[i]))+(end ? r : -r)));
+function beamScene(st, m){
+  const parts=[], labels=[], ghost=ease(st.xr||0), put=(pts,svg,r=0)=>parts.push({box:beamBoxOf(pts,r),svg});
+  const solid=(a,b,material,label,at,fade=false)=>{
+    put([a,b],`<g opacity="${fade ? 1-.73*ghost : 1}">${box(...a,...b,material,tone,1.2)}</g>`);
+    if(label) labels.push({at:at||avg([a,b]),text:label});
+  };
+  const link=(a,b,r,material,label)=>{put([a,b],rod(a,b,r,material,toneI,.9),r);if(label)labels.push({at:avg([a,b]),text:label});};
+  let svg=board(0,0,70,146,3,5,WOOD);
+  const load=beamPoint(st,20), rider=beamPoint(st,-st.poise), panZ=load[2]-32;
+  svg+=castShadow([[22,82,3],[42,105,3],beamPivot,beamPoint(st,-72),load,[load[0]-12,load[1],panZ],[load[0]+12,load[1],panZ]],3,boardTop(0,0,70,146,3,5));
+  solid([21,82,3],[43,104,7],m,'BASE');
+  solid([29,91,7],[35,97,58],m,'UPRIGHT',null,true);
+  for(const x of [27.5,35]) solid([x,90,58],[x+1.5,98,71],m,x===35?'BEARING CHEEKS':null,null,true);
+  link([27,94,68],[37,94,68],1.1,METAL,'FULCRUM PIN');
+  // Each short beam segment carries its own engravings, so the carrier can occlude them from either side.
+  for(let d=-72;d<22;d+=2){
+    const a=on(PX(30.4),rectUV(d,-2,d+2,2)).map(p=>beamPoint(st,p[1],p[0]-32,p[2]));
+    const b=on(PX(33.6),rectUV(d,-2,d+2,2)).map(p=>beamPoint(st,p[1],p[0]-32,p[2]));
+    let seg=loft(a,b,n=>tone(n,beamBrass));
+    const cap=facing([1,0,0])?b:a;
+    seg+=fill(pd(cap),tone(facing([1,0,0])?[1,0,0]:[-1,0,0],beamBrass));
+    if(d===-72) seg+=shape([a[0],b[0],b[3],a[3]],beamBrass.m,.8);
+    if(d===20) seg+=shape([a[1],b[1],b[2],a[2]],beamBrass.m,.8);
+    const marking=-d;
+    if(marking>=8 && marking<=68 && (marking-8)%4===0){
+      const selected=st.phase==='read' && marking===48;
+      const dx=facing([1,0,0])?1.65:-1.65;
+      const c=beamPoint(st,-marking,dx,0);
+      const tick=beamPoint(st,-marking,dx,marking%20===8?1.9:1.1);
+      seg+=line([c,tick],selected?3:1).replaceAll(INK,selected?'#e2483d':INK);
+      if((marking-8)%20===0){
+        // Offset each numeral from its tick so the poise carrier cannot hide the reading.
+        const p=beamPoint(st,-marking+4,dx,-1.2);
+        const u=Dv(0,dx>0?-Math.cos(st.angle):Math.cos(st.angle),dx>0?-Math.sin(st.angle):Math.sin(st.angle));
+        const v=Dv(0,Math.sin(st.angle),-Math.cos(st.angle));
+        parts.push({box:[[p[0],p[1]-2,p[2]-1],[p[0],p[1]+2,p[2]+3]],svg:`<text transform="${txM(P(...p),u,v)}" font-size="2.7" text-anchor="middle" font-family="monospace" font-weight="800" fill="${selected?'#e2483d':INK}">${(marking-8)/20}</text>`});
+      }
+    }
+    put([...a,...b],seg);
+  }
+  labels.push({at:beamPoint(st,-64),text:'GRADUATED BEAM'},{at:beamPoint(st,-28,1.65,1.5),text:'ENGRAVED SCALE',on:st.phase==='read'});
+  link([load[0],load[1],load[2]-1],[load[0],load[1],load[2]-4],.85,METAL,'LOAD EYE');
+  for(let j=0;j<3;j++){
+    const th=(30+120*j)*Math.PI/180;
+    const end=[load[0]+11*Math.cos(th),load[1]+11*Math.sin(th),panZ+3];
+    link([load[0],load[1],load[2]-4],end,.34,beamCord,j===0?'SUSPENSION CORDS':null);
+  }
+  // The shallow pan is split into independent wall strips and a floor so its contents sort inside it.
+  const floorA=on(PZ(panZ),ellUV(load[0],load[1],10,10,30)), floorB=on(PZ(panZ+1),ellUV(load[0],load[1],10,10,30));
+  put([...floorA,...floorB],loft(floorA,floorB,n=>toneI(n,METAL))+shape(floorB,METAL.l,1));
+  for(let j=0;j<30;j++){
+    const th=j*Math.PI*2/30, th2=(j+1)*Math.PI*2/30;
+    const pt=(r,z,t)=>[load[0]+r*Math.cos(t),load[1]+r*Math.sin(t),z];
+    const a=[pt(10,panZ,th),pt(10,panZ,th2)],b=[pt(12,panZ+3,th),pt(12,panZ+3,th2)];
+    put([...a,...b],shape([a[0],a[1],b[1],b[0]],toneI([Math.cos(th),Math.sin(th),.5],METAL),.5)+line(b,1.3));
+  }
+  labels.push({at:[load[0],load[1],panZ+1],text:'PAN FLOOR'},{at:[load[0]+12,load[1],panZ+3],text:'PAN RIM'});
+  const q=st.transfer, w=ease(q);
+  const specimen=[54+(load[0]-54)*w,126+(load[1]-126)*w,3+(panZ+1-3)*w+39*Math.sin(Math.PI*w)];
+  solid([specimen[0]-5,specimen[1]-5,specimen[2]],[specimen[0]+5,specimen[1]+5,specimen[2]+9],PALS.tomato);
+  const poiseTop=[rider[0],rider[1],rider[2]-3],poiseBottom=[rider[0],rider[1],rider[2]-14];
+  const carrier=ellUV(0,0,3,3,24).map(([x,z])=>[rider[0]+x,rider[1],rider[2]+z]);
+  for(let j=0;j<carrier.length;j++)link(carrier[j],carrier[(j+1)%carrier.length],.48,METAL);
+  labels.push({at:[rider[0]+3,rider[1],rider[2]],text:'POISE CARRIER',on:st.phase==='sliding'});
+  link(poiseTop,[...poiseBottom.slice(0,2),poiseBottom[2]+4],.55,METAL,'WEIGHT HANGER');
+  put([[rider[0]-4,rider[1]-4,poiseBottom[2]-4],[rider[0]+4,rider[1]+4,poiseBottom[2]+4]],cyl(rider[0],rider[1],poiseBottom[2]-4,poiseBottom[2]+4,4,DARK,toneI,1.3));
+  labels.push({at:poiseBottom,text:'1 KG COUNTERWEIGHT',on:st.phase==='sliding'});
+  svg+=byDepth(parts);
+  if(ghost>0){
+    const short=beamPoint(st,20,6,7),zero=beamPoint(st,0,6,7),long=beamPoint(st,-st.poise,6,7);
+    svg+=`<g opacity="${ghost}" stroke="#e2483d" fill="none" stroke-width="1.2" stroke-dasharray="3 2"><path d="${pd([short,zero,long],false)}"/></g>`;
+    for(const [a,b,t] of [[short,zero,'20 CM'],[zero,long,Math.round(st.poise)+' CM']]){
+      const p=P(...avg([a,b]));svg+=`<text x="${p[0]}" y="${p[1]-3}" font-size="${6*INK_K}" font-family="monospace" text-anchor="middle" fill="#b23924">${t}</text>`;
+    }
+  }
+  if(ghost>.6)svg+=xrCallouts(labels,beamBounds);
+  return svg;
+}
+function beamAnimate(st,ui){
+  ui.animate(dt=>{
+    st.elapsed=Math.min(1,st.elapsed+dt/(st.phase==='loading'?1.6:1.8));
+    if(st.phase==='loading')st.transfer=st.elapsed;
+    if(st.phase==='sliding')st.poise=beamTare+beamMass*beamShort*ease(st.elapsed);
+    const onPan=st.phase==='loading'?Math.max(0,(st.transfer-.85)/.15):1;
+    st.angle=-.16*(beamMass*beamShort*onPan-(st.poise-beamTare))/40;
+    if(st.elapsed<1)return true;
+    st.phase=st.phase==='loading'?'loaded':'balanced';return false;
+  });
+}
+const ui=mountFigure({
+  fig:'22',turn:'full',title:'Beam scale',size:[70,146,83],palette:'mint',
+  state:{phase:'empty',elapsed:0,transfer:0,poise:8,angle:0},scene:beamScene,
+  buttons:[
+    {label:'Load',onClick:(st,ui)=>{if(st.phase!=='empty')return ui.flash('The specimen is already loaded');st.phase='loading';st.elapsed=0;beamAnimate(st,ui);}},
+    {label:'Slide',onClick:(st,ui)=>{if(st.phase==='empty')return ui.flash('Load the pan first');if(st.phase==='loading'||st.phase==='sliding')return ui.flash('Wait for the beam to settle');if(st.phase!=='loaded')return ui.flash('The beam is balanced');st.phase='sliding';st.elapsed=0;beamAnimate(st,ui);}},
+    {label:'Read',onClick:(st,ui)=>{if(!['balanced','read'].includes(st.phase))return ui.flash('Balance the loaded beam before reading');st.phase='read';}}
+  ],
+  stats:st=>[{label:'Mass',value:st.phase==='read'?'2 kg':'unread'},{label:'Poise position',value:Math.round(st.poise)+' cm',small:true},{label:'Beam',value:st.phase==='empty'?'tared':Math.abs(st.angle)<.001&&st.phase!=='loading'?'balanced':'tilted',small:true}],
+  params:(st,q)=>{const ph=q.get('state');if(['loaded','balanced','read'].includes(ph)){st.phase=ph;st.transfer=1;st.poise=ph==='loaded'?8:48;st.angle=ph==='loaded'?-.16:0;}}
+});
+xrMount(()=>ui,()=>'');
+</script></body></html>
