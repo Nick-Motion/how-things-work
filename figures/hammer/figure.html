@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hammer</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Book page 23 describes striking as a third-class lever. The wrist is the fulcrum;
+   the hand applies effort between it and the head. Head speed and travel increase,
+   not static force. Impact drives the nail against resistance from the wood.
+   Raise rotates the hand and tool about the wrist. Strike accelerates to contact,
+   then follows through while the nail enters the block. Reset replaces the specimen.
+   The partial hand and forearm are a teaching model, not a mechanical wrist hinge.
+   See-through ghosts the grip, skin and wood to expose the steel shank, wrist and nail.
+   Parts. Tool: forged steel shaft continuous with neck, cheek, face and two claw tips;
+   molded grip surrounds the lower shaft. The claw is inactive throughout this lesson.
+   Human model: forearm holds wrist, palm and fingers hold the grip. Simplified bones
+   inside the skin show the pivot and effort path, not a clinical anatomical model.
+   Fixture: wood block on table; nail head and shank with point inside wood.
+   Construction reference: https://www.estwing.com/product/rip-hammer/ . One-piece
+   steel and molded grip are representative details, not an exact book replica.
+   Scale is illustrative, 5 mm per model unit. Radius to hand effort is 14 units,
+   to head is 60. Both move through the same angle. Time is slowed for teaching.
+   shortcut: prescribed nail travel illustrates impact without a collision simulation,
+   use a dynamics solver if teaching impact force, material response or energy.
+*/
+const hamPivot = [25,40,38], hamSteel = matOf('#9ba9b1'), hamSkin = matOf('#e4b394');
+const hamState = {phase:'rest', angle:.25, driven:0, xr:0, xrT:0, generation:0};
+const hamPoint = (a,x,y=0,z=0) => [hamPivot[0]+x*Math.cos(a)-z*Math.sin(a),40+y,38+x*Math.sin(a)+z*Math.cos(a)];
+const hamBounds = (ps,r=0) => [[0,1,2].map(i=>Math.min(...ps.map(p=>p[i]))-r),[0,1,2].map(i=>Math.max(...ps.map(p=>p[i]))+r)];
+const hamFaceZ = a => hamPoint(a,60,0,-8)[2];
+const hamEndAngle = -.135;
+function hamScene(st,m){
+  const k = ease(st.xr || 0), a = st.angle, parts = [];
+  const put = (pts,r,svg) => parts.push({box:hamBounds(pts,r),svg});
+  const beam = (p,q,r,mat,opacity=1,r1=r) => put([p,q],Math.max(r,r1),`<g opacity="${opacity}">${rod(p,q,r,mat,toneI,1.2,r1)}</g>`);
+  const hp = (x,y=0,z=0) => hamPoint(a,x,y,z);
+  let out = board(0,0,108,84,3,5,BOARD);
+  out += castShadow([hamPivot,hp(60,0,14),hp(60,0,-8),[85,40,30-st.driven]],3,boardTop(0,0,108,84,3,5));
+  const block = box(69,22,3,103,60,20,WOOD,toneI,1.5);
+  let grain = '';
+  for(const y of [26,33,48,56]) grain += line([[70,y,20.05],[82,y+1,20.05],[102,y-.5,20.05]],.5).replaceAll(INK,'#9b7043');
+  put([[69,22,3],[103,60,20]],0,`<g opacity="${1-.76*k}">${block}${grain}</g>`);
+  const nz = 30-st.driven, low = k > .01 ? nz-14 : 20;
+  beam([85,40,low],[85,40,nz-.5],.65,METAL);
+  if(k>.01) beam([85,40,nz-14],[85,40,nz-16],.65,METAL,k,0);
+  put([[83.2,38.2,nz-.5],[86.8,41.8,nz]],0,cyl(85,40,nz-.5,nz,1.8,METAL,toneI,.9));
+  beam([3,40,36],hamPivot,4.5,hamSkin,1-.78*k,4);
+  beam(hp(0),hp(17),4.6,hamSkin,1-.82*k,5);
+  beam(hp(1),hp(58),1.6,hamSteel);
+  beam(hp(3),hp(23),3,m,1-.65*k,2.5);
+  for(const x of [9,12,15,18]) {
+    beam(hp(x,-4,1),hp(x,3,1),1.3,hamSkin,1-.8*k);
+    beam(hp(x,3,1),hp(x,3,-3),1.3,hamSkin,1-.8*k);
+  }
+  beam(hp(7,-3,3),hp(17,-3,1),1.7,hamSkin,1-.8*k);
+  beam(hp(49),hp(60),2.4,hamSteel,1,3.2);
+  const hamCheek = [[55,-4,-4],[65,-4,-4],[65,4,-4],[55,4,-4]].map(([x,y,z])=>hp(x,y,z));
+  const hamCheekTop = [[55,-4,6],[65,-4,6],[65,4,6],[55,4,6]].map(([x,y,z])=>hp(x,y,z));
+  let cheek = loft(hamCheek,hamCheekTop,n=>toneI(n,hamSteel));
+  if(vis([Math.sin(-a),0,Math.cos(a)])) cheek += shape(hamCheekTop,hamSteel.l,1);
+  else cheek += shape(hamCheek,hamSteel.d,1);
+  put([...hamCheek,...hamCheekTop],0,cheek+hullInk([...hamCheek,...hamCheekTop],2));
+  beam(hp(60,0,-4),hp(60,0,-8),4,hamSteel);
+  for(const y of [-2.5,2.5]) {
+    beam(hp(60,y,5),hp(58,y,10),1.9,hamSteel,1,1.5);
+    beam(hp(58,y,10),hp(53,y,14),1.5,hamSteel,1,.4);
+  }
+  out += byDepth(parts);
+  if(k>.01){
+    const bones = [rod([5,38.5,36],hamPivot,1.1,CERAMIC,toneI,.8),rod([5,41.5,36],hamPivot,1.1,CERAMIC,toneI,.8),rod(hp(0),hp(14),1.4,CERAMIC,toneI,.9)];
+    out += `<g opacity="${k}">${bones.join('')}${rod([25,34,38],[25,46,38],1.7,matOf('#e76e50'),toneI,.9)}</g>`;
+    const travel = Array.from({length:25},(_,i)=>hamPoint(hamEndAngle+(.95-hamEndAngle)*i/24,60,0,-8));
+    const effort = [hp(14,7,9),hp(14,7,-7)];
+    out += `<g opacity="${k}" fill="none" stroke="#db663c" stroke-width="2" stroke-linecap="round"><path d="${pd(travel,false)}" stroke-dasharray="3 2"/><path d="${pd(effort,false)}"/>${line([hp(12,7,-3),hp(14,7,-7),hp(16,7,-3)],1.8)}</g>`;
+  }
+  if(k>.6) out += xrCallouts([
+    {at:hp(60,0,-8),text:'STRIKING FACE',on:st.phase==='strike'},
+    {at:hp(64,2,1),text:'CHEEK'},
+    {at:hp(51),text:'NECK'},
+    {at:hp(34),text:'STEEL SHAFT'},
+    {at:hp(22,0,2.5),text:'MOLDED GRIP'},
+    {at:hp(54,2.5,13),text:'CLAW TIPS'},
+    {at:hamPivot,text:'WRIST FULCRUM',on:st.phase==='strike'||st.phase==='raise'},
+    {at:hp(14,3),text:'HAND EFFORT',on:st.phase==='strike'},
+    {at:hamPoint(.65,60,0,-8),text:'HEAD TRAVEL',on:st.phase==='strike'}
+  ],[10,104,28,52,20,92]);
+  return out;
+}
+function hamRaise(st,ui){
+  if(st.phase==='raise'||st.phase==='strike') return ui.flash('Wait for the swing to finish');
+  if(st.angle===.95) return ui.flash('The hammer is raised');
+  hamMove(st,ui,'raise',.95,.8);
+}
+function hamStrike(st,ui){
+  if(st.phase==='raise'||st.phase==='strike') return ui.flash('Wait for the swing to finish');
+  if(st.driven>0) return ui.flash('Reset to replace the driven nail');
+  if(st.angle<.9) return ui.flash('Raise the hammer first');
+  hamMove(st,ui,'strike',hamEndAngle,.8);
+}
+function hamMove(st,ui,phase,target,seconds){
+  const from = st.angle, gen = ++st.generation; let t=0; st.phase=phase;
+  ui.animate(dt=>{
+    if(gen!==st.generation) return false;
+    t=Math.min(1,t+dt/seconds);
+    const q=phase==='strike'?t*t:ease(t);
+    st.angle=from+(target-from)*q;
+    if(phase==='strike') st.driven=Math.max(0,30-hamFaceZ(st.angle));
+    if(t===1){st.phase=phase==='strike'?'driven':'raised';return false;}
+    return true;
+  });
+}
+const hamUI = mountFigure({fig:'23',turn:'full',title:'Hammer',size:[108,84,103],palette:'cobalt',state:hamState,scene:hamScene,
+  stats:st=>[{label:'Nail driven',value:Math.round(st.driven*5)+' mm'},{label:'Head / hand travel',value:'4.3x',small:true}],
+  buttons:[{label:'Raise',onClick:hamRaise},{label:'Strike',onClick:hamStrike},
+    {label:'Reset',onClick:(st)=>{st.generation++;st.phase='rest';st.angle=.25;st.driven=0;}}],
+  params:(st,q)=>{
+    if(q.get('raised')==='1'){st.angle=.95;st.phase='raised';}
+    if(q.get('driven')==='1'){st.angle=hamEndAngle;st.driven=30-hamFaceZ(st.angle);st.phase='driven';}
+  }
+});
+xrMount(()=>hamUI,()=> '');
+</script></body></html>
