@@ -1,0 +1,673 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wind turbine</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Wind turbine (a 2 MW, 80 m rotor, three-blade upwind turbine with a gearbox; drawn squashed: the tower is cut short
+   and the nacelle drawn about 3x too big next to the blades, so its insides can be read).
+   How it really works, and where everything is after each step:
+   1. Wind: the anemometer (cups) on the nacelle roof measures the wind speed, the wind vane beside it its direction.
+      Below the 3 m/s cut-in the controller waits: brake off, blades at 0 deg pitch, rotor coasting.
+   2. Turning: above cut-in the lift on the blades turns the rotor (clockwise seen from upwind) at up to 17.5 rpm
+      (tip speed ratio 8). Hub -> main shaft (held by the main bearing on the bedplate) -> planetary stage (carrier on the
+      main shaft, planets roll in the fixed ring gear, the sun gear turns ~4.6x) -> parallel stage (big wheel on the sun
+      shaft drives a pinion) -> high-speed shaft, about 104x the rotor speed (1800 rpm at rated) -> brake disc ->
+      flexible coupling -> generator. Power ~ 1/2 rho A Cp v^3 (rho 1.225, A = pi 40^2, Cp .45) = 1.39 kW per (m/s)^3,
+      capped at the 2000 kW rating (reached at 11.3 m/s).
+   3. Pitch: above rated speed the controller turns each blade about its own axis (pitch motor pinion on the toothed
+      ring of the pitch bearing, ~9 deg/s) to spill the extra wind and hold 2000 kW. 90 deg = feathered: the blade
+      edge-on to the wind, no lift.
+   4. Power out: generator (690 V) -> converter cabinet -> 3 power cables down through the yaw bearing's centre, hang
+      free in a drip loop (so the nacelle can turn), then clamped down the tower wall -> transformer at the foot ->
+      buried cable -> the house meter -> the lamp. (A real turbine feeds the grid; here one house stands for it.)
+   5. Yaw: when the vane shows the wind has moved, the 4 yaw motors on the bedplate turn their pinions round the
+      toothed yaw ring fixed on the tower top, swinging the nacelle and rotor to face the wind (really ~0.5 deg/s,
+      drawn ~15 deg/s). The yaw brakes clamp the ring otherwise. The hanging cables twist as it turns.
+   6. Storm: above the 25 m/s cut-out the blades feather to 90 deg, the rotor slows, then the hydraulic brake
+      caliper clamps the disc on the high-speed shaft and holds it; it restarts once the wind drops below 20 m/s.
+      The Brake button does the same by hand.
+   Parts (each fixed to the part named after it):
+   GROUND   grass plot . concrete foundation . door steps . pad transformer . buried cable . compass rose
+   TOWER    3 steel sections (bottom, middle, top) with bolted flanges . door . ladder . 2 platforms .
+            power cables (3) + control cable on the wall . drip loop . twisting hanging bundle
+   NACELLE  cover (palette) on the bedplate . cooler, mast, aviation light, anemometer, wind vane on the roof .
+            yaw ring (tower) . 4 yaw motors + pinions . 2 yaw brakes . bedplate . 2 rear frame rails . main bearing
+            (pillow block + ring) . main shaft . planetary stage (housing, ring gear, 3 planets, sun) . parallel stage
+            (housing, wheel, pinion) . 2 gearbox feet . high-speed shaft . brake disc . brake caliper . hydraulic unit
+            + hose . coupling . generator (housing, stator winding, rotor, feet, terminal box) . converter cabinet .
+            controller cabinet . generator cables . down cables
+   ROTOR    shaft flange outside the nose . spinner . hub casting . 3 x (pitch bearing, pitch gear ring, blade root,
+            pitch motor + pinion) . 3 blades with collars and red tips
+   HOUSE    walls, gables, roof, door, windows, door lamp . meter . wiring . ceiling lamp */
+
+/* ---------- world (x = depth toward the front, y = width, z = up) ---------- */
+const GW = 48, GD = 52, BH = 1.2;
+const GRASS = { l:'#c9dca6', m:'#aac487', d:'#7f9a62' };
+const GTOP = boardTop(0, 0, GW, GD, BH, 6);
+const TX = 30, TY = 21, ZB = BH + .5, ZT = 36;                 // tower axis, tower foot (on the foundation), tower top
+const rTower = z => 2.4 + (1.55 - 2.4)*(z - ZB)/(ZT - ZB);
+const TZS = [ZB, 14, 25, ZT];                                    // tower sections, flanges at 14 and 25
+const ZA = 5.0, ZH = 3.1;                                        // main shaft axis, high-speed shaft axis (nacelle frame)
+const XH = 10.2, R_ROOT = 3.0;                                   // hub centre; where a blade leaves the spinner
+const HX0 = 4, HX1 = 15, HY0 = 35, HY1 = 44, HZ1 = BH + 5.4, HRZ = BH + 8.6, HYR = 39.5;   // house
+const TR = [20, 25.5, 23.6, 29, BH + 3.0];                       // transformer x0 y0 x1 y1 top
+const ROUTE = [[[TX - 1.2, TY + .6], [21.8, 27.2]], [[20.4, 29.0], [15.0, 37.2]]];
+
+/* ---------- the real numbers ---------- */
+const V_IN = 3, V_RATED = 11.3, V_OUT = 25, V_BACK = 20, P_RATED = 2000, RPM_MAX = 17.5, TSR = 8, R_REAL = 40, GEAR = 104;
+const KP = .5*1.225*Math.PI*R_REAL**2*.45/1000;                  // kW per (m/s)^3
+const YAW_RATE = 15, PITCH_RATE = 9;
+const rpmFor = v => v < V_IN ? 0 : Math.min(RPM_MAX, TSR*v/R_REAL*60/(2*Math.PI));
+const pAvail = v => v < V_IN ? 0 : Math.min(P_RATED, KP*v**3);
+const pitchFor = v => v > V_RATED ? Math.min(25, (v - V_RATED)*3.2) : 0;
+const WINDS = { calm:{ label:'Calm', v:2 }, breeze:{ label:'Breeze', v:7 }, strong:{ label:'Strong', v:14 }, storm:{ label:'Storm', v:28 } };
+const DIRS = { S:{ label:'South', a:0 }, E:{ label:'East', a:90 }, N:{ label:'North', a:180 }, W:{ label:'West', a:270 } };
+
+const rad = a => a*Math.PI/180;
+const addv = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]], scl = (a, k) => a.map(v => v*k);
+const f2 = v => v.toFixed(2);
+const dist = (a, b) => Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
+const wrap180 = a => ((a % 360) + 540) % 360 - 180;
+const sm01 = t => { t = Math.max(0, Math.min(1, t)); return t*t*(3 - 2*t); };
+
+/* ---------- the nacelle frame: origin on the tower axis at the yaw bearing, +x toward the rotor ---------- */
+let NC = 1, NS = 0, VL = [1,1,1];
+const nDir = ([x,y,z]) => [x*NC - y*NS, x*NS + y*NC, z];
+const nP = ([x,y,z]) => [TX + x*NC - y*NS, TY + x*NS + y*NC, ZT + z];
+const wp = pts => pts.map(nP);
+function setFrames(st){ const a = rad(st.yaw); NC = Math.cos(a); NS = Math.sin(a); VL = [CAM_V[0]*NC + CAM_V[1]*NS, -CAM_V[0]*NS + CAM_V[1]*NC, CAM_V[2]]; }
+
+/* ---------- sorting: nacelle-frame parts compare in that frame, the rest by world boxes ---------- */
+const lboxOf = pts => [[0,1,2].map(i => Math.min(...pts.map(p => p[i]))), [0,1,2].map(i => Math.max(...pts.map(p => p[i])))];
+const corners = b => { const o = []; for (const x of [b[0][0], b[1][0]]) for (const y of [b[0][1], b[1][1]]) for (const z of [b[0][2], b[1][2]]) o.push([x,y,z]); return o; };
+const grow = (b, e) => [b[0].map(v => v - e), b[1].map(v => v + e)];
+const itN = (lb, svg) => ({ lbox: lb, box: lboxOf(corners(lb).map(nP)), svg });
+const itW = (b, svg) => ({ lbox: null, box: b, svg });
+const sepL = (p, q) => { for (let k = 0; k < 3; k++){ if (p.lbox[1][k] <= q.lbox[0][k] + 1e-6) return VL[k] >= 0 ? -1 : 1; if (q.lbox[1][k] <= p.lbox[0][k] + 1e-6) return VL[k] >= 0 ? 1 : -1; } return 0; };
+// order only the pairs that overlap on screen, then draw back to front through that graph (ties and cycles by depth)
+function sortAll(items){
+  items = items.filter(Boolean); const n = items.length;
+  const sb = items.map(it => { const q = corners(it.box).map(c => P(...c)); return [Math.min(...q.map(v => v[0])), Math.max(...q.map(v => v[0])), Math.min(...q.map(v => v[1])), Math.max(...q.map(v => v[1]))]; });
+  const dep = items.map(it => depthOf(boxMid(it.box))), out = items.map(() => []), indeg = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++){
+    const a = sb[i], b = sb[j]; if (a[1] < b[0] || b[1] < a[0] || a[3] < b[2] || b[3] < a[2]) continue;
+    const c = (items[i].lbox && items[j].lbox ? sepL(items[i], items[j]) : 0) || sepOrder(items[i], items[j]);
+    if (c < 0){ out[i].push(j); indeg[j]++; } else if (c > 0){ out[j].push(i); indeg[i]++; } }
+  const done = new Array(n).fill(false), res = [];
+  for (let k = 0; k < n; k++){
+    let b = -1; for (let i = 0; i < n; i++) if (!done[i] && (b < 0 || (indeg[i] === 0) > (indeg[b] === 0) || ((indeg[i] === 0) === (indeg[b] === 0) && dep[i] < dep[b]))) b = i;
+    done[b] = true; res.push(items[b].svg); for (const j of out[b]) indeg[j]--; }
+  return res.join('');
+}
+const op = (k, svg) => k >= .999 ? svg : `<g opacity="${f2(k)}">${svg}</g>`;
+
+/* ---------- solids about any axis, in the nacelle frame ---------- */
+const ortho = ax => { const u = norm(cross(ax, Math.abs(ax[2]) < .9 ? [0,0,1] : [1,0,0])); return [u, cross(ax, u)]; };
+const ringL = (c, ax, r, n = 20, ph = 0) => { const [u, v] = ortho(ax); return Array.from({length:n}, (_, i) => { const t = ph + i/n*2*Math.PI; return addv(c, addv(scl(u, r*Math.cos(t)), scl(v, r*Math.sin(t)))); }); };
+const axBox = (c, ax, s0, s1, r) => lboxOf([...ringL(addv(c, scl(ax, s0)), ax, r, 8), ...ringL(addv(c, scl(ax, s1)), ax, r, 8)]);
+// solid of revolution: profile [[s, r]...] along ax from c (convex, s rising)
+function revL(c, ax, prof, M, sh = toneI, w = 1, n = 22){
+  const R = prof.map(([s, r]) => wp(ringL(addv(c, scl(ax, s)), ax, Math.max(r, .01), n)));
+  let o = ''; for (let i = 0; i < R.length - 1; i++) o += loft(R[i], R[i+1], nn => sh(nn, M));
+  const a = nDir(ax), b = scl(a, -1);
+  if (prof[prof.length-1][1] > .05 && vis(a)) o += fill(pd(R[R.length-1]), sh(a, M)) + ink(pd(R[R.length-1]), w*.6);
+  if (prof[0][1] > .05 && vis(b)) o += fill(pd(R[0]), sh(b, M)) + ink(pd(R[0]), w*.6);
+  return o + hullInk(R.flat(), w);
+}
+// a ring-shaped solid (bearing, winding, ring gear): the bore, what is inside it, the outside, the end that faces you
+function tubeL(c, ax, s0, s1, r0, r1, M, sh = toneI, w = .8, n = 24, inner = '', o1 = 1){
+  const at = s => addv(c, scl(ax, s)), A0 = wp(ringL(at(s0), ax, r0, n)), A1 = wp(ringL(at(s1), ax, r0, n)), B0 = wp(ringL(at(s0), ax, r1, n)), B1 = wp(ringL(at(s1), ax, r1, n));
+  const a = nDir(ax), fr = vis(a), Bc = fr ? B1 : B0, Ac = fr ? A1 : A0, cn = fr ? a : scl(a, -1);
+  const o = loft(B0, B1, nn => sh(nn, M)) + `<path d="${pd(Bc)}${pd(Ac)}" fill="${sh(cn, M)}" fill-rule="evenodd"/>` + ink(pd(Bc), w*.7) + ink(pd(Ac), w*.6) + hullInk([...B0, ...B1], w);
+  return loft(A0, A1, nn => mix(sh(nn, M), '#000000', .3), true) + inner + op(o1, o);
+}
+// spur gear about ax (phase ph turns it), optional hole
+function gearL(c, ax, s0, s1, r, nt, M, ph = 0, rIn = 0, sh = toneI, w = .7){
+  const [u, v] = ortho(ax), d = Math.min(.22, r*.16);
+  const ring = s => wp(Array.from({length: nt*4}, (_, i) => { const t = ph + (i + .5)/(nt*4)*2*Math.PI, rr = i % 4 < 2 ? r : r - d; return addv(addv(c, scl(ax, s)), addv(scl(u, rr*Math.cos(t)), scl(v, rr*Math.sin(t)))); }));
+  const A = ring(s0), B = ring(s1), a = nDir(ax), fr = vis(a), cap = fr ? B : A, cn = fr ? a : scl(a, -1);
+  const hole = rIn > 0 ? pd(wp(ringL(addv(c, scl(ax, fr ? s1 : s0)), ax, rIn, 16))) : '';
+  return loft(A, B, nn => sh(nn, M)) + `<path d="${pd(cap)}${hole}" fill="${sh(cn, M)}" fill-rule="evenodd"/>` + ink(pd(cap), w*.6) + (hole ? ink(hole, w*.5) : '') + hullInk([...A, ...B], w);
+}
+// a vertical prism in the nacelle frame: footprint (x, y), z0..z1
+function slabN(pts2, z0, z1, M, sh = toneI, w = .9){
+  const A = wp(pts2.map(([x, y]) => [x, y, z0])), B = wp(pts2.map(([x, y]) => [x, y, z1]));
+  let s = '';
+  if (pts2.length <= 6){ const c = avg(pts2.map(([x, y]) => [x, y, 0]));
+    for (let i = 0; i < pts2.length; i++){ const j = (i + 1) % pts2.length, [ax, ay] = pts2[i], [bx, by] = pts2[j];
+      let nn = [by - ay, -(bx - ax), 0]; if (nn[0]*((ax + bx)/2 - c[0]) + nn[1]*((ay + by)/2 - c[1]) < 0) nn = scl(nn, -1);
+      const wn = nDir(norm(nn)); if (vis(wn)) s += shape([A[i], A[j], B[j], B[i]], sh(wn, M), w*.6); } }
+  else s += loft(A, B, nn => sh(nn, M));
+  if (vis([0,0,1])) s += shape(B, sh([0,0,1], M), w*.6); if (vis([0,0,-1])) s += shape(A, sh([0,0,-1], M), w*.6);
+  return s + hullInk([...A, ...B], w);
+}
+const boxN = (x0, y0, z0, x1, y1, z1, M, sh = toneI, w = .9) => slabN(rectUV(x0, y0, x1, y1), z0, z1, M, sh, w);
+const rodN = (a, b, r, M, w = .7, r1 = r, n = 14) => rod(nP(a), nP(b), r, M, toneI, w, r1, n);
+const rodIt = (a, b, r, M, w = .7) => itN(grow(lboxOf([a, b]), r), rodN(a, b, r, M, w));
+// a point on a cylinder about the local x axis, on the side toward the viewer (for label dots)
+const nearAx = (x, r, cz = ZA) => { const l = Math.hypot(VL[1], VL[2]) || 1; return [x, r*VL[1]/l, cz + r*VL[2]/l]; };
+
+/* ---------- wires: short pieces so they sort with the solids they pass ---------- */
+const bendPts = (pts, r = .5) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i-1], pts[i], pts[i+1]];
+    const la = dist(a, b), lc = dist(c, b), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k])*d/la), q = c.map((v, k) => b[k] + (v - b[k])*d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length-1]); return out; };
+const stretch = (pts, e) => { const g = (a, b) => { const l = dist(a, b) || 1; return a.map((v, k) => v + (v - b[k])*e/l); };
+  return [g(pts[0], pts[1]), ...pts.slice(1, -1), g(pts[pts.length-1], pts[pts.length-2])]; };
+const strokeSvg = (pts, col, w) => `<path d="${pd(pts, false)}" fill="none" stroke="${INK}" style="stroke-width:${f2(2*w + .9*INK_K)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${pd(stretch(pts, .2), false)}" fill="none" stroke="${col}" style="stroke-width:${f2(2*w)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+function wireItems(pts, col, w = .1, Ls = 1.6){
+  const q = bendPts(pts), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < Ls){ len += dist(q[j], q[j-1]); j++; }
+    if (len < Ls) while (j < q.length - 1) j++;
+    const seg = q.slice(i, j + 1); out.push(itN(grow(lboxOf(seg), w), strokeSvg(seg.map(nP), col, w))); i = j; }
+  return out;
+}
+
+/* ---------- materials ---------- */
+const WHITE = CERAMIC, STEEL = matOf('#aab2b6'), CAST = matOf('#9aa3a6'), COPPER = { l:'#f0b07a', m:'#d08a52', d:'#9a5a2c' };
+const LIT = matOf('#ff9a3a'), BRONZE = matOf('#d9ad62'), REDM = matOf('#e2483d'), CAL = matOf('#b8433a'), MOTORM = matOf('#5f7891');
+const GENM = matOf('#6f8fa6'), ROTM = matOf('#b6bcbf'), CAB = matOf('#dfe2dc'), HYD = matOf('#4b78b8'), CONC = matOf('#d8d3c6');
+const WALL = matOf('#f3e7cc'), ROOF = matOf('#cf5a40'), TRM = matOf('#8fb59a'), LIT_C = '#ff9a3a', CABLE_C = '#2b2724';
+
+/* ---------- nacelle cover ---------- */
+const NAC_X = [-12.2, -11.4, 5.8, 7.0], NAC_K = [.9, 1, 1, .78];
+const NAC_PROF = rrUV(-4.4, .2, 4.4, 9.6, 2.2, 5);
+const nacRing = i => NAC_PROF.map(([y, z]) => nP([NAC_X[i], y*NAC_K[i], 4.9 + (z - 4.9)*NAC_K[i]]));
+function nacBody(m){
+  const R = [0,1,2,3].map(nacRing), fx = nDir([1,0,0]); let s = '';
+  for (let i = 0; i < 3; i++) s += loft(R[i], R[i+1], n => tone(n, m));
+  s += vis(fx) ? shape(R[3], tone(fx, m), 1.1) + ink(pd(wp(ringL([7.01, 0, ZA], [1,0,0], .95, 16))), .8) : shape(R[0], tone(scl(fx, -1), m), 1.1);
+  // a stripe along each flank, the roof hatch, the seams of the nose and tail panels
+  for (const sy of [1, -1]) if (vis(nDir([0, sy, 0]))) s += shape(wp([[-11.4, 4.41*sy, 2.5], [5.8, 4.41*sy, 2.5], [5.8, 4.41*sy, 3.1], [-11.4, 4.41*sy, 3.1]]), m.d, .5);
+  if (vis([0,0,1])) s += shape(wp([[-3.2, -1.2, 9.61], [-.6, -1.2, 9.61], [-.6, 1.2, 9.61], [-3.2, 1.2, 9.61]]), mix(m.l, '#ffffff', .25), .6);
+  for (const i of [1, 2]){ const r = R[i]; for (let j = 0; j < r.length; j++){ const a = r[j], b = r[(j+1) % r.length], mid = NAC_PROF[j], nn = nDir(norm([0, mid[0], mid[1] - 4.9]));
+    if (vis(nn)) s += ink(pd([a, b], false), .5); } }
+  return s + hullInk(R.flat(), 2.4);
+}
+function nacItem(st, m, k){
+  let svg = nacBody(m);
+  if (k > 0){ const R = [0,1,2,3].map(nacRing), fx = nDir([1,0,0]); let far = '';
+    for (let i = 0; i < 3; i++) far += loft(R[i], R[i+1], n => mix(toneI(scl(n, -1), m), '#f2efe7', .55), true);
+    far += fill(pd(vis(fx) ? R[0] : R[3]), mix(m.d, '#f2efe7', .5));
+    svg = op(.5*k, far) + nacMech(st) + op(1 - .8*k, svg) + op(.6*k, hullInk(R.flat(), 2.4)); }
+  return itN([[-12.2, -4.4, 0], [7.0, 4.4, 9.6]], svg);
+}
+
+/* ---------- inside the nacelle (see-through) ---------- */
+function nacMech(st){
+  const parts = [], put = (lb, svg) => parts.push(itN(lb, svg)), ax = [1,0,0], cA = [0, 0, ZA], cH = [0, 0, ZH];
+  const turning = st.rpm > .3, gen = st.P > 1, braking = st.brake > .3;
+  // yaw ring on the tower top (its teeth stay with the tower), yaw brakes clamping it, yaw motors on the bedplate
+  put([[-2.4, -2.4, 0], [2.4, 2.4, .7]], gearL([0,0,0], [0,0,1], 0, .7, 2.4, 44, STEEL, -rad(st.yaw), 1.5));
+  for (const sx of [1, -1]) put([[sx > 0 ? 2.0 : -2.75, -.38, 0], [sx > 0 ? 2.75 : -2.0, .38, .85]], boxN(sx > 0 ? 2.0 : -2.75, -.38, 0, sx > 0 ? 2.75 : -2.0, .38, .85, CAL, toneI, .7));
+  for (const a of [60, 120, 240, 300]){ const cx = 2.78*Math.cos(rad(a)), cy = 2.78*Math.sin(rad(a));
+    put([[cx - .48, cy - .48, 0], [cx + .48, cy + .48, 2.6]], gearL([cx, cy, 0], [0,0,1], .05, .65, .36, 9, STEEL, st.yawPh)
+      + rodN([cx, cy, .65], [cx, cy, 1.55], .34, STEEL, .7) + rodN([cx, cy, 1.55], [cx, cy, 2.48], .46, st.yawing ? LIT : MOTORM, .9) + rodN([cx, cy, 2.48], [cx, cy, 2.6], .3, DARK, .5)); }
+  // bedplate, rear frame rails
+  put([[-4.2, -1.9, .9], [5.8, 1.9, 2.3]], boxN(-4.2, -1.9, .9, 5.8, 1.9, 2.3, CAST, toneI, 1));
+  for (const [y0, y1] of [[1.4, 2.6], [-2.6, -1.4]]) put([[-10.9, y0, .3], [-4.2, y1, 1.0]], boxN(-10.9, y0, .3, -4.2, y1, 1.0, CAST, toneI, .8));
+  // main bearing (pillow block + ring) and the main shaft; a painted line shows it turning
+  const shaft = (x0, x1, r = .8, cz = ZA, a = st.ang) => { let s = rodN([x0, 0, cz], [x1, 0, cz], r, STEEL, .8, r, 18);
+    const nn = nDir([0, Math.cos(a), Math.sin(a)]); if (vis(nn)) s += ink(pd(wp([[x0 + .1, r*1.01*Math.cos(a), cz + r*1.01*Math.sin(a)], [x1 - .1, r*1.01*Math.cos(a), cz + r*1.01*Math.sin(a)]]), false), .7);
+    return s; };
+  put([[3.7, -1.6, 2.3], [5.6, 1.6, 3.5]], boxN(3.7, -1.6, 2.3, 5.6, 1.6, 3.5, CAST, toneI, .9));
+  put([[3.7, -1.5, ZA - 1.5], [5.6, 1.5, ZA + 1.5]], tubeL(cA, ax, 3.7, 5.6, .8, 1.5, CAST, toneI, 1, 26, shaft(3.7, 5.6)));
+  put([[-.9, -.8, ZA - .8], [3.7, .8, ZA + .8]], shaft(-.9, 3.7));
+  put([[5.6, -.8, ZA - .8], [7.0, .8, ZA + .8]], shaft(5.6, 7.0));
+  // planetary stage: the carrier turns with the rotor, planets roll in the fixed ring gear, the sun turns 4.6x
+  const th = st.ang, sunA = 4.6*th;
+  let pl = gearL(cA, ax, -1.75, -1.25, .55, 10, STEEL, sunA);
+  for (let j = 0; j < 3; j++){ const a = th + j*2*Math.PI/3; pl += gearL([0, 1.27*Math.cos(a), ZA + 1.27*Math.sin(a)], ax, -1.75, -1.25, .68, 13, BRONZE, -1.91*th); }
+  put([[-2.1, -2.25, ZA - 2.25], [-.9, 2.25, ZA + 2.25]], tubeL(cA, ax, -1.75, -1.25, 1.98, 2.12, STEEL, toneI, .6, 30, pl)
+    + op(.42, revL(cA, ax, [[-2.1, 1.6], [-1.9, 2.25], [-1.0, 2.25], [-.9, 1.4]], CAST, toneI, 1.2, 28)));
+  // parallel stage: the big wheel on the sun shaft drives the pinion of the high-speed shaft
+  put([[-4.6, -2.0, 2.6], [-2.1, 2.0, 7.0]], gearL(cA, ax, -3.55, -3.15, 1.35, 26, BRONZE, sunA) + gearL(cH, ax, -3.55, -3.15, .5, 10, STEEL, -2.7*sunA)
+    + op(.42, boxN(-4.6, -2.0, 2.6, -2.1, 2.0, 7.0, CAST, toneI, 1.2)));
+  for (const [y0, y1] of [[1.1, 1.7], [-1.7, -1.1]]) put([[-3.8, y0, 2.3], [-2.6, y1, 2.6]], boxN(-3.8, y0, 2.3, -2.6, y1, 2.6, CAST, toneI, .6));
+  // high-speed shaft, brake disc + caliper, coupling, generator
+  put([[-5.05, -.32, ZH - .32], [-4.6, .32, ZH + .32]], shaft(-5.05, -4.6, .32, ZH, st.gAng));
+  put([[-5.5, -1.35, ZH - 1.35], [-4.85, 1.35, ZH + 1.8]], revL(cH, ax, [[-5.3, 1.35], [-5.05, 1.35]], STEEL, toneI, .9, 26)
+    + boxN(-5.5, -.42, ZH + .98, -4.85, .42, ZH + 1.8, braking ? REDM : CAL, toneI, .8));
+  put([[-5.6, -.32, ZH - .32], [-5.3, .32, ZH + .32]], shaft(-5.6, -5.3, .32, ZH, st.gAng));
+  { const cp = [rodN([-6.75, 0, ZH], [-6.3, 0, ZH], .62, STEEL, .7, .62, 16), rodN([-6.3, 0, ZH], [-5.9, 0, ZH], .38, DARK, .6, .38, 14), rodN([-5.9, 0, ZH], [-5.6, 0, ZH], .62, STEEL, .7, .62, 16)];
+    put([[-6.75, -.62, ZH - .62], [-5.6, .62, ZH + .62]], (VL[0] > 0 ? cp : cp.reverse()).join('')); }
+  { let rot = revL(cH, ax, [[-9.7, 1.0], [-7.6, 1.0]], ROTM, toneI, .7, 20);
+    for (let j = 0; j < 6; j++){ const a = st.gAng + j*Math.PI/3; if (vis(nDir([0, Math.cos(a), Math.sin(a)]))) rot += ink(pd(wp([[-9.6, 1.01*Math.cos(a), ZH + 1.01*Math.sin(a)], [-7.7, 1.01*Math.cos(a), ZH + 1.01*Math.sin(a)]]), false), .45); }
+    let feet = ''; for (const [y0, y1] of [[1.85, 2.35], [-2.35, -1.85]]) feet += boxN(-10.2, y0, 1.0, -7.4, y1, 2.0, GENM, toneI, .7);
+    const hous = revL(cH, ax, [[-10.6, 1.5], [-10.3, 1.9], [-7.0, 1.9], [-6.75, 1.45]], GENM, toneI, 1.4, 30);
+    put([[-10.6, -2.35, 1.0], [-6.75, 2.35, ZH + 1.9]], feet + tubeL(cH, ax, -9.9, -7.4, 1.18, 1.62, gen ? LIT : COPPER, toneI, .7, 26, rot) + op(.45, hous)); }
+  put([[-9.2, -.6, ZH + 1.9], [-8.0, .6, ZH + 2.6]], boxN(-9.2, -.6, ZH + 1.9, -8.0, .6, ZH + 2.6, STEEL, toneI, .7));
+  // hydraulic unit for the brake and its hose
+  put([[-7.2, 2.4, 1.0], [-5.9, 3.6, 2.9]], boxN(-7.2, 2.4, 1.0, -5.9, 3.6, 2.2, HYD, toneI, .8) + rodN([-6.55, 3.0, 2.2], [-6.55, 3.0, 2.9], .4, STEEL, .6, .4, 12));
+  parts.push(...wireItems([[-6.2, 2.7, 2.2], [-6.0, 2.0, 4.0], [-5.3, .9, ZH + 1.5], [-5.2, .45, ZH + 1.4]], braking ? '#e2483d' : CABLE_C, .08));
+  // converter and controller cabinets at the back, with their status lights
+  const led = (x, y0, z, on) => vis(nDir([1,0,0])) ? shape(wp([[x + .01, y0, z], [x + .01, y0 + .4, z], [x + .01, y0 + .4, z + .3], [x + .01, y0, z + .3]]), on ? '#43c25c' : '#e2483d', .4) : '';
+  put([[-11.7, -3.6, 1.2], [-10.8, -1.4, 7.6]], boxN(-11.7, -3.6, 1.2, -10.8, -1.4, 7.6, CAB, toneI, 1) + led(-10.8, -3.1, 6.6, gen));
+  put([[-11.7, 1.4, 3.2], [-10.8, 3.6, 7.6]], boxN(-11.7, 1.4, 3.2, -10.8, 3.6, 7.6, CAB, toneI, 1) + led(-10.8, 1.9, 6.6, true));
+  // generator cables to the converter; the down cables from the converter into the tower
+  const wc = gen ? LIT_C : CABLE_C;
+  for (let i = 0; i < 3; i++){ const dy = -.3 + .3*i;
+    parts.push(...wireItems([[-8.6, dy, ZH + 2.6], [-9.3, dy, 7.0], [-10.3, -2.5 + dy, 7.0], [-10.8, -2.5 + dy, 6.4]], wc, .1));
+    parts.push(...wireItems([[-10.8, -2.2 + dy, 1.6], [-10.3, -.9 + dy*.6, .8], [-2.6, dy*.6, .8], [-.3, dy*.6, .8], [0, dy*.5, -.3]], wc, .1)); }
+  return sortAll(parts);
+}
+
+/* ---------- roof: cooler, mast, aviation light, anemometer, wind vane ---------- */
+function roofItems(st){
+  const out = [], put = (lb, svg) => out.push(itN(lb, svg));
+  let c = boxN(-11.6, -2.6, 9.6, -8.8, 2.6, 10.7, STEEL, tone, 1.2);
+  if (vis([0,0,1])) for (let y = -2.2; y <= 2.25; y += .55) c += ink(pd(wp([[-11.35, y, 10.71], [-9.05, y, 10.71]]), false), .45);
+  put([[-11.6, -2.6, 9.6], [-8.8, 2.6, 10.7]], c);
+  put([[-7.8, -.25, 9.6], [-7.4, .25, 12.3]], rodN([-7.6, 0, 9.6], [-7.6, 0, 11.9], .14, STEEL, .7) + rodN([-7.6, 0, 11.9], [-7.6, 0, 12.3], .22, REDM, .7));
+  put([[-7.7, -1.75, 11.7], [-7.5, 1.75, 11.9]], rodN([-7.6, -1.75, 11.8], [-7.6, 1.75, 11.8], .09, STEEL, .6));
+  // anemometer: three cups on arms, turning with the wind
+  { const c0 = [-7.6, 1.7, 12.55]; let s = rodN([-7.6, 1.7, 11.85], c0, .07, STEEL, .5);
+    const cups = [0, 1, 2].map(j => { const a = st.anem + j*2*Math.PI/3, e = [Math.cos(a), Math.sin(a), 0], t = [-Math.sin(a), Math.cos(a), 0], p = addv(c0, scl(e, .8));
+      return { d: camDot(nDir(e), CAM_V), s: rodN(c0, p, .04, STEEL, .4) + rodN(addv(p, scl(t, .18)), addv(p, scl(t, -.22)), .2, DARK, .6, .02, 10) }; });
+    s += cups.sort((a, b) => a.d - b.d).map(c => c.s).join('') + rodN([-7.6, 1.7, 12.5], [-7.6, 1.7, 12.7], .12, DARK, .5);
+    put([[-8.5, .8, 11.9], [-6.7, 2.6, 12.9]], s); }
+  // wind vane: its nose points into the wind (local angle = wind direction - nacelle heading)
+  { const a = rad(st.vane - st.yaw), e = [Math.cos(a), Math.sin(a), 0], c0 = [-7.6, -1.7, 12.45];
+    let s = rodN([-7.6, -1.7, 11.85], c0, .07, STEEL, .5) + rodN(addv(c0, scl(e, -1.1)), addv(c0, scl(e, .9)), .06, STEEL, .5);
+    const t0 = addv(c0, scl(e, -1.25)), t1 = addv(c0, scl(e, -.55));
+    s += shape(wp([addv(t0, [0, 0, -.35]), addv(t1, [0, 0, -.12]), addv(t1, [0, 0, .12]), addv(t0, [0, 0, .45])]), DARK.m, .6) + rodN(addv(c0, scl(e, .75)), addv(c0, scl(e, 1.1)), .12, DARK, .6, .02, 10);
+    put([[-8.9, -3.0, 11.9], [-6.3, -.4, 12.9]], s); }
+  return out;
+}
+
+/* ---------- rotor: shaft flange, spinner with the hub and pitch system inside, blades ---------- */
+const SPIN_P = [[8.0, 2.75], [9.0, 3.05], [10.2, 3.15], [11.4, 3.0], [12.6, 2.45], [13.6, 1.6], [14.2, .8], [14.45, .1]];
+const bladeEr = (st, i) => { const a = st.ang + i*2*Math.PI/3; return [0, Math.cos(a), Math.sin(a)]; };
+function shaftItem(st){
+  const a = [rodN([7.0, 0, ZA], [7.6, 0, ZA], .8, STEEL, .8, .8, 18), revL([0, 0, ZA], [1,0,0], [[7.6, 1.5], [7.95, 1.5]], STEEL, toneI, .9, 24)];
+  return itN([[7.0, -1.5, ZA - 1.5], [7.95, 1.5, ZA + 1.5]], (VL[0] > 0 ? a : a.reverse()).join(''));
+}
+function hubMech(st){
+  const parts = [], put = (lb, svg) => parts.push(itN(lb, svg)), hc = [XH, 0, ZA];
+  put([[8.1, -1.5, ZA - 1.5], [12.4, 1.5, ZA + 1.5]], revL([0, 0, ZA], [1,0,0], [[8.1, .9], [8.45, 1.5], [12.0, 1.5], [12.4, .9]], CAST, toneI, 1, 24));
+  for (let i = 0; i < 3; i++){
+    const er = bladeEr(st, i), mo = [-1.15, 0, 0], hm = addv(hc, mo);
+    put(axBox(hc, er, 1.45, 1.85, 1.0), tubeL(hc, er, 1.45, 1.85, .6, 1.0, STEEL, toneI, .8, 22));
+    put(axBox(hc, er, 1.85, 2.1, .95), gearL(hc, er, 1.85, 2.1, .92, 24, BRONZE, rad(st.pitch), .58));
+    put(axBox(hc, er, 2.1, 3.0, .58), rodN(addv(hc, scl(er, 2.1)), addv(hc, scl(er, 3.0)), .58, WHITE, .8, .58, 16));
+    put(axBox(hm, er, 1.85, 2.9, .3), gearL(hm, er, 1.85, 2.1, .22, 8, STEEL, -4.2*rad(st.pitch)) + rodN(addv(hm, scl(er, 2.1)), addv(hm, scl(er, 2.9)), .3, st.pitching ? LIT : MOTORM, .8, .3, 14));
+  }
+  return sortAll(parts);
+}
+function spinnerItem(st, m, k){
+  const ax = [1,0,0], shell = revL([0, 0, ZA], ax, SPIN_P, m, tone, 1.8, 28);
+  let svg = shell;
+  if (k > 0){ const R = SPIN_P.map(([s, r]) => wp(ringL([s, 0, ZA], ax, Math.max(r, .01), 28))); let far = '';
+    for (let i = 0; i < R.length - 1; i++) far += loft(R[i], R[i+1], n => mix(toneI(scl(n, -1), m), '#f2efe7', .55), true);
+    svg = op(.5*k, far) + hubMech(st) + op(1 - .8*k, shell); }
+  return itN([[8.0, -3.15, ZA - 3.15], [14.45, 3.15, ZA + 3.15]], act('rotor', svg));
+}
+/* blade: elliptical sections (thin at the trailing edge) along the span, twisted 14 deg at the root to 0 at the tip.
+   Pitch turns the chord from the rotor plane (0) to edge-on into the wind (90). */
+const BL_R = [3.0, 3.8, 4.8, 6.0, 8.0, 10.5, 13, 15.5, 17.5, 19];
+const blC = r => r <= 3.8 ? 1.15 : r <= 6 ? 1.15 + 1.45*sm01((r - 3.8)/2.2) : 2.6 - 2.05*Math.pow((r - 6)/13, .9);
+const blT = r => r <= 6 ? 1.15 - .06*sm01((r - 3.8)/2.2) : blC(r)*(.42 - .28*(r - 6)/13);
+const blTw = r => r <= 4.8 ? 14 : 14*(1 - (r - 4.8)/14.2);
+function bladeSec(r, phi, pitch){
+  const b = rad(pitch + blTw(r)), cb = Math.cos(b), sb = Math.sin(b), c = blC(r), t = blT(r), off = .2*c*sm01((r - 3.8)/2.2), cp = Math.cos(phi), sp2 = Math.sin(phi);
+  return Array.from({length:10}, (_, j) => { const a = j/10*2*Math.PI, ca = Math.cos(a);
+    const cc = c/2*ca - off, tt = t/2*Math.sin(a)*(ca < 0 ? .35 + .65*(1 + ca) : 1), et = -cb*cc + sb*tt, ex = sb*cc + cb*tt;
+    return [XH + ex, r*cp - et*sp2, ZA + r*sp2 + et*cp]; });
+}
+function bladeItem(st, i, k){
+  const phi = st.ang + i*2*Math.PI/3, er = bladeEr(st, i), secs = BL_R.map(r => bladeSec(r, phi, st.pitch)), S2 = secs.map(wp);
+  let s = '';
+  for (let j = 0; j < S2.length - 1; j++) s += loft(S2[j], S2[j+1], n => tone(n, j === S2.length - 2 ? REDM : WHITE));
+  const en = nDir(er); if (vis(en)) s += fill(pd(S2[S2.length-1]), tone(en, REDM));
+  // silhouette: on every section, the two points furthest either side of the blade's line on screen
+  const a = P(...avg(S2[0])), b = P(...avg(S2[S2.length-1])), dl = Math.hypot(b[0]-a[0], b[1]-a[1]);
+  if (dl > 3*INK_K){ const nx = -(b[1]-a[1])/dl, ny = (b[0]-a[0])/dl, L1 = [], L2 = [];
+    for (const sec of S2){ const q = sec.map(p => P(...p)); let lo = q[0], hi = q[0];
+      for (const p of q){ const v = p[0]*nx + p[1]*ny; if (v < lo[0]*nx + lo[1]*ny) lo = p; if (v > hi[0]*nx + hi[1]*ny) hi = p; }
+      L1.push(hi); L2.push(lo); }
+    s += ink(sp([...L1, ...L2.reverse()]), 1.3);
+  } else s += hullInk(S2.flat(), 1.3);
+  s += ink(pd(wp([12, 14.5].map(r => { const q = bladeSec(r, phi, st.pitch); return q[0]; })).concat([]), false), 0);
+  // the collar where the blade leaves the spinner
+  const hc = [XH, 0, ZA], col = rodN(addv(hc, scl(er, 2.95)), addv(hc, scl(er, 3.35)), .74, matOf('#d7d3c4'), .8, .74, 16);
+  s = vis(en) ? col + s : s + col;
+  return itN(lboxOf([...secs.flat(), ...ringL(addv(hc, scl(er, 2.95)), er, .74, 8)]), act('rotor', op(1 - .3*k, s)));
+}
+
+/* ---------- tower: sections, flanges, door; ladder, platforms and cables inside (see-through) ---------- */
+const ringW = (z, r, n = 28) => Array.from({length:n}, (_, i) => { const t = i/n*2*Math.PI; return [TX + r*Math.cos(t), TY + r*Math.sin(t), z]; });
+const WALL_D = norm([-.9, .47, 0]), LAD = [TX + .25, TY - 1.0];
+function cablePaths(st){
+  const gen = st.P > 1, zb = ZT - 6, paths = [];
+  for (let i = 0; i < 4; i++){
+    const pts = [], a0 = i*Math.PI/2, rr = .2;
+    for (let z = ZT + .4; z >= zb - .01; z -= .5){ const a = a0 + rad(st.twist)*(z - zb)/(ZT + .4 - zb); pts.push([TX + rr*Math.cos(a), TY + rr*Math.sin(a), z]); }
+    const tg = [-WALL_D[1], WALL_D[0]], off = (i - 1.5)*.2, wallAt = z => { const d = rTower(z) - .25; return [TX + WALL_D[0]*d + tg[0]*off, TY + WALL_D[1]*d + tg[1]*off, z]; };
+    const lp = [[TX + .1*Math.cos(a0), TY + .1*Math.sin(a0), zb - 1.4], [TX + WALL_D[0]*.5 + tg[0]*off, TY + WALL_D[1]*.5 + tg[1]*off, zb - 2.7], [TX + WALL_D[0]*1.1 + tg[0]*off, TY + WALL_D[1]*1.1 + tg[1]*off, zb - 2.3], wallAt(zb - 1.4)];
+    pts.push(...bendPts([pts[pts.length-1], ...lp], .6).slice(1));
+    for (let z = zb - 2; z >= ZB + .9; z -= 1.5) pts.push(wallAt(z));
+    pts.push(wallAt(ZB + .5), [TX + WALL_D[0]*.6, TY + WALL_D[1]*.6, ZB + .3]);
+    paths.push({ pts, col: i === 3 ? '#9aa0a4' : gen ? LIT_C : CABLE_C, w: i === 3 ? .07 : .1 });
+  }
+  return paths;
+}
+function towerItems(st, m, k){
+  const out = [], cab = k > 0 ? cablePaths(st) : [];
+  for (let i = 0; i < 3; i++){
+    const z0 = TZS[i], z1 = TZS[i+1], r0 = rTower(z0), r1 = rTower(z1), A = ringW(z0, r0), B = ringW(z1, r1);
+    let shell = loft(A, B, n => tone(n, WHITE));
+    for (const sd of [1, -1]) shell += line([[TX + sd*r0*CAM_R[0], TY + sd*r0*CAM_R[1], z0], [TX + sd*r1*CAM_R[0], TY + sd*r1*CAM_R[1], z1]], 1.8);
+    if (i > 0){ const F0 = ringW(z0 - .15, r0 + .12), F1 = ringW(z0 + .2, r0 + .1); shell += loft(F0, F1, n => tone(n, WHITE)) + hullInk([...F0, ...F1], .9); }
+    if (i === 0 && vis([1,0,0])){ const dz0 = ZB + .45, dz1 = ZB + 3.4, rr = rTower(ZB + 2) + .03, arc = (z, a0, a1) => Array.from({length:5}, (_, j) => { const t = a0 + (a1 - a0)*j/4; return [TX + rr*Math.cos(t), TY + rr*Math.sin(t), z]; });
+      shell += shape([...arc(dz0, -.36, .36), ...arc(dz1, .36, -.36)], tone([1,0,0], m), 1) + shape(arc(dz0 + 1.6, .2, .26).slice(0, 2).concat(arc(dz0 + 1.75, .26, .2).slice(0, 2)), DARK.m, .4); }
+    let svg = shell;
+    if (k > 0){
+      const far = loft(A, B, n => mix(toneI(scl(n, -1), WHITE), '#f2efe7', .4), true);
+      let inner = '';
+      if (i > 0) inner += op(.85, shape(ringW(z0, r0 - .08, 24), CAST.l, .6));
+      // ladder (two rails, rungs) and the cables, nearest last
+      const lad = line([[LAD[0] - .32, LAD[1], z0], [LAD[0] - .32, LAD[1], z1]], 1) + line([[LAD[0] + .32, LAD[1], z0], [LAD[0] + .32, LAD[1], z1]], 1)
+        + Array.from({length: Math.floor((z1 - z0)/1.1)}, (_, j) => line([[LAD[0] - .32, LAD[1], z0 + .55 + 1.1*j], [LAD[0] + .32, LAD[1], z0 + .55 + 1.1*j]], .7)).join('');
+      const cs = cab.map(c => { let o = '', seg = []; const flush = () => { if (seg.length > 1) o += strokeSvg(seg, c.col, c.w); seg = []; };
+        for (let j = 0; j < c.pts.length - 1; j++){ const zm = (c.pts[j][2] + c.pts[j+1][2])/2; if (zm >= z0 && zm < z1){ if (!seg.length) seg.push(c.pts[j]); seg.push(c.pts[j+1]); } else flush(); }
+        flush(); return o; }).join('');
+      const dl = depthOf([LAD[0], LAD[1], 0]), dc = depthOf([TX + WALL_D[0], TY + WALL_D[1], 0]);
+      inner += dl < dc ? lad + cs : cs + lad;
+      svg = op(.5*k, far) + inner + op(1 - .75*k, shell);
+    }
+    out.push({ lbox: [[-r0, -r0, z0 - ZT], [r0, r0, z1 - ZT]], box: [[TX - r0, TY - r0, z0], [TX + r0, TY + r0, z1]], svg });
+  }
+  out.push(itW([[TX - 3.1, TY - 3.1, BH], [TX + 3.1, TY + 3.1, ZB]], cyl(TX, TY, BH, ZB, 3.1, CONC, tone, 1.2, 32)));
+  out.push(itW([[TX + 2.15, TY - .7, ZB], [TX + 3.0, TY + .7, ZB + .45]], box(TX + 2.15, TY - .7, ZB, TX + 3.0, TY + .7, ZB + .45, CONC, tone, .8)));
+  return out;
+}
+
+/* ---------- ground: transformer, house ---------- */
+function transformerItem(st){
+  const [x0, y0, x1, y1, zt] = TR;
+  let s = box(x0, y0, BH, x1, y1, zt, TRM, tone, 1.4) + box(x0 - .2, y0 - .2, zt, x1 + .2, y1 + .2, zt + .3, TRM, tone, 1);
+  const warn = (pl, u, v) => shape(on(pl, [[u - .55, v - .45], [u + .55, v - .45], [u, v + .5]]), '#f4b829', .6);
+  if (vis([1,0,0])) s += warn(PX(x1 + .02), (y0 + y1)/2, BH + 1.9); if (vis([0,1,0])) s += warn(PY(y1 + .02), (x0 + x1)/2, BH + 1.9);
+  if (vis([-1,0,0])) s += warn(PX(x0 - .02), (y0 + y1)/2, BH + 1.9); if (vis([0,-1,0])) s += warn(PY(y0 - .02), (x0 + x1)/2, BH + 1.9);
+  return itW([[x0 - .2, y0 - .2, BH], [x1 + .2, y1 + .2, zt + .3]], s);
+}
+function houseItem(st, k){
+  const lit = st.lamp, glass = mix('#cfe9f0', '#ffd34d', lit);
+  let s = box(HX0, HY0, BH, HX1, HY1, HZ1, WALL, tone, 1.3);
+  for (const [x, n] of [[HX0, [-1,0,0]], [HX1, [1,0,0]]]) if (vis(n)) s += shape([[x, HY0, HZ1], [x, HY1, HZ1], [x, HYR, HRZ - .25]], tone(n, WALL), 1.1);
+  // windows (they glow when the lamp is on), the door, the door lamp
+  const win = (q, n) => { let o = ''; if (lit > .03) o += fill(pd(q), '#ffe27a', `opacity="${f2(.5*lit)}" stroke="#ffe27a" stroke-width="2.4" stroke-linejoin="round"`);
+    const c = avg(q), mu = q.map(p => p.map((v, j) => v + (c[j] - v)*.0)); o += shape(mu, glass, .9);
+    o += line([avg([q[0], q[1]]), avg([q[2], q[3]])], .5) + line([avg([q[1], q[2]]), avg([q[3], q[0]])], .5); return o; };
+  const wy = (y, xa, xb, za, zb) => [[xa, y, za], [xb, y, za], [xb, y, zb], [xa, y, zb]], wx = (x, ya, yb, za, zb) => [[x, ya, za], [x, yb, za], [x, yb, zb], [x, ya, zb]];
+  if (vis([0,1,0])){ for (const xa of [5.2, 11.8]) s += win(wy(HY1 + .02, xa, xa + 2, BH + 2, BH + 3.8));
+    s += shape(wy(HY1 + .02, 8.7, 10.3, BH, BH + 3.6), ROOF.d, 1) + shape(on(PY(HY1 + .04), ellUV(10.0, BH + 1.8, .12, .12, 8)), METAL.l, .3);
+    s += (lit > .03 ? fill(pd(on(PY(HY1 + .05), ellUV(9.5, BH + 4.2, .9, .9, 16))), '#ffe27a', `opacity="${f2(.45*lit)}"`) : '') + shape(on(PY(HY1 + .06), ellUV(9.5, BH + 4.2, .28, .28, 10)), mix('#efe9da', '#ffd34d', lit), .5); }
+  if (vis([0,-1,0])) for (const xa of [5.2, 8.5, 11.8]) s += win(wy(HY0 - .02, xa, xa + 2, BH + 2, BH + 3.8));
+  if (vis([1,0,0])) s += win(wx(HX1 + .02, 38.6, 40.4, BH + 2, BH + 3.8));
+  if (vis([-1,0,0])) s += win(wx(HX0 - .02, 38.6, 40.4, BH + 2, BH + 3.8));
+  // roof: the slope turned away first, then the near one; fascia boards along the eaves; ridge
+  const slope = sy => { const ye = sy > 0 ? HY1 + .7 : HY0 - .7, q = [[HX0 - .5, HYR, HRZ], [HX1 + .5, HYR, HRZ], [HX1 + .5, ye, HZ1 - .35], [HX0 - .5, ye, HZ1 - .35]];
+    const n = norm([0, sy*(HRZ - HZ1 + .35), Math.abs(ye - HYR)]); let o = '';
+    if (vis(n)) o += shape(q, tone(n, ROOF), 1.2) + [.25, .5, .75].map(t => line([[HX0 - .5, HYR + (ye - HYR)*t, HRZ + (HZ1 - .35 - HRZ)*t], [HX1 + .5, HYR + (ye - HYR)*t, HRZ + (HZ1 - .35 - HRZ)*t]], .45)).join('');
+    const fq = [[HX0 - .5, ye, HZ1 - .35], [HX1 + .5, ye, HZ1 - .35], [HX1 + .5, ye, HZ1 - .75], [HX0 - .5, ye, HZ1 - .75]], fn = [0, sy, 0];
+    if (vis(fn)) o += shape(fq, tone(fn, ROOF.d ? matOf(ROOF.d) : ROOF), .8);
+    return { o, d: vis(n) ? 1 : 0 }; };
+  const sl = [slope(1), slope(-1)].sort((a, b) => a.d - b.d);
+  let roof = sl.map(x => x.o).join('');
+  for (const [x, n] of [[HX0 - .5, [-1,0,0]], [HX1 + .5, [1,0,0]]]) if (vis(n)) roof += line([[x, HY0 - .7, HZ1 - .35], [x, HYR, HRZ], [x, HY1 + .7, HZ1 - .35]], 1.1);
+  roof += rod([HX0 - .5, HYR, HRZ], [HX1 + .5, HYR, HRZ], .2, ROOF, tone, .9, .2, 10);
+  s += roof;
+  if (k > 0){
+    // inside: the meter by the cable's way in, the wiring up the wall and across the ceiling, the lamp
+    let mech = box(14.3, 36.5, BH + 1.6, 14.85, 37.7, BH + 3.0, CAB, toneI, .8) + (vis([-1,0,0]) ? shape(on(PX(14.29), rectUV(36.75, BH + 2.2, 37.45, BH + 2.7)), '#cfe9f0', .4) : '');
+    const g = st.P > 1;
+    mech += strokeSvg([[15.0, 37.2, BH + .05], [14.6, 37.1, BH + .3], [14.6, 37.1, BH + 1.6]], g ? LIT_C : CABLE_C, .1);
+    mech += strokeSvg(bendPts([[14.55, 37.4, BH + 3.0], [14.55, 37.4, HZ1 - .3], [9.5, HYR, HZ1 - .3], [9.5, HYR, HZ1 - 1.0]]), g ? LIT_C : '#efe9da', .07);
+    mech += (lit > .03 ? fill(pd(on(PX(9.5), ellUV(HYR, HZ1 - 1.35, 1.6, 1.6, 20))), '#ffe27a', `opacity="${f2(.5*lit)}"`) : '') + rod([9.5, HYR, HZ1 - 1.0], [9.5, HYR, HZ1 - 1.2], .2, DARK, toneI, .5, .2, 10)
+      + cyl(9.5, HYR, HZ1 - 1.75, HZ1 - 1.2, .32, matOf(mix('#efe9da', '#ffd34d', lit)), toneI, .7, 14);
+    s = xrUnder(s, mech, k);
+  }
+  return itW([[HX0 - .5, HY0 - .7, BH], [HX1 + .5, HY1 + .7, HRZ + .2]], s);
+}
+
+/* ---------- on the ground: compass, buried cable, shadows ---------- */
+const txZ = (x, y, z, str, size, col = INK) => `<text transform="${txM(P(x + size*.36, y, z), Dv(0,-1,0), Dv(1,0,0))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800">${str}</text>`;
+function compass(st){
+  const cx = 42, cy = 45, z = BH + .03; let s = ink(pd(on(PZ(z), ellUV(cx, cy, 2.4, 2.4, 32))), .8);
+  ['N', 'E', 'S', 'W'].forEach((t, i) => { const a = rad(180 - 90*i), c = Math.cos(a), sn = Math.sin(a);
+    s += line([[cx + 1.9*c, cy + 1.9*sn, z], [cx + 2.4*c, cy + 2.4*sn, z]], .8) + txZ(cx + 3.2*c, cy + 3.2*sn, z, t, 1.4); });
+  // the wind, blowing in from where it comes from
+  const a = rad(st.wdir), e = [Math.cos(a), Math.sin(a)], q = d => [cx + e[0]*d, cy + e[1]*d, z], wn = [-e[1], e[0]];
+  s += line([q(2.1), q(-.6)], 1.3) + shape([q(-1.4), [cx - e[0]*.5 + wn[0]*.55, cy - e[1]*.5 + wn[1]*.55, z], [cx - e[0]*.5 - wn[0]*.55, cy - e[1]*.5 - wn[1]*.55, z]], '#5a82c6', .8);
+  return s;
+}
+function buried(st, k){
+  const g = st.P > 1, z = BH + .05; let s = '';
+  for (const [a, b] of ROUTE){ const pts = [[...a, z], [...b, z]];
+    s += strokeSvg(pts, g ? LIT_C : CABLE_C, .14);
+    if (g) s += `<path d="${pd(pts, false)}" fill="none" stroke="#fff4d6" stroke-width="1.2" stroke-dasharray="1.2 2.4" stroke-dashoffset="${f2(-st.flowT*6)}" stroke-linecap="round"/>`; }
+  return op(k, s);
+}
+function shadows(st){
+  const lite = s => s.split(SHADOW).join(mix(SHADOW, GRASS.l, .5));
+  let hi = castShadow(corners([[-12.2, -4.4, .2], [7, 4.4, 9.6]]).map(nP), BH) + castShadow(SPIN_P.flatMap(([x, r]) => wp(ringL([x, 0, ZA], [1,0,0], r, 10))), BH);
+  for (let i = 0; i < 3; i++) hi += castShadow(BL_R.flatMap(r => wp(bladeSec(r, st.ang + i*2*Math.PI/3, st.pitch).filter((_, j) => j % 5 === 0))), BH);
+  return clipTo(GTOP, lite(hi) + castShadow([...ringW(ZB, 2.4, 12), ...ringW(ZT, 1.55, 12)], BH)
+    + castShadow(corners([[HX0, HY0, BH], [HX1, HY1, HZ1]]).concat([[HX0, HYR, HRZ], [HX1, HYR, HRZ]]), BH) + castShadow(corners([[TR[0], TR[1], BH], [TR[2], TR[3], TR[4]]]), BH));
+}
+
+/* ---------- the wind, drawn: streaks blowing through the rotor ---------- */
+function windSvg(st){
+  const v = st.wind; if (v < .3) return '';
+  const a = rad(st.wdir), u = [Math.cos(a), Math.sin(a)], wv = [-u[1], u[0]], n = Math.min(10, 4 + Math.round(v/4)), LT = 46, len = 1.4 + .3*v, o0 = Math.min(.85, .3 + v/14);
+  let s = '';
+  for (let j = 0; j < n; j++){
+    const lat = -17 + 34*((j*.618 + .1) % 1), z = 24 + 30*((j*.382 + .21) % 1), t = (st.flowT*(1.5 + .5*v) + j*LT*.37) % LT, s0 = 26 - t;
+    const fade = Math.max(0, Math.min(1, t/5, (LT - t)/5)); if (fade <= 0) continue;
+    const at = q => [TX + u[0]*q + wv[0]*lat, TY + u[1]*q + wv[1]*lat, z + .4*Math.sin(q*.35 + j)];
+    const pts = [s0 + len, s0 + len*.66, s0 + len*.33, s0].map(at), tip = at(s0 - .2), bk = at(s0 + .9);
+    const head = [[bk[0], bk[1], bk[2] + .55], tip, [bk[0], bk[1], bk[2] - .55]];
+    s += op(o0*fade, `<path d="${pd(pts, false)}" fill="none" stroke="${INK}" stroke-width="2.6" stroke-linecap="round"/><path d="${pd(pts, false)}" fill="none" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round"/>`
+      + `<path d="${pd(head, false)}" fill="none" stroke="${INK}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="${pd(head, false)}" fill="none" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>`);
+  }
+  return s;
+}
+
+/* ---------- labels ---------- */
+// core's xrCallouts, except that the right-hand column starts below the stats panel and the See-through / Labels switches
+function wtCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0]));
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0;
+  let fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 3*k);
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, btn = document.getElementById('btns');
+  let s = '';
+  let top = { [-1]: fs, [1]: fs + 30*k };
+  if (btn && svgEl.getScreenCTM()){ const r = btn.getBoundingClientRect(), q = new DOMPoint(r.right, r.bottom + 50).matrixTransform(svgEl.getScreenCTM().inverse());
+    if (q.y > 0) top[-1] = q.y + hgt; }
+  // the right column starts under the stats and the See-through / Labels switches, and stops above the zoom chip
+  const ctm = svgEl.getScreenCTM(), sr = svgEl.getBoundingClientRect(), px2u = sr.width ? vb.width/sr.width : 1;
+  for (const el of u ? [] : [document.querySelector('.vset'), document.getElementById('stats')]) if (el && ctm){ const r = el.getBoundingClientRect();
+    if (r.height && r.bottom < sr.top + .5*sr.height){ const q = new DOMPoint(r.left, r.bottom + 14).matrixTransform(ctm.inverse()); top[1] = Math.max(top[1], q.y + hgt/2); } }
+  const bot = vb.y + vb.height - hgt, hL = Math.max(1, bot - top[-1]), botR = bot - (u ? 0 : 34*px2u), hR = Math.max(1, botR - top[1]);
+  const all = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  const nL = Math.round(all.length*hL/(hL + hR)), Lc = all.slice(0, nL), Rc = all.slice(nL);
+  const sc = Math.min(1, hL/Math.max(1, Lc.length - 1)/gap, hR/Math.max(1, Rc.length - 1)/gap); fs *= sc; hgt *= sc; gap *= sc;
+  for (const [col, side] of [[Lc, -1], [Rc, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    const over = col.length ? Math.max(0, col[col.length-1].py - (side > 0 ? botR : bot)) : 0, room = col.length ? col[0].py - top[side] : 0;
+    for (const c of col) c.py -= Math.min(over, room);
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+function labels(st, k){
+  const B = [0, GW, 0, GD, 0, 61], turning = st.rpm > .3, gen = st.P > 1, braking = st.brake > .3, N = nP;
+  const tw = z => { const d = norm([CAM_V[0], CAM_V[1], 0]), r = rTower(z); return [TX + r*d[0], TY + r*d[1], z]; };
+  // the blade that stands highest carries the blade label; the one most toward the viewer, the pitch labels
+  const ids = [0, 1, 2], hiB = ids.reduce((a, b) => bladeEr(st, b)[2] > bladeEr(st, a)[2] ? b : a, 0);
+  const er = bladeEr(st, hiB), bl = [XH, 12*er[1], ZA + 12*er[2]];
+  const sy = VL[1] >= 0 ? 1 : -1;
+  if (k > .6){
+    const pb = ids.reduce((a, b) => camDot(nDir(bladeEr(st, b)), CAM_V) > camDot(nDir(bladeEr(st, a)), CAM_V) ? b : a, 0), e = bladeEr(st, pb), et = [0, -e[2], e[1]];
+    const at = (s, x = 0, t = 0) => [XH + x, s*e[1] + t*et[1], ZA + s*e[2] + t*et[2]];
+    const ya = [60, 120, 240, 300].map(a => [2.78*Math.cos(rad(a)), 2.78*Math.sin(rad(a)), 2.6]).reduce((p, q) => camDot(nDir(q), CAM_V) > camDot(nDir(p), CAM_V) ? q : p);
+    const wallC = cablePaths(st)[1].pts.find(p => p[2] < 10.5) || [TX, TY, 10];
+    return wtCallouts([
+      { at: N(bl), text:'BLADES', on: turning },
+      { at: N([13.9, 0, ZA + 1.1]), text:'SPINNER' },
+      { at: N(nearAx(11.4, 1.5)), text:'HUB', on: turning },
+      { at: N(at(1.65, 0, 1.0)), text:'PITCH BEARING', on: st.pitching },
+      { at: N(at(1.98, .92)), text:'PITCH GEAR', on: st.pitching },
+      { at: N(at(2.9, -1.15)), text:'PITCH MOTOR', on: st.pitching },
+      { at: N(nearAx(6.4, .8)), text:'MAIN SHAFT', on: turning },
+      { at: N(nearAx(4.65, 1.5)), text:'MAIN BEARING', on: turning },
+      { at: N([5.0, 1.9*sy, 1.6]), text:'BEDPLATE' },
+      { at: N([-3.35, 2.0*sy, 6.6]), text:'GEARBOX', on: turning },
+      { at: N(nearAx(-1.5, 1.95)), text:'PLANET GEARS', on: turning },
+      { at: N(nearAx(-4.8, .32, ZH)), text:'HIGH-SPEED SHAFT', on: turning },
+      { at: N(nearAx(-5.17, 1.35, ZH)), text:'BRAKE DISC', on: braking },
+      { at: N([-5.17, 0, ZH + 1.8]), text:'BRAKE CALIPER', on: braking },
+      { at: N([-6.55, 3.0, 2.9]), text:'HYDRAULIC UNIT', on: braking },
+      { at: N(nearAx(-6.1, .62, ZH)), text:'COUPLING', on: turning },
+      { at: N(nearAx(-8.6, 1.9, ZH)), text:'GENERATOR', on: gen },
+      { at: N([-11.25, -2.5, 7.6]), text:'CONVERTER', on: gen },
+      { at: N([-11.25, 2.5, 7.6]), text:'CONTROLLER', on: true },
+      { at: N([-10.2, 0, 10.7]), text:'COOLER', on: gen },
+      { at: N([-7.6, 1.7, 12.7]), text:'ANEMOMETER', on: st.wind > 2.5 },
+      { at: N([-7.6, -1.7, 12.6]), text:'WIND VANE', on: st.yawing },
+      { at: N([...nearAx(0, 2.4, 0).map((v, j) => j === 2 ? .7 : v)]), text:'YAW BEARING', on: st.yawing },
+      { at: N(ya), text:'YAW MOTORS', on: st.yawing },
+      { at: N([2.4*(VL[0] >= 0 ? 1 : -1), 0, .85]), text:'YAW BRAKES', on: !st.yawing },
+      { at: tw(19), text:'TOWER' },
+      { at: tw(25), text:'TOWER FLANGE' },
+      { at: [LAD[0] + .32, LAD[1], 18], text:'LADDER' },
+      { at: wallC, text:'TOWER CABLES', on: gen },
+      { at: [TX + WALL_D[0]*.5, TY + WALL_D[1]*.5, ZT - 8.7], text:'DRIP LOOP', on: st.yawing },
+      { at: [TX + rTower(ZB + 2), TY, ZB + 2.2], text:'TOWER DOOR' },
+      { at: [TX + 3.1*CAM_R[0]*-1, TY + 3.1*CAM_R[1]*-1, ZB], text:'FOUNDATION' },
+      { at: [(TR[0] + TR[2])/2, (TR[1] + TR[3])/2, TR[4] + .3], text:'TRANSFORMER', on: gen },
+      { at: [17.7, 33.5, BH + .05], text:'BURIED CABLE', on: gen },
+      { at: [14.5, 37.1, BH + 3.0], text:'METER', on: gen },
+      { at: [9.5, HYR, HZ1 - 1.75], text:'LAMP', on: st.lamp > .5 },
+      { at: [HX0, HYR, HRZ], text:'HOUSE', on: st.lamp > .5 },
+    ], B);
+  }
+  return wtCallouts([
+    { at: N(bl), text:'BLADES', on: turning },
+    { at: N([13.9, 0, ZA + 1.1]), text:'SPINNER' },
+    { at: N([-2, 0, 9.6]), text:'NACELLE', on: gen },
+    { at: N([-7.6, 1.7, 12.7]), text:'ANEMOMETER', on: st.wind > 2.5 },
+    { at: N([-7.6, -1.7, 12.6]), text:'WIND VANE', on: st.yawing },
+    { at: N([-10.2, 0, 10.7]), text:'COOLER', on: gen },
+    { at: tw(19), text:'TOWER' },
+    { at: [TX + rTower(ZB + 2), TY, ZB + 2.2], text:'TOWER DOOR' },
+    { at: [(TR[0] + TR[2])/2, (TR[1] + TR[3])/2, TR[4] + .3], text:'TRANSFORMER', on: gen },
+    { at: [HX0, HYR, HRZ], text:'HOUSE', on: st.lamp > .5 },
+  ], B);
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  setFrames(st);
+  const k = ease(st.xr || 0);
+  let s = board(0, 0, GW, GD, BH, 6, GRASS) + compass(st) + shadows(st) + (k > 0 ? buried(st, k) : '');
+  s += sortAll([...towerItems(st, m, k), nacItem(st, m, k), ...roofItems(st), shaftItem(st), spinnerItem(st, m, k), ...[0, 1, 2].map(i => bladeItem(st, i, k)), houseItem(st, k), transformerItem(st)]);
+  return s + op(1 - k, windSvg(st)) + labels(st, k);
+}
+
+/* ---------- behaviour (one state object, one clock) ---------- */
+let ui, loopOn = false;
+function stepSim(st, dt){
+  const vt = WINDS[st.wSet].v; st.wind += (vt - st.wind)*Math.min(1, dt/1.6); if (Math.abs(vt - st.wind) < .02) st.wind = vt;
+  st.wdir = DIRS[st.dir].a;
+  const dv = wrap180(st.wdir - st.vane); st.vane = (st.vane + Math.sign(dv)*Math.min(Math.abs(dv), 90*dt) + 360) % 360;
+  // yaw: the controller turns the nacelle toward what the vane reads (a real one waits for a minutes-long average)
+  const err = wrap180(st.vane - st.yaw); st.yawing = Math.abs(err) > .3;
+  if (st.yawing){ const d = Math.sign(err)*Math.min(Math.abs(err), YAW_RATE*dt); st.yaw = (st.yaw + d + 360) % 360; st.twist += d; st.yawPh -= rad(d)*2.4/.36; }
+  if (st.wind > V_OUT && !st.cut){ st.cut = true; if (ui && ui.flash) ui.flash(`${Math.round(st.wind)} m/s: past the 25 m/s cut-out, the blades feather`, 2400); }
+  else if (st.cut && st.wind < V_BACK) st.cut = false;
+  const stop = st.manual || st.cut, veff = st.wind*Math.max(0, Math.cos(rad(wrap180(st.wdir - st.yaw))));
+  const pt = stop ? 90 : pitchFor(veff), dp = pt - st.pitch; st.pitching = Math.abs(dp) > .05; st.pitch += Math.sign(dp)*Math.min(Math.abs(dp), PITCH_RATE*dt);
+  const pf = Math.max(0, Math.min(1, (90 - st.pitch)/60)), full = rpmFor(veff), rt = full*pf;
+  st.rpm += (rt - st.rpm)*Math.min(1, dt/2.5);
+  const bt = stop && st.rpm < 4 ? 1 : 0; st.brake += Math.sign(bt - st.brake)*Math.min(Math.abs(bt - st.brake), dt/.4);
+  if (st.brake > .9) st.rpm = Math.max(0, st.rpm - 5*dt);
+  if (st.rpm < .02 && rt === 0) st.rpm = 0;
+  st.ang -= st.rpm*Math.PI/30*dt;
+  st.gAng -= st.rpm*Math.PI/30*dt*6;                              // drawn 6x the rotor; really 104x, too fast to see
+  const pa = st.brake > .05 ? 0 : pAvail(veff)*Math.min(1, full > 0 ? st.rpm/full : 0);
+  st.P += (pa - st.P)*Math.min(1, dt/.6); if (Math.abs(pa - st.P) < .5) st.P = pa;
+  const lt = st.P > 5 ? 1 : 0; st.lamp += Math.sign(lt - st.lamp)*Math.min(Math.abs(lt - st.lamp), dt*2.5);
+  st.anem += st.wind*dt*1.1; st.flowT += dt;
+  return true;                                                    // there is always some wind
+}
+function runLoop(){
+  if (loopOn) return; loopOn = true;
+  ui.animate(dt => stepSim(ui.st, dt));
+}
+function setWind(st, key){
+  st.wSet = key; runLoop();
+  const v = WINDS[key].v;
+  if (key === 'calm') ui.flash(`${v} m/s is under the 3 m/s cut-in: the rotor coasts to a stop`, 2200);
+  else if (key === 'storm') ui.flash(`a ${v} m/s storm is coming`, 1600);
+  else if (st.cut || st.manual) ui.flash(st.manual ? 'the brake is on: release it to turn' : 'waiting for the storm to drop below 20 m/s', 2200);
+  else ui.flash(v > V_RATED ? `${v} m/s is past rated (11.3): the blades pitch to hold 2000 kW` : `${v} m/s: the blades bite and the rotor picks up`, 2200);
+}
+function setDir(st, key){
+  st.dir = key; runLoop();
+  ui.flash(`wind from the ${DIRS[key].label.toLowerCase()}: the yaw motors turn the nacelle to face it`, 2200);
+}
+function toggleBrake(st){
+  st.manual = !st.manual; runLoop();
+  ui.flash(st.manual ? 'stop: the blades feather to 90°, then the disc brake holds the rotor' : 'released: the blades pitch back into the wind', 2200);
+}
+function settle(st){ for (let i = 0; i < 1600; i++) stepSim(st, .05); st.flowT = 0; }
+
+ui = mountFigure({
+  fig:'31', title:'Wind turbine', size:[GW, GD, 61], palette:'cobalt', turn:'full',
+  state:{ wSet:'calm', wind:2, dir:'S', wdir:0, vane:0, yaw:0, yawing:false, yawPh:0, twist:0, pitch:0, pitching:false, rpm:0, ang:Math.PI/2, gAng:0,
+          brake:0, manual:false, cut:false, P:0, lamp:0, anem:.4, flowT:0 },
+  scene,
+  stats: st => [{ label:'Power', value:`${Math.round(st.P)} kW` },
+                { label:'Wind', value:`${st.wind.toFixed(0)} m/s`, small:true },
+                { label:'Rotor', value: st.rpm > .05 ? `${st.rpm.toFixed(1)} rpm` : st.brake > .5 ? 'braked' : 'still', small:true },
+                { label:'Pitch', value:`${Math.round(st.pitch)}°`, small:true },
+                { label:'Yaw', value: Math.abs(wrap180(st.wdir - st.yaw)) < 1 ? 'into the wind' : `${Math.round(Math.abs(wrap180(st.wdir - st.yaw)))}° off`, small:true }],
+  buttons:[
+    { label:'Wind', choices: st => Object.keys(WINDS).map(key => ({ label:`${WINDS[key].label} ${WINDS[key].v} m/s`, current: st.wSet === key, onClick: st => setWind(st, key) })) },
+    { label:'Wind from', choices: st => Object.keys(DIRS).map(key => ({ label: DIRS[key].label, current: st.dir === key, onClick: st => setDir(st, key) })) },
+    { label:'Brake / release', onClick: st => toggleBrake(st) },
+  ],
+  acts:{ rotor: st => toggleBrake(st) },
+  params:(st, q) => {
+    if (WINDS[q.get('wind')]) st.wSet = q.get('wind');
+    if (DIRS[q.get('dir')]){ st.dir = q.get('dir'); st.vane = st.yaw = DIRS[st.dir].a; }
+    if (q.get('brake') === '1') st.manual = true;
+    if (q.has('wind') || q.has('brake')) settle(st);
+    if (q.has('nyaw')){ st.yaw = +q.get('nyaw'); st.yawing = Math.abs(wrap180(st.vane - st.yaw)) > .3; }
+    if (q.has('bp')) st.pitch = +q.get('bp');
+    if (q.has('ang')) st.ang = +q.get('ang');
+    st.wdir = DIRS[st.dir].a;
+    if (q.get('still') === '1') st.still = true;
+  },
+});
+if ((new URLSearchParams(location.search)).has('wind') && !ui.st.still) runLoop();
+xrMount(() => ui, st => st.brake > .5 ? `Stopped: the blades are feathered to 90° so the wind slides past them, and the caliper clamps the brake disc on the high-speed shaft${st.cut ? ' until the storm drops below 20 m/s' : ''}.`
+  : st.rpm < .3 ? `${st.wind.toFixed(0)} m/s is under the 3 m/s cut-in: the rotor waits while the anemometer and the vane on the roof watch the wind.`
+  : `${st.wind.toFixed(0)} m/s turns the rotor at ${st.rpm.toFixed(0)} rpm; the gearbox steps it up ${GEAR}× to ${Math.round(st.rpm*GEAR)} rpm for the generator, which sends ${Math.round(st.P)} kW down the tower cables to the house${st.pitch > 1 ? `; the blades are pitched ${Math.round(st.pitch)}° to spill the extra wind` : ''}.`);
+</script></body></html>
