@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Cavendish experiment</title></head><body>
+<script src="core.js"></script>
+<script>
+/* ---------- truth first ----------
+   A classroom Cavendish torsion balance (the PASCO / Leybold kind), on a bench, with a lamp-and-scale light lever.
+   - Inside a glass-sided case a light aluminium beam carries two small lead balls (38.3 g, r 9.5 mm) 50 mm either
+     side of its centre. It hangs from a 25 um tungsten wire, about 276 mm long, that runs up a glass tube to a torsion
+     head (a graduated brass drum that sets the zero). A small concave mirror on the beam's stem turns with it.
+   - Two big lead balls (1.5 kg, r 31.75 mm) sit in cradles on posts at the ends of a swing arm that turns on a
+     bearing round the support column, outside the glass. In position 1 or 2 each big ball sits 47.5 mm from a small
+     ball across the glass; the middle position puts them square to the beam (no net torque).
+   - Arrest pins under the small balls hold the beam still while you set up; a knob on the case end turns a cam
+     shaft that lifts or drops them.
+   - A lamp with a slit and lens shines on the mirror; the reflected image of the slit is a light spot on a scale
+     400 mm away. The spot moves 2 x 400 mm x twist, so a twist of a few hundredths of a degree is millimetres.
+   - Gravity between 1.5 kg and 38 g at 47.5 mm is ~1.7 nN. With the wire's torsion constant (~2.2e-8 N m/rad) the beam
+     turns less than half a degree and swings with a period of ~10 minutes, lightly damped by the air in the case.
+   - Measuring G (the real lab method): release, let it swing, read three turning points of the spot, take the rest
+     point (S1 + 2 S2 + S3)/4 and the period; swing the big balls to the other side and do it again. The shift of the
+     rest point gives the twist, the period gives the wire's stiffness, and G = twist x stiffness / (torque per unit G).
+   Parts: bench board, levelling feet x3, base plate, spirit level, column (lower + upper), bearing collar, swing arm,
+   ball posts x2, cradles x2, big lead balls x2, floor block, cam shaft, arrest cams x2, arrest pins x2, arrest knob,
+   glass panes x2, end walls x2, top plate, tube collar, glass tube, tungsten wire, torsion head (collar, zero dial
+   drum, cap), upper wire clamp, lower wire clamp, stem, concave mirror, hub, beam rod, small lead balls x2;
+   lamp stand (base, post), scale + clamp, lamp housing (reflector, bulb, slit, lens tube + lens), bracket,
+   lamp supply (transformer, rocker switch, pilot light), lamp cord, mains cord.
+   Units: 1 unit = 1 mm. x = depth, y = width, z = up. */
+
+/* ---------- geometry (mm) ---------- */
+const CV_BW = 200, CV_BD = 560, CV_BT = 15;                 // bench board
+const CV_BTOP = boardTop(0, 0, CV_BW, CV_BD, CV_BT, 8);
+const CV_AX = 100, CV_AY = 440;                             // torsion axis
+const CV_SY = 37;                                            // scale face (y)
+const CV_LSC = (CV_AY - 3) - CV_SY;                          // mirror face to scale: 400 mm
+const CV_ZB = 150;                                           // height of the balls' centres
+const CV_RS = 9.53, CV_RB = 31.75;                           // small / big ball radius
+const CV_TWK = 3;                                            // the beam is DRAWN turned 3x its real angle (real: under 1 degree)
+const CV_LEAD = { l:'#b6babf', m:'#878d95', d:'#53585f' };
+const CV_BRASS = { l:'#f3d98a', m:'#d4ad52', d:'#8c6a26' };
+const CV_COPPER = { l:'#e9a46a', m:'#c47a3f', d:'#7d4a22' };
+const CV_GLASS = '#cfe9f0', CV_RED = '#e2483d', CV_BEAM = '#ffd23f';
+
+/* ---------- physics (SI) ---------- */
+const CV_GN = 6.674e-11;                                     // the G the balls really obey
+const CV_m = 0.0383, CV_M = 1.5;                             // kg
+const CV_d = 0.050, CV_b = 0.0475;                           // beam half-length, ball centre gap in position 1/2 (m)
+const CV_RR = Math.hypot(CV_d, CV_b);                        // swing-arm radius of the big balls (m)
+const CV_WD = 25e-6, CV_GS = 161e9, CV_LW = 0.276;           // tungsten wire: diameter, shear modulus, length
+const CV_KAP = Math.PI * CV_GS * Math.pow(CV_WD/2, 4) / (2 * CV_LW);   // torsion constant (N m / rad)
+const CV_I = 2 * CV_m * CV_d * CV_d + 1.8e-6;                // beam moment of inertia (balls + rod + mirror)
+const CV_T0 = 2 * Math.PI * Math.sqrt(CV_I / CV_KAP);        // ~9.7 min
+const CV_DAMP = 2 * 0.05 * Math.sqrt(CV_KAP * CV_I);         // air damping (zeta 0.05)
+const CV_PSI = { 1: -Math.atan2(CV_b, CV_d), 0: -Math.PI/2, [-1]: -Math.PI + Math.atan2(CV_b, CV_d) };
+const CV_POSN = { 1: 'Position 1', 0: 'Middle', [-1]: 'Position 2' };
+
+// small balls at +-d along the beam, big balls at +-R along the arm; every pair pulls (Newton)
+function cvBodies(psi, th){
+  const sm = [1, -1].map(a => [a*CV_d*Math.cos(th), a*CV_d*Math.sin(th)]);
+  const bg = [1, -1].map(b => [b*CV_RR*Math.cos(psi), b*CV_RR*Math.sin(psi)]);
+  const fs = [[0, 0], [0, 0]], fb = [[0, 0], [0, 0]]; let near = 0, tau = 0;
+  sm.forEach((p, i) => bg.forEach((q, j) => { const dx = q[0] - p[0], dy = q[1] - p[1], r2 = dx*dx + dy*dy, F = CV_GN*CV_M*CV_m/r2, r = Math.sqrt(r2);
+    fs[i][0] += F*dx/r; fs[i][1] += F*dy/r; fb[j][0] -= F*dx/r; fb[j][1] -= F*dy/r; near = Math.max(near, F); tau += p[0]*F*dy/r - p[1]*F*dx/r; }));
+  return { fs, fb, near, tau };
+}
+const cvTau = (psi, th) => cvBodies(psi, th).tau;
+const cvSpot = th => 2 * CV_LSC * th;                         // light-lever reading on the scale (mm)
+const CV_FREF = Math.hypot(...cvBodies(CV_PSI[1], 0).fs[0]);   // net pull on a small ball in position 1
+
+function cvSim(st, h){                                       // h seconds of real time, semi-implicit Euler
+  const n = Math.max(1, Math.ceil(h / 0.5)), dt = h / n;
+  for (let i = 0; i < n; i++){
+    const a = (cvTau(st.psi, st.th) - CV_KAP*st.th - CV_DAMP*st.om) / CV_I, om0 = st.om;
+    st.om += a*dt; st.th += st.om*dt; st.t += dt;
+    if (st.rec && om0*st.om < 0) cvTurn(st);
+  }
+}
+// a turning point of the spot: three in a row give the rest point and the period
+function cvTurn(st){
+  st.tp.push({ t: st.t, S: cvSpot(st.th) });
+  if (st.tp.length < 3) return;
+  const [p1, p2, p3] = st.tp.slice(-3), c = st.pos, first = !st.eq[c];
+  st.eq[c] = { S: (p1.S + 2*p2.S + p3.S) / 4, T: p3.t - p1.t };
+  const had = st.Gm; cvG(st);
+  if (st.Gm && !had) st.note = 'G found from the two rest points and the period';
+  else if (first && !st.Gm) st.note = `Rest point ${cvMM(st.eq[c].S)} at ${CV_POSN[c].toLowerCase()}: now swing the big balls`;
+}
+function cvG(st){
+  const c = st.pos, e = st.eq[c]; let o = null;
+  for (const q of [1, 0, -1]) if (q !== c && st.eq[q] && (o == null || Math.abs(q - c) > Math.abs(o - c))) o = q;
+  if (o == null) return;
+  const the = Math.abs(e.S - st.eq[o].S) / Math.abs(c - o) / (2*CV_LSC);   // twist per position step (rad)
+  const kap = 4*Math.PI*Math.PI*CV_I / (e.T*e.T);                           // wire stiffness from the period
+  st.Gm = kap * the / (Math.abs(cvTau(CV_PSI[1], -the)) / CV_GN); st.Tm = e.T;
+}
+const cvMM = S => (S < 0 ? '-' : '+') + Math.abs(S).toFixed(1) + ' mm';
+const cvSci = v => { const e = Math.floor(Math.log10(v)); return `${(v / Math.pow(10, e)).toFixed(2)}&times;10<sup>${e}</sup>`; };
+const cvClock = t => { const s = Math.floor(t); return Math.floor(s/60) + ':' + String(s % 60).padStart(2, '0'); };
+
+/* ---------- actions ---------- */
+function cvGo(st, ui){
+  if (st.loop) return; st.loop = true;
+  ui.animate(dt => {
+    if (st.sw < 1){ st.sw = Math.min(1, st.sw + dt/1.4); st.psi = st.psi0 + (CV_PSI[st.pos] - st.psi0)*ease(st.sw); }
+    const pt = st.locked ? 1 : 0;
+    if (st.pad !== pt) st.pad = pt ? Math.min(1, st.pad + dt/.6) : Math.max(0, st.pad - dt/.6);
+    if (st.locked){ st.om = 0; st.th = st.pad >= 1 ? 0 : st.th * Math.max(0, 1 - dt*7); }
+    else { st.rec = st.sw >= 1 && st.pad <= 0; cvSim(st, dt*st.speed); }
+    if (st.note){ ui.flash(st.note, 2600); st.note = ''; }
+    const settled = st.locked || (st.sw >= 1 && Math.abs(st.th - cvTau(st.psi, st.th)/CV_KAP) < 3e-6 && Math.abs(st.om) < 3e-8);
+    st.loop = st.sw < 1 || st.pad !== pt || !settled;
+    return st.loop;
+  });
+}
+function cvRelease(st){
+  st.locked = false; st.t = 0; st.tp = [];
+  st.om = 1.5 / (2*CV_LSC) * 2*Math.PI / CV_T0;              // the pins never let go perfectly: a ~1.5 mm swing
+}
+function cvToggle(st, ui){
+  if (st.locked){ cvRelease(st); ui.flash('Beam released: watch the spot'); }
+  else { st.locked = true; st.tp = []; ui.flash('Beam locked on the arrest pins'); }
+  cvGo(st, ui);
+}
+function cvSwing(st, ui, c){
+  if (st.locked){ cvRelease(st); ui.flash('Released the beam, then swung the balls'); }
+  st.pos = c; st.psi0 = st.psi; st.sw = 0; st.tp = [];
+  cvGo(st, ui);
+}
+
+/* ---------- drawing helpers ---------- */
+const cvRing = (x, y, z, r, n = 16) => on(PZ(z), ellUV(x, y, r, r, n));
+const cvArc = (x, y, z, r, [a0, a1], n = 12) => Array.from({length: n + 1}, (_, i) => { const a = (a0 + (a1 - a0)*i/n)*Math.PI/180; return [x + r*Math.cos(a), y + r*Math.sin(a), z]; });
+const cvGh = (svg, mech, k) => k > 0 ? `<g opacity="${f(1 - .65*k)}">${svg}</g>` + (mech ? `<g opacity="${f(k)}">${mech}</g>` : '') : svg;
+const cvLine = (pts, col, w, op = 1) => `<path d="${pd(pts, false)}" fill="none" stroke="${col}" stroke-width="${w}" stroke-linecap="round" opacity="${op}"/>`;
+const cvBoxOf = pts => [[0, 1, 2].map(i => Math.min(...pts.map(p => p[i]))), [0, 1, 2].map(i => Math.max(...pts.map(p => p[i])))];
+// a lead ball: flat tone bands, light from the upper right
+function cvBall(c, r, mt, w){
+  const [X, Y] = P(...c), R = r*CAM_K;
+  return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="${mt.d}"/>`
+    + `<circle cx="${f(X + .1*R)}" cy="${f(Y - .12*R)}" r="${f(.86*R)}" fill="${mt.m}"/>`
+    + `<circle cx="${f(X + .28*R)}" cy="${f(Y - .3*R)}" r="${f(.5*R)}" fill="${mt.l}"/>`
+    + `<circle cx="${f(X + .38*R)}" cy="${f(Y - .42*R)}" r="${f(.13*R)}" fill="#ffffff" opacity=".7"/>`
+    + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="none" stroke="${INK}" stroke-width="${w}"/>`;
+}
+// upright prism on a convex base [[x,y],...]
+function cvPrism(base, z0, z1, mt, shade = toneI, w = .9){
+  const n = base.length, cx = base.reduce((a, p) => a + p[0], 0)/n, cy = base.reduce((a, p) => a + p[1], 0)/n; let s = '';
+  for (let i = 0; i < n; i++){ const a = base[i], b = base[(i + 1) % n]; let nr = norm([b[1] - a[1], a[0] - b[0], 0]);
+    if (nr[0]*((a[0] + b[0])/2 - cx) + nr[1]*((a[1] + b[1])/2 - cy) < 0) nr = nr.map(v => -v);
+    if (vis(nr)) s += shape([[a[0], a[1], z0], [b[0], b[1], z0], [b[0], b[1], z1], [a[0], a[1], z1]], shade(nr, mt), w); }
+  if (vis([0, 0, 1])) s += shape(base.map(p => [p[0], p[1], z1]), shade([0, 0, 1], mt), w);
+  return s;
+}
+// rectangle centred c, along unit u (half a) and its normal v (from b0 to b1)
+const cvRect = (c, u, a, b0, b1) => { const v = [-u[1], u[0]]; return [[-a, b0], [a, b0], [a, b1], [-a, b1]].map(([p, q]) => [c[0] + u[0]*p + v[0]*q, c[1] + u[1]*p + v[1]*q]); };
+function cvGlassPane(pts){
+  const [a, b, c, d] = pts, lp = (p, q, t) => p.map((v, i) => v + (q[i] - v)*t);
+  return fill(pd(pts), CV_GLASS, 'opacity=".3"')
+    + cvLine([lp(a, b, .18), lp(d, c, .42)], '#ffffff', 1.8, .38) + cvLine([lp(a, b, .3), lp(d, c, .5)], '#ffffff', 1, .38) + ink(pd(pts), .8);
+}
+function cvArrow(p, v, col){
+  const lv = Math.hypot(v[0], v[1]); if (lv < .8) return '';
+  const q = [p[0] + v[0], p[1] + v[1], p[2]], ux = v[0]/lv, uy = v[1]/lv, hl = Math.min(6, lv*.45), hw = hl*.6;
+  const h1 = [q[0] - ux*hl - uy*hw, q[1] - uy*hl + ux*hw, q[2]], h2 = [q[0] - ux*hl + uy*hw, q[1] - uy*hl - ux*hw, q[2]];
+  return cvLine([p, [q[0] - ux*hl*.6, q[1] - uy*hl*.6, q[2]]], col, 2.2) + `<path d="${pd([h1, q, h2])}" fill="${col}" stroke="${col}" stroke-width="1" stroke-linejoin="round"/>`;
+}
+
+/* ---------- where everything is, for this state ---------- */
+function cvGeo(st){
+  const thd = CV_TWK * st.th, u = [Math.cos(thd), Math.sin(thd)], R = CV_RR*1000;
+  const small = [1, -1].map(a => [CV_AX + a*50*u[0], CV_AY + a*50*u[1], CV_ZB]);
+  const big = [1, -1].map(b => [CV_AX + b*R*Math.cos(st.psi), CV_AY + b*R*Math.sin(st.psi), CV_ZB]);
+  const padTop = 135.4 + 5*st.pad, S = cvSpot(st.th);
+  return { thd, u, small, big, padTop, S, R, spot: [CV_AX + S, CV_SY, 207], lens: [CV_AX, CV_SY + 34, 180], mir: [CV_AX, CV_AY - 3, 194] };
+}
+
+/* ---------- the torsion balance ---------- */
+function cvApparatus(st, m, g, k){
+  const X = CV_AX, Y = CV_AY, it = [];
+  // feet, base plate, spirit level, lower column (a stack)
+  let s = '';
+  for (const a of [90, 210, 330]){ const fx = X + 44*Math.cos(a*Math.PI/180), fy = Y + 44*Math.sin(a*Math.PI/180);
+    s += cyl(fx, fy, CV_BT, CV_BT + 7, 7, DARK, toneI, 1.1) + cyl(fx, fy, CV_BT + 7, 24, 2.5, METAL, toneI, .8); }
+  s += cyl(X, Y, 24, 34, 56, m, tone, 1.8);
+  const lv = [X - 26, Y + 30];
+  if (vis([0, 0, 1])) s += shape(cvRing(lv[0], lv[1], 34.05, 7), '#a8d8b4', 1) + fill(pd(cvRing(lv[0] + 1.5, lv[1] - 1.5, 34.1, 2.6)), '#effff2') + ink(pd(cvRing(lv[0], lv[1], 34.1, 3.2)), .6);
+  s += cyl(X, Y, 34, 69, 10, METAL, toneI, 1.2);
+  it.push({ box: [[X - 56, Y - 56, CV_BT], [X + 56, Y + 56, 69]], svg: s });
+  // swing arm: far half, bearing collar, near half
+  const ua = [Math.cos(st.psi), Math.sin(st.psi)], half = sg => cvPrism(cvRect([X + sg*ua[0]*39, Y + sg*ua[1]*39], ua, 39, -7, 7), 70, 78, m, tone, 1.2);
+  const nearSg = vis([ua[0], ua[1], 0]) ? 1 : -1;
+  const collar = cyl(X, Y, 69, 78, 15, m, tone, 1.3);
+  let bear = '';
+  if (k > 0) for (let i = 0; i < 10; i++){ const a = i/10*2*Math.PI; bear += cvBall([X + 12.5*Math.cos(a), Y + 12.5*Math.sin(a), 73.5], 2.2, METAL, .6); }
+  it.push({ box: cvBoxOf([[X + 80*ua[0], Y + 80*ua[1], 69], [X - 80*ua[0], Y - 80*ua[1], 78], [X - 16, Y - 16, 69], [X + 16, Y + 16, 78]]),
+    svg: half(-nearSg) + cvGh(collar, bear, k) + half(nearSg) });
+  // upper column
+  it.push({ box: [[X - 10, Y - 10, 78], [X + 10, Y + 10, 118]], svg: cyl(X, Y, 78, 118, 10, METAL, toneI, 1.2) });
+  // big balls on their posts and cradles
+  for (const c of g.big){
+    const post = cyl(c[0], c[1], 78, 115, 4, METAL, toneI, 1);
+    const A = cvRing(c[0], c[1], 115, 8), B = cvRing(c[0], c[1], 121.5, 9.5);
+    const cup = loft(A, B, n => toneI(n, METAL), true) + ink(pd(cvArc(c[0], c[1], 121.5, 9.5, farHalf()), false), .9)
+      + cvBall(c, CV_RB, CV_LEAD, 1.8) + cvPull(c, cvBodies(st.psi, st.th).fb[g.big.indexOf(c)], CV_RB)
+      + loft(A, B, n => toneI(n, METAL)) + hullInk([...A, ...B], 1) + ink(pd(cvArc(c[0], c[1], 121.5, 9.5, nearHalf()), false), .9);
+    it.push({ box: [[c[0] - CV_RB, c[1] - CV_RB, 78], [c[0] + CV_RB, c[1] + CV_RB, CV_ZB + CV_RB]], svg: post + cup });
+  }
+  it.push({ box: [[X - 80, Y - 15, 118], [X + 88, Y + 15, 500]], svg: byDepth(cvCase(st, m, g, k)) });
+  return it;
+}
+
+// the glass case, everything inside it, the tube and the torsion head
+function cvCase(st, m, g, k){
+  const X = CV_AX, Y = CV_AY, it = [];
+  // floor block, with the arrest cam shaft inside
+  let mech = '';
+  if (k > 0){ const zc = 122.5 + 5*st.pad, mi = [];
+    for (const [x0, x1] of [[-76, -53], [-47, 47], [53, 80]]) mi.push({ box: [[X + x0, Y - 2, 123], [X + x1, Y + 2, 127]], svg: cylX(X + x0, X + x1, Y, 125, 2, METAL, toneI, .8) });
+    for (const sg of [-1, 1]){ const cx = X + sg*50;
+      mi.push({ box: [[cx - 3, Y - 4.5, zc - 4.5], [cx + 3, Y + 4.5, zc + 4.5]], svg: cylX(cx - 3, cx + 3, Y, zc, 4.5, CV_BRASS, toneI, .9) });
+      mi.push({ box: [[cx - 1.5, Y - 1.5, zc + 4.5], [cx + 1.5, Y + 1.5, 132]], svg: cyl(cx, Y, zc + 4.5, 132, 1.5, METAL, toneI, .7) }); }
+    mech = byDepth(mi); }
+  it.push({ box: [[X - 80, Y - 15, 118], [X + 80, Y + 15, 132]], svg: cvGh(box(X - 80, Y - 15, 118, X + 80, Y + 15, 132, m, tone, 1.4), mech, k) });
+  // arrest knob on the +x end; its pointer shows locked / free
+  let knob = cylX(X + 80, X + 88, Y, 125, 5, DARK, toneI, 1.1);
+  if (vis([1, 0, 0])){ const a = Math.PI*(.25 + st.pad*.5); knob += line([[X + 88.1, Y, 125], [X + 88.1, Y + 4*Math.cos(a), 125 + 4*Math.sin(a)]], 1.4); }
+  it.push({ box: [[X + 80, Y - 5, 120], [X + 88, Y + 5, 130]], svg: act('lock', knob) });
+  // glass panes and metal end walls
+  for (const sg of [-1, 1]){
+    const yy = Y + sg*15;
+    it.push({ box: [[X - 78, Math.min(yy, Y + sg*13), 132], [X + 78, Math.max(yy, Y + sg*13), 212]], svg: cvGlassPane([[X - 78, yy, 132], [X + 78, yy, 132], [X + 78, yy, 212], [X - 78, yy, 212]]) });
+    const x0 = sg < 0 ? X - 80 : X + 78;
+    it.push({ box: [[x0, Y - 15, 132], [x0 + 2, Y + 15, 212]], svg: box(x0, Y - 15, 132, x0 + 2, Y + 15, 212, m, tone, 1.2) });
+  }
+  // arrest pins with their pad cups
+  for (const sg of [-1, 1]){ const px = X + sg*50, cb = g.padTop - 3;
+    const A = cvRing(px, Y, cb, 2.2, 12), B = cvRing(px, Y, g.padTop, 5, 12);
+    it.push({ box: [[px - 5, Y - 5, 132], [px + 5, Y + 5, g.padTop]], svg: (cb > 132.2 ? cyl(px, Y, 132, cb, 1.5, METAL, toneI, .8) : '') + loft(A, B, n => toneI(n, CV_BRASS), true) + loft(A, B, n => toneI(n, CV_BRASS)) + hullInk([...A, ...B], .9) + ink(pd(B), .6) });
+  }
+  // beam: hub, two rod halves with the small balls
+  it.push({ box: [[X - 6, Y - 6, 144], [X + 6, Y + 6, 156]], svg: cyl(X, Y, 144, 156, 6, METAL, toneI, 1) });
+  const fsm = cvBodies(st.psi, st.th).fs;
+  [1, -1].forEach((a, i) => { const c = g.small[i], ux = g.u[0]*a, uy = g.u[1]*a;
+    const rd = rod([X + ux*6, Y + uy*6, CV_ZB], [X + ux*(50 - CV_RS + .5), Y + uy*(50 - CV_RS + .5), CV_ZB], 1.5, METAL, toneI, .8), bl = cvBall(c, CV_RS, CV_LEAD, 1.2) + cvPull(c, fsm[i], CV_RS);
+    it.push({ box: cvBoxOf([[X + ux*6, Y + uy*6, CV_ZB - CV_RS + .07], [c[0] + CV_RS, c[1] + CV_RS, CV_ZB + CV_RS], [c[0] - CV_RS, c[1] - CV_RS, CV_ZB]]),
+      svg: vis([ux, uy, 0]) ? rd + bl : bl + rd }); });
+  // stem, concave mirror (facing the scale, turning with the beam), lower wire clamp
+  { const n = [g.u[1], -g.u[0], 0], mb = cvRect([X, Y], g.u, 6, -3, -1);
+    const stem = cyl(X, Y, 156, 202, 1.2, METAL, toneI, .7);
+    let mir = cvPrism(mb, 185, 201, METAL, toneI, .9);
+    if (vis(n)){ const fc = [mb[0], mb[1]].map(p => [p[0], p[1]]); const q = [[fc[0][0], fc[0][1], 185.5], [fc[1][0], fc[1][1], 185.5], [fc[1][0], fc[1][1], 200.5], [fc[0][0], fc[0][1], 200.5]];
+      mir += fill(pd(q), '#e8f1f5') + cvLine([[q[0][0]*.7 + q[1][0]*.3, q[0][1]*.7 + q[1][1]*.3, 187], [q[0][0]*.45 + q[1][0]*.55, q[0][1]*.45 + q[1][1]*.55, 199]], '#ffffff', 1.4, .8) + ink(pd(q), .7); }
+    const wireLow = cvLine([[X, Y, 208], [X, Y, 212]], INK, .7);
+    it.push({ box: [[X - 6.2, Y - 3.4, 156], [X + 6.2, Y + 1.6, 212]], svg: (vis(n) ? stem + mir : mir + stem) + cyl(X, Y, 202, 208, 2.5, METAL, toneI, .8) + wireLow }); }
+  // the light inside the case: to the mirror and back
+  { const yin = Y - 13, yout = Y - 3.45, tIn = t => [g.lens[0] + (g.mir[0] - g.lens[0])*t, g.lens[1] + (g.mir[1] - g.lens[1])*t, g.lens[2] + (g.mir[2] - g.lens[2])*t];
+    const tOut = t => [g.mir[0] + (g.spot[0] - g.mir[0])*t, g.mir[1] + (g.spot[1] - g.mir[1])*t, g.mir[2] + (g.spot[2] - g.mir[2])*t];
+    const ti = y => (y - g.lens[1]) / (g.mir[1] - g.lens[1]), to = y => (y - g.mir[1]) / (g.spot[1] - g.mir[1]);
+    const pts = [tIn(ti(yin)), tIn(ti(yout)), tOut(to(yout)), tOut(to(yin))];
+    it.push({ box: cvBoxOf(pts), svg: cvBeamSeg(pts) }); }
+  // top plate, tube collar, glass tube with the wire, torsion head
+  it.push({ box: [[X - 80, Y - 15, 212], [X + 80, Y + 15, 220]], svg: box(X - 80, Y - 15, 212, X + 80, Y + 15, 220, m, tone, 1.5) });
+  { const A = cvRing(X, Y, 228, 7, 20), B = cvRing(X, Y, 470, 7, 20), h = hull([...A, ...B].map(p => P(...p)));
+    const off = [CAM_K, 0], c0 = P(X, Y, 232), c1 = P(X, Y, 466);
+    const tube = cyl(X, Y, 220, 228, 11, CV_BRASS, toneI, 1.2) + cvLine([[X, Y, 228], [X, Y, 470]], INK, .7)
+      + fill(sp(h), CV_GLASS, 'opacity=".32"') + `<path d="M${f(c0[0] + off[0]*3.8)} ${f(c0[1] + off[1]*3.8)}L${f(c1[0] + off[0]*3.8)} ${f(c1[1] + off[1]*3.8)}" stroke="#ffffff" stroke-width="2" opacity=".5"/>` + ink(sp(h), 1.1);
+    it.push({ box: [[X - 11, Y - 11, 220], [X + 11, Y + 11, 470]], svg: tube }); }
+  { let head = cyl(X, Y, 470, 478, 10, CV_BRASS, toneI, 1.2) + cyl(X, Y, 478, 490, 14, CV_BRASS, toneI, 1.4);
+    for (let a = 0; a < 360; a += 10){ const r = a*Math.PI/180, nr = [Math.cos(r), Math.sin(r), 0]; if (!vis(nr)) continue;
+      head += line([[X + 14.1*nr[0], Y + 14.1*nr[1], 489], [X + 14.1*nr[0], Y + 14.1*nr[1], a % 30 ? 486.5 : 484]], a % 30 ? .5 : .8); }
+    if (vis([.7, .7, 0])) head += line([[X + 10.1*.707, Y + 10.1*.707, 471], [X + 10.1*.707, Y + 10.1*.707, 477.5]], 1.3);
+    head += cyl(X, Y, 490, 500, 6, CV_BRASS, toneI, 1.1);
+    const clamp = k > 0 ? cvLine([[X, Y, 470], [X, Y, 478]], INK, .7) + cyl(X, Y, 478, 487, 3, METAL, toneI, .8) : '';
+    it.push({ box: [[X - 14, Y - 14, 470], [X + 14, Y + 14, 500]], svg: cvGh(head, clamp, k) }); }
+  return it;
+}
+// a piece of the light lever: the wedge between the beam to the mirror and the beam back to the scale
+const cvBeamSeg = pts => fill(pd(pts), CV_BEAM, 'opacity=".2"') + cvLine([pts[0], pts[1]], CV_BEAM, 1.8, .85) + cvLine([pts[3], pts[2]], CV_BEAM, 1.8, .85);
+
+// outside the case: lamp to the glass, glass back to the scale, in short pieces so they sort with the balls
+function cvBeamOut(st, g){
+  const it = [], y0 = g.lens[1], y1 = CV_AY - 15;
+  const at = (a, b, y) => { const t = (y - a[1]) / (b[1] - a[1]); return [a[0] + (b[0] - a[0])*t, y, a[2] + (b[2] - a[2])*t]; };
+  const n = 9;
+  for (let i = 0; i < n; i++){ const ya = y0 + (y1 - y0)*i/n, yb = y0 + (y1 - y0)*(i + 1)/n;
+    const pts = [at(g.lens, g.mir, ya), at(g.lens, g.mir, yb), at(g.spot, g.mir, yb), at(g.spot, g.mir, ya)];
+    it.push({ box: cvBoxOf(pts), svg: cvBeamSeg(pts) }); }
+  const a = g.spot, b = at(g.spot, g.mir, y0);
+  it.push({ box: cvBoxOf([a, b]), svg: cvLine([a, b], CV_BEAM, 1.8, .85) });
+  return it;
+}
+
+/* ---------- lamp, scale and supply ---------- */
+function cvLampStand(st, m, g, k){
+  const X = CV_AX, Y0 = CV_SY, py = Y0 - 14, it = [];
+  it.push({ box: [[X - 24, py - 24, CV_BT], [X + 24, py + 24, 22]], svg: cyl(X, py, CV_BT, 22, 24, DARK, toneI, 1.6) });
+  it.push({ box: [[X - 4, py - 4, 22], [X + 4, py + 4, 224]], svg: cyl(X, py, 22, 224, 4, METAL, toneI, 1.1) });
+  // the scale: ticks every 5 mm, numbers every 20 mm, and the light spot on its face
+  { let sc = box(X - 55, Y0 - 3, 196, X + 55, Y0, 218, CERAMIC, toneI, 1.3);
+    if (vis([0, 1, 0])){
+      for (let v = -50; v <= 50; v += 5) sc += line([[X + v, Y0 + .05, 217], [X + v, Y0 + .05, v % 10 ? 214.5 : 212.5]], v % 10 ? .5 : .8);
+      for (let v = -40; v <= 40; v += 20) sc += txY(X + v, Y0 + .1, 199, String(v), 5.2);
+      sc += fill(pd(on(PY(Y0 + .15), ellUV(g.spot[0], g.spot[2], 5, 3.6))), '#ffe066', 'opacity=".75"')
+        + fill(pd(on(PY(Y0 + .2), ellUV(g.spot[0], g.spot[2], 2.3, 2.6))), '#fffbe0') + line([[g.spot[0], Y0 + .25, 204.5], [g.spot[0], Y0 + .25, 209.5]], .6); }
+    const clamp = box(X - 4, Y0 - 10, 203, X + 4, Y0 - 3, 211, METAL, toneI, .9);
+    it.push({ box: [[X - 55, Y0 - 10, 196], [X + 55, Y0, 218]], svg: vis([0, 1, 0]) ? clamp + sc : sc + clamp }); }
+  // lamp: bracket from the post, housing, lens tube toward the mirror
+  { const br = box(X - 3, Y0 - 10, 177, X + 3, Y0 + 2, 183, METAL, toneI, .9);
+    let hs = box(X - 11, Y0 + 2, 168, X + 11, Y0 + 24, 192, DARK, toneI, 1.5);
+    if (vis([0, 0, 1])) for (const dy of [7, 11, 15, 19]) hs += line([[X - 7, Y0 + dy, 192.05], [X + 7, Y0 + dy, 192.05]], .8);
+    let lt = rod([X, Y0 + 24, 180], [X, Y0 + 34, 180], 6, DARK, toneI, 1.1);
+    if (vis([0, 1, 0])) lt += fill(pd(on(PY(Y0 + 34.1), ellUV(X, 180, 4.2, 4.2, 16))), '#fff1a8') + ink(pd(on(PY(Y0 + 34.1), ellUV(X, 180, 4.2, 4.2, 16))), .6);
+    let mech = '';
+    if (k > 0){ const mi = [
+        { box: [[X - 8, Y0 + 3, 172], [X + 8, Y0 + 6, 188]], svg: rod([X, Y0 + 3, 180], [X, Y0 + 6, 180], 3, METAL, toneI, .8, 8) },
+        { box: [[X - 5, Y0 + 7, 175], [X + 5, Y0 + 15, 185]], svg: cvBall([X, Y0 + 11, 180], 4.5, { l:'#fffbe0', m:'#ffe98a', d:'#f4c84a' }, .9) },
+        { box: [[X - 7, Y0 + 18, 171], [X + 7, Y0 + 19, 189]], svg: box(X - 7, Y0 + 18, 171, X + 7, Y0 + 19, 189, DARK, toneI, .8) + (vis([0, 1, 0]) ? cvLine([[X, Y0 + 19.1, 175], [X, Y0 + 19.1, 185]], '#fff1a8', 1.6) : '') },
+        { box: [[X - 5.5, Y0 + 28.5, 174.5], [X + 5.5, Y0 + 30, 185.5]], svg: rod([X, Y0 + 28.5, 180], [X, Y0 + 30, 180], 5.5, CLEAR, toneI, .7) } ];
+      mech = byDepth(mi); }
+    const body = cvGh(hs + lt, mech, k);
+    it.push({ box: [[X - 11, Y0 - 10, 168], [X + 11, Y0 + 34, 192]], svg: vis([0, 1, 0]) ? br + body : body + br }); }
+  return it;
+}
+function cvPsu(st, k){
+  const x0 = 22, x1 = 68, y0 = 92, y1 = 130, z1 = 44;
+  let s = box(x0, y0, CV_BT, x1, y1, z1, DARK, toneI, 1.6);
+  if (vis([1, 0, 0])){ s += tx(x1 + .1, (y0 + y1)/2, 24, '6 V LAMP', 4.6, '#e3e0d2');
+    s += fill(pd(on(PX(x1 + .1), ellUV(y0 + 7, 36, 2, 2, 12))), '#43c25c') + ink(pd(on(PX(x1 + .1), ellUV(y0 + 7, 36, 2, 2, 12))), .6); }
+  s += box(56, 112, z1, 62, 124, z1 + 3, DARK, toneI, .9) + box(57, 113, z1 + 3, 61, 118, z1 + 5, { l:'#e2483d', m:'#c23a31', d:'#7d2420' }, toneI, .8);
+  let mech = '';
+  if (k > 0) mech = box(30, 100, 17, 50, 122, 38, METAL, toneI, .9) + rod([33, 111, 27.5], [47, 111, 27.5], 7.5, CV_COPPER, toneI, .9);
+  return { box: [[x0, y0, CV_BT], [x1, y1, z1 + 5]], svg: cvGh(s, mech, k) };
+}
+function cvCords(){
+  const cord = pts => cvLine(pts, INK, 3.4) + cvLine(pts, '#4a4540', 2);
+  return cord([[68, 100, CV_BT + 1.2], [80, 82, CV_BT + 1.2], [92, 58, CV_BT + 1.2], [96, 46, CV_BT + 1.4]])
+    + cord([[22, 112, CV_BT + 1.2], [10, 116, CV_BT + 1.2], [0, 119, CV_BT + 1], [-6, 121, 6], [-10, 124, 0]]);
+}
+function cvShadows(st, g){
+  const X = CV_AX, Y = CV_AY, ring = cvRing, z0 = CV_BT, sh = [];
+  sh.push([...ring(X, Y, 24, 56), ...ring(X, Y, 34, 56)]);
+  sh.push([...ring(X, Y, 34, 15), ...ring(X, Y, 118, 15)]);
+  sh.push([[X - 80, Y - 15, 118], [X + 80, Y - 15, 118], [X + 80, Y + 15, 118], [X - 80, Y + 15, 118], [X - 80, Y - 15, 132], [X + 80, Y - 15, 132], [X + 80, Y + 15, 132], [X - 80, Y + 15, 132]]);
+  sh.push([...ring(X, Y, 220, 14), ...ring(X, Y, 500, 14)]);
+  const ua = [Math.cos(st.psi), Math.sin(st.psi)];
+  sh.push([[X + 78*ua[0], Y + 78*ua[1], 74], [X - 78*ua[0], Y - 78*ua[1], 74], [X + 7, Y + 7, 74], [X - 7, Y - 7, 74]]);
+  for (const c of g.big) sh.push([...ring(c[0], c[1], CV_ZB, CV_RB), ...ring(c[0], c[1], 78, 4)]);
+  const py = CV_SY - 14;
+  sh.push(ring(X, py, 22, 24));
+  sh.push([...ring(X, py, 22, 4), ...ring(X, py, 224, 4)]);
+  sh.push([[X - 55, CV_SY - 3, 196], [X + 55, CV_SY - 3, 196], [X - 55, CV_SY, 218], [X + 55, CV_SY, 218], [X, py, 205]]);
+  sh.push([[X - 11, CV_SY + 2, 168], [X + 11, CV_SY + 2, 168], [X - 11, CV_SY + 34, 192], [X + 11, CV_SY + 34, 192], [X, py, 180]]);
+  sh.push([[22, 92, 44], [68, 92, 44], [68, 130, 44], [22, 130, 44], [22, 92, 15], [68, 130, 15]]);
+  const glass = [[X - 80, Y - 15, 132], [X + 80, Y + 15, 132], [X - 80, Y - 15, 220], [X + 80, Y + 15, 220], [X + 80, Y - 15, 220], [X - 80, Y + 15, 220]];
+  return clipTo(CV_BTOP, `<g opacity=".45">${castShadow(glass, z0)}</g>` + sh.map(p => castShadow(p, z0)).join(''));
+}
+// the pull on a ball (red, drawn on the ball): length grows with the force
+function cvPull(c, F, r){
+  const mag = Math.hypot(...F); if (!mag) return '';
+  const ux = F[0]/mag, uy = F[1]/mag, Lr = 16*mag/CV_FREF;
+  return cvArrow([c[0] + ux*(r + 1.5), c[1] + uy*(r + 1.5), c[2]], [ux*Lr, uy*Lr], CV_RED);
+}
+
+/* ---------- the scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0), g = cvGeo(st);
+  return board(0, 0, CV_BW, CV_BD, CV_BT, 8, WOOD) + cvShadows(st, g) + cvCords()
+    + byDepth([...cvApparatus(st, m, g, k), ...cvBeamOut(st, g), ...cvLampStand(st, m, g, k), cvPsu(st, k)]);
+}
+
+/* ---------- see-through labels ---------- */
+const CV_B = [CV_AX - 90, CV_AX + 90, CV_AY - 80, CV_AY + 80, CV_BT, 500];
+const XR_OPTS = {
+  inside: st => { const g = cvGeo(st), X = CV_AX, Y = CV_AY, free = !st.locked, swing = st.sw < 1, cams = st.pad > 0 && st.pad < 1;
+    const bi = g.big[0][0] - g.big[0][1] > g.big[1][0] - g.big[1][1] ? 0 : 1, br = g.big[bi], bl = g.big[1 - bi];
+    const ua = [Math.cos(st.psi), Math.sin(st.psi)], armL = ua[0] - ua[1] < 0 ? 1 : -1, si = g.small[0][0] - g.small[0][1] > g.small[1][0] - g.small[1][1] ? 0 : 1;
+    const sl = g.small[1 - si], beamMid = [(sl[0] + X)/2, (sl[1] + Y)/2, CV_ZB];
+    return [
+      { at: [X + 9.9, Y - 9.9, 486], text: 'TORSION HEAD', on: false },
+      { at: [X - 9.9, Y + 9.9, 484], text: 'ZERO DIAL', on: false },
+      { at: [X - 2, Y + 2, 483], text: 'WIRE CLAMP', on: free },
+      { at: [X - .3, Y + .3, 340], text: 'TUNGSTEN WIRE', on: free },
+      { at: [X + 5, Y - 5, 400], text: 'GLASS TUBE', on: false },
+      { at: [X + 60, Y - 15, 216], text: 'TOP PLATE', on: false },
+      { at: [X + 3, Y - 3, 194], text: 'CONCAVE MIRROR', on: free },
+      { at: [X + 2, Y - 2, 205], text: 'LOWER CLAMP', on: false },
+      { at: [X - 4.2, Y + 4.2, 150], text: 'HUB', on: free },
+      { at: [X - 30, Y + 15, 180], text: 'GLASS PANE', on: false },
+      { at: [X + 79, Y + 5, 175], text: 'END WALL', on: false },
+      { at: beamMid, text: 'TORSION BEAM', on: free },
+      { at: [g.small[si][0] + 6, g.small[si][1] - 6, CV_ZB + 3], text: 'SMALL LEAD BALL', on: free },
+      { at: [X - 50, Y, g.padTop - 1], text: 'ARREST PIN', on: st.locked },
+      { at: [X - 50, Y + 4.5, 122.5 + 5*st.pad], text: 'ARREST CAM', on: cams },
+      { at: [X - 66, Y, 125], text: 'CAM SHAFT', on: cams },
+      { at: [X + 88, Y, 125], text: 'ARREST KNOB', on: cams },
+      { at: [X + 40, Y - 15, 125], text: 'FLOOR BLOCK', on: false },
+      { at: [br[0] + 16, br[1] - 16, CV_ZB + 12], text: 'BIG LEAD BALL', on: swing },
+      { at: [br[0] + 8, br[1] - 8, 119], text: 'CRADLE', on: false },
+      { at: [bl[0], bl[1] + 4, 96], text: 'BALL POST', on: false },
+      { at: [X + armL*60*ua[0], Y + armL*60*ua[1], 78], text: 'SWING ARM', on: swing },
+      { at: [X - 10.6, Y + 10.6, 73.5], text: 'BEARING', on: swing },
+      { at: [X + 7, Y - 7, 100], text: 'COLUMN', on: false },
+      { at: [X - 40, Y + 39, 34], text: 'BASE PLATE', on: false },
+      { at: [X + 44*Math.cos(Math.PI*7/6) - 5, Y + 44*Math.sin(Math.PI*7/6) + 5, 20], text: 'LEVELLING FOOT', on: false },
+      { at: [X - 26, Y + 30, 34.1], text: 'SPIRIT LEVEL', on: false },
+      { at: [CV_AX + 50, CV_SY, 214], text: 'SCALE', on: false },
+      { at: [g.spot[0] + 2, CV_SY, g.spot[2]], text: 'LIGHT SPOT', on: free || swing },
+      { at: [CV_AX, (CV_SY + CV_AY)/2, 192], text: 'LIGHT BEAM', on: true },
+      { at: [CV_AX + 11, CV_SY + 14, 175], text: 'LAMP HOUSING', on: false },
+      { at: [CV_AX + 3, CV_SY + 11, 182], text: 'BULB', on: true },
+    ]; },
+  surface: st => { const g = cvGeo(st);
+    return [ { at: [CV_AX + 9.9, CV_AY - 9.9, 486], text: 'TORSION HEAD', on: false },
+      { at: [CV_AX - 30, CV_AY + 15, 180], text: 'GLASS CASE', on: false },
+      { at: [g.small[0][0], g.small[0][1], CV_ZB + 5], text: 'SMALL LEAD BALL', on: !st.locked },
+      { at: [g.big[1][0] - 12, g.big[1][1] + 12, CV_ZB + 14], text: 'BIG LEAD BALL', on: st.sw < 1 },
+      { at: [CV_AX + 50, CV_SY, 214], text: 'SCALE', on: false },
+      { at: [g.spot[0] + 2, CV_SY, g.spot[2]], text: 'LIGHT SPOT', on: !st.locked },
+      { at: [CV_AX + 11, CV_SY + 14, 175], text: 'LAMP', on: true } ]; } };
+function cvScene(st, m){
+  const items = ease(st.xr || 0) > .6 ? XR_OPTS.inside(st) : XR_OPTS.surface(st);
+  return scene(st, m) + xrCallouts(items, CV_B);
+}
+
+let ui;
+ui = mountFigure({
+  fig:'C1', turn:'full', title:'The Cavendish experiment',
+  size:[CV_BW, CV_BD, 270], center:[CV_AX, CV_AY - 60], palette:'cobalt',
+  state:{ pos: 0, psi: CV_PSI[0], psi0: CV_PSI[0], sw: 1, locked: true, pad: 1, th: 0, om: 0, t: 0, speed: 60, tp: [], eq: {}, Gm: 0, Tm: 0, rec: false, loop: false, note: '' },
+  scene: cvScene,
+  stats: st => { const b = cvBodies(st.psi, st.th);
+    return [ { label:'Gravity pull', value: (b.near*1e9).toFixed(2) + ' nN', small: true },
+             { label:'Light spot', value: cvMM(cvSpot(st.th)), small: true },
+             { label: st.locked ? 'Beam' : 'Since release', value: st.locked ? 'locked' : cvClock(st.t), small: true },
+             { label:'G measured', value: st.Gm ? cvSci(st.Gm) : '&mdash;', small: true } ]; },
+  buttons:[
+    { label:'Release / lock beam', onClick: cvToggle },
+    { label:'Swing the big balls', choices: st => [1, 0, -1].map(c => ({ label: CV_POSN[c], current: st.pos === c && st.sw >= 1, onClick: (st, ui) => cvSwing(st, ui, c) })) },
+    { label:'Time-lapse', choices: st => [20, 60, 150].map(v => ({ label: 'x' + v, current: st.speed === v, onClick: st => { st.speed = v; } })) },
+  ],
+  acts:{ lock: (st, el, ui) => cvToggle(st, ui) },
+  params:(st, q) => {
+    const p = { '1': 1, '0': 0, '-1': -1, 'A': 1, 'N': 0, 'B': -1 }[q.get('pos')];
+    if (p != null){ st.pos = p; st.psi = st.psi0 = CV_PSI[p]; }
+    if (+q.get('speed') > 0) st.speed = +q.get('speed');
+    if (q.get('lock') === '0'){ st.locked = false; st.pad = 0; }
+    if (+q.get('run') > 0 && !st.locked){ st.rec = true; cvSim(st, +q.get('run')); }
+    // ?seq=1:1500,-1:1500 : release, then hold each position for that many real seconds (a measured G for a screenshot)
+    for (const it of (q.get('seq') || '').split(',').filter(Boolean)){ const [c, s] = it.split(':').map(Number);
+      st.locked = false; st.pad = 0; st.pos = c; st.psi = st.psi0 = CV_PSI[c]; st.tp = []; st.rec = true; cvSim(st, s); }
+    st.note = '';
+  },
+});
+xrMount(() => ui, () => '');
+if (!ui.st.locked && new URLSearchParams(location.search).get('still') !== '1') cvGo(ui.st, ui);
+</script></body></html>
