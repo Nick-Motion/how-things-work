@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Can opener</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   The 2016 book page 15 describes a sharp wheel above a toothed feed wheel and two spur gears.
+   Primary mechanism reference, US9604833B1, detailed description of Figs 1 to 6, parts 30 to 56.
+   https://patents.google.com/patent/US9604833B1/en
+   1. Clamp squeezes the two levers about their common pin. The upper wheel's bevel pierces the lid
+      just inside the rolled seam. The lower serrated wheel grips the seam from underneath.
+   2. The key turns the lower shaft, feed wheel and drive gear together. The upper gear turns the
+      cutter in the opposite direction. Relative travel feeds the entire lid circumference through the nip.
+      The can rotates on the table under the held opener, as in the book's explanation.
+   3. Only after a full cut does Lift release the jaws, raise the loose lid above the seam, carry it
+      over the table and set it down. The rolled seam stays attached to the can.
+   Teaching adaptations. Buttons stand for a person's hands. Hands and food are omitted. The opener
+   is supported by the implied holding hand. Lift stages manual removal, not an automatic lid lifter.
+   After removal Clamp reports that a fresh can requires reloading the page. No self-repair or reset hardware.
+   Model dimensions are enlarged drawing units, not manufacturing dimensions. Teeth are schematic.
+   Parts and supports.
+   Structure. Fixed lever and moving lever share a pivot pin. Each lever carries its shaft in its head.
+   Controls. Two moulded grips cover the lever tails. The turning key is fixed to the lower shaft.
+   Transmission. Drive gear on feed shaft meshes with cutter gear on cutter shaft. Both gears have
+   pitch radius 3.95, closed centre spacing 7.9. The axles run through the lever heads.
+   Working end. Feed wheel and serrations are integral to the lower axle assembly. Cutting wheel and
+   wedge bevel are integral to the upper assembly. Shaft collars sit against the stamped head plates.
+   Contact. Can wall radius 17, seam radius 17.5 at z35.9. Feed wheel centre z32.6, radius3.3 touches
+   the seam underside at35.9. Cutter centre z40.5, radius4.6 reaches the lid at35.9, x45.5, radius15.5.
+   Specimen. Can shell, bottom seam, rolled upper seam and lid are real 3D surfaces, separate from anatomy.
+*/
+const coCX=30, coCY=32, coR=17, coLidR=15.5, coTop=35.9;
+const coSteel=matOf('#aab6bc'), coGear=matOf('#c7a358'), coTin=matOf('#d8e0dd');
+const coB=pts=>[[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i])))];
+const coPart=(pts,svg)=>({box:coB(pts),svg});
+const coAround=(y,z,a)=>[27+(y-27)*Math.cos(a)-(z-36)*Math.sin(a),36+(y-27)*Math.sin(a)+(z-36)*Math.cos(a)];
+const coUpper=(x,y,z,st)=>{const p=coAround(y,z,(1-st.clamp)*.28);return[x,...p];};
+const coRing=(x,y,z,r,n=36)=>on(PX(x),ellUV(y,z,r,r,n));
+const coRot=(y,z,a)=>[y*Math.cos(a)-z*Math.sin(a),y*Math.sin(a)+z*Math.cos(a)];
+function coPlate(profile,x0,x1,material,st,upper=false){
+  const map=([y,z],x)=>upper?coUpper(x,y,z,st):[x,y,z];
+  const a=profile.map(p=>map(p,x0)),b=profile.map(p=>map(p,x1)),n=vis([1,0,0])?[1,0,0]:[-1,0,0];
+  return coPart([...a,...b],loft(a,b,nr=>tone(nr,material))+shape(n[0]>0?b:a,tone(n,material),.7)+hullInk([...a,...b],1.8));
+}
+function coAxle(parts,x0,x1,y,z,r,material){
+  parts.push({box:[[x0,y-r,z-r],[x1,y+r,z+r]],svg:cylX(x0,x1,y,z,r,material,toneI,.8,28)});
+}
+function coCog(parts,x0,x1,y,z,angle,material,teeth=18,r=3.95){
+  coAxle(parts,x0,x1,y,z,r-.45,material);
+  for(let i=0;i<teeth;i++){
+    const a=angle+i*Math.PI*2/teeth;
+    const uv=[[r-.55,-.57],[r+.4,-.38],[r+.4,.38],[r-.55,.57]].map(([u,v])=>{const q=coRot(u,v,a);return[y+q[0],z+q[1]];});
+    const aa=on(PX(x0),uv),bb=on(PX(x1),uv),cap=vis([1,0,0])?bb:aa;
+    parts.push(coPart([...aa,...bb],loft(aa,bb,n=>toneI(n,material))+shape(cap,material.l,.45)));
+  }
+}
+function coGeometry(st,m){
+  const shell=[],drive=[],labels=[],a=st.cut*2*Math.PI*17.5/3.3;
+  const addLabel=(text,at,on=false)=>labels.push({text,at,on});
+  const upper=(x,y,z)=>coUpper(x,y,z,st),uc=upper(45.5,35,40.5),turning=st.phase==='turning';
+  for(const upperLever of [false,true]){
+    const head=upperLever?[[24,34.2],[39,35],[40,44.5],[32,46.2],[23,39]]:[[24,29],[40,27.6],[40,36.2],[26,39],[23,36]];
+    shell.push(coPlate(head,53,54.5,coSteel,st,upperLever));
+    const tail=upperLever?[[27,34.5],[31,38],[50,34.5],[50,30.5]]:[[27,31],[31,34],[50,28],[50,24]];
+    shell.push(coPlate(tail,53.2,54.3,coSteel,st,upperLever));
+    const grip=upperLever?rrUV(48,28.9,80,35.6,2.8):rrUV(48,21.5,80,28.3,2.8);
+    shell.push(coPlate(grip,52.1,55.4,m,st,upperLever));
+    addLabel(upperLever?'MOVING LEVER':'FIXED LEVER',upperLever?upper(54.4,43,34.5):[54.4,43,29.5],st.phase==='clamping');
+    addLabel(upperLever?'UPPER GRIP':'LOWER GRIP',upperLever?upper(55.4,66,33):[55.4,66,25],st.phase==='clamping');
+  }
+  coAxle(drive,52.4,55.1,27,36,1.55,coSteel);
+  addLabel('PIVOT PIN',[55.1,27,36],st.phase==='clamping');
+  coAxle(drive,47,61,35,32.6,.8,coSteel);
+  coAxle(drive,53,55,35,32.6,1.35,coSteel);
+  coCog(drive,51,52.3,35,32.6,a,coGear);
+  coCog(drive,46.5,49,35,32.6,a,coSteel,24,2.9);
+  const uy=uc[1],uz=uc[2];
+  coAxle(drive,46.6,55,uy,uz,.8,coSteel);
+  coAxle(drive,53,55,uy,uz,1.35,coSteel);
+  coCog(drive,51,52.3,uy,uz,-a+Math.PI/18,coGear);
+  const edge=coRing(45.5,uy,uz,4.6),back=coRing(46.8,uy,uz,3.2);
+  drive.push(coPart([...edge,...back],loft(edge,back,n=>toneI(n,METAL))+shape(vis([1,0,0])?back:edge,METAL.l,.8)+hullInk([...edge,...back],1.4)));
+  const keyProf=rrUV(-7,-1.5,7,1.5,1.4).map(([u,v])=>{const q=coRot(u,v,a);return[35+q[0],32.6+q[1]];});
+  drive.push(coPlate(keyProf,60.3,62.5,DARK,st));
+  coAxle(drive,59.7,62.8,35,32.6,1.9,DARK);
+  const keyEnd=coRot(5,0,a);
+  addLabel('TURNING KEY',[62.5,35+keyEnd[0],32.6+keyEnd[1]],turning);
+  addLabel('FEED SHAFT',[57,35,32.6],turning);
+  addLabel('CUTTER SHAFT',[54.8,uy,uz],turning);
+  addLabel('DRIVE GEAR',[52.3,35,28.9],turning);
+  addLabel('CUTTER GEAR',[52.3,uy,uz+3.7],turning);
+  addLabel('FEED WHEEL',[47.8,35,32.6],turning);
+  addLabel('FEED TEETH',[47.8,37.8,33.5],turning);
+  addLabel('CUTTING WHEEL',[45.5,uy,uz+2],turning||st.phase==='clamping');
+  addLabel('WEDGE BEVEL',[46.1,uy,uz-3.9],turning||st.phase==='clamping');
+  addLabel('SHAFT COLLAR',[55,35,32.6],turning);
+  return{shell,drive,labels};
+}
+function coCan(st,k){
+  const parts=[],phi=-2*Math.PI*st.cut,bodyOpacity=1-.76*k;
+  const bottom=cyl(coCX,coCY,2.3,3.1,17.4,coTin,toneI,.9,64);
+  parts.push({box:[[12.6,14.6,2.3],[47.4,49.4,3.1]],svg:bottom});
+  for(let i=0;i<48;i++){
+    const t=phi+i*Math.PI/24,u=phi+(i+1)*Math.PI/24;
+    const point=(r,a,z)=>[coCX+r*Math.cos(a),coCY+r*Math.sin(a),z];
+    const n=[Math.cos((t+u)/2),Math.sin((t+u)/2),0];
+    const q=[point(coR,t,3.1),point(coR,u,3.1),point(coR,u,35.5),point(coR,t,35.5)];
+    let svg='';
+    if(vis(n)){
+      svg+=shape(q,tone(n,coTin),0);
+      const wrap=[point(17.03,t,8),point(17.03,u,8),point(17.03,u,29),point(17.03,t,29)];
+      svg+=shape(wrap,tone(n,matOf('#d4a94b')),0);
+      if(i===0)svg+=line([point(17.08,t,8),point(17.08,t,29)],1.3);
+      for(const z of [5,32.5])svg+=line([point(17.1,t,z),point(17.1,u,z)],.6);
+    }
+    parts.push(coPart(q,`<g opacity="${bodyOpacity}">${svg}</g>`));
+    const rim=[point(17.5,t,35.3),point(17.5,u,35.3),point(17.5,u,36.5),point(17.5,t,36.5)];
+    const inner=[point(16.7,t,36.5),point(16.7,u,36.5),point(17.5,u,36.5),point(17.5,t,36.5)];
+    const shoulder=[point(15.5,t,35.9),point(15.5,u,35.9),point(16.7,u,35.9),point(16.7,t,35.9)];
+    parts.push(coPart(shoulder,shape(shoulder,coTin.l,.3)));
+    parts.push(coPart(rim,`<g opacity="${1-.55*k}">${vis(n)?shape(rim,toneI(n,coTin),.45):''}${shape(inner,METAL.l,.4)}</g>`));
+  }
+  const p=st.lift,raise=Math.min(1,p/.28),carry=Math.max(0,Math.min(1,(p-.28)/.38)),lower=Math.max(0,(p-.66)/.34);
+  const x=coCX-9*ease(carry),y=coCY+44*ease(carry),z=coTop+21*ease(raise)-(coTop+21-2.7)*ease(lower);
+  let lid=cyl(x,y,z,z+.5,coLidR,coTin,toneI,.9,64);
+  for(const r of [5,10,14])lid+=ink(pd(on(PZ(z+.52),ellUV(x,y,r,r,64))),.45);
+  if(st.cut>0&&st.lift===0){
+    const count=Math.max(2,Math.ceil(st.cut*80));
+    const arc=Array.from({length:count},(_,i)=>{const t=-2*Math.PI*st.cut*(1-i/(count-1));return[coCX+coLidR*Math.cos(t),coCY+coLidR*Math.sin(t),coTop+.55];});
+    lid+=line(arc,1.8);
+  }
+  parts.push({box:[[x-coLidR,y-coLidR,z],[x+coLidR,y+coLidR,z+.55]],svg:lid});
+  if(st.cut===1&&st.lift>0){
+    const hole=on(PZ(35.7),ellUV(coCX,coCY,16.3,16.3,64));
+    parts.push({box:[[13.7,15.7,35.6],[46.3,48.3,35.7]],svg:shape(hole,'#55574f',.6)});
+  }
+  return parts;
+}
+function coScene(st,m){
+  const k=ease(st.xr||0),g=coGeometry(st,m),can=coCan(st,k);
+  const shell=g.shell.map(p=>({...p,svg:`<g opacity="${1-.78*k}">${p.svg}</g>`}));
+  let s=board(0,0,88,96,2.3,4,WOOD);
+  s+=castShadow([[13,15,2.3],[47,15,35],[47,49,36],[13,49,36],[54,80,25],[63,35,40]],2.3,boardTop(0,0,88,96,2.3,4));
+  s+=byDepth([...can,...shell,...(k===0?g.drive:[])]);
+  if(k>0)s+=`<g opacity="${k}">${byDepth(g.drive)}</g>`;
+  if(k>.6)s+=xrCallouts(g.labels,[13,80,15,81,2.3,59]);
+  return s;
+}
+function coRun(st,ui,phase,seconds,step,done){
+  st.phase=phase;let t=0;
+  ui.animate(dt=>{t=Math.min(1,t+dt/seconds);step(ease(t));if(t===1){done();return false;}return true;});
+}
+function coClamp(st,ui){
+  if(st.phase==='removed')return ui.flash('The lid is off. Reload for a fresh can.');
+  if(st.phase!=='ready')return ui.flash(st.phase==='clamped'?'The rim is already clamped.':'Wait for this action to finish.');
+  coRun(st,ui,'clamping',.8,p=>st.clamp=p,()=>st.phase='clamped');
+}
+function coTurn(st,ui){
+  if(st.phase!=='clamped')return ui.flash(st.phase==='ready'?'Clamp the rim first.':st.phase==='cut'?'The cut is complete. Lift the lid.':'Wait for this action to finish.');
+  coRun(st,ui,'turning',4,p=>st.cut=p,()=>st.phase='cut');
+}
+function coLift(st,ui){
+  if(st.phase!=='cut')return ui.flash(st.phase==='removed'?'The separated lid is on the table.':'Finish the cut before lifting the lid.');
+  coRun(st,ui,'lifting',2.4,p=>{st.clamp=1-Math.min(1,p/.12);st.lift=Math.max(0,(p-.12)/.88);},()=>{st.lift=1;st.phase='removed';});
+}
+const ui=mountFigure({fig:'15',title:'Can opener',size:[88,96,64],palette:'tomato',turn:'full',
+  state:{phase:'ready',clamp:0,cut:0,lift:0},scene:coScene,
+  stats:st=>[{label:'Lid cut',value:Math.round(st.cut*100)+'%'}],
+  buttons:[{label:'Clamp',onClick:coClamp},{label:'Turn',onClick:coTurn},{label:'Lift',onClick:coLift}],
+  params:(st,q)=>{const phase=q.get('stage');if(['clamped','cut','removed'].includes(phase)){st.phase=phase;st.clamp=phase==='removed'?0:1;st.cut=phase==='clamped'?0:1;st.lift=phase==='removed'?1:0;}}
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
