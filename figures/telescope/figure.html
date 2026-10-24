@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>A reflecting telescope</title></head><body>
+<script src="core.js"></script>
+<script>
+/* A Newtonian reflector (130 mm mirror, 650 mm focal length, f/5) on an alt-az tripod, aimed at a moon poster on the wall.
+   Truth first: how a Newtonian forms an image, and where the light is after each step
+   1. Light from the moon runs as an almost parallel bundle into the open front of the tube (only with the dust cap off).
+   2. It runs the length of the tube to the concave primary mirror at the bottom, which sits in its cell on three springs
+      against three collimation bolts and is held by three clips.
+   3. The primary sends it back up the tube as a cone converging on a focus 650 mm from the mirror.
+   4. Before it gets there, the flat elliptical secondary, at 45 degrees on its holder in the middle of a four-vane spider,
+      turns the cone 90 degrees out through a hole in the tube side, up the focuser.
+   5. The cone comes to focus 110 mm from the tube axis: a small, upside-down image of the moon. The eyepiece's field stop
+      has to sit on that focus; turning a focus knob turns the pinion, which drives the rack on the drawtube in or out.
+   6. The eyepiece magnifies that image: magnification = 650 mm / eyepiece focal length (25 mm: 26x, 10 mm: 65x,
+      6 mm: 108x). The moon (0.52 degrees) then fills 26x0.52/50 of a 50 degree eyepiece field. Eyepieces are not
+      parfocal, so a swap needs a touch of refocus. The blur circle is the focus error x D/F (1/5) against the field stop.
+   7. The eye lens sends the light out as a parallel bundle through the exit pupil into the eye.
+   Parts (each held by another):
+   ROOM     floor boards . wall . skirting board . moon poster in its frame on the wall
+   TUBE     steel tube . front ring . rear cell . hinged inspection hatch with two hinges and a latch . dust cap
+            primary mirror . cell plate . three mirror clips . three springs . three collimation bolts and knobs .
+            three locking screws . spider: four vanes . secondary holder . secondary mirror . adjusting hub
+   FOCUSER  base saddle . body . drawtube . rack . pinion and its shaft . two focus knobs . collar . set screw
+   EYEPIECE barrel . body . colour band . rubber eyecup . field stop . field lens . eye lens (three: 25, 10 and 6 mm)
+   FINDER   shoe . body . two windows . brightness knob . battery . LED
+   MOUNT    dovetail bar and two bolts . saddle . alt axle and clutch knob . arm . azimuth base, bearing and lock knob .
+            tripod head with three hinge lugs . three legs, each: upper tube, leg lock, inner leg, rubber foot .
+            accessory tray with three braces and three eyepiece pockets */
+
+/* ---------- geometry (x = depth, y = width, z = up; 1 unit = 1 cm) ---------- */
+const BW = 118, BD = 112, BH = 2, BTOP = boardTop(0, 0, BW, BD, BH, 5);
+const WALLX = 4, WY0 = 22, WY1 = 92, WZ1 = 146;                 // the wall stands at the back of the floor
+const XH = 82, YH = 56, ZA = 106, YT = 51;                       // altitude axle (tube balance point); tripod axis at (XH, YT)
+const MOON = [WALLX + .62, YH, 128], MOON_R = 9.5;                 // the poster's centre: the tube points straight at it
+const ALT = Math.atan2(MOON[2] - ZA, XH - MOON[0]);
+const AX = [-Math.cos(ALT), 0, Math.sin(ALT)], SV = [0, 1, 0], UV = [Math.sin(ALT), 0, Math.cos(ALT)];
+const TUBE_L = 68, TUBE_R = 7.5, TUBE_RI = 7.0, TBAL = 28;
+const FL = 65, TM = 6, TS = 60, MIR_R = 6.5, SEC_R = 1.6;         // mirror focal length, faces along the tube, radii
+const FP_R = FL - (TS - TM);                                        // focus distance from the tube axis, up the focuser
+const DTH0 = -45, DTH1 = 81, DT0 = 2, DT1 = 62, DMID = (DTH0 + DTH1) / 2;   // inspection hatch: angles, length
+const EPS = [ { fe:25, len:4.4, band:'#43c25c', off:-.6, hole:20 },
+              { fe:10, len:3.8, band:'#3e86d9', off:-.2, hole:60 },
+              { fe:6,  len:4.9, band:'#e2483d', off:.1,  hole:100 } ];
+const HDT_MIN = 10.4, HDT_MAX = 13.6, HDT0 = 12.2;                 // drawtube travel (shoulder distance from the axis)
+const ZTR = 53.6, TRAY_R = 11;                                       // accessory tray top
+const LEGS = [0, 120, 240], LEG_TOP = [6.8, 84.2], LEG_FOOT = 33, S_LOCK = .5211;
+const CAP_FLOOR = [46, 80, BH];
+
+const PLASTER = { l:'#f3ece0', m:'#ddd3c2', d:'#b5aa98' }, SKIRT = matOf('#e6dccb'), INSIDE = { l:'#4a4541', m:'#36322f', d:'#252220' };
+const RUBBER = matOf('#34302c'), TRAYM = matOf('#5f5a54'), FINDM = matOf('#ebe7dc'), PCB = matOf('#4fa36a');
+const RAY = '#ef9a12', RAYG = '#fff3b8';
+
+/* ---------- small vector helpers (own names: core owns the short ones) ---------- */
+const rad = d => d * Math.PI / 180;
+const vadd = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const vscl = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
+const vlerp = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const vsum = (o, ...ts) => ts.reduce((p, [v, k]) => vadd(p, vscl(v, k)), o);
+const neg = a => vscl(a, -1);
+const radial = th => vadd(vscl(SV, Math.cos(rad(th))), vscl(UV, Math.sin(rad(th))));
+const tang = th => vadd(vscl(SV, -Math.sin(rad(th))), vscl(UV, Math.cos(rad(th))));
+const TB = vadd([XH, YH, ZA], vscl(AX, -TBAL));
+const axisPt = t => vadd(TB, vscl(AX, t));
+const tubeP = (t, r, th) => vadd(axisPt(t), vscl(radial(th), r));
+const FOC_TH = 115, FIND_TH = 150;                                  // focuser on the top, toward the back; finder beside it
+const ringT = (t, r, n = 36) => Array.from({ length: n }, (_, i) => tubeP(t, r, i * 360 / n));
+const FDIR = radial(FOC_TH), FW = norm(cross(FDIR, AX)), FOC0 = axisPt(TS), FP = vadd(FOC0, vscl(FDIR, FP_R));
+const N2 = norm(sub(FDIR, AX));                                     // secondary mirror normal
+function basisFor(ax){ const e1 = norm(cross(ax, Math.abs(ax[2]) < .9 ? [0, 0, 1] : [1, 0, 0])); return [e1, cross(ax, e1)]; }
+const ringAround = (c, ax, r, n = 20) => { const [e1, e2] = basisFor(ax);
+  return Array.from({ length: n }, (_, i) => { const t = i / n * 2 * Math.PI; return vsum(c, [e1, r * Math.cos(t)], [e2, r * Math.sin(t)]); }); };
+const boxOfPts = (pts, e = 0) => [[0, 1, 2].map(i => Math.min(...pts.map(p => p[i])) - e), [0, 1, 2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const boxPts = (x0, y0, z0, x1, y1, z1) => [[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0],[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]];
+// a box on its own axes X, Y, Z from o, spanning the ranges rx, ry, rz (convex: every face toward the viewer is drawn)
+function obox(o, X, Y, Z, rx, ry, rz, M, sh = toneI, w = .8){
+  const pt = (a, b, c) => vsum(o, [X, a], [Y, b], [Z, c]);
+  const [x0, x1] = rx, [y0, y1] = ry, [z0, z1] = rz;
+  const F = [ [X, [pt(x1,y0,z0), pt(x1,y1,z0), pt(x1,y1,z1), pt(x1,y0,z1)]], [neg(X), [pt(x0,y0,z0), pt(x0,y1,z0), pt(x0,y1,z1), pt(x0,y0,z1)]],
+    [Y, [pt(x0,y1,z0), pt(x1,y1,z0), pt(x1,y1,z1), pt(x0,y1,z1)]], [neg(Y), [pt(x0,y0,z0), pt(x1,y0,z0), pt(x1,y0,z1), pt(x0,y0,z1)]],
+    [Z, [pt(x0,y0,z1), pt(x1,y0,z1), pt(x1,y1,z1), pt(x0,y1,z1)]], [neg(Z), [pt(x0,y0,z0), pt(x1,y0,z0), pt(x1,y1,z0), pt(x0,y1,z0)]] ];
+  return F.filter(([n]) => vis(n)).map(([n, q]) => shape(q, sh(n, M), w)).join('');
+}
+const oboxPts = (o, X, Y, Z, rx, ry, rz) => { const out = []; for (const a of rx) for (const b of ry) for (const c of rz) out.push(vsum(o, [X, a], [Y, b], [Z, c])); return out; };
+// an open sleeve (a band, a collar): the side only, no end discs
+const sleeve = (a, b, r, M, w = .6, n = 22) => { const A = ringAround(a, norm(sub(b, a)), r, n), B = ringAround(b, norm(sub(b, a)), r, n);
+  return loft(A, B, nr => toneI(nr, M)) + hullInk([...A, ...B], w); };
+const disc = (c, ax, r, col, w = .6, n = 20, extra = '') => { const R = ringAround(c, ax, r, n); return fill(pd(R), col, extra) + (w ? ink(pd(R), w) : ''); };
+const annulus = (c, ax, r0, r1, col, w = .7, n = 36) => { const A = ringAround(c, ax, r1, n), B = ringAround(c, ax, r0, n);
+  return `<path d="${pd(A)}${pd(B)}" fill="${col}" fill-rule="evenodd"/>` + ink(pd(A), w) + ink(pd(B), w * .8); };
+const strk = (pts, col, w, extra = '') => `<path d="${pd(pts, false)}" fill="none" stroke="${col}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" ${extra}/>`;
+const coil = (a, b, r, turns, w = .5) => { const ax = norm(sub(b, a)), [e1, e2] = basisFor(ax), pts = [];
+  for (let i = 0; i <= turns * 14; i++){ const t = i / (turns * 14), th = t * turns * 2 * Math.PI; pts.push(vsum(vlerp(a, b, t), [e1, r * Math.cos(th)], [e2, r * Math.sin(th)])); }
+  return strk(pts, INK, w + .8) + strk(pts, METAL.l, w); };
+
+/* ---------- the moon (the poster, and the same moon in the eyepiece, turned upside down) ---------- */
+// near side, unit disc, u = viewer's right, v = up: maria, then bright craters
+const MARIA = [[-.3,.42,.24,.2],[.18,.38,.15,.13],[.32,.1,.17,.15],[.67,.28,.1,.13],[-.55,0,.24,.38],[-.15,-.35,.17,.13],[.55,-.12,.1,.15],[.36,-.27,.08,.09],[-.45,-.45,.1,.08]];
+const CRATERS = [[-.1,-.72,.05],[-.3,.12,.045],[-.62,.3,.035],[.08,-.1,.03]];
+function moonArt(map, R, w){                                        // map: unit (u, v) -> screen [X, Y]; R: screen radius
+  const ell = (cu, cv, ru, rv, n = 22) => sp(ellUV(cu, cv, ru, rv, n).map(map));
+  let s = fill(ell(0, 0, 1, 1, 40), '#efece2');
+  s += fill(MARIA.map(([u, v, a, b]) => ell(u, v, a, b)).join(''), '#bdb7a8');
+  s += fill(ell(-.12, .72, .045, .04), '#9d9789');                     // Plato, dark floored
+  for (const [u, v, r] of CRATERS) s += fill(ell(u, v, r, r, 12), '#fbfaf4') + `<path d="${ell(u + r * .25, v - r * .25, r * .6, r * .6, 10)}" fill="#cfc9ba"/>`;
+  let rays = ''; for (let i = 0; i < 9; i++){ const a = i / 9 * 2 * Math.PI + .3, q0 = map([-.1 + .07 * Math.cos(a), -.72 + .07 * Math.sin(a)]), q1 = map([-.1 + .34 * Math.cos(a), -.72 + .34 * Math.sin(a)]);
+    rays += `M${f(q0[0])} ${f(q0[1])}L${f(q1[0])} ${f(q1[1])}`; }
+  s += `<path d="${rays}" stroke="#fbfaf4" stroke-width="${f(R * .03)}" opacity=".7" fill="none"/>`;
+  return s + `<path d="${ell(0, 0, 1, 1, 40)}" fill="none" stroke="${INK}" stroke-width="${w}"/>`;
+}
+
+/* ---------- the room ---------- */
+function floorBoards(){
+  let s = board(0, 0, BW, BD, BH, 5, WOOD), d = '';
+  for (let y = 14; y < BD - 4; y += 14) d += pd([[3, y, BH + .02], [BW - 3, y, BH + .02]], false);
+  return s + `<path d="${d}" fill="none" stroke="${INK}" stroke-width=".5" opacity=".35"/>`;
+}
+function wallSvg(){
+  const front = facing([1, 0, 0]);
+  const wall = box(0, WY0, BH, WALLX, WY1, WZ1, PLASTER, tone, 1.1), skirt = box(WALLX, WY0, BH, WALLX + .9, WY1, BH + 5, SKIRT, tone, .8);
+  let s = front ? wall + skirt + poster() : skirt + wall;
+  return s + hullInk(boxPts(0, WY0, BH, WALLX + .9, WY1, WZ1), 2.6);
+}
+function poster(){
+  const fx = WALLX + .6;
+  let s = cylX(WALLX, fx, YH, MOON[2], MOON_R + 1.3, DARK, toneI, 1, 36);
+  s += fill(pd(on(PX(fx + .01), ellUV(YH, MOON[2], MOON_R + .5, MOON_R + .5, 36))), '#1d2230');
+  const map = ([u, v]) => P(fx + .02, YH - u * MOON_R, MOON[2] + v * MOON_R);
+  return s + moonArt(map, MOON_R * 1.2, .9) + [[-1.1, 1.0], [1.15, .85], [.9, -1.12], [-1.0, -1.05]].map(([u, v]) => { const q = map([u, v]); return `<circle cx="${f(q[0])}" cy="${f(q[1])}" r=".45" fill="#f5f0dc"/>`; }).join('');
+}
+
+/* ---------- tripod and accessory tray ---------- */
+const legPt = (ph, s) => { const r = LEG_TOP[0] + (LEG_FOOT - LEG_TOP[0]) * s, z = LEG_TOP[1] + (BH + 1.6 - LEG_TOP[1]) * s;
+  return [XH + r * Math.cos(rad(ph)), YT + r * Math.sin(rad(ph)), z]; };
+const sAtZ = z => (LEG_TOP[1] - z) / (LEG_TOP[1] - BH - 1.6);
+const holePt = i => [XH + 8 * Math.cos(rad(EPS[i].hole)), YT + 8 * Math.sin(rad(EPS[i].hole)), ZTR];
+function legSection(ph, s0, s1, r, M){
+  const a = legPt(ph, s0), b = legPt(ph, s1);
+  return { box: [[Math.min(a[0], b[0]) - r, Math.min(a[1], b[1]) - r, b[2]], [Math.max(a[0], b[0]) + r, Math.max(a[1], b[1]) + r, a[2]]], svg: rod(a, b, r, M, toneI, .9, r, 14) };
+}
+function tripodParts(st, k){
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg });
+  const sA = sAtZ(ZTR), sB = sAtZ(ZTR - 3.4), s0 = sAtZ(82.8);
+  for (const ph of LEGS){
+    parts.push(legSection(ph, s0, .2, 1.25, METAL), legSection(ph, .2, sA, 1.25, METAL), legSection(ph, sB, S_LOCK - .025, 1.25, METAL));
+    parts.push(legSection(ph, S_LOCK - .025, S_LOCK + .025, 1.75, DARK));                       // leg lock
+    parts.push(legSection(ph, S_LOCK + .025, .76, .9, METAL), legSection(ph, .76, 1, .9, METAL));
+    const ft = legPt(ph, 1); put([[ft[0] - 1.7, ft[1] - 1.7, BH], [ft[0] + 1.7, ft[1] + 1.7, BH + 1.8]], cyl(ft[0], ft[1], BH, BH + 1.8, 1.7, RUBBER, toneI, .9, 16));
+  }
+  // tripod head: the plate, three hinge lugs (each with its bolt) and the tops of the legs between them
+  { let s = ''; const items = [];
+    for (const ph of LEGS){ const R = [Math.cos(rad(ph)), Math.sin(rad(ph)), 0], T = [-Math.sin(rad(ph)), Math.cos(rad(ph)), 0], o = [XH, YT, 0];
+      const stub = rod(legPt(ph, 0), legPt(ph, s0), 1.25, METAL, toneI, .9, 1.25, 14);
+      const lug = obox(o, R, T, [0, 0, 1], [5.2, 8.4], [-1.7, 1.7], [82.8, 85], DARK, toneI, .8);
+      const bolt = vis(T) ? rod(vsum(o, [R, 7.1], [T, 1.7], [[0, 0, 1], 83.9]), vsum(o, [R, 7.1], [T, 2.2], [[0, 0, 1], 83.9]), .6, METAL, toneI, .6)
+                          : rod(vsum(o, [R, 7.1], [T, -1.7], [[0, 0, 1], 83.9]), vsum(o, [R, 7.1], [T, -2.2], [[0, 0, 1], 83.9]), .6, METAL, toneI, .6);
+      items.push({ at: [XH + 7 * R[0], YT + 7 * R[1], 84], svg: stub + lug + bolt }); }
+    s += byDepth(items) + cyl(XH, YT, 85, 87, 8, DARK, tone, 1.2, 36);
+    put([[XH - 8.4, YT - 8.4, 82.8], [XH + 8.4, YT + 8.4, 87]], s); }
+  // accessory tray: a moulded tray with three eyepiece pockets, held on three braces at the legs (with the leg pieces it grips)
+  { const items = [];
+    for (const ph of LEGS){ const R = [Math.cos(rad(ph)), Math.sin(rad(ph)), 0], T = [-Math.sin(rad(ph)), Math.cos(rad(ph)), 0], o = [XH, YT, 0];
+      items.push({ at: [XH + 14 * R[0], YT + 14 * R[1], 52], svg: obox(o, R, T, [0, 0, 1], [TRAY_R - .4, 16.4], [-.8, .8], [51.4, 52.6], TRAYM, toneI, .7)
+        + rod(legPt(ph, sA), legPt(ph, sB), 1.25, METAL, toneI, .9, 1.25, 14) }); }
+    const A = on(PZ(ZTR - 3.4), ellUV(XH, YT, TRAY_R - .6, TRAY_R - .6, 40)), B = on(PZ(ZTR), ellUV(XH, YT, TRAY_R, TRAY_R, 40));
+    let tray = loft(A, B, n => toneI(n, TRAYM)) + fill(pd(B), TRAYM.l) + ink(pd(B), .9) + hullInk([...A, ...B], 1.4);
+    for (let i = 0; i < 3; i++){ const h = holePt(i); tray += fill(pd(on(PZ(ZTR + .01), ellUV(h[0], h[1], 1.75, 1.75, 16))), '#26231f') + ink(pd(on(PZ(ZTR + .01), ellUV(h[0], h[1], 1.75, 1.75, 16))), .6); }
+    items.push({ at: [XH, YT, 52], svg: tray });
+    put([[XH - 17.5, YT - 17.5, ZTR - 3.4], [XH + 17.5, YT + 17.5, ZTR]], byDepth(items)); }
+  // spare eyepieces standing in their pockets
+  EPS.forEach((E, i) => { if (i === st.ep && !st.swap) return; if (st.swap && (i === st.swap.from || i === st.swap.to) && !epInHole(st, i)) return;
+    const h = holePt(i); put([[h[0] - 2.1, h[1] - 2.1, ZTR], [h[0] + 2.1, h[1] + 2.1, ZTR + E.len + 1]], eyepiece(i, h, [0, 0, 1], k, false)); });
+  // the dust cap lying on the floor, or on its way down
+  const cp = capPose(st.capK);
+  if (st.capK > 0 && cp.low) put(capBox(cp), capSvg(cp));
+  if (hatchLow(st)) put(boxOfPts(hatchPts(hatchPose(st.door)), .3), hatchPanel(st, PALS[st.pal]));
+  const mv = movingEp(st);
+  if (mv && mv.O[2] < 87) put(boxOfPts([vadd(mv.O, vscl(mv.e, -3.3)), vadd(mv.O, vscl(mv.e, EPS[mv.i].len + 1.1))], 2.2), eyepiece(mv.i, mv.O, mv.e, k, true));
+  return byDepth(parts);
+}
+
+/* ---------- eyepieces ---------- */
+// O = shoulder (where it sits on the drawtube / pocket), e = toward the eye end. lifted: draw the barrel (it is out in the open)
+function eyepiece(i, O, e, k, lifted){
+  const E = EPS[i], top = vis(e), at = d => vadd(O, vscl(e, d));
+  const barrel = lifted ? rod(at(-3.2), O, 1.58, METAL, toneI, .8, 1.58, 18) : '';
+  const body = rod(O, at(E.len), 2.05, DARK, toneI, 1, 2.05, 24) + sleeve(at(E.len - 1.5), at(E.len - .9), 2.08, matOf(E.band), .5);
+  const cup = rod(at(E.len), at(E.len + 1), 1.85, RUBBER, toneI, .9, 1.85, 22);
+  const lens = top ? disc(at(E.len + 1.02), e, 1.15, '#1f2c3a', .5, 18) + disc(vsum(at(E.len + 1.03), [basisFor(e)[0], .35], [basisFor(e)[1], .35]), e, .3, '#ffffff', 0, 10, 'opacity=".6"') : '';
+  let s = top ? barrel + body + cup + lens : cup + body + barrel;
+  if (k > 0){                                                         // see-through: the optics inside the barrel and body
+    const fsR = ringAround(at(E.off), e, 1.45, 20), fsI = ringAround(at(E.off), e, 1.05, 20);
+    const mech = `<path d="${pd(fsR)}${pd(fsI)}" fill="#26231f" fill-rule="evenodd"/>` + disc(at(E.off + .45), e, 1.3, '#cfe9f0', .6, 20, 'opacity=".9"')
+      + disc(at(E.len + .45), e, 1.25, '#cfe9f0', .6, 20, 'opacity=".9"') + (lifted ? '' : sleeve(at(-3.2), O, 1.58, METAL, .5));
+    s = `<g opacity="${f(1 - .7 * k)}">${s}</g><g opacity="${f(k)}">${mech}</g>`;
+  }
+  return s;
+}
+// the eyepiece being swapped: out of the focuser, round the tube and down to its pocket (or the reverse)
+const EP_KEYS = [0, .13, .32, .58, .8, 1];
+function epPath(i, hdt, u){
+  const O0 = vadd(FOC0, vscl(FDIR, hdt)), h = holePt(i);
+  const K = [O0, vadd(O0, vscl(FDIR, 5.5)), [70, 76, 118], [84, 67, 72], vadd(h, [0, 0, 11]), h];   // up, round the open side, down to the tray
+  let j = 0; while (j < 4 && u > EP_KEYS[j + 1]) j++;
+  const t = ease(Math.max(0, Math.min(1, (u - EP_KEYS[j]) / (EP_KEYS[j + 1] - EP_KEYS[j]))));
+  const O = vlerp(K[j], K[j + 1], t), uu = Math.max(0, Math.min(1, (u - .13) / .45));
+  return { O, e: norm(vlerp(FDIR, [0, 0, 1], ease(uu))) };
+}
+function movingEp(st){
+  if (!st.swap) return null; const k = st.swap.k;
+  if (k < .5){ const p = epPath(st.swap.from, st.hdt, k / .5); return { i: st.swap.from, ...p }; }
+  const p = epPath(st.swap.to, st.hdt, 1 - (k - .5) / .5); return { i: st.swap.to, ...p };
+}
+const epInHole = (st, i) => st.swap && ((i === st.swap.to && st.swap.k < .5) || (i === st.swap.from && st.swap.k >= .5));
+
+/* ---------- dust cap ---------- */
+function capPose(kc){
+  if (kc <= .22){ const e1 = ease(kc / .22); return { c: axisPt(66.9 + 7 * e1), e: AX, low: false }; }
+  const u = ease((kc - .22) / .78), q0 = axisPt(73.9), q2 = CAP_FLOOR, q1 = [(q0[0] + q2[0]) / 2, (q0[1] + q2[1]) / 2 + 8, q0[2] + 6];
+  const c = [0, 1, 2].map(i => (1 - u) * (1 - u) * q0[i] + 2 * (1 - u) * u * q1[i] + u * u * q2[i]);
+  return { c, e: norm(vlerp(AX, [0, 0, 1], u)), low: c[2] < 87 };
+}
+const capBox = cp => boxOfPts([...ringAround(cp.c, cp.e, 8.2, 12), ...ringAround(vadd(cp.c, vscl(cp.e, 1.8)), cp.e, 8.2, 12)]);
+function capSvg(cp){
+  const A = ringAround(cp.c, cp.e, 8.2, 36), B = ringAround(vadd(cp.c, vscl(cp.e, 1.8)), cp.e, 8.2, 36);
+  let s = loft(A, B, n => tone(n, DARK));
+  if (vis(cp.e)) s += fill(pd(B), tone(cp.e, DARK)) + ink(pd(B), 1) + rod(vadd(cp.c, vscl(cp.e, 1.8)), vadd(cp.c, vscl(cp.e, 2.3)), 2.4, DARK, tone, .8, 2.4, 20);
+  else s += annulus(cp.c, cp.e, 7.6, 8.2, DARK.m, .8) + disc(cp.c, cp.e, 7.6, '#1a1816', 0, 36);
+  return s + hullInk([...A, ...B], 1.8);
+}
+
+/* ---------- the tube ---------- */
+const N_T = 40, DA = 9;
+const inHatch = a => (((a - DTH0) % 360) + 360) % 360 + DA <= (DTH1 - DTH0) + 1e-6;
+function farInner(){
+  let s = '';
+  for (let i = 0; i < N_T; i++){ const a = i * DA, b = a + DA, n = neg(radial(a + DA / 2));
+    if (vis(n)) s += face(pd([tubeP(1.5, TUBE_RI, a), tubeP(1.5, TUBE_RI, b), tubeP(68, TUBE_RI, b), tubeP(68, TUBE_RI, a)]), toneI(n, INSIDE)); }
+  return s;
+}
+function tubeOuter(m, open){
+  let s = '';
+  for (let i = 0; i < N_T; i++){ const a = i * DA, b = a + DA, n = radial(a + DA / 2); if (!vis(n)) continue;
+    const col = tone(n, m), segs = open && inHatch(a) ? [[1.5, DT0], [DT1, 65]] : [[1.5, 65]];
+    for (const [t0, t1] of segs) s += face(pd([tubeP(t0, TUBE_R, a), tubeP(t0, TUBE_R, b), tubeP(t1, TUBE_R, b), tubeP(t1, TUBE_R, a)]), col); }
+  return s;
+}
+// the hatch outline on the tube (only the parts on the near side)
+function hatchOutline(w){
+  let d = '';
+  const run = pts => { let seg = []; for (const [p, n] of pts){ if (vis(n)) seg.push(p); else { if (seg.length > 1) d += pd(seg, false); seg = []; } } if (seg.length > 1) d += pd(seg, false); };
+  for (const t of [DT0, DT1]){ const pts = []; for (let a = DTH0; a <= DTH1 + 1e-6; a += 3) pts.push([tubeP(t, TUBE_R + .02, a), radial(a)]); run(pts); }
+  for (const a of [DTH0, DTH1]) if (vis(radial(a))) d += pd([tubeP(DT0, TUBE_R + .02, a), tubeP(DT1, TUBE_R + .02, a)], false);
+  return d ? ink(d, w) : '';
+}
+function windowRim(){
+  let s = '';
+  const CUT = '#9aa3a8';
+  for (let a = DTH0; a < DTH1 - 1e-6; a += DA){ const b = a + DA;
+    if (vis(AX)) s += face(pd([tubeP(DT0, TUBE_RI, a), tubeP(DT0, TUBE_RI, b), tubeP(DT0, TUBE_R, b), tubeP(DT0, TUBE_R, a)]), CUT);
+    if (vis(neg(AX))) s += face(pd([tubeP(DT1, TUBE_RI, a), tubeP(DT1, TUBE_RI, b), tubeP(DT1, TUBE_R, b), tubeP(DT1, TUBE_R, a)]), CUT); }
+  if (vis(tang(DTH0))) s += face(pd([tubeP(DT0, TUBE_RI, DTH0), tubeP(DT1, TUBE_RI, DTH0), tubeP(DT1, TUBE_R, DTH0), tubeP(DT0, TUBE_R, DTH0)]), CUT);
+  if (vis(neg(tang(DTH1)))) s += face(pd([tubeP(DT0, TUBE_RI, DTH1), tubeP(DT1, TUBE_RI, DTH1), tubeP(DT1, TUBE_R, DTH1), tubeP(DT0, TUBE_R, DTH1)]), CUT);
+  return s + hatchOutline(1.3);
+}
+// the cover is held by two thumb screws; "open" lifts it off and lays it on the floor, convex side up
+const thumbPts = t => [tubeP(t, TUBE_R, DMID), tubeP(t, TUBE_R + 1.1, DMID)];
+const TS_T = [DT0 + 4, DT1 - 4];
+const HP = { O: axisPt((DT0 + DT1) / 2), X: AX, Y: radial(DMID) };
+HP.Z = tang(DMID);
+const HAND = Math.sign(dot(cross(HP.X, HP.Y), HP.Z));
+const HCHORD = TUBE_R * Math.cos(rad((DTH1 - DTH0) / 2));
+const HFLOOR = { O: [20, YH, BH - HCHORD], X: [0, 1, 0], Y: [0, 0, 1] };
+function hatchPose(kd){
+  const lift = .22, u0 = Math.min(1, kd / lift), u = ease(Math.max(0, (kd - lift) / (1 - lift)));
+  const q0 = vadd(HP.O, vscl(HP.Y, 5 * ease(u0))), q2 = HFLOOR.O, q1 = [(q0[0] + q2[0]) / 2, q0[1] + 26, q0[2] + 4];
+  const O = kd <= lift ? q0 : [0, 1, 2].map(i => (1 - u) * (1 - u) * q0[i] + 2 * (1 - u) * u * q1[i] + u * u * q2[i]);
+  const X = norm(vlerp(HP.X, HFLOOR.X, u)), Y = norm(sub(vlerp(HP.Y, HFLOOR.Y, u), vscl(X, dot(vlerp(HP.Y, HFLOOR.Y, u), X))));
+  return { O, X, Y, Z: vscl(cross(X, Y), HAND) };
+}
+const hatchMap = (pose, p) => { const v = sub(p, HP.O); return vsum(pose.O, [pose.X, dot(v, HP.X)], [pose.Y, dot(v, HP.Y)], [pose.Z, dot(v, HP.Z)]); };
+const hatchDir = (pose, n) => vsum([0, 0, 0], [pose.X, dot(n, HP.X)], [pose.Y, dot(n, HP.Y)], [pose.Z, dot(n, HP.Z)]);
+const hatchPts = pose => [DT0, DT1].flatMap(t => [DTH0, DMID, DTH1].map(a => hatchMap(pose, tubeP(t, TUBE_R, a))));
+function hatchPanel(st, m){
+  const pose = hatchPose(st.door), strips = [];
+  for (let a = DTH0; a < DTH1 - 1e-6; a += DA){ const b = a + DA;
+    const q = [tubeP(DT0, TUBE_R, a), tubeP(DT0, TUBE_R, b), tubeP(DT1, TUBE_R, b), tubeP(DT1, TUBE_R, a)].map(p => hatchMap(pose, p));
+    const nOut = hatchDir(pose, radial(a + DA / 2));
+    strips.push({ d: depthOf(avg(q)), svg: face(pd(q), vis(nOut) ? tone(nOut, m) : toneI(neg(nOut), INSIDE)) }); }
+  let s = strips.sort((p, q) => p.d - q.d).map(p => p.svg).join('');
+  const edge = []; for (let a = DTH0; a <= DTH1 + 1e-6; a += 4.5) edge.push(tubeP(DT0, TUBE_R, a));
+  for (let a = DTH1; a >= DTH0 - 1e-6; a -= 4.5) edge.push(tubeP(DT1, TUBE_R, a));
+  s += ink(pd(edge.map(p => hatchMap(pose, p))), 1.2);
+  if (vis(hatchDir(pose, radial(DMID)))) for (const t of TS_T){ const [l0, l1] = thumbPts(t).map(p => hatchMap(pose, p)); s += rod(l0, l1, .75, DARK, toneI, .7, .75, 12); }
+  return s;
+}
+const hatchLow = st => st.door > .001 && Math.max(...hatchPts(hatchPose(st.door)).map(p => p[2])) < 86;
+const thumbScrews = () => vis(radial(DMID)) ? TS_T.map(t => rod(...thumbPts(t), .75, DARK, toneI, .7, .75, 12)).join('') : '';
+function rearCell(m){
+  const A = ringT(-1.2, 7.9), B = ringT(1.5, 7.9);
+  let s = loft(A, B, n => tone(n, DARK));
+  if (vis(neg(AX))) s += fill(pd(A), tone(neg(AX), DARK)) + ink(pd(A), 1);
+  if (vis(AX)) s += annulus(axisPt(1.5), AX, TUBE_R, 7.9, tone(AX, DARK), .7);
+  return s + hullInk([...A, ...B], 1.6);
+}
+function frontRing(){
+  const A = ringT(65, 7.9), B = ringT(68, 7.9);
+  let s = loft(A, B, n => tone(n, DARK));
+  if (vis(AX)) s += annulus(axisPt(68), AX, TUBE_RI, 7.9, tone(AX, DARK), .9);
+  if (vis(neg(AX))) s += annulus(axisPt(65), AX, TUBE_R, 7.9, tone(neg(AX), DARK), .7);
+  return s + hullInk([...A, ...B], 1.6);
+}
+// the rear of the cell: three collimation knobs and three locking screws (outside, on the end plate)
+function rearKnobs(){
+  let s = '';
+  for (const th of [90, 210, 330]){ const p = tubeP(-1.2, 4.6, th); s += rod(p, vadd(p, vscl(AX, -1.5)), 1.15, DARK, toneI, .8, 1.15, 14); }
+  for (const th of [30, 150, 270]){ const p = tubeP(-1.2, 4.6, th); s += rod(p, vadd(p, vscl(AX, -.5)), .6, METAL, toneI, .6, .6, 10); }
+  return s;
+}
+
+/* ---------- inside the tube ---------- */
+function primaryItem(k){
+  const fA = vis(AX), clips = [];
+  for (const th of [90, 210, 330]){ const R = radial(th), T = tang(th);
+    const c = obox(axisPt(0), R, T, AX, [5.9, 6.95], [-.6, .6], [TM, TM + .3], METAL, toneI, .5) + obox(axisPt(0), R, T, AX, [6.55, 6.95], [-.6, .6], [3.6, TM], METAL, toneI, .5);
+    clips.push({ near: vis(R), svg: c }); }
+  let mir = rod(axisPt(TM - 2.2), axisPt(TM), MIR_R, CLEAR, toneI, .9, MIR_R, 40);
+  if (fA){
+    for (const [dt, r, c] of [[0, 6.25, '#e8eef1'], [-.18, 4.6, '#d5dfe4'], [-.32, 2.8, '#c4d0d7']]) mir += fill(pd(ringAround(axisPt(TM + dt), AX, r, 36)), c);
+    mir += ink(pd(ringAround(axisPt(TM - .38), AX, .5, 14)), .6);
+    const [e1, e2] = basisFor(AX);
+    mir += fill(pd([vsum(axisPt(TM), [e1, -4], [e2, 2.5]), vsum(axisPt(TM), [e1, -2.6], [e2, 3.6]), vsum(axisPt(TM), [e1, 1.2], [e2, -1.4]), vsum(axisPt(TM), [e1, -.2], [e2, -2.5])]), '#ffffff', 'opacity=".45"');
+  }
+  const cell = rod(axisPt(TM - 3.2), axisPt(TM - 2.2), 6.9, DARK, toneI, .8, 6.9, 36);
+  let mech = '';
+  if (k > 0){                                                         // springs and bolts between the end plate and the cell plate
+    for (const th of [90, 210, 330]) mech += coil(tubeP(-.35, 4.6, th), tubeP(TM - 3.2, 4.6, th), .65, 5, .4) + rod(tubeP(-1.2, 4.6, th), tubeP(TM - 3, 4.6, th), .25, METAL, toneI, .4, .25, 8);
+    for (const th of [30, 150, 270]) mech += rod(tubeP(-1.2, 4.6, th), tubeP(TM - 3.2, 4.6, th), .3, METAL, toneI, .4, .3, 8);
+    mech += disc(axisPt(-.4), AX, 7.2, '#5b5650', .6, 36, 'opacity=".55"');
+  }
+  const front = clips.filter(c => fA || c.near).map(c => c.svg).join(''), back = clips.filter(c => !(fA || c.near)).map(c => c.svg).join('');
+  return fA ? mech + cell + back + mir + front : back + mir + front + cell + mech;
+}
+function spiderItem(){
+  const fA = vis(AX), n = 28, ring = (tf, cut) => Array.from({ length: n }, (_, i) => { const ph = i / n * 2 * Math.PI;
+    return vsum(axisPt(cut ? TS + SEC_R * Math.sin(ph) : tf), [FW, SEC_R * Math.cos(ph)], [FDIR, SEC_R * Math.sin(ph)]); });
+  const rim = ring(0, true), back = ring(TS + 3.2, false);
+  let holder = loft(rim, back, nr => toneI(nr, DARK)) + hullInk([...rim, ...back], .8);
+  const hub = rod(axisPt(TS + 3.2), axisPt(TS + 4.1), 1.0, DARK, toneI, .7, 1.0, 16);
+  let face2 = '';
+  if (vis(N2)){ face2 = fill(pd(rim), '#e3eaee') + ink(pd(rim), .8);
+    face2 += fill(pd([vsum(FOC0, [FW, -.9], [FDIR, -.6], [AX, -.6]), vsum(FOC0, [FW, -.3], [FDIR, -.9], [AX, -.9]), vsum(FOC0, [FW, .9], [FDIR, .5], [AX, .5]), vsum(FOC0, [FW, .3], [FDIR, .8], [AX, .8])]), '#ffffff', 'opacity=".55"'); }
+  else if (fA) holder += fill(pd(back), toneI(AX, DARK)) + ink(pd(back), .6);
+  const core = fA ? holder + face2 + hub : hub + holder + face2;
+  const vanes = [80, 170, 260, 350].map(th => ({ near: vis(radial(th)), svg: shape([tubeP(TS + 2, 1.5, th), tubeP(TS + 3.4, 1.5, th), tubeP(TS + 3.4, TUBE_RI, th), tubeP(TS + 2, TUBE_RI, th)], METAL.m, .5) }));
+  return vanes.filter(v => !v.near).map(v => v.svg).join('') + core + vanes.filter(v => v.near).map(v => v.svg).join('');
+}
+// the light: a bundle down the tube, a cone back up to the secondary, a narrow cone out to the focus
+function beamTube(){
+  const H = pts => sp(hull(pts.map(p => P(...p))));
+  return fill(H([...ringT(TM, MIR_R, 24), ...ringT(68, MIR_R, 24)]), '#fff1a8', 'opacity=".32"')
+    + fill(H([...ringT(TM, MIR_R, 24), ...ringAround(FOC0, AX, 1.1, 16)]), '#ffd447', 'opacity=".42"')
+    + fill(H([...ringAround(FOC0, FDIR, 1.1, 16), ...ringAround(vadd(FOC0, vscl(FDIR, TUBE_RI)), FDIR, .42, 12)]), '#ffc22e', 'opacity=".55"');
+}
+function rayPaths(st){
+  const out = [], seated = !st.swap, E = EPS[st.ep], hEL = st.hdt + E.len + .45, eye = vadd(FOC0, vscl(FDIR, st.hdt + E.len + 2.6));
+  for (const c of [-4.8, 4.8]){
+    const Ec = vsum(axisPt(68), [FDIR, c]);
+    const lam = (MOON[0] - Ec[0]) / AX[0], Mc = vadd(Ec, vscl(AX, lam));
+    const Hc = vsum(axisPt(TM - .4 * (1 - (c / MIR_R) ** 2)), [FDIR, c]), d = norm(sub(axisPt(TM + FL), Hc));
+    const Sc = vadd(Hc, vscl(d, dot(sub(FOC0, Hc), N2) / dot(d, N2))), d2 = sub(d, vscl(N2, 2 * dot(d, N2)));
+    const Xc = vadd(Sc, vscl(d2, (TUBE_RI - dot(sub(Sc, FOC0), FDIR)) / dot(d2, FDIR)));
+    const ELc = vadd(FP, vscl(d2, ((seated ? hEL : st.hdt + 3) - FP_R) / dot(d2, FDIR)));
+    out.push({ moon: [Mc, st.capK === 0 ? axisPt(69.1 + 0 * c) && vsum(axisPt(69.1), [FDIR, c]) : Ec], tube: [Ec, Hc, Sc, Xc], foc: seated ? [Xc, FP, ELc, eye] : [Xc, FP, ELc] });
+  }
+  return { rays: out, eye };
+}
+const rayLine = pts => strk(pts, RAYG, 2.4, 'opacity=".9"') + strk(pts, RAY, .85);
+const arrowAt = (a, b, t = .5) => { const p = P(...vlerp(a, b, t)), q = P(...vlerp(a, b, t + .02)), dx = q[0] - p[0], dy = q[1] - p[1], l = Math.hypot(dx, dy) || 1, ux = dx / l, uy = dy / l, z = 1.6;
+  return `<path d="M${f(p[0] + ux * z)} ${f(p[1] + uy * z)}L${f(p[0] - ux * z - uy * z * .8)} ${f(p[1] - uy * z + ux * z * .8)}L${f(p[0] - ux * z + uy * z * .8)} ${f(p[1] - uy * z - ux * z * .8)}Z" fill="${RAY}"/>`; };
+function tubeContents(st, k, withMech){
+  const fA = vis(AX), lit = st.capK > 0 && (st.door > .02 || withMech);
+  let beam = '';
+  if (lit){ beam = beamTube();
+    for (const r of rayPaths(st).rays) beam += rayLine(r.tube) + arrowAt(r.tube[0], r.tube[1], .45) + arrowAt(r.tube[1], r.tube[2], .55); }
+  // along the tube: the primary, the light in front of it, the secondary on its spider
+  const items = [primaryItem(withMech ? k : 0), beam, spiderItem()];
+  let s = (fA ? items : items.reverse()).join('');
+  return s;
+}
+function tubeCore(st, m, k){
+  const open = st.door > .001, fA = vis(AX);
+  const mid = tubeOuter(m, open) + (open ? windowRim() : hatchOutline(.8) + thumbScrews());
+  const capOn = st.capK === 0 ? capSvg(capPose(0)) : '';
+  const shell = (fA ? rearCell(m) + mid + frontRing() + capOn : capOn + frontRing() + mid + rearCell(m)) + hullInk([...ringT(-1.2, 7.9, 24), ...ringT(68, 7.9, 24)], 2.4);
+  if (k <= 0) return farInner() + tubeContents(st, 0, false) + shell;
+  return `<g opacity="${f(1 - .5 * k)}">${farInner()}</g><g opacity="${f(1 - k)}">${tubeContents(st, 0, false)}</g><g opacity="${f(1 - .8 * k)}">${shell}</g><g opacity="${f(k)}">${tubeContents(st, k, true)}</g>`;
+}
+
+/* ---------- focuser (rack and pinion) with the eyepiece in it ---------- */
+const FPT = (h, a = 0, w = 0) => vsum(FOC0, [FDIR, h], [AX, a], [FW, w]);
+function focuserStack(st, k){
+  const top = vis(FDIR), knobA = (st.hdt - HDT_MIN) / .62;
+  const base = obox(FOC0, FDIR, AX, FW, [6.6, 7.9], [-3.4, 3.4], [-3.0, 3.0], DARK, toneI, .8);
+  let body = obox(FOC0, FDIR, AX, FW, [7.9, 10.0], [-3.0, 3.0], [-2.4, 3.6], DARK, tone, 1);
+  let mech = '';
+  if (k > 0){                                                         // inside the body: drawtube, its rack, the pinion on the knob shaft
+    mech += rod(FPT(7.0), FPT(10.0), 1.9, METAL, toneI, .6, 1.9, 18);
+    mech += obox(FOC0, FDIR, AX, FW, [7.2, st.hdt - .4], [-.35, .35], [1.85, 2.2], METAL, toneI, .5);
+    let teeth = ''; for (let h = 7.4; h < st.hdt - .5; h += .36) teeth += pd([FPT(h, -.35, 2.22), FPT(h, .35, 2.22)], false);
+    if (vis(FW)) mech += ink(teeth, .35);
+    mech += rod(FPT(8.9, -3, 2.7), FPT(8.9, 3, 2.7), .3, METAL, toneI, .5, .3, 10);
+    const gear = rod(FPT(8.9, -.55, 2.7), FPT(8.9, .55, 2.7), .62, matOf('#d8b25a'), toneI, .6, .62, 18);
+    let gt = ''; for (let i = 0; i < 10; i++){ const a = knobA + i / 10 * 2 * Math.PI; gt += pd([FPT(8.9 + .62 * Math.sin(a), .56, 2.7 + .62 * Math.cos(a)), FPT(8.9 + .78 * Math.sin(a), .56, 2.7 + .78 * Math.cos(a))], false); }
+    mech += gear + (vis(AX) ? ink(gt, .4) : '');
+    body = `<g opacity="${f(1 - .75 * k)}">${body}</g><g opacity="${f(k)}">${mech}</g>`;
+  }
+  const knobs = [-1, 1].map(sg => { const a0 = FPT(8.9, sg * 3.0, 2.7), a1 = FPT(8.9, sg * 3.7, 2.7), a2 = FPT(8.9, sg * 5.1, 2.7);
+    let s = rod(a0, a1, .35, METAL, toneI, .6, .35, 10) + rod(a1, a2, 1.5, DARK, toneI, 1, 1.5, 20);
+    if (vis(vscl(AX, sg))){ let kn = ''; for (let i = 0; i < 12; i++){ const a = knobA * sg + i / 12 * 2 * Math.PI; kn += pd([vsum(a2, [FDIR, 1.2 * Math.sin(a)], [FW, 1.2 * Math.cos(a)]), vsum(a2, [FDIR, 1.5 * Math.sin(a)], [FW, 1.5 * Math.cos(a)])], false); }
+      s += ink(kn, .35) + strk([a2, vsum(a2, [FDIR, 1.1 * Math.sin(knobA * sg)], [FW, 1.1 * Math.cos(knobA * sg)])], '#f4efe0', .7); }
+    return { near: vis(vscl(AX, sg)), svg: act('knob', s) }; });
+  const seated = !st.swap, O = FPT(st.hdt);
+  // drawtube: the part above the body, open at the top when no eyepiece is in it
+  let dtube = sleeve(FPT(10.0), O, 1.9, METAL, .7) + (top ? (seated ? '' : annulus(O, FDIR, 1.58, 1.9, METAL.l, .6) + disc(O, FDIR, 1.58, '#1d1a17', 0)) : '');
+  const collar = sleeve(FPT(st.hdt - .9), O, 2.15, METAL, .6) + (top ? annulus(O, FDIR, 1.9, 2.15, METAL.l, .5) : '');
+  const screw = rod(FPT(st.hdt - .45, 0, -2.15), FPT(st.hdt - .45, 0, -3.3), .3, METAL, toneI, .5, .3, 8) + rod(FPT(st.hdt - .45, 0, -3.3), FPT(st.hdt - .45, 0, -3.9), .7, DARK, toneI, .6, .7, 12);
+  const screwNear = vis(neg(FW));
+  const mv = movingEp(st);
+  const ep = seated ? eyepiece(st.ep, O, FDIR, k, false) : (mv && mv.O[2] >= 87 ? eyepiece(mv.i, mv.O, mv.e, k, true) : '');
+  let eyeSvg = '';
+  if (k > 0){ const R = rayPaths(st);
+    if (st.capK > 0) eyeSvg += R.rays.map(r => rayLine(r.foc)).join('') + arrowAt(R.rays[0].foc[1], R.rays[0].foc[2], .5);
+    if (seated) eyeSvg += eyeGlyph(R.eye);
+    eyeSvg = `<g opacity="${f(k)}">${eyeSvg}</g>`; }
+  const kb = knobs.filter(x => !x.near).map(x => x.svg).join(''), kf = knobs.filter(x => x.near).map(x => x.svg).join('');
+  const low = base + kb + body + kf;
+  const up = (screwNear ? '' : screw) + dtube + collar + (screwNear ? screw : '');
+  return top ? low + up + ep + eyeSvg : eyeSvg + ep + up + low;
+}
+// the observer's eye: an eyeball with its pupil toward the eyepiece
+function eyeGlyph(c){
+  const [X, Y] = P(...c), r = 1.5 * CAM_K, pupil = vadd(c, vscl(FDIR, -1.5)), [px, py] = P(...pupil);
+  let s = `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r)}" fill="#fbf7ee" stroke="${INK}" stroke-width=".8"/>`;
+  if (vis(neg(FDIR))) s += `<circle cx="${f(px)}" cy="${f(py)}" r="${f(r * .42)}" fill="#3e86d9" stroke="${INK}" stroke-width=".5"/><circle cx="${f(px)}" cy="${f(py)}" r="${f(r * .18)}" fill="${INK}"/>`;
+  return s;
+}
+
+/* ---------- finder, dovetail and mount ---------- */
+function finderSvg(k){
+  const R = radial(FIND_TH), T = tang(FIND_TH), c0 = axisPt(45.5);
+  const shoe = obox(c0, R, AX, T, [6.9, 8.1], [-4, 4], [-1.3, 1.3], DARK, toneI, .7);
+  let body = obox(c0, R, AX, T, [8.1, 10.4], [-5.5, 5.5], [-1.4, 1.4], FINDM, tone, .9);
+  if (k > 0) body = `<g opacity="${f(1 - .7 * k)}">${body}</g><g opacity="${f(k)}">` + rod(vsum(c0, [R, 9.25], [AX, -4.6]), vsum(c0, [R, 9.25], [AX, -1.2]), .75, METAL, toneI, .5, .75, 12)
+    + obox(c0, R, AX, T, [8.4, 8.6], [-1, 3.4], [-1, 1], PCB, toneI, .4) + `<circle cx="${f(P(...vsum(c0, [R, 9.25], [AX, 3.6]))[0])}" cy="${f(P(...vsum(c0, [R, 9.25], [AX, 3.6]))[1])}" r="${f(.45 * CAM_K)}" fill="#e2483d" stroke="${INK}" stroke-width=".4"/></g>`;
+  const win = sg => rod(vsum(c0, [R, 9.25], [AX, sg * 5.5]), vsum(c0, [R, 9.25], [AX, sg * 5.75]), 1.0, CLEAR, toneI, .6, 1.0, 16);
+  const knob = rod(vsum(c0, [R, 9.25], [AX, -2], [T, 1.4]), vsum(c0, [R, 9.25], [AX, -2], [T, 2.2]), .65, DARK, toneI, .6, .65, 12);
+  const kSide = vis(T), fA = vis(AX);
+  return shoe + (fA ? win(-1) : win(1)) + (kSide ? '' : knob) + body + (kSide ? knob : '') + (fA ? win(1) : win(-1));
+}
+function armStack(k){
+  const near = vis(neg(SV));
+  const dov = obox(axisPt(TBAL), AX, UV, neg(SV), [-15, 15], [-1.9, 1.9], [7.2, 8.6], METAL, toneI, .8);
+  const bolts = near ? [-11, 11].map(a => rod(vsum(axisPt(TBAL + a), [SV, -8.6]), vsum(axisPt(TBAL + a), [SV, -9.1]), .55, DARK, toneI, .5, .55, 10)).join('') : '';
+  const sad = obox([XH, YH - 8.9, ZA], AX, UV, SV, [-4.4, 4.4], [-2.9, 2.9], [-.3, .3], DARK, toneI, .8);
+  let arm = box(XH - 4.5, YH - 12, 91.5, XH + 4.5, YH - 9.2, 110, DARK, tone, 1) + hullInk(boxPts(XH - 4.5, YH - 12, 91.5, XH + 4.5, YH - 9.2, 110), 1.6);
+  if (k > 0) arm = `<g opacity="${f(1 - .7 * k)}">${arm}</g><g opacity="${f(k)}">` + rod([XH, YH - 13.4, ZA], [XH, YH - 8.6, ZA], .9, METAL, toneI, .6, .9, 14)
+    + rod([XH, YH - 10.4, ZA], [XH, YH - 9.9, ZA], 2.6, matOf('#c9a46a'), toneI, .5, 2.6, 20) + `</g>`;
+  const clutch = rod([XH, YH - 12, ZA], [XH, YH - 13.3, ZA], .55, METAL, toneI, .6, .55, 10) + rod([XH, YH - 13.3, ZA], [XH, YH - 15.2, ZA], 2.0, matOf('#e2483d'), toneI, .9, 2.0, 18);
+  return near ? dov + bolts + sad + arm + clutch : clutch + arm + sad + dov;
+}
+function azBase(k){
+  let base = cyl(XH, YT, 87, 91.5, 9.5, DARK, tone, 1.4, 40);
+  if (k > 0){ let balls = ''; for (let i = 0; i < 16; i++){ const a = i / 16 * 2 * Math.PI, q = P(XH + 6.5 * Math.cos(a), YT + 6.5 * Math.sin(a), 88.4); balls += `<circle cx="${f(q[0])}" cy="${f(q[1])}" r="${f(.55 * CAM_K)}" fill="${METAL.l}" stroke="${INK}" stroke-width=".4"/>`; }
+    base = `<g opacity="${f(1 - .7 * k)}">${base}</g><g opacity="${f(k)}">` + cyl(XH, YT, 84, 91.2, 1.1, METAL, toneI, .6, 14) + balls + `</g>`; }
+  const dirK = [Math.cos(rad(-35)), Math.sin(rad(-35)), 0], kp = r => [XH + r * dirK[0], YT + r * dirK[1], 89.2];
+  const knob = rod(kp(9.4), kp(11), .45, METAL, toneI, .6, .45, 10) + rod(kp(11), kp(12.4), 1.4, DARK, toneI, .8, 1.4, 16);
+  return vis(dirK) ? base + knob : knob + base;
+}
+function scopeTop(st, m, k){
+  const fA = vis(AX), before = [], after = [];
+  const side = (isNear, svg) => (isNear ? after : before).push(svg);
+  const foc = focuserStack(st, k), fnd = finderSvg(k);
+  if (st.door > .001 && !hatchLow(st)){ const c = avg(hatchPts(hatchPose(st.door))); side(vis(sub(c, axisPt(dot(sub(c, TB), AX)))), hatchPanel(st, m)); }
+  const fNear = vis(FDIR), dNear = vis(radial(FIND_TH));
+  // finder and focuser sit one behind the other along the tube
+  const pair = fA ? [[dNear, fnd], [fNear, foc]] : [[fNear, foc], [dNear, fnd]];
+  for (const [n, s] of pair) side(n, s);
+  side(vis(neg(AX)), rearKnobs());
+  const cp = capPose(st.capK);
+  if (st.capK > 0 && !cp.low) side(fA, capSvg(cp));
+  const arm = armStack(k), armNear = vis(neg(SV));
+  return azBase(k) + (armNear ? '' : arm) + before.reverse().join('') + tubeCore(st, m, k) + after.join('') + (armNear ? arm : '');
+}
+
+/* ---------- shadows ---------- */
+function shadows(st){
+  const parts = [boxPts(0, WY0, BH, WALLX + .9, WY1, WZ1)];
+  for (const ph of LEGS){ const a = legPt(ph, 0), b = legPt(ph, 1); parts.push([...ringAround(a, [0, 0, 1], 1.3, 8), ...ringAround(b, [0, 0, 1], 1.7, 8)]); }
+  parts.push([...on(PZ(82.8), ellUV(XH, YT, 8.4, 8.4, 16)), ...on(PZ(91.5), ellUV(XH, YT, 9.5, 9.5, 16))]);
+  parts.push(on(PZ(ZTR), ellUV(XH, YT, TRAY_R, TRAY_R, 16)));
+  parts.push(boxPts(XH - 4.5, YH - 12, 91.5, XH + 4.5, YH - 9.2, 110));
+  parts.push([...ringT(-1.2, 7.9, 16), ...ringT(68, 7.9, 16)]);
+  if (st.door > .001) parts.push(hatchPts(hatchPose(st.door)));
+  if (st.capK > 0){ const cp = capPose(st.capK); parts.push([...ringAround(cp.c, cp.e, 8.2, 12), ...ringAround(vadd(cp.c, vscl(cp.e, 1.8)), cp.e, 8.2, 12)]); }
+  return clipTo(BTOP, parts.map(p => castShadow(p, BH)).join(''));
+}
+
+/* ---------- the view in the eyepiece (drawn in a round inset, bottom left) ---------- */
+const magOf = i => FL * 10 / EPS[i].fe;
+const focusErrMM = st => (st.hdt - (FP_R - EPS[st.ep].off)) * 10;
+function eyepieceView(st){
+  const svgEl = document.getElementById('fig'), vb = svgEl && svgEl.viewBox.baseVal; if (!vb || !vb.width) return '';
+  const R = vb.width * .085, cx = vb.x + R * 1.3, cy = vb.y + vb.height - R * 1.25;
+  let s = `<circle cx="${f(cx)}" cy="${f(cy)}" r="${f(R * 1.16)}" fill="#3d3935" stroke="${INK}" stroke-width="1.6"/><circle cx="${f(cx)}" cy="${f(cy)}" r="${f(R * 1.06)}" fill="#272421"/>`;
+  const sky = st.capK > 0 && !st.swap ? '#121a2e' : '#08090c';
+  s += `<circle cx="${f(cx)}" cy="${f(cy)}" r="${f(R)}" fill="${sky}"/>`;
+  if (st.capK > 0 && !st.swap){
+    const frac = magOf(st.ep) * .52 / 50, Rm = R * frac, err = Math.abs(focusErrMM(st)), fs = .873 * EPS[st.ep].fe;
+    const blur = Math.min(R * .45, err * .2 / fs * 2 * R / 2.4), id = 'epClip' + (++_clipN), fid = 'epBlur';
+    const art = moonArt(([u, v]) => [cx - u * Rm, cy + v * Rm], Rm, blur > .3 ? 0 : .6);   // upside down: a Newtonian turns the image round
+    s += `<defs><clipPath id="${id}"><circle cx="${f(cx)}" cy="${f(cy)}" r="${f(R)}"/></clipPath><filter id="${fid}" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="${f(blur)}"/></filter></defs>`;
+    s += `<g clip-path="url(#${id})"><g ${blur > .05 ? `filter="url(#${fid})"` : ''} opacity="${f(Math.max(.55, 1 - blur / R))}">${art}</g></g>`;
+  }
+  s += `<circle cx="${f(cx)}" cy="${f(cy)}" r="${f(R)}" fill="none" stroke="${INK}" stroke-width="1.1"/>`;
+  const txt = (y, t, c, fsz) => `<text x="${f(cx)}" y="${f(y)}" font-size="${f(fsz)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".06em" fill="${c}">${t}</text>`;
+  s += txt(cy - R * 1.16 - 4 * INK_K, 'IN THE EYEPIECE', INK, 7.4 * INK_K);
+  if (st.capK === 0 || st.swap) s += txt(cy + 2.6 * INK_K, st.swap ? 'SWAPPING' : 'DUST CAP ON', '#8d877c', 7.4 * INK_K);
+  // a dotted leader from the eyepiece to its view
+  if (!st.swap){ const [X, Y] = P(...FPT(st.hdt + EPS[st.ep].len + 1)), dx = cx - X, dy = cy - Y, l = Math.hypot(dx, dy);
+    s += `<path d="M${f(X)} ${f(Y)}L${f(cx - dx / l * R * 1.18)} ${f(cy - dy / l * R * 1.18)}" stroke="${INK}" stroke-width=".8" stroke-dasharray="2 2.5" fill="none" opacity=".55"/>`; }
+  return s;
+}
+
+/* ---------- scene ---------- */
+function outsideRays(st){
+  if (!st.ray) return '';
+  return rayPaths(st).rays.map(r => rayLine(r.moon) + arrowAt(r.moon[0], r.moon[1], .5)).join('');
+}
+function scene(st, m){
+  const k = ease(st.xr || 0);
+  st.ray = k > 0;
+  let s = floorBoards() + shadows(st);
+  const wall = wallSvg(), rays = k > 0 ? `<g opacity="${f(k)}">${outsideRays(st)}</g>` : '';
+  const scope = tripodParts(st, k) + scopeTop(st, m, k);
+  s += CAM_V[0] >= 0 ? wall + rays + scope : scope + rays + wall;
+  return s + eyepieceView(st);
+}
+
+/* ---------- behaviour ---------- */
+let ui;
+function animateTo(st, key, goal, secs, done){
+  const from = st[key], tok = (st['_' + key] = (st['_' + key] || 0) + 1); let t = 0;
+  ui.animate(dt => { if (st['_' + key] !== tok) return false; t = Math.min(1, t + dt / secs); st[key] = from + (goal - from) * ease(t);
+    if (t >= 1){ if (done) done(); return false; } return true; });
+}
+function capToggle(st, then){
+  if (st.capMoving) return ui.flash('The cap is still moving');
+  st.capMoving = true;
+  const goal = st.capK > .5 ? 0 : 1;
+  animateTo(st, 'capK', goal, 1.6, () => { st.capMoving = false; st.capK = goal; if (then) then(); });
+}
+function focus(st){
+  if (st.swap) return ui.flash('Wait for the eyepiece to seat');
+  if (st.capK === 0 && !st.capMoving){ ui.flash('Taking the dust cap off first'); return capToggle(st, () => focus(st)); }
+  if (st.capMoving) return ui.flash('The cap is still moving');
+  const goal = FP_R - EPS[st.ep].off;
+  if (Math.abs(st.hdt - goal) < .005) return ui.flash('Already sharp: the moon is in focus');
+  if (st.focusing) return;
+  st.focusing = true; const h0 = st.hdt; let t = 0;
+  ui.animate(dt => { t = Math.min(1, t + dt / 1.5);
+    const c1 = 1.4, y = 1 + (c1 + 1) * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);   // a little past focus, then back
+    st.hdt = Math.max(HDT_MIN, Math.min(HDT_MAX, h0 + (goal - h0) * y));
+    if (t >= 1){ st.hdt = goal; st.focusing = false; return false; } return true; });
+}
+function swapTo(st, j){
+  if (st.swap) return ui.flash('Wait for the eyepiece to seat');
+  if (st.focusing) return ui.flash('Still focusing');
+  st.swap = { from: st.ep, to: j, k: 0 };
+  ui.animate(dt => { st.swap.k = Math.min(1, st.swap.k + dt / 3.4); if (st.swap.k >= 1){ st.ep = j; st.swap = null; return false; } return true; });
+}
+function hatch(st){ st.doorT = st.doorT ? 0 : 1; animateTo(st, 'door', st.doorT, 1.1); }
+
+/* ---------- see-through labels ---------- */
+const XR_OPTS = { getSt: () => { try { return ui.st; } catch (e) { return {}; } }, B: [36, 110, 40, 72, 80, 124], inline: true, mech: () => '',
+  inside: st => { if (st.hdt == null) return [];
+    const lit = st.capK > 0, sw = !!st.swap, foc = !!st.focusing, E = EPS[st.ep], O = FPT(st.hdt), R = rayPaths(st);
+    const L = [
+      { at: MOON, text: 'MOON', on: lit },
+      { at: vsum(R.rays[0].moon[0], [AX, 18]), text: 'LIGHT RAYS', on: lit },
+      { at: tubeP(TM, 4.5, 140), text: 'PRIMARY MIRROR', on: lit },
+      { at: tubeP(TM - 2.7, 6.9, 250), text: 'MIRROR CELL', on: false },
+      { at: tubeP(1.2, 4.6, 270), text: 'CELL SPRING', on: false },
+      { at: tubeP(-2.7, 4.6, 330), text: 'COLLIMATION KNOB', on: false },
+      { at: FOC0, text: 'SECONDARY MIRROR', on: lit },
+      { at: tubeP(TS + 2.7, 5, 260), text: 'SPIDER VANE', on: false },
+      { at: FP, text: 'FOCAL POINT', on: lit && Math.abs(focusErrMM(st)) < .5 },
+      { at: tubeP(12, TUBE_R, 275), text: 'TUBE', on: false },
+      { at: FPT(9, 0, -2.4), text: 'FOCUSER', on: foc },
+      { at: FPT(Math.min(st.hdt, 10.6), 0, -1.9), text: 'DRAWTUBE', on: foc },
+      { at: FPT(8.6, 0, 2.05), text: 'RACK', on: foc },
+      { at: FPT(8.9, .55, 2.7), text: 'PINION', on: foc },
+      { at: FPT(8.9, 5.1, 2.7), text: 'FOCUS KNOB', on: foc },
+      { at: tubeP(50.5, 10.4, FIND_TH), text: 'FINDER', on: false },
+      { at: [XH, YH - 15.2, ZA], text: 'ALT CLUTCH', on: false },
+      { at: [XH + 4.5, YH - 10.6, 92.5], text: 'MOUNT ARM', on: false },
+      { at: [XH + 5.5, YT - 5.5, 87.6], text: 'AZIMUTH BEARING', on: false },
+      { at: [XH + 6.2, YT - 3.6, 83], text: 'TRIPOD HEAD', on: false },
+      { at: legPt(0, .32), text: 'TRIPOD LEG', on: false },
+      { at: legPt(0, S_LOCK), text: 'LEG LOCK', on: false },
+      { at: legPt(0, .86), text: 'INNER LEG', on: false },
+      { at: vadd(legPt(0, 1), [0, 0, -.6]), text: 'RUBBER FOOT', on: false },
+      { at: [XH, YT + TRAY_R, ZTR - 1.5], text: 'ACCESSORY TRAY', on: sw },
+    ];
+    if (!sw){ L.push({ at: FPT(st.hdt + E.len - 1.2, 0, 2.05), text: `EYEPIECE ${E.fe} MM`, on: true },
+      { at: FPT(st.hdt + E.off, 0, 1.45), text: 'FIELD STOP', on: lit && Math.abs(focusErrMM(st)) < .5 },
+      { at: FPT(st.hdt + E.len + .45, 0, 1.25), text: 'EYE LENS', on: lit },
+      { at: R.eye, text: 'EYE', on: lit }); }
+    if (st.capK > 0){ const cp = capPose(st.capK); L.push({ at: vadd(cp.c, vscl(cp.e, 2.3)), text: 'DUST CAP', on: false }); }
+    return L; },
+  surface: st => { if (st.hdt == null) return [];
+    const L = [ { at: [WALLX + .6, YH - MOON_R * .7, MOON[2] + MOON_R * .7], text: 'MOON', on: false },
+      { at: tubeP(20, TUBE_R, 60), text: 'TUBE', on: false },
+      { at: FPT(10, 0, -2.4), text: 'FOCUSER', on: !!st.focusing },
+      { at: FPT(8.9, 5.1, 2.7), text: 'FOCUS KNOB', on: !!st.focusing },
+      { at: tubeP(45.5, 10.4, FIND_TH), text: 'FINDER', on: false },
+      { at: legPt(240, .55), text: 'TRIPOD', on: false },
+      { at: [XH, YT + TRAY_R, ZTR], text: 'ACCESSORY TRAY', on: !!st.swap } ];
+    if (!st.swap) L.push({ at: FPT(st.hdt + EPS[st.ep].len, 0, 2), text: 'EYEPIECE', on: false });
+    const cp = capPose(st.capK); L.push({ at: vadd(cp.c, vscl(cp.e, 2.3)), text: 'DUST CAP', on: !!st.capMoving });
+    if (st.door > .5) L.push({ at: tubeP(TM, 3.5, 20), text: 'PRIMARY MIRROR', on: st.capK > 0 }, { at: FOC0, text: 'SECONDARY MIRROR', on: st.capK > 0 }, { at: axisPt(30), text: 'LIGHT PATH', on: st.capK > 0 });
+    return L; } };
+
+const sceneX = xrWrap(scene, XR_OPTS);
+ui = mountFigure({
+  fig:'31', title:'A reflecting telescope', turn:'full',
+  size:[BW, BD, WZ1], palette:'cobalt',
+  state:{ capK:1, capMoving:false, ep:0, hdt:HDT0, door:0, doorT:0, swap:null, focusing:false },
+  scene: sceneX,
+  stats: st => { const err = focusErrMM(st);
+    return [ { label: st.swap ? 'Magnification' : `Magnification, ${EPS[st.ep].fe} mm`, value: st.swap ? '--' : Math.round(magOf(st.ep)) + 'x' },
+             { label:'Focus', value: st.swap ? '--' : Math.abs(err) < .05 ? 'sharp' : `off ${Math.abs(err).toFixed(1)} mm`, small:true } ]; },
+  buttons:[
+    { label:'Dust cap off / on', onClick: st => capToggle(st) },
+    { label:'Turn the focuser', onClick: st => focus(st) },
+    { label:'Swap eyepiece', choices: st => EPS.map((E, j) => ({ label:`${E.fe} mm  ${Math.round(magOf(j))}x`, current: st.ep === j && !st.swap,
+        disabled: !!st.swap, why:'Wait for the eyepiece to seat', onClick: st => swapTo(st, j) })) },
+    { label:'Open the tube', onClick: st => hatch(st) },
+  ],
+  acts:{ knob: st => focus(st) },
+  params:(st, q) => {
+    if (q.get('cap') === '0') st.capK = 1;
+    if (q.get('cap') === '1') st.capK = 0;
+    if (q.has('capk')) st.capK = +q.get('capk');
+    if (q.has('ep')){ const j = EPS.findIndex(E => String(E.fe) === q.get('ep')); if (j >= 0) st.ep = j; }
+    if (q.get('sharp') === '1') st.hdt = FP_R - EPS[st.ep].off;
+    if (q.has('hdt')) st.hdt = +q.get('hdt');
+    if (q.get('open') === '1') st.door = st.doorT = 1;
+    if (q.has('door')) st.door = +q.get('door');
+    if (q.has('swap')){ const j = EPS.findIndex(E => String(E.fe) === (q.get('to') || '10')); st.swap = { from: st.ep, to: j < 0 ? 1 : j, k: +q.get('swap') }; }
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
