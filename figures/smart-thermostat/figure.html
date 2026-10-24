@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Smart thermostat</title>
+<script>addEventListener('error',e=>document.documentElement.dataset.errors+=e.message+';');addEventListener('unhandledrejection',e=>document.documentElement.dataset.errors+=String(e.reason)+';');</script>
+<style>.zchip{right:calc(50% - 50px)!important}</style></head><body><script src="core.js"></script><script>
+/* Truth first.
+   A generic 24 VAC, single-stage gas furnace and split air conditioner, not a heat pump.
+   R supplies 24 VAC; C returns it. The thermostat closes R-W for heat, R-Y and R-G for cooling.
+   The furnace board starts the inducer, proves draft, ignites the burners and then runs the blower.
+   Combustion gases stay inside the heat exchanger and exit the flue; room air flows outside it.
+   Cooling moves heat from indoor evaporator to outdoor condenser through a closed refrigerant loop.
+   Wi-Fi is for remote access. The sensor, stored schedule and local relays work without it.
+   Teaching adaptations: thermostat enlarged; equipment placed together on a display plinth;
+   thermal response, clock and furnace timing accelerated. One clock hour takes three seconds. Night button installs a 22:00-06:00
+   heating setback and advances to 22:00. Away uses a 16-28 C deadband, independent of the schedule.
+   Parts and supports.
+   Thermostat: wall-mounted backplate and screws, PCB on standoffs, sensor at a lower air vent,
+   processor, flash, clock crystal, regulator, radio, antenna, three relays and terminal block on PCB,
+   LCD and touch electrode on front cover; five insulated conductors land on labelled terminals.
+   Furnace: filter and blower housing on base, motor on blower hub, board and transformer on chassis,
+   gas valve and burner manifold on brackets, igniter and flame sensor beside burner outlets,
+   sealed heat exchanger above burners, inducer and pressure switch beside flue, evaporator above,
+   expansion valve at liquid inlet, supply plenum above coil, return duct attached to blower inlet.
+   Condenser: compressor on base feet, finned coil against side walls, fan and motor on upper bracket,
+   contactor and capacitor on service panel, suction and liquid lines connected to indoor coil.
+   References checked 2026-10-24.
+   https://support.google.com/googlehome/answer/9243422?hl=en
+   https://www.carrier.com/us/en/residential/hvac-resources/furnaces/how-does-a-gas-furnace-work/
+   https://www.ahrinet.org/scholarships-education/education/homeowners/how-things-work/air-conditioning-system
+*/
+const thState={room:21,target:21,mode:'heat',program:'manual',away:false,wifi:true,equipment:'idle',phase:0,elapsed:0,clock:12,scheduled:false,running:false};
+const thCopper=matOf('#cb8651'),thPCB=matOf('#53846a'),thBlue=matOf('#77bdd4');
+function thDemand(s){
+ const low=s.away?16:s.target,high=s.away?28:s.target;
+ if((s.away||s.mode==='heat')&&(s.room<low-.25||(s.equipment==='heat'&&s.room<low)))return 'heat';
+ if((s.away||s.mode==='cool')&&(s.room>high+.25||(s.equipment==='cool'&&s.room>high)))return 'cool';
+ return 'idle';
+}
+function thStep(s,dt){
+ s.elapsed+=dt;s.clock=(s.clock+dt/3)%24;
+ if(s.scheduled&&!s.away&&s.program==='night')s.target=s.clock>=22||s.clock<6?18:21;
+ const demand=thDemand(s);
+ if(demand!==s.equipment){s.equipment=demand;s.phase=0;}
+ s.phase+=dt;
+ if(s.scheduled&&s.equipment==='idle')s.room+=Math.max(-dt*.15,Math.min(dt*.15,16-s.room));
+ if(s.equipment==='heat'&&s.phase>2)s.room=Math.min(s.away?16:s.target,s.room+dt*.22);
+ if(s.equipment==='cool'&&s.phase>1)s.room=Math.max(s.away?28:s.target,s.room-dt*.22);
+ return s.equipment!=='idle'||s.scheduled;
+}
+function thRun(s,u){
+ if(s.running)return;s.running=true;
+ u.animate(dt=>{const active=thStep(s,dt);s.running=active;return active;});
+}
+function thSet(s,u,mode){
+ s.away=false;s.scheduled=false;s.program='manual';s.mode=mode;
+ s.target=mode==='heat'?Math.min(28,Math.max(s.room+2,s.target+1)):Math.max(16,Math.min(s.room-2,s.target-1));
+ s.target=Math.round(s.target);s.equipment='idle';thRun(s,u);
+}
+const thBounds=pts=>[[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))-.2),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i]))+.2)];
+function thWire(parts,pts,col,r=.45){
+ for(let i=1;i<pts.length;i++)parts.push({box:thBounds([pts[i-1],pts[i]]),svg:rod(pts[i-1],pts[i],r,matOf(col),toneI,.5, r,8)});
+}
+function thFan(x,y,z,r,angle,vertical=false){
+ const pt=(u,v)=>vertical?[x,y+u,z+v]:[x+u,y+v,z];let out='';
+ for(let i=0;i<4;i++){
+  const a=angle+i*Math.PI/2,c=Math.cos(a),d=Math.sin(a);
+  out+=shape([[1,-1],[r,-r*.24],[r*.7,r*.34],[1,1]].map(([u,v])=>pt(u*c-v*d,u*d+v*c)),METAL.m,.65);
+ }
+ return out+(vertical?cylX(x-.3,x+.3,y,z,1.6,DARK):cyl(x,y,z-.3,z+.3,1.6,DARK));
+}
+function thScene(s,m){
+ const k=ease(s.xr||0),heat=s.equipment==='heat',cool=s.equipment==='cool',burn=heat&&s.phase>1,blower=(heat&&s.phase>2)||(cool&&s.phase>1),parts=[],labels=[];
+ const put=(b,svg)=>parts.push({box:b,svg});
+ const bx=(name,b,mat,on=false)=>{put([b.slice(0,3),b.slice(3)],box(...b,mat,toneI,.75));if(name)labels.push({text:name,at:[b[3],(b[1]+b[4])/2,(b[2]+b[5])/2],on});};
+ const label=(text,at,on=false)=>labels.push({text,at,on});
+ let out=board(0,0,65,170,2,3,matOf('#ded5be'));
+ out+=clipTo(boardTop(0,0,65,170,2,3),castShadow([[0,115,2],[3,167,110],[3,115,110]],2)+castShadow([[10,60,2],[50,104,84],[50,60,84]],2)+castShadow([[15,6,2],[52,44,45],[52,6,45]],2));
+ bx('',[0,115,2,2,167,110],CERAMIC);
+ const thProf=rrUV(124,58,158,96,6);
+ let thBody=extrude(thProf,3,13,m)+shape(on(PX(facing([1,0,0])?13:3),thProf),tone(facing([1,0,0])?[1,0,0]:[-1,0,0],m),1.8)+hullInk([...on(PX(3),thProf),...on(PX(13),thProf)],2.5);
+ if(facing([1,0,0])){
+  thBody+=shape(on(PX(13.15),rrUV(128,65,154,90,3)),'#263c37',1);
+  thBody+=tx(13.3,141,78,s.target.toFixed(0)+' C',7,'#c6f3d7')+tx(13.3,141,71,s.away?'AWAY':s.program==='night'?'22-06 NIGHT':s.mode.toUpperCase(),2.2,'#c6f3d7')+tx(13.3,141,85,s.wifi?'WI-FI ON':'WI-FI OFF',2.1,'#c6f3d7');
+  for(let y=133;y<=150;y+=3)thBody+=line([[13.2,y,61],[13.2,y+1,61]],.8);
+ }
+ let furnaceBody=box(10,60,2,50,104,84,m,tone,1.7);
+ if(facing([1,0,0])){
+  furnaceBody+=ink(pd(on(PX(50.1),rectUV(62,4,102,40))),1.1)+ink(pd(on(PX(50.1),rectUV(62,42,102,82))),1.1);
+  for(let y=65;y<100;y+=4)furnaceBody+=line([[50.2,y,30],[50.2,y,35]],1);
+  furnaceBody+=tx(50.25,82,69,'FURNACE',4,INK)+shape(on(PX(50.2),ellUV(81,51,2,2,12)),burn?'#ffb642':'#343c38',.7);
+ }
+ if(facing([-1,0,0]))furnaceBody+=shape(on(PX(9.9),rectUV(70,12,94,31)),'#dedbd1',.9);
+ let acBody=box(15,6,2,52,44,45,thBlue,tone,1.7);
+ for(const y of [5.9,44.1])if(facing([0,y<10?-1:1,0]))for(let z=8;z<38;z+=3)acBody+=line([[19,y,z],[48,y,z]],.8);
+ if(facing([1,0,0]))for(let z=8;z<38;z+=3)acBody+=line([[52.1,10,z],[52.1,40,z]],.8);
+ acBody+=shape(on(PZ(45.1),ellUV(33.5,25,14,14,32)),'#343c38',1.3)+thFan(33.5,25,45.3,12,cool?s.elapsed*5:0);
+ acBody+=ink(pd(on(PZ(45.8),ellUV(33.5,25,14,14,32))),1.2);
+ for(let i=-3;i<=3;i++)acBody+=line([[20,25+i*3.5,45.8],[47,25+i*3.5,45.8]],.6);
+ const shells=[{box:[[3,124,58],[13,158,96]],svg:k?xrGhost(thBody,'',k,thProf,3,13,m):thBody},{box:[[10,60,2],[50,104,84]],svg:k?xrGhost(furnaceBody,'',k,rectUV(60,2,104,84),10,50,m):furnaceBody},{box:[[15,6,2],[52,44,45]],svg:k?xrGhost(acBody,'',k,rectUV(6,2,44,45),15,52,thBlue):acBody}];
+ bx('SUPPLY PLENUM',[15,65,84,44,99,100],METAL,blower);
+ bx('RETURN DUCT',[4,105,2,32,113,68],METAL,blower);
+ put([[32,104,4],[40,113,23]],box(28,100,4,38,113,23,METAL));
+ put([[7,94,65],[13,100,108]],cyl(10,97,65,108,3,METAL));
+ label('FLUE',[10,97,104],burn);
+ thWire(parts,[[4,145,59],[4,145,4],[4,109,4],[11,100,10]],'#51483e',1);
+ thWire(parts,[[17,65,76],[7,65,76],[7,65,5],[7,40,5],[20,40,7]],'#c68c5c',.7);
+ thWire(parts,[[18,65,79],[9,65,79],[9,65,6],[9,38,6],[21,38,7]],'#5e686b',1.1);
+ if(k>0){
+  const inner=[],outer=parts.splice(0); // Keep complete mechanisms above their own ghosted cases.
+  parts.push(...shells,...outer);const exterior=byDepth(parts);parts.length=0;
+  bx('BACKPLATE',[2,125,59,4,157,95],METAL);
+  for(const y of [128,154])put([[4,y-1,63],[5,y+1,65]],cylX(4,5,y,64,1,METAL));
+  label('MOUNTING SCREW',[5,128,64]);
+  bx('CIRCUIT BOARD',[5,127,63,6,155,93],thPCB,true);
+  bx('PROCESSOR',[6,137,79,8,145,86],DARK,true);
+  bx('FLASH MEMORY',[6,148,80,7.5,152,85],DARK,s.scheduled);
+  bx('CLOCK CRYSTAL',[6,148,88,8,153,90],METAL,s.scheduled);
+  bx('VOLTAGE REGULATOR',[6,129,78,8,133,83],DARK,true);
+  bx('WI-FI RADIO',[6,128,85,8,135,91],METAL,s.wifi);
+  thWire(parts,[[7,132,91],[7,132,94],[7,140,94],[7,140,91]],s.wifi?'#e4ad3f':'#8c8a78',.32);label('ANTENNA',[7,136,94],s.wifi);
+  bx('TEMPERATURE SENSOR',[7,138,63,9,142,66],matOf('#75a4b2'),true);
+  bx('HEAT RELAY',[6,145,69,10,151,74],heat?matOf('#f4ac59'):DARK,heat);
+  bx('COOL RELAY',[6,136,69,10,142,74],cool?thBlue:DARK,cool);
+  bx('FAN RELAY',[6,127,69,10,133,74],cool?thBlue:DARK,cool);
+  put([[10,129,76],[11,153,89]],`<g opacity=".16">${box(10,129,76,11,153,89,METAL)}</g>`);
+  bx('TOUCH ELECTRODE',[11.2,130,67,11.5,152,68],thCopper);
+  const colors=['#d45042','#dedbd1','#dfb33f','#6ca475','#77a7d4'];
+  for(let i=0;i<5;i++){
+   const y=129+i*5;
+   bx(['R 24 VAC','W HEAT','Y COOL','G FAN','C COMMON'][i],[5,y,60,8,y+3,63],matOf(colors[i]),i===1?heat:i===2||i===3?cool:true);
+   thWire(parts,[[5,y+1.5,60],[4,y+1.5,57],[4,145,55]],colors[i],.23);
+  }
+  bx('FURNACE BOARD',[12,92,10,14,101,25],thPCB,heat||cool);
+  bx('24 VAC TRANSFORMER',[12,94,29,21,101,36],METAL,true);
+  bx('AIR FILTER',[12,101,4,42,103,27],matOf('#d6cda6'),blower);
+  bx('BLOWER HOUSING',[18,70,5,39,97,28],METAL,blower);
+  put([[39,74,9],[44,92,25]],cylX(39,43,83,17,8,DARK)+thFan(43.1,83,17,6,blower?s.elapsed*8:0,true));label('BLOWER MOTOR',[43,83,17],blower);
+  bx('GAS VALVE',[35,93,36,44,101,42],thCopper,burn);
+  thWire(parts,[[50,98,38],[44,98,38],[35,98,38],[35,69,38]],'#bd9468',.9);
+  label('GAS MANIFOLD',[35,82,38],burn);
+  for(const y of [69,79,89]){
+   put([[29,y-2,38],[36,y+2,47]],cyl(32,y,38,45,2,METAL));
+   if(burn){const h=3+Math.sin(s.elapsed*16+y);put([[30,y-2,45],[34,y+2,51]],shape([[30,y,45],[32,y,49+h],[34,y,45]],'#f5b64f',.4));}
+   const tube=[[32,y,47],[26,y,52],[21,y,63],[26,y,68],[32,y,66],[32,97,66],[17,97,66]];thWire(parts,tube,burn?'#d89362':'#a7a6a0',2.2);
+  }
+  label('BURNER',[32,79,43],burn);label('HEAT EXCHANGER',[23,79,61],burn);
+  bx('IGNITER',[35,66,43,38,68,47],heat&&s.phase<=1?matOf('#ffd270'):CERAMIC,heat&&s.phase<=1);
+  thWire(parts,[[38,90,43],[35,90,45],[34,89,47]],'#d6d6cc',.35);label('FLAME SENSOR',[34,89,47],burn);
+  put([[9,92,61],[18,102,71]],cylX(11,17,97,66,4,DARK));label('DRAFT INDUCER',[17,97,66],heat);
+  bx('PRESSURE SWITCH',[12,92,53,16,97,57],DARK,heat);
+  thWire(parts,[[14,94,57],[14,94,61],[15,97,64]],'#51483e',.25);
+  bx('HIGH LIMIT SWITCH',[34,88,62,36,91,65],DARK,burn);
+  bx('EVAPORATOR FINS',[16,65,72,43,99,73.5],thBlue,cool);
+  thWire(parts,[[18,65,76],[18,97,76],[41,97,76],[41,65,76],[41,65,79],[41,97,79],[18,97,79],[18,65,79]],'#b7855d',.65);
+  label('EVAPORATOR TUBES',[41,94,78],cool);
+  bx('EXPANSION VALVE',[15,63,74,20,66,78],thCopper,cool);
+  bx('DRAIN PAN',[14,63,69,45,101,70],METAL,cool);
+  thWire(parts,[[45,100,70],[48,106,70],[48,106,3]],'#d8d6bf',.55);label('CONDENSATE DRAIN',[48,106,20],cool);
+  put([[28,19,3],[39,30,23]],cyl(33.5,24.5,3,23,5.5,DARK));label('COMPRESSOR',[33.5,24.5,20],cool);
+  for(const y of [9,41])bx('',[18,y,5,49,y+1,34],METAL,cool);
+  const coil=[[33.5,24.5,23],[19,24.5,23],[19,9,32]];
+  for(let z=32;z>=8;z-=3)coil.push([48,9,z],[48,41,z],[19,41,z],[19,9,z-3]);
+  coil.push([20,40,7]);thWire(parts,coil,'#bf8b60',.6);
+  label('CONDENSER COIL',[40,41,24],cool);
+  bx('FAN BRACKET',[22,23,37,45,27,38],METAL);
+  put([[30,22,33],[37,29,42]],cyl(33.5,25,33,42,3.5,DARK));label('OUTDOOR FAN MOTOR',[33.5,25,37],cool);
+  put([[21,13,42],[46,38,44]],thFan(33.5,25,43,12,cool?s.elapsed*8:0));label('FAN BLADES',[42,25,43],cool);
+  bx('CONTACTOR',[44,9,10,49,15,20],cool?thBlue:DARK,cool);
+  put([[43,16,5],[49,22,16]],cyl(46,19,5,16,3,METAL));label('RUN CAPACITOR',[46,19,14],cool);
+  
+  thWire(parts,[[24,41,7],[20,40,7]],'#b98356',.6);
+  thWire(parts,[[21,38,7],[30,38,7],[33,25,23]],'#515e62',1);label('SUCTION LINE',[9,51,6],cool);label('LIQUID LINE',[7,51,5],cool);
+  thWire(parts,[[14,98,31],[14,99,24],[14,97,19]],'#c44b40',.3);
+  thWire(parts,[[14,96,17],[11,102,17],[11,102,4],[11,46,4],[46,46,4],[46,14,14]],cool?'#efc54e':'#7c775d',.3);
+  inner.push(...parts);parts.length=0;
+  out+=exterior+`<g opacity="${k}">${byDepth(inner)}</g>`;
+  if(k>.6)out+=thLabels(labels);
+ }else out+=byDepth([...shells,...parts]);
+ return out;
+}
+function thLabels(items){
+ const omitted=new Set(['BACKPLATE','MOUNTING SCREW','CLOCK CRYSTAL','VOLTAGE REGULATOR','TOUCH ELECTRODE','R 24 VAC','W HEAT','Y COOL','G FAN','C COMMON','OUTDOOR FAN MOTOR','FAN BRACKET','EVAPORATOR TUBES','DRAIN PAN','AIR FILTER']);
+ const svg=document.getElementById('fig'),vb=svg.viewBox.baseVal,r=svg.getBoundingClientRect(),u=vb.width/r.width,phone=innerWidth<=560;
+ const a=items.filter(i=>!omitted.has(i.text)).map(i=>({...i,p:P(...i.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+ const columns=[a.slice(0,Math.ceil(a.length/2)),a.slice(Math.ceil(a.length/2))];
+ const top=phone?vb.y+12*u:vb.y+Math.max(0,...['btns','stats'].map(id=>document.getElementById(id).getBoundingClientRect().bottom-r.top+14))*u;
+ const bottom=vb.y+vb.height-14*u,fs=(phone?10:9.3)*u,h=(phone?17:15)*u;let out='';
+ for(let side=0;side<2;side++){
+  const col=columns[side].sort((a,b)=>a.p[1]-b.p[1]);
+  col.forEach((it,i)=>{
+   const n=(window.__ln||(window.__ln={}))[it.text]||(__ln[it.text]=Object.keys(__ln).length+1);
+   const w=phone?23*u:it.text.length*fs*.6+14*u,x=side?vb.x+vb.width-w/2-3*u:vb.x+w/2+3*u;
+   const y=top+i*(bottom-top)/Math.max(1,col.length-1),edge=x+(side?-w/2:w/2);
+   out+=`<g class="tag${it.on?' on':''}" data-n="${n}" data-t="${it.text}"><path d="M${f(it.p[0])} ${f(it.p[1])}L${f(edge)} ${f(y)}" fill="none" stroke="${INK}" stroke-width=".55" opacity=".7"/><circle cx="${f(it.p[0])}" cy="${f(it.p[1])}" r="${f(u)}" fill="${INK}"/><rect x="${f(x-w/2)}" y="${f(y-h/2)}" width="${f(w)}" height="${f(h)}" rx="${f(h/2)}" fill="${it.on?'var(--accent)':'#fff4d6'}" stroke="${INK}" stroke-width=".7"/><text x="${f(x)}" y="${f(y+fs*.33)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="700" fill="${INK}">${phone?n:it.text}</text></g>`;
+  });
+ }
+ return out;
+}
+const thUI=mountFigure({fig:'07',title:'Smart thermostat',turn:'full',size:[65,170,110],palette:'mint',state:thState,scene:thScene,
+ stats:s=>[{label:'Room',value:s.room.toFixed(1)+' C'},{label:s.away?'Away band':'Setpoint',value:s.away?'16-28 C':s.target.toFixed(0)+' C'},{label:'Equipment',value:s.equipment==='idle'?'Off':s.equipment==='heat'?'Furnace':'Cooling'},{label:'Wi-Fi',value:s.wifi?'Online':'Offline'}],
+ buttons:[
+ {label:'Turn it up',onClick:(s,u)=>thSet(s,u,'heat')},
+ {label:'Cool it down',onClick:(s,u)=>thSet(s,u,'cool')},
+ {label:'Night schedule',onClick:(s,u)=>{s.away=false;s.program='night';s.scheduled=true;s.mode='heat';s.clock=22;s.target=18;s.equipment='idle';thRun(s,u);u.flash('22:00 to 06:00: 18 C. Daytime: 21 C.');}},
+ {label:'Away mode',onClick:(s,u)=>{s.away=!s.away;s.equipment='idle';thRun(s,u);u.flash(s.away?'Away: heat below 16 C, cool above 28 C.':'Home: previous settings restored.');}},
+ {label:'Wi-Fi off / on',onClick:(s,u)=>{s.wifi=!s.wifi;u.flash(s.wifi?'Wi-Fi on. Remote access restored.':'Wi-Fi off. Local control and stored schedule still work.');}}
+ ],params:(s,q)=>{const n=Number(q.get('room'));if(q.has('room')&&Number.isFinite(n))s.room=Math.max(5,Math.min(40,n));if(q.get('wifi')==='0')s.wifi=false;}
+});
+xrMount(()=>thUI,()=> '');
+</script></body></html>
