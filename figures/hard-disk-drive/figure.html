@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hard disk drive</title></head><body>
+<script src="core.js"></script>
+<script>
+/* A 3.5-inch hard disk drive with its lid off. 1 unit = 1 mm. x = depth (the SATA end faces the viewer at x = 147),
+   y = width (101.6), z = up (26.1 with the lid; the lid is off, so the casting rim is at z = 26).
+
+   How it really works (where the power, the heads and the data are after each step):
+   1. Power on: the SATA power plug brings 12 V (spindle motor, voice coil) and 5 V (electronics) through TVS diodes.
+      The controller SoC boots from its serial flash; the motor driver energises the spindle motor's three-phase stator
+      coils in turn (no sensors: it reads the back-EMF of the idle phase to know where the rotor is). The rotor is the
+      hub itself, a cup with a ring magnet inside, turning on a fluid dynamic bearing. Three platters are stacked on
+      the hub with spacer rings between them and a clamp on top; they reach 7200 rpm in about 6 s.
+   2. Load the heads: at full speed the moving air can carry a slider. The voice coil motor swings the actuator: the
+      lift tab at the tip of each suspension slides down the plastic ramp at the platter edge and the six sliders
+      (one per surface) settle onto an air bearing a few nanometres thick.
+   3. Read a file: the host sends a READ command over the SATA data cable. The controller turns the block address into
+      a surface and track. The motor driver drives current through the voice coil, which sits between two strong
+      magnets on steel plates; the Lorentz force swings the whole arm stack about its pivot bearing (all arms move
+      together). Servo wedges written on every surface tell the head where it is, so it settles on the track centre
+      within milliseconds and follows it. One head reads at a time: its TMR read element senses the magnetised bits,
+      the preamp on the flex cable amplifies the signal, the read channel in the SoC decodes it, the DRAM cache
+      buffers it and it leaves over SATA. The platters turn at one speed, so the outer tracks pass faster and read
+      faster (about 250 MB/s at the outer edge, 130 MB/s near the hub).
+   4. Park: the voice coil swings the arm off the outer edge; the tabs climb the ramp and lift the heads clear of the
+      surfaces; a crash stop holds the coil. On power off the motor's back-EMF powers this retract, then the platters
+      spin down. A recirculation filter in the airflow catches particles; a breather hole with its own filter lets the
+      air pressure inside match the room.
+
+   Parts (each held by another):
+   CASTING   aluminium base: floor, four walls, two corner shrouds, lid screw holes, side mounting holes, breather hole
+   SPINDLE   hub with ring magnet (rotor), stator coils, fluid bearing on the shaft, three platters, two spacer rings,
+             disc clamp with six screws
+   ACTUATOR  pivot bearing cartridge, four arms, six suspensions, six sliders (read/write heads), lift tabs,
+             voice coil on its yoke, bottom and top VCM magnet plates, two crash stops, parking ramp with its fingers
+   FLEX      flex cable from the arm stack to the bracket, preamp chip on the flex, bracket through the floor
+   AIR       recirculation filter
+   PCB       controller board under the casting: SoC, DRAM cache, motor driver, serial flash, crystal, regulator and
+             inductor, TVS diodes, shock sensor, head connector, SATA power and data connectors, jumper pins,
+             insulator sheet */
+
+/* ---------- layout ---------- */
+const HW = 147, HD = 101.6, HZT = 26, HZF = 6;                     // length, width, rim height, tub floor top
+const HS = [52, 50.8], HPV = [112, 30], HL = 48;                  // spindle centre, actuator pivot, pivot-to-head length
+const HR = 47.5, HHOLE = 12.5;                                    // platter radius (95 mm), hub
+const PB = [10, 14, 18], PT = [11.3, 15.3, 19.3];                 // platter bottoms / tops
+const AZ = [8.2, 12.65, 16.65, 20.45];                            // arm mid-planes: below, between, between, above
+const R_ID = 20, R_OD = 46, R_PARK = 48.8, RPM = 7200;
+const HDD = Math.hypot(HS[0] - HPV[0], HS[1] - HPV[1]), HBE = Math.atan2(HS[1] - HPV[1], HS[0] - HPV[0]);
+const armPhi = r => HBE - Math.acos((HDD*HDD + HL*HL - r*r) / (2*HDD*HL));
+const AF = (ph, u, s, z) => [HPV[0] + u*Math.cos(ph) - s*Math.sin(ph), HPV[1] + u*Math.sin(ph) + s*Math.cos(ph), z];
+const polarAt = p => Math.atan2(p[1] - HS[1], p[0] - HS[0]);
+const SPOL = (r, a, z) => [HS[0] + r*Math.cos(a), HS[1] + r*Math.sin(a), z];
+const PSI_TAB = polarAt(AF(armPhi(R_PARK), HL + 3, 0, 0));
+
+/* ---------- colours ---------- */
+const CAST = { l:'#eceeec', m:'#c4cac8', d:'#8c9592' };
+const PLAT = { l:'#e2e8ec', m:'#b8c2c9', d:'#7d8a93' };
+const ALU = matOf('#d6dbdd'), STEEL = matOf('#9aa3a8'), MAGM = matOf('#5d6266'), RUB = matOf('#3b3735');
+const COPPER = matOf('#cf7f42'), AMBER = matOf('#d9973e'), BLK = { l:'#4a4642', m:'#34312e', d:'#211f1d' };
+const PCBG = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, GOLD = matOf('#d8b25a'), WHT = matOf('#f1ece0');
+const SLIDER = matOf('#4a4f5a'), FILT = matOf('#f2efe6'), CAPT = matOf('#c9a46a');
+const HOLE = '#1d1a17', SILK = '#f3efe4';
+
+/* ---------- helpers ---------- */
+const clamp1 = t => Math.max(0, Math.min(1, t));
+const hdI = (b, svg) => ({ box: b, svg });
+const op = (k, svg) => k >= .999 ? svg : k <= .001 ? '' : `<g opacity="${k.toFixed(3)}">${svg}</g>`;
+const hdBounds = (pts, e = .02) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+function hdPrism(poly, z0, z1, m, w = .6, top = '', shade = toneI){
+  const A = poly.map(([x, y]) => [x, y, z0]), B = poly.map(([x, y]) => [x, y, z1]);
+  let s = loft(A, B, n => shade(n, m));
+  if (vis([0,0,1])) s += fill(pd(B), shade([0,0,1], m)) + top + ink(pd(B), w*.8);
+  return s + hullInk([...A, ...B], w);
+}
+const hdPI = (poly, z0, z1, m, w, top, shade) => hdI(hdBounds(poly.map(([x, y]) => [x, y, z0]).concat(poly.map(([x, y]) => [x, y, z1]))), hdPrism(poly, z0, z1, m, w, top, shade));
+const hdBox = (x0, y0, z0, x1, y1, z1, m, w = .6, top = '', shade = toneI) => hdI([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, m, shade, w) + (vis([0,0,1]) ? top : ''));
+const rectXY = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+const disc = (cx, cy, z, r, n = 20) => ellUV(cx, cy, r, r, n).map(([x, y]) => [x, y, z]);
+const htx = (x, y, z, str, size, col = SILK, wt = 800) => `<text transform="${txM(P(x, y, z), Dv(0,-1,0), Dv(1,0,0))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${wt}">${str}</text>`;
+const dot2 = (p, r, col) => { const [X, Y] = P(...p); return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r)}" fill="${col}"/>`; };
+const lineC = (pts, w, col) => line(pts, w).replace(INK, col);
+// a polygon in the spindle's polar frame: radial r0..r1 at angle a, tangential -t..t
+const polarQuad = (a, r0, r1, t0, t1) => { const e = [Math.cos(a), Math.sin(a)], q = [-Math.sin(a), Math.cos(a)];
+  return [[r0, t0], [r1, t0], [r1, t1], [r0, t1]].map(([r, t]) => [HS[0] + e[0]*r + q[0]*t, HS[1] + e[1]*r + q[1]*t]); };
+// a polygon in the actuator's frame (u along the arm, s across it) at arm angle ph
+const armPoly = (ph, uv) => uv.map(([u, s]) => AF(ph, u, s, 0).slice(0, 2));
+
+/* ---------- the state, in one place ---------- */
+const FILES = [
+  { name:'photo.jpg', where:'outer tracks', r: 44, mb: 6.2 },
+  { name:'song.mp3', where:'middle tracks', r: 34, mb: 9.4 },
+  { name:'notes.txt', where:'inner tracks', r: 23.5, mb: 0.1 },
+];
+const loaded = st => st.r < HR + .4;
+const liftOf = r => .4 * clamp1((r - (HR - .3)) / 1.2);
+const rateOf = r => Math.round(255 * r / R_OD);
+const trackOf = r => Math.round((R_OD - r) / (R_OD - R_ID) * 452000);
+const seekMs = dr => 1 + 14*Math.sqrt(Math.abs(dr) / (R_OD - R_ID));
+
+/* ---------- the casting ---------- */
+function castingItems(st, k){
+  const g = 1 - .78*k, out = [], T = tone;
+  const rimTop = (pts) => pts.map(([x, y]) => fill(pd(disc(x, y, HZT + .02, .85, 10)), HOLE)).join('');
+  // back wall (x = 0..3), side walls, front wall above the connector bay, corner posts beside the bay
+  const sideHoles = (y, n) => vis(n) ? [28.5, 130.1].map(x => fill(pd(on(PY(y + (n[1] > 0 ? .02 : -.02)), ellUV(x, 6.35, 1.75, 1.75, 14))), HOLE) + ink(pd(on(PY(y + (n[1] > 0 ? .02 : -.02)), ellUV(x, 6.35, 1.75, 1.75, 14))), .5)).join('') : '';
+  out.push(hdI([[0, 3, 0], [3, HD - 3, HZT]], op(g, box(0, 3, 0, 3, HD - 3, HZT, CAST, T, .9))));
+  out.push(hdI([[0, 0, 0], [HW, 3, HZT]], op(g, box(0, 0, 0, HW, 3, HZT, CAST, T, .9) + sideHoles(0, [0,-1,0]) + (vis([0,0,1]) ? rimTop([[74, 1.5]]) : ''))));
+  out.push(hdI([[0, HD - 3, 0], [HW, HD, HZT]], op(g, box(0, HD - 3, 0, HW, HD, HZT, CAST, T, .9) + sideHoles(HD, [0,1,0]) + (vis([0,0,1]) ? rimTop([[74, HD - 1.5]]) : ''))));
+  out.push(hdI([[141, 3, 8], [HW, HD - 3, HZT]], op(g, box(141, 3, 8, HW, HD - 3, HZT, CAST, T, .9) + (vis([0,0,1]) ? rimTop([[144, 7], [144, HD/2], [144, HD - 7]]) : ''))));
+  for (const [y0, y1] of [[3, 14], [88, HD - 3]]) out.push(hdI([[141, y0, 0], [HW, y1, 8]], op(g, box(141, y0, 0, HW, y1, 8, CAST, T, .9))));
+  // corner shrouds at the back: the casting hugs the platter edge
+  for (const tri of [[[3, 3], [26, 3], [3, 26]], [[3, HD - 3], [3, HD - 26], [26, HD - 3]]]){
+    const it = hdPI(tri, HZF, HZT, CAST, .9, rimTop([[tri[0][0] + 4, tri[0][1] + (tri[0][1] < 50 ? 4 : -4)]]), T);
+    it.svg = op(g, it.svg); out.push(it); }
+  // floor: breather hole with its filter label
+  const floorTop = fill(pd(disc(132, 90, HZF + .02, 3.2, 18)), FILT.l) + ink(pd(disc(132, 90, HZF + .02, 3.2, 18)), .35) + fill(pd(disc(132, 90, HZF + .03, .7, 10)), HOLE)
+    + lineC([[108, 34, HZF + .02], [140, 34, HZF + .02]], .3, CAST.d) + lineC([[108, 98, HZF + .02], [108, 34, HZF + .02]], .3, CAST.d);
+  out.push(hdI([[3, 3, 4], [141, HD - 3, HZF]], op(g, box(3, 3, 4, 141, HD - 3, HZF, CAST, toneI, .8) + (vis([0,0,1]) ? floorTop : ''))));
+  return out;
+}
+
+/* ---------- the controller board (under the casting) ---------- */
+const ZP0 = .6, ZP1 = 2.2;
+const ROUTES = [
+  { id:'pwr', w:.7, lines:[[[140, 26], [136, 30], [136.5, 37]], [[140, 38], [133, 40], [133, 84]], [[136, 42], [128, 52], [124, 84]], [[133, 86], [110, 88]]] },
+  { id:'motor', w:.5, lines:[[[100, 86], [80, 80], [62, 60]], [[100, 89], [78, 84], [58, 63]], [[100, 92], [76, 88], [54, 64]]] },
+  { id:'vcm', w:.5, lines:[[[110, 85], [118, 70], [126, 50]], [[110, 87], [120, 72], [128, 50]]] },
+  { id:'sata', w:.4, lines:[[[141, 53], [134, 60], [131, 66]], [[141, 55], [135, 61], [132, 67]], [[141, 58], [136, 63], [133, 68]], [[141, 60], [137, 64], [134, 69]]] },
+  { id:'dram', w:.35, lines:[[[116, 64], [111, 64]], [[116, 66], [111, 66]], [[116, 68], [111, 68]], [[116, 70], [111, 70]], [[116, 72], [111, 72]], [[116, 74], [111, 74]]] },
+  { id:'head', w:.4, lines:[[[120, 63], [127, 50]], [[122, 63], [129, 50]], [[124, 63], [130.5, 50]]] },
+  { id:'spi', w:.3, lines:[[[118, 63], [122, 58]], [[119, 63], [123.5, 58]]] },
+];
+function active(st, id){
+  const ph = st.ph;
+  if (ph === 'off') return 0;
+  if (id === 'pwr') return 1;
+  if (id === 'motor') return ph === 'spinup' || ph === 'down' ? 2 : 1;
+  if (id === 'vcm') return ['load', 'seek', 'park'].includes(ph) ? 2 : 0;
+  if (id === 'spi') return ph === 'spinup' && st.pt < 1 ? 2 : 0;
+  if (['sata', 'dram', 'head'].includes(id)) return ph === 'read' ? 2 : 0;
+  return 0;
+}
+function traceSvg(st, k){
+  const z = ZP1 + .015, l3 = pts => pd(pts.map(([x, y]) => [x, y, z]), false);
+  let s = '';
+  for (const r of ROUTES){
+    const d = r.lines.map(l3).join(''), cap = 'fill="none" stroke-linecap="round" stroke-linejoin="round"', a = active(st, r.id);
+    s += `<path d="${d}" ${cap} stroke="${a ? (r.id === 'pwr' ? '#ff7a3a' : '#f6c27a') : '#c98a52'}" style="stroke-width:${r.w}" opacity="${f(k)}"/>`;
+    if (a === 2) s += `<path d="${d}" ${cap} stroke="#fff6c0" style="stroke-width:${(r.w*1.6).toFixed(2)}" stroke-dasharray="1.2 3.6" stroke-dashoffset="${f(-st.clock*18)}" opacity="${f(k)}"/>`;
+  }
+  return s;
+}
+function pcbItem(st, k){
+  const poly = rectXY(3, 3, 141, HD - 3), parts = [];
+  const top = (vis([0,0,1]) && k > 0 ? traceSvg(st, k) : '') + htx(80, 22, ZP1 + .02, 'PCB 100854-REV.A', 1.6) + htx(132, 76, ZP1 + .02, 'U1', 1.2) + htx(107, 77, ZP1 + .02, 'U2', 1.2);
+  const chip = (x0, y0, x1, y1, h, m, lines, w = .45) => { const z1 = ZP1 + h;
+    parts.push(hdBox(x0, y0, ZP1, x1, y1, z1, m, w, lines.map(([t, sz, c], i) => htx((x0 + x1)/2 + (i - (lines.length - 1)/2)*sz*1.5, (y0 + y1)/2, z1 + .01, t, sz, c)).join(''))); };
+  chip(116, 63, 130, 77, 1.2, BLK, [['MARVELL', 1.7, '#d9d4c7'], ['88i9446', 1.4, '#a9a396'], ['TC-2214', 1.1, '#a9a396']]);
+  chip(103, 62, 111, 75, 1.1, BLK, [['SAMSUNG', 1.3, '#d9d4c7'], ['DDR3 256MB', 1.05, '#a9a396']]);
+  chip(100, 84, 110, 94, 1.1, BLK, [['SMOOTH', 1.3, '#d9d4c7'], ['L7251', 1.3, '#a9a396']]);
+  chip(121, 54, 126, 58.5, .8, BLK, [['25Q40', .95, '#d9d4c7']], .35);
+  chip(133, 65.5, 137, 69.5, 1, ALU, [['25.000', .8, '#6b7377']], .35);
+  chip(129, 84, 135, 90, 1, BLK, [['TPS54', .9, '#d9d4c7']], .35);
+  chip(120, 84, 126, 90, 2.2, MAGM, [['2R2', 1.1, '#e6e1d4']], .4);
+  for (const y0 of [35, 40.5]) parts.push(hdBox(134, y0, ZP1, 138.4, y0 + 3.6, ZP1 + 1.6, BLK, .35, fill(pd(rectXY(134.3, y0, 135.1, y0 + 3.6).map(([x, y]) => [x, y, ZP1 + 1.62])), '#e9e4d8')));
+  chip(99, 48, 102.5, 51.5, 1, BLK, [['SNS', .7, '#d9d4c7']], .3);
+  parts.push(hdBox(125, 44, ZP1, 131, 50, ZP1 + 1.8, WHT, .45, fill(pd(rectXY(125.6, 44.6, 130.4, 49.4).map(([x, y]) => [x, y, ZP1 + 1.81])), HOLE)));
+  for (const [x, y] of [[113, 60], [113, 78], [128, 80], [138, 50], [97, 70], [114, 83], [127, 60]]) parts.push(hdBox(x, y, ZP1, x + 1.2, y + .7, ZP1 + .5, CAPT, .2));
+  const body = hdPrism(poly, ZP0, ZP1, PCBG, 1, top);
+  return hdI([[3, 3, ZP0], [141, HD - 3, ZP1 + 2.2]], body + byDepth(parts));
+}
+// the board's tab at the SATA end with the connectors, beside the insulator sheet
+function frontItem(st, k){
+  const parts = [], xF = 147.6, zc = 4.8;
+  parts.push(hdBox(141, 14, ZP0, 147, 88, ZP1, PCBG, .7));
+  parts.push(hdI([[141, 14, ZP1], [141.4, 88, 4]], op(1 - .7*k, box(141, 14, ZP1, 141.4, 88, 4, BLK, toneI, .5))));
+  const conn = (y0, y1, n, keyLeft) => {
+    let s = box(141.4, y0, ZP1, xF, y1, 7.4, BLK, toneI, .6);
+    if (vis([1,0,0])){ const P1 = PX(xF + .02), P2 = PX(xF + .04);
+      s += shape(on(P1, rectUV(y0 + 1, 3.2, y1 - 1, 6.6)), HOLE, .4) + fill(pd(on(P2, rectUV(y0 + 2.2, zc - .45, y1 - 2.2, zc + .45))), '#4a4642');
+      s += fill(pd(on(P2, keyLeft ? rectUV(y1 - 2.4, 3.2, y1 - 1, zc + .45) : rectUV(y0 + 1, 3.2, y0 + 2.4, zc + .45))), HOLE);
+      for (let i = 0; i < n; i++){ const y = y0 + 2.8 + (i + .5)*(y1 - y0 - 5.6)/n; s += fill(pd(on(PX(xF + .06), rectUV(y - .3, zc + .45, y + .3, zc + .75))), GOLD.l); } }
+    let pins = '';
+    if (k > 0) for (let i = 0; i < n; i++){ const y = y0 + 2.8 + (i + .5)*(y1 - y0 - 5.6)/n; pins += lineC([[xF - .4, y, zc + .6], [142.4, y, zc + .6], [142.4, y, ZP1]], .35, GOLD.m); }
+    return hdI([[141.4, y0, ZP1], [xF, y1, 7.4]], op(1 - .65*k, s) + op(k, pins)); };
+  parts.push(conn(20, 44, 15, true), conn(50, 62.5, 7, false));
+  // jumper pins: 2 x 4 in a shroud, one jumper cap
+  { let s = box(142, 68, ZP1, 147.2, 77, 5.6, BLK, toneI, .5);
+    if (vis([1,0,0])) for (let i = 0; i < 4; i++) for (const z of [3.2, 4.6]) s += fill(pd(on(PX(147.22), ellUV(69.6 + i*2, z, .35, .35, 8))), GOLD.l);
+    parts.push(hdI([[142, 68, ZP1], [147.2, 77, 5.6]], s));
+    parts.push(hdBox(146.4, 74.4, 2.6, 148.6, 76.6, 5.2, matOf(PALS[st.pal].m), .4)); }
+  return hdI([[141, 14, ZP0], [148.6, 88, 7.4]], byDepth(parts));
+}
+
+/* ---------- the spindle: hub, platters, spacers, clamp, motor ---------- */
+function platterSvg(i, st, k){
+  const z0 = PB[i], z1 = PT[i], n = 72, A = disc(HS[0], HS[1], z0, HR, n), B = disc(HS[0], HS[1], z1, HR, n);
+  let s = loft(A, B, nr => toneI(nr, PLAT));
+  if (vis([0,0,1])){
+    const zt = z1 + .01, band = (a, w, c) => { const e = [Math.cos(a), Math.sin(a)], q = [-e[1], e[0]];
+      return fill(pd([[-60, w[0]], [60, w[0]], [60, w[1]], [-60, w[1]]].map(([t, r]) => [HS[0] + q[0]*t + e[0]*r, HS[1] + q[1]*t + e[1]*r, zt])), c); };
+    let top = fill(pd(B), PLAT.l);
+    top += clipTo(B, band(.6, [-18, -2], '#f8fafb') + band(.6, [8, 15], '#f1f4f6') + band(.6, [24, 40], '#c9d2d8'));
+    for (const r of [R_ID, 26.5, 33, 39.5, R_OD]) top += `<path d="${pd(disc(HS[0], HS[1], zt, r, 56))}" fill="none" stroke="#a3aeb6" style="stroke-width:.22"/>`;
+    if (i === 2 && k > 0) top += op(k, servoSvg(st, zt));
+    if (i === 2 && st.ph === 'read') top += readArc(st, zt);
+    s += top + ink(pd(B), .7);
+  }
+  return s + hullInk([...A, ...B], 1.1);
+}
+// servo wedges follow the arc the head travels, so they are curved spokes
+function servoSvg(st, z){
+  const rs = [], ph0 = polarAt(AF(armPhi(R_OD), HL, 0, 0));
+  for (let r = R_ID; r <= R_OD + .01; r += 2) rs.push([r, polarAt(AF(armPhi(r), HL, 0, 0)) - ph0]);
+  let s = '';
+  for (let i = 0; i < 24; i++){ const a0 = st.ang + i*Math.PI/12;
+    s += `<path d="${pd(rs.map(([r, d]) => SPOL(r, a0 + d, z)), false)}" fill="none" stroke="#6f7c86" style="stroke-width:.35"/>`; }
+  return s;
+}
+function readArc(st, z){
+  const r = st.r, a = polarAt(AF(armPhi(r), HL, 0, 0)), span = clamp1(st.prog)*5.6, pts = [];
+  for (let j = 0; j <= 40; j++) pts.push(SPOL(r, a - span*j/40, z));
+  return `<path d="${pd(pts, false)}" fill="none" stroke="${PALS[st.pal].l}" style="stroke-width:1.1" stroke-linecap="round"/>`;
+}
+const hubCyl = (z0, z1, r, m, w = .8) => cyl(HS[0], HS[1], z0, z1, r, m, toneI, w, 32);
+function clampSvg(st){
+  let s = hubCyl(PT[2], 20.6, 16.5, ALU, .9) + hubCyl(20.6, 21.2, 7, ALU, .7);
+  if (vis([0,0,1])){
+    for (let i = 0; i < 6; i++){ const a = st.ang + i*Math.PI/3, c = SPOL(11.5, a, 20.62);
+      s += fill(pd(disc(c[0], c[1], 20.63, 1.5, 12)), '#b6bdc0') + ink(pd(disc(c[0], c[1], 20.63, 1.5, 12)), .35);
+      const t = [Math.cos(a), Math.sin(a)]; s += line([[c[0] - t[0]*.8, c[1] - t[1]*.8, 20.64], [c[0] + t[0]*.8, c[1] + t[1]*.8, 20.64]], .35); }
+    const nb = SPOL(14.5, st.ang + Math.PI/6, 20.62);
+    s += fill(pd(disc(nb[0], nb[1], 20.63, .7, 8)), '#7d878b');                                      // balancing notch
+    s += fill(pd(disc(HS[0], HS[1], 21.22, 1.6, 14)), HOLE);                                          // threaded hole for the lid screw
+  }
+  return s;
+}
+function motorSvg(st){
+  // fixed stator (9 coils on a steel core), fluid bearing sleeve and shaft; the hub's ring magnet turns with it
+  const parts = [], zs0 = 6.6, zs1 = 9.8;
+  for (let i = 0; i < 12; i++){ const a0 = st.ang + i*Math.PI/6, a1 = a0 + Math.PI/6, poly = [];
+    for (let j = 0; j <= 3; j++) poly.push(SPOL(11.6, a0 + (a1 - a0)*j/3, 0).slice(0, 2));
+    for (let j = 3; j >= 0; j--) poly.push(SPOL(10.2, a0 + (a1 - a0)*j/3, 0).slice(0, 2));
+    parts.push(hdPI(poly, 6.6, 10.6, matOf(i % 2 ? '#d0504a' : '#4f6fb8'), .3)); }
+  for (let i = 0; i < 9; i++){ const a = i*2*Math.PI/9;
+    parts.push(hdPI(polarQuad(a, 4.2, 9.4, -1.4, 1.4), zs0, zs1, COPPER, .3)); }
+  parts.push(hdI([[HS[0] - 4.2, HS[1] - 4.2, zs0], [HS[0] + 4.2, HS[1] + 4.2, zs1 + .4]], hubCyl(zs0, zs1 + .4, 4.2, STEEL, .5)));
+  parts.push(hdI([[HS[0] - 3.4, HS[1] - 3.4, zs0], [HS[0] + 3.4, HS[1] + 3.4, 18.4]], hubCyl(zs0, 18.4, 3.4, matOf('#b8a26a'), .5) + hubCyl(18.4, 21.1, 1.8, METAL, .5)));
+  return byDepth(parts);
+}
+
+/* ---------- the actuator: arms, suspensions, heads; pivot; voice coil ---------- */
+// one layer of the arm stack (j = 0 below the bottom platter ... 3 above the top one), with its ramp fingers
+function armLayer(j, st, ph, k){
+  const zc = AZ[j], lift = liftOf(st.r), out = [];
+  const armUV = [[3, -6], [10, -5.6], [30, -2.9], [31.5, -2.4], [31.5, 2.4], [30, 2.9], [10, 5.6], [3, 6]];
+  let armTop = '';
+  if (vis([0,0,1])){ const hole = [[13, 0], [23, -1.7], [23, 1.7]].map(([u, s]) => AF(ph, u, s, zc + .41)); armTop += fill(pd(hole), HOLE) + ink(pd(hole), .3);
+    armTop += fill(pd(disc(...AF(ph, 28.7, 0, 0).slice(0, 2), zc + .41, 1.1, 10)), '#a9b1b4'); }
+  out.push(hdPI(armPoly(ph, armUV), zc - .4, zc + .4, ALU, .55, armTop));
+  const susUV = [[27, -2.1], [HL - 1, -.9], [HL + .8, -.45], [HL + 3.2, -.3], [HL + 3.2, .3], [HL + .8, .45], [HL - 1, .9], [27, 2.1]];
+  const head = (zSl0, zSl1, zSu0, zSu1, on) => {
+    out.push(hdPI(armPoly(ph, susUV), zSu0, zSu1, STEEL, .35, vis([0,0,1]) ? lineC([AF(ph, 29, .7, zSu1 + .01), AF(ph, HL - 1.5, .3, zSu1 + .01)], .25, AMBER.d) : ''));
+    out.push(hdPI(armPoly(ph, [[HL - .8, -.6], [HL + .8, -.6], [HL + .8, .6], [HL - .8, .6]]), zSl0, zSl1, on ? matOf(PALS[st.pal].d) : SLIDER, .3)); };
+  const reading = st.ph === 'read';
+  if (j > 0){ const t = PT[j - 1]; head(t + lift, t + .35 + lift, t + .35 + lift, t + .55 + lift, reading && j === 3); }
+  if (j < 3){ const b = PB[j]; head(b - .35 - lift, b - lift, b - .55 - lift, b - .35 - lift, false); }
+  // ramp fingers reach in over the platter edge beside each tab
+  const fq = polarQuad(PSI_TAB, 46.6, 50.2, -1.5, 1.5), rm = matOf(PALS[st.pal].m);
+  if (j > 0) out.push(hdPI(fq, PT[j - 1] + .03, PT[j - 1] + .7, rm, .35));
+  if (j < 3) out.push(hdPI(fq, PB[j] - .7, PB[j] - .03, rm, .35));
+  return out;
+}
+function stackItem(st, k){
+  const ph = armPhi(st.r), gp = 1 - .45*k, gh = 1 - .7*k;
+  const segs = [[HZF + .3, PB[0], 15], [PT[0], PB[1], 15], [PT[1], PB[2], 15]];
+  let s = '';
+  for (let j = 0; j < 4; j++){
+    const hub = j < 3 ? hdI([[HS[0] - 15, HS[1] - 15, segs[j][0]], [HS[0] + 15, HS[1] + 15, segs[j][1]]], op(gh, hubCyl(segs[j][0], segs[j][1], 15, j ? ALU : STEEL)))
+      : hdI([[HS[0] - 16.5, HS[1] - 16.5, PT[2]], [HS[0] + 16.5, HS[1] + 16.5, 21.2]], op(gh, clampSvg(st)));
+    s += byDepth([hub, ...armLayer(j, st, ph, k)]);
+    if (j < 3) s += op(gp, platterSvg(j, st, k));
+  }
+  if (k > 0) s += op(k, motorSvg(st));
+  return hdI([[HS[0] - HR, HS[1] - HR, HZF], [HS[0] + HR, HS[1] + HR, 21.2]], s);
+}
+function pivotItem(st, k){
+  const [x, y] = HPV, g = 1 - .65*k;
+  let s = op(g, cyl(x, y, HZF, 21.4, 5.5, ALU, toneI, 1, 28) + cyl(x, y, 21.4, 22.2, 3.2, METAL, toneI, .7, 20) + (vis([0,0,1]) ? fill(pd(disc(x, y, 22.22, 1.3, 12)), HOLE) : ''));
+  if (k > 0){ let b = rod([x, y, HZF], [x, y, 22], 1.6, STEEL, toneI, .5);
+    for (const z of [8.5, 18.5]) for (let i = 0; i < 10; i++){ const a = i*Math.PI/5 + st.r*.15; b += dot2([x + 3.3*Math.cos(a), y + 3.3*Math.sin(a), z], .55, '#8f989b'); }
+    s += op(k, b); }
+  return hdI([[x - 5.5, y - 5.5, HZF], [x + 5.5, y + 5.5, 22.2]], s);
+}
+function coilItem(st, k){
+  const ph = armPhi(st.r) + Math.PI, z0 = 10.5, z1 = 15.5;
+  const yoke = armPoly(ph, [[4.5, -5], [10, -6.5], [10, 6.5], [4.5, 5]]);
+  const coil = armPoly(ph, [[9, -6.5], [24, -8.2], [24, 8.2], [9, 6.5]]), hole = [[12, -3.6], [21, -4.6], [21, 4.6], [12, 3.6]].map(([u, s]) => AF(ph, u, s, z1 + .01));
+  const top = fill(pd(hole), '#3f3b38') + ink(pd(hole), .35);
+  const its = [hdPI(yoke, z0 + 1, z1 - 1, matOf('#55504a'), .5), hdPI(coil, z0, z1, COPPER, .7, top)];
+  const all = [...yoke, ...coil];
+  return hdI(hdBounds(all.map(([a, b]) => [a, b, z0]).concat(all.map(([a, b]) => [a, b, z1]))), byDepth(its));
+}
+const VCM_POLY = [[108, 4], [140.5, 4], [140.5, 19], [136, 24.4], [119, 24.4], [108, 13]];
+function vcmItems(st, k){
+  const lo = hdI([[108, 4, HZF], [140.5, 24.4, 9.5]], hdPrism(VCM_POLY, HZF, 7.5, STEEL, .8) + hdPrism(VCM_POLY.map(([x, y]) => [x + (x < 120 ? 1.5 : -1.5), y + (y < 10 ? 1.5 : -1.2)]), 7.5, 9.5, MAGM, .6));
+  const hi = hdI([[108, 4, 16.5], [140.5, 24.4, 20.5]], op(1 - .82*k, hdPrism(VCM_POLY.map(([x, y]) => [x + (x < 120 ? 1.5 : -1.5), y + (y < 10 ? 1.5 : -1.2)]), 16.5, 18.5, MAGM, .6) + hdPrism(VCM_POLY, 18.5, 20.5, STEEL, .9)));
+  const posts = [[110.6, 7.6], [137, 18.5]].map(([x, y]) => hdI([[x - 1.4, y - 1.4, 9.5], [x + 1.4, y + 1.4, 16.5]], cyl(x, y, 9.5, 16.5, 1.4, RUB, toneI, .6, 14)));
+  return [lo, hi, ...posts];
+}
+function rampItem(st){
+  const poly = polarQuad(PSI_TAB, 50.2, 56.5, -4.2, 4.2), m = matOf(PALS[st.pal].m);
+  const top = lineC([...polarQuad(PSI_TAB, 51, 55.5, -.8, -.8).slice(0, 2).map(([x, y]) => [x, y, 21.42])], .3, m.d);
+  return hdPI(poly, HZF, 21.4, m, .8, top);
+}
+function flexItems(st, k){
+  const ph = armPhi(st.r), a = AF(ph, 1.5, -6.2, 0), sd = [Math.sin(ph), -Math.cos(ph)];
+  const b = [125.5, 47, 0], p1 = [a[0] + sd[0]*14, a[1] + sd[1]*14], p2 = [b[0] - 14, b[1] + 6];
+  const bz = t => { const u = 1 - t; return [0, 1].map(i => u*u*u*a[i] + 3*u*u*t*p1[i] + 3*u*t*t*p2[i] + t*t*t*b[i]); };
+  const out = [], N = 10, z0 = 11, z1 = 16;
+  for (let i = 0; i < N; i++){ const q0 = bz(i/N), q1 = bz((i + 1)/N), quad = [[...q0, z0], [...q1, z0], [...q1, z1], [...q0, z1]];
+    let n = norm([q1[1] - q0[1], -(q1[0] - q0[0]), 0]); if (!vis(n)) n = n.map(v => -v);
+    let s = shape(quad, toneI(n, AMBER), .45);
+    for (const z of [12.6, 14.4]) s += lineC([[...q0, z], [...q1, z]], .25, '#b06a20');
+    if (i === 1 || i === 2){ const pq = [[...q0, 12], [...q1, 12], [...q1, 15], [...q0, 15]]; s += shape(pq, BLK.m, .35); }
+    if (st.ph === 'read' && k > 0) s += `<path d="${pd([[...q0, 13.5], [...q1, 13.5]], false)}" stroke="#fff6c0" style="stroke-width:.6" stroke-dasharray=".8 1.6" stroke-dashoffset="${f(st.clock*10)}" fill="none"/>`;
+    out.push(hdI(hdBounds(quad), s)); }
+  out.push(hdBox(125, 44, HZF, 131, 50, 17, METAL, .7, fill(pd(rectXY(125.6, 44.6, 130.4, 46).map(([x, y]) => [x, y, 17.02])), '#9aa3a8')));
+  return out;
+}
+function filterItem(st){
+  const m = matOf(PALS[st.pal].m);
+  let s = box(86, 4.5, HZF, 102, 10.5, 20, m, toneI, .7);
+  if (vis([0,1,0])){ const pl = PY(10.52); s += fill(pd(on(pl, rectUV(87.5, HZF + 1.5, 100.5, 18.5))), FILT.l);
+    for (let x = 89; x < 100; x += 1.6) s += lineC(on(pl, [[x, HZF + 1.5], [x, 18.5]]), .25, '#c9c2b0'); }
+  return hdI([[86, 4.5, HZF], [102, 10.5, 20]], s);
+}
+
+/* ---------- labels ---------- */
+const LB = [0, HW, 0, HD, 0, HZT];
+function headAt(st, z){ return AF(armPhi(st.r), HL, 0, z); }
+function insideLabels(st){
+  const on = st.ph !== 'off', rd = st.ph === 'read', mv = ['load', 'seek', 'park'].includes(st.ph), ph = armPhi(st.r);
+  return [
+    { at: SPOL(8, 1.2, 9.8), text:'STATOR COILS', on: active(st, 'motor') === 2 },
+    { at: SPOL(10.9, 2.6, 10.6), text:'ROTOR MAGNET', on: on },
+    { at: [HS[0], HS[1], 18.4], text:'FLUID BEARING', on: on },
+    { at: SPOL(13, 4, 21), text:'DISC CLAMP', on: false },
+    { at: SPOL(30, 3.6, PT[2]), text:'PLATTER 3', on: rd },
+    { at: SPOL(HR, 2.3, PT[1]), text:'PLATTER 2', on: false },
+    { at: SPOL(HR, 2.1, PT[0]), text:'PLATTER 1', on: false },
+    { at: SPOL(15, 2.4, 16.5), text:'SPACER RING', on: false },
+    { at: SPOL(40, 4.6, PT[2]), text:'SERVO WEDGES', on: st.ph === 'seek' },
+    { at: AF(ph, 18, 0, AZ[3] + .4), text:'ACTUATOR ARM', on: mv },
+    { at: AF(ph, 40, 0, PT[2] + .55), text:'SUSPENSION', on: false },
+    { at: headAt(st, PT[2] + .35), text:'READ HEAD', on: rd },
+    { at: [HPV[0], HPV[1], 22.2], text:'PIVOT BEARING', on: mv },
+    { at: AF(ph + Math.PI, 17, 0, 15.5), text:'VOICE COIL', on: mv },
+    { at: [127, 14, 20.5], text:'VCM MAGNET', on: mv },
+    { at: [138.5, 8, 7.5], text:'STEEL YOKE', on: false },
+    { at: [137, 18.5, 16.5], text:'CRASH STOP', on: st.ph === 'park' },
+    { at: SPOL(53.5, PSI_TAB, 21.4), text:'PARKING RAMP', on: !loaded(st) },
+    { at: [...AF(ph, 1.5, -6.2, 0).slice(0, 2), 16], text:'PREAMP CHIP', on: rd },
+    { at: [121, 47, 16], text:'FLEX CABLE', on: rd },
+    { at: [94, 10.5, 16], text:'RECIRC FILTER', on: on },
+    { at: [132, 90, HZF], text:'BREATHER HOLE', on: false },
+    { at: [0, HD, 20], text:'BASE CASTING', on: false },
+    { at: [123, 70, ZP1 + 1.2], text:'CONTROLLER SOC', on: on },
+    { at: [107, 68.5, ZP1 + 1.1], text:'DRAM CACHE', on: rd },
+    { at: [105, 89, ZP1 + 1.1], text:'MOTOR DRIVER', on: active(st, 'motor') === 2 || mv },
+    { at: [123.5, 56, ZP1 + .8], text:'SERIAL FLASH', on: active(st, 'spi') === 2 },
+    { at: [128, 47, ZP1 + 1.8], text:'HEAD CONNECTOR', on: rd },
+    { at: [147.6, 32, 7.4], text:'SATA POWER', on: on },
+    { at: [147.6, 56, 7.4], text:'SATA DATA', on: rd },
+    { at: [147.2, 72.5, 5.6], text:'JUMPER PINS', on: false },
+  ];
+}
+function surfaceLabels(st){
+  const on = st.ph !== 'off', rd = st.ph === 'read', mv = ['load', 'seek', 'park'].includes(st.ph), ph = armPhi(st.r);
+  return [
+    { at: SPOL(30, 3.6, PT[2]), text:'PLATTERS', on: on },
+    { at: SPOL(13, 4, 21), text:'DISC CLAMP', on: false },
+    { at: AF(ph, 18, 0, AZ[3] + .4), text:'ACTUATOR ARM', on: mv },
+    { at: headAt(st, PT[2] + .35), text:'READ HEAD', on: rd },
+    { at: [127, 14, 20.5], text:'VCM MAGNET', on: mv },
+    { at: SPOL(53.5, PSI_TAB, 21.4), text:'PARKING RAMP', on: !loaded(st) },
+    { at: [121, 47, 16], text:'FLEX CABLE', on: rd },
+    { at: [94, 10.5, 16], text:'AIR FILTER', on: false },
+    { at: [0, HD, 20], text:'BASE CASTING', on: false },
+    { at: [147.6, 32, 7.4], text:'SATA POWER', on: on },
+    { at: [147.6, 56, 7.4], text:'SATA DATA', on: rd },
+  ];
+}
+
+/* ---------- scene ---------- */
+// byDepth's comparator mixes box separation with centre depth, which is not transitive, so with ~20 items the floor can
+// land on top of the pivot. Paint in topological order of the box separations instead, farthest free item first.
+function hdDepth(parts){
+  parts = parts.filter(Boolean);
+  const n = parts.length, after = parts.map(() => []), deg = parts.map(() => 0), d = parts.map(p => depthOf(p.at || boxMid(p.box)));
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++){ const o = sepOrder(parts[i], parts[j]);
+    if (o < 0){ after[i].push(j); deg[j]++; } else if (o > 0){ after[j].push(i); deg[i]++; } }
+  const done = parts.map(() => false); let s = '';
+  for (let c = 0; c < n; c++){
+    let b = -1; for (let i = 0; i < n; i++) if (!done[i] && (b < 0 || (deg[i] === 0) > (deg[b] === 0) || ((deg[i] === 0) === (deg[b] === 0) && d[i] < d[b]))) b = i;
+    done[b] = true; s += parts[b].svg; for (const j of after[b]) deg[j]--;
+  }
+  return s;
+}
+function scene(st, m){
+  const k = ease(st.xr || 0);
+  let s = '';
+  const sh = []; for (const x of [0, HW]) for (const y of [0, HD]) for (const z of [0, HZT]) sh.push([x, y, z]);
+  s += castShadow(sh, 0);
+  const items = [pcbItem(st, k), frontItem(st, k), ...castingItems(st, k), stackItem(st, k), pivotItem(st, k), coilItem(st, k),
+    ...vcmItems(st, k), rampItem(st), ...flexItems(st, k), filterItem(st)];
+  s += hdDepth(items);
+  const lab = k > .6 ? insideLabels(st) : surfaceLabels(st);
+  return s + xrCallouts(lab, LB);
+}
+
+/* ---------- behaviour (one state object) ---------- */
+let ui, looping = false;
+function say(text, ms = 1900){ if (ui) ui.flash(text, ms); }
+function setPh(st, ph){ st.ph = ph; st.pt = 0; }
+function moveTo(st, r, ph, dur){ st.rFrom = st.r; st.rTo = r; st.dur = dur; setPh(st, ph); }
+function startSeek(st, i){
+  const fl = FILES[i], dr = Math.abs(fl.r - st.r);
+  st.file = i; st.seekMs = seekMs(dr); st.prog = 0;
+  moveTo(st, fl.r, 'seek', .3 + .6*Math.sqrt(dr / (R_OD - R_ID)));
+  say(`Seek to track ${trackOf(fl.r).toLocaleString('en')}: the voice coil swings the arm in ${st.seekMs.toFixed(1)} ms`);
+}
+function tick(dt){
+  const st = ui.st;
+  st.clock += dt; st.pt += dt;
+  st.ang -= dt*2*Math.PI*.45*st.rpm/RPM;                                // drawn 270x slower than 7200 rpm
+  const moving = () => { const e = ease(clamp1(st.pt / st.dur)); st.r = st.rFrom + (st.rTo - st.rFrom)*e; return st.pt >= st.dur; };
+  if (st.ph === 'spinup'){ st.rpm = RPM*ease(clamp1(st.pt / 3.2));
+    if (st.pt >= 3.2){ st.rpm = RPM; moveTo(st, R_OD, 'load', .8); say('At 7200 rpm: the heads slide down the ramp onto a cushion of air'); } }
+  else if (st.ph === 'load'){ if (moving()){ setPh(st, 'idle'); if (st.queue != null){ const q = st.queue; st.queue = null; startSeek(st, q); } else say('Ready: heads flying a few nanometres above the platters'); } }
+  else if (st.ph === 'seek'){ if (moving()){ setPh(st, 'read'); st.prog = 0; } }
+  else if (st.ph === 'read'){ st.prog = clamp1(st.pt / 2.6);
+    if (st.prog >= 1){ const fl = FILES[st.file]; setPh(st, 'idle');
+      say(`${fl.name}: ${fl.mb} MB read at ${rateOf(fl.r)} MB/s in ${Math.max(1, fl.mb / rateOf(fl.r)*1000).toFixed(0)} ms, sent over SATA`, 2600); } }
+  else if (st.ph === 'park'){ if (moving()){ if (st.offAfter){ st.offAfter = false; setPh(st, 'down'); say('Heads parked. The motor stops and the platters spin down'); }
+    else { setPh(st, 'parked'); say('Parked: the tabs rest on the ramp, the heads are clear of the platters'); } } }
+  else if (st.ph === 'down'){ st.rpm = RPM*(1 - ease(clamp1(st.pt / 3)));
+    if (st.pt >= 3){ st.rpm = 0; setPh(st, 'off'); } }
+  return st.ph !== 'off';
+}
+function kick(){ if (looping) return; looping = true; ui.animate(dt => { const b = tick(dt); if (!b) looping = false; return b; }); }
+function powerOn(st){
+  if (st.ph === 'off'){ setPh(st, 'spinup'); st.queue = null; say('12 V spins the motor, 5 V wakes the controller: the platters spin up'); }
+  else if (st.ph === 'down') say('Still spinning down: wait for it to stop');
+  else say('Already on');
+  kick();
+}
+function readFile(st, i){
+  if (st.ph === 'off' || st.ph === 'down') return say('Power it on first: the heads can only fly over spinning platters');
+  if (st.ph === 'spinup' || st.ph === 'load'){ st.queue = i; return say(`Queued ${FILES[i].name}: waiting for the heads to load`); }
+  if (st.ph === 'parked'){ st.queue = i; moveTo(st, R_OD, 'load', .8); say('Loading the heads off the ramp first'); return kick(); }
+  if (st.ph === 'seek' || st.ph === 'read' || st.ph === 'park') return say('Busy: one request at a time here');
+  startSeek(st, i); kick();
+}
+function parkHeads(st){
+  if (st.ph === 'off' || st.ph === 'down') return say('Already parked: off, the heads always rest on the ramp');
+  if (st.ph === 'parked') return say('Already parked');
+  if (st.ph === 'spinup') return say('Still parked: the heads load once the platters are up to speed');
+  st.queue = null; moveTo(st, R_PARK, 'park', .3 + .4*Math.sqrt(Math.abs(R_PARK - st.r) / (R_OD - R_ID)) + .2); kick();
+}
+function powerOff(st){
+  if (st.ph === 'off') return say('Already off');
+  if (st.ph === 'down') return say('Already spinning down');
+  st.queue = null;
+  if (loaded(st) || st.ph === 'load'){ st.offAfter = true; moveTo(st, R_PARK, 'park', .6); say('Power off: first the heads retract to the ramp'); }
+  else { setPh(st, 'down'); say('The motor stops and the platters spin down'); }
+  kick();
+}
+
+const STATUS = { off:'OFF', spinup:'SPIN-UP', load:'LOADING', idle:'IDLE', seek:'SEEKING', read:'READING', park:'PARKING', parked:'PARKED', down:'SPIN-DOWN' };
+ui = mountFigure({
+  fig:'HD', title:'Hard disk drive', turn:'full',
+  size:[224, 106, 89], center:[HW/2, HD/2], palette:'cobalt',
+  state:{ ph:'off', pt:0, rpm:0, r:R_PARK, rFrom:R_PARK, rTo:R_PARK, dur:1, ang:0, clock:0, file:0, prog:0, seekMs:0, queue:null, offAfter:false },
+  scene,
+  stats: st => [
+    { label:'Status', value: STATUS[st.ph] },
+    { label:'Spindle', value: `${Math.round(st.rpm)} rpm`, small:true },
+    { label:'Track', value: loaded(st) ? trackOf(st.r).toLocaleString('en') : 'RAMP', small:true },
+    { label:'Data', value: st.ph === 'read' ? `${rateOf(st.r)} MB/s` : st.ph === 'seek' ? `seek ${st.seekMs.toFixed(1)} ms` : '-', small:true },
+  ],
+  buttons:[
+    { label:'Power on', onClick: st => powerOn(st) },
+    { label:'Read a file', choices: st => FILES.map((fl, i) => ({ label:`${fl.name} (${fl.where})`, onClick: st => readFile(st, i), disabled: st.ph === 'off' || st.ph === 'down', why:'Power it on first: the heads can only fly over spinning platters' })) },
+    { label:'Park heads', onClick: st => parkHeads(st) },
+    { label:'Power off', onClick: st => powerOff(st) },
+  ],
+  params:(st, q) => {
+    if (q.get('on') === '1'){ st.ph = 'idle'; st.rpm = RPM; st.r = R_OD; }
+    if (q.has('r')) st.r = +q.get('r');
+    if (q.has('ph')) st.ph = q.get('ph');
+    if (q.has('prog')) st.prog = +q.get('prog');
+    if (q.has('ang')) st.ang = +q.get('ang');
+    if (q.has('clock')) st.clock = +q.get('clock');
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
