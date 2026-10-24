@@ -14,8 +14,7 @@ sys.exit(1 if missing else 0)
 EOF
 grep -q "turn:'full'\|turn: 'full'\|turn:\"full\"" index.html && ok "turn:full" || bad "turn:full missing"
 grep -q "xrMount" index.html && ok "see-through wired" || bad "no xrMount"
-labels=$(grep -oE "text: ?['\"][A-Z][A-Z0-9 /.-]*['\"]" figure.html | sort -u | wc -l)
-[ "$labels" -ge 25 ] && ok "labels $labels" || bad "labels $labels (<25)"
+labels=0
 grep -q "<script src=\"core.js\"" index.html && bad "index.html not built (still loads core.js)" || ok "self-contained"
 T=$(mktemp -d)
 for v in "yaw=45" "yaw=200" "yaw=300&xr=1&labels=1" "yaw=110&xr=1&labels=1"; do
@@ -24,5 +23,7 @@ for v in "yaw=45" "yaw=200" "yaw=300&xr=1&labels=1" "yaw=110&xr=1&labels=1"; do
   err=$(grep -o 'data-errors="[^"]*"' "$T/dom.html" | head -1)
   if [ -z "$err" ] || [ "$err" = 'data-errors=""' ]; then ok "render $v"; else bad "render $v $err"; fi
   sed 's/data:image[^"'"'"']*//g' "$T/dom.html" | grep -q "NaN" && bad "NaN at $v"
+  n=$(grep -o 'data-t="[^"]*"' "$T/dom.html" | sort -u | wc -l); [ "$n" -gt "$labels" ] && labels=$n
 done
+[ "$labels" -ge 25 ] && ok "labels rendered $labels" || bad "labels rendered $labels (<25)"
 exit $fail

@@ -49,7 +49,7 @@ const CR = 1.4, LL = 40.5, FOOT_H = 7;                    // crank radius, crank
 const SHO = [30, 74];                                      // shoulder axle (x, z)
 const LEGY = [[11, 19], [51, 59]], LINKY = [[9.1, 10.1], [59.9, 60.9]];
 const WMAX = 4, WIND_T = .55, RUN_W = .3;                 // key turns max, s per turn winding, turns/s running
-const GZ = 3, XMAX = 60, BX1 = XMAX + 52, BY1 = 82, LIFT = 16, UNIT_CM = .15;
+const GZ = 3, XMAX = 40, BX1 = XMAX + 54, BY1 = 82, LIFT = 20;
 // slabs along y: every rod is cut at these so each piece sorts against the flat parts it passes
 const YS = [8, 9.1, 10.1, 11, 19, 19.5, 20.5, 22, 23, 24.5, 25.5, 26.5, 27.5, 29, 30, 31.5, 38.5, 41, 42, 44, 45, 45.4, 46, 47, 48, 49.5, 50.5, 51, 59, 59.9, 60.9, 62];
 
@@ -72,10 +72,17 @@ const capY = (y0, y1) => facing([0,1,0]) ? y1 + .03 : y0 - .03;   // the y of th
 const barUV = (p, q, wd) => { const d = nrm2([q[0] - p[0], q[1] - p[1]]), n = [-d[1]*wd/2, d[0]*wd/2];
   return [[p[0] + n[0], p[1] + n[1]], [q[0] + n[0], q[1] + n[1]], [q[0] - n[0], q[1] - n[1]], [p[0] - n[0], p[1] - n[1]]]; };
 const discUV = (c, r, n = 18) => ellUV(c[0], c[1], r, r, n);
+// thin pins and arbors as stroked lines (a faceted rod per slab piece costs ~10x the drawing for the same look)
+function pinSvg(a, b, r, M){
+  const A = P(...a), B = P(...b), d = `M${f(A[0])} ${f(A[1])}L${f(B[0])} ${f(B[1])}`, o = f(-r*.35);
+  return `<path d="${d}" stroke="${INK}" stroke-width="${f(2*r + .9)}" fill="none"/><path d="${d}" stroke="${M.m}" stroke-width="${f(2*r - .2)}" fill="none"/>`
+    + `<path d="${d}" transform="translate(0 ${o})" stroke="${M.l}" stroke-width="${f(r*.55)}" fill="none"/>`;
+}
+const yPin = (c, y0, y1, r, M) => ({ box:[[c[0] - r, y0, c[1] - r], [c[0] + r, y1, c[1] + r]], svg: pinSvg([c[0], y0, c[1]], [c[0], y1, c[1]], r, M) });
 // a rod along y, cut at the slab planes
-function yRod(c, y0, y1, r, M, w = .5){
+function yRod(c, y0, y1, r, M){
   const cuts = [y0, ...YS.filter(v => v > y0 + 1e-6 && v < y1 - 1e-6), y1], out = [];
-  for (let i = 0; i < cuts.length - 1; i++) out.push({ box:[[c[0] - r, cuts[i], c[1] - r], [c[0] + r, cuts[i+1], c[1] + r]], svg: rod([c[0], cuts[i], c[1]], [c[0], cuts[i+1], c[1]], r, M, toneI, w, r, 12) });
+  for (let i = 0; i < cuts.length - 1; i++) out.push(yPin(c, cuts[i], cuts[i+1], r, M));
   return out;
 }
 // toothed wheels in a y slab
@@ -225,7 +232,7 @@ function outside(st, m, K){
   items.push({ box:[[12, 18, 85], [38, 52, 108]], svg: headSvg(st, m) });
   for (const [y0, y1] of [[14.5, 18], [52, 55.5]]) items.push({ box:[[21.5, y0, 92.5], [28.5, y1, 99.5]], svg: rod([25, y0, 96], [25, y1, 96], 3.5, m, toneI, 1, 3.5, 18) });
   { const ball = P(25, 35, 118.5), br = 2.3*1.2247;
-    items.push({ box:[[23, 33, 108], [27, 37, 121]], svg: cyl(25, 35, 108, 110, 2.2, TIN, toneI, .9, 16) + rod([25, 35, 110], [25, 35, 116.5], .6, TIN, toneI, .8, .6, 10)
+    items.push({ box:[[23, 33, 108], [27, 37, 121]], svg: cyl(25, 35, 108, 110, 2.2, TIN, toneI, .9, 16) + pinSvg([25, 35, 110], [25, 35, 116.5], .6, TIN)
       + `<circle cx="${f(ball[0])}" cy="${f(ball[1])}" r="${f(br)}" fill="${st.run && st.w > 0 ? '#ff6a4c' : '#e2483d'}" stroke="${INK}" stroke-width="1"/>`
       + `<circle cx="${f(ball[0] - br*.35)}" cy="${f(ball[1] - br*.35)}" r="${f(br*.3)}" fill="#ffffff" opacity=".7"/>` }); }
   return items;
@@ -245,11 +252,12 @@ function mech(st, K){
   L([40, 30, 34], 'BASE PLATE');
   for (const [a, b] of [[9.6, 10.6], [19.4, 20.4], [50.6, 51.6], [59.4, 60.4]]){
     put({ box:[[GP[0] - 1.3, a, 34], [GP[0] + 1.3, b, 37.2]], svg: box(GP[0] - 1.3, a, 34, GP[0] + 1.3, b, 37.2, STEEL, toneI, .6) }); }
-  L([GP[0] + 1.3, 60.4, 36], 'GUIDE STAPLE');
+
   // frame plates and pillars
   for (const [y0, y1, name] of [[22, 23, 'LEFT PLATE'], [47, 48, 'RIGHT PLATE']]){
     const it = prismY(PLATE, y0, y1, PLM, toneI, 1);
     const yy = capY(y0, y1); for (const c of [A1, A2, A3, A4, APV, SPV, ...PILLARS, SPRING_ANCHOR]) it.svg += shape(on(PY(yy), discUV(c, .9, 10)), PLM.d, .35);
+    it.svg = `<g opacity=".45">${it.svg}</g>` + hullInk([...on(PY(y0), PLATE), ...on(PY(y1), PLATE)], .9);   // pressed-tin plates, kept faint so the train shows
     put(it); }
   L([9, 48, 38], 'RIGHT PLATE'); L([9, 22, 66], 'LEFT PLATE');
   for (const c of PILLARS) add(yRod(c, 23, 47, .9, STEEL, .6));
@@ -260,27 +268,28 @@ function mech(st, K){
   for (const [a, b] of [[21.4, 22], [23, 24.5], [25.5, 26.5], [27.5, 31.5], [38.5, 47], [48, 62]]) add(yRod(A1, a, b, .8, STEEL, .6));
   L([A1[0], 55, A1[1]], 'WINDING ARBOR', winding || walking);
   // great wheel (rides on the arbor), its click on the ratchet, the ratchet wheel fixed to the arbor
-  put(wheel(gearPts(A1, R1, 40, K.g1, .7), A1, R1, 24.5, 25.5, lit(walking) || BRASS, 4, K.g1));
+  put(wheel(gearPts(A1, R1, 30, K.g1, .7), A1, R1, 24.5, 25.5, lit(walking) || BRASS, 4, K.g1));
   L([...polar(A1, 7, 210).slice(0, 1), 25.5, polar(A1, 7, 210)[1]], 'GREAT WHEEL', walking);
   put(wheel(sawPts(A1, 4.6, 12, K.a1, 1), A1, 4.6, 26.5, 27.5, lit(winding) || STEEL));
   { const r = polar(A1, 4.4, 160), rel = ((K.a1 - K.g1) % (2*Math.PI/12) + 2*Math.PI/12) % (2*Math.PI/12) / (2*Math.PI/12);
     const lift = winding ? .9*rel : 0, cp = rot2(polar(A1, 6.6, 120), A1, K.g1), tip = rot2(polar(A1, 4.25 + lift, 165), A1, K.g1);
     const ck = prismY(barUV(cp, tip, 1.1), 26.5, 27.5, lit(winding) || STEEL, toneI, .6);
-    ck.svg += rod([cp[0], 25.5, cp[1]], [cp[0], 27.7, cp[1]], .45, STEEL, toneI, .4, .45, 8);
+    ck.svg += pinSvg([cp[0], 25.5, cp[1]], [cp[0], 27.7, cp[1]], .45, STEEL);
     put(ck);
     const sp0 = rot2(polar(A1, 7.2, 95), A1, K.g1), sp1 = [(cp[0] + tip[0])/2, (cp[1] + tip[1])/2];
     put({ box: bx3([[sp0[0], 26.8, sp0[1]], [sp1[0], 27.2, sp1[1]]], .5), svg: `<path d="${pd([[sp0[0], 27, sp0[1]], [(sp0[0] + sp1[0])/2 + .8, 27, (sp0[1] + sp1[1])/2 + .8], [sp1[0], 27, sp1[1]], ], false)}" fill="none" stroke="${INK}" stroke-width="1.1" stroke-linecap="round"/><path d="${pd([[sp0[0], 27, sp0[1]], [(sp0[0] + sp1[0])/2 + .8, 27, (sp0[1] + sp1[1])/2 + .8], [sp1[0], 27, sp1[1]]], false)}" fill="none" stroke="#e8eef0" stroke-width=".45" stroke-linecap="round"/>` });
     L([tip[0], 27.5, tip[1]], 'CLICK', winding); L([sp0[0], 27, sp0[1]], 'CLICK SPRING', winding); L([r[0], 27.5, r[1] - 1], 'RATCHET WHEEL', winding); }
   // mainspring: an open spiral of flat steel, inner end on the arbor, outer end hooked on the anchor pillar
   put(springItem(st, K));
+  { const sp = polar(A1, 3.9 + (1 - Math.min(1, st.w/WMAX))*3.6 - .4, 200); L([sp[0], 38.5, sp[1]], 'MAINSPRING', winding || walking); }
   // the train
   put(wheel(gearPts(A2, r2, 10, K.a2, .7), A2, r2, 24.5, 25.5, lit(walking) || BRASS));
   L([...[polar(A2, 3.4, 230)].map(p => [p[0], 25.5, p[1]])[0]], 'CRANK PINION', walking);
-  put(wheel(gearPts(A2, R2, 34, K.a2, .7), A2, R2, 29, 30, lit(walking) || BRASS, 4, K.a2));
+  put(wheel(gearPts(A2, R2, 26, K.a2, .7), A2, R2, 29, 30, lit(walking) || BRASS, 4, K.a2));
   L([polar(A2, 6.2, 255)[0], 30, polar(A2, 6.2, 255)[1]], 'SECOND WHEEL', walking);
   put(wheel(gearPts(A3, r3, 8, K.a3, .6), A3, r3, 29, 30, lit(walking) || BRASS));
   L([A3[0], 30, A3[1] - 1.8], 'THIRD PINION', walking);
-  put(wheel(gearPts(A3, R3, 24, K.a3, .6), A3, R3, 41, 42, lit(walking) || BRASS, 3, K.a3));
+  put(wheel(gearPts(A3, R3, 18, K.a3, .6), A3, R3, 41, 42, lit(walking) || BRASS, 3, K.a3));
   L([polar(A3, 4, -70)[0], 42, polar(A3, 4, -70)[1]], 'THIRD WHEEL', walking);
   put(wheel(gearPts(A4, r4, 7, K.a4, .5), A4, r4, 41, 42, lit(walking) || BRASS));
   L([A4[0] - 1.5, 42, A4[1]], 'GOVERNOR PINION', walking);
@@ -297,7 +306,7 @@ function mech(st, K){
       prismY(discUV(top, 1.5, 14), 45.2, 46.2, BRASS, toneI, .6)];
     put({ box: bx3([[APV[0] - 2.6, 45.2, APV[1] - 3.4], [APV[0] + 2.6, 46.2, APV[1] + 8.6]]), svg: pieces.map(p => p.svg).join('') });
     add(yRod(APV, 46, 47, .45, STEEL, .5));
-    L([pa[1][0], 46, pa[1][1]], 'ANCHOR', walking); L([APV[0], 46.5, APV[1]], 'ANCHOR PIVOT'); L([top[0], 46.2, top[1] + 1], 'BALANCE WEIGHT', walking); }
+    L([pa[1][0], 46, pa[1][1]], 'ANCHOR', walking); L([top[0], 46.2, top[1] + 1], 'BALANCE WEIGHT', walking); }
   // stop lever: tip in the star wheel while stopped, swung clear when released; its shaft runs out to the handle
   { const b = stopAngle(st), tip = rot2([A4[0] + RS + .25, A4[1] + .1], SPV, b);
     const lv = prismY(barUV(SPV, tip, 1.3), 45.4, 46, lit(!walking && st.w > 0) || REDM, toneI, .6);
@@ -310,12 +319,10 @@ function mech(st, K){
   K.legs.forEach((Lg, i) => { const [d0, d1] = i ? [49.5, 50.5] : [19.5, 20.5], [l0, l1] = LEGY[i], [k0, k1] = LINKY[i];
     put({ box:[[A2[0] - 3.2, d0, A2[1] - 3.2], [A2[0] + 3.2, d1, A2[1] + 3.2]], svg: rod([A2[0], d0, A2[1]], [A2[0], d1, A2[1]], 3.2, lit(walking) || STEEL, toneI, .7, 3.2, 20) });
     const pins = i ? [[50.5, 51], [59, 59.9], [60.9, 61.4]] : [[8.6, 9.1], [10.1, 11], [19, 19.5]];
-    for (const [a, b] of pins) put({ box:[[Lg.C[0] - .7, a, Lg.C[1] - .7], [Lg.C[0] + .7, b, Lg.C[1] + .7]], svg: rod([Lg.C[0], a, Lg.C[1]], [Lg.C[0], b, Lg.C[1]], .7, STEEL, toneI, .5, .7, 10) });
+    for (const [a, b] of pins) put(yPin(Lg.C, a, b, .7, STEEL));
     // the leg inside the body (above the base plate), with its slot over the guide pin
     const up = legPiece(Lg, -2.2, tAtZ(Lg, 34), l0, l1, TIN, true); up.box[0][2] = 34; put(up);
-    put(legPiece(Lg, tAtZ(Lg, 32), LL, l0, l1, TIN));
-    parts[parts.length - 1].box[1][2] = 32;
-    for (const [a, b] of i ? [[50.6, 51], [59, 59.4]] : [[10.6, 11], [19, 19.4]]) put({ box:[[GP[0] - .5, a, GP[1] - .5], [GP[0] + .5, b, GP[1] + .5]], svg: rod([GP[0], a, GP[1]], [GP[0], b, GP[1]], .5, STEEL, toneI, .4, .5, 8) });
+    for (const [a, b] of i ? [[50.6, 51], [59, 59.4]] : [[10.6, 11], [19, 19.4]]) put(yPin(GP, a, b, .5, STEEL));
     // arm link and the lever on the shoulder axle
     const th = K.arms[i], E = [SHO[0] + LEVER*Math.sin(th), SHO[1] - LEVER*Math.cos(th)], ym = (k0 + k1)/2;
     const lev = prismY(barUV(SHO, E, 1.6), k0, k1, STEEL, toneI, .6), lk = prismY(barUV(Lg.C, E, 1.1), k0 + .1, k1 - .1, lit(walking) || STEEL, toneI, .6);
@@ -330,11 +337,15 @@ function mech(st, K){
   });
   // key outside (its bow is drawn with the outside parts)
   L([A1[0], 71.5, A1[1] + 5.5], 'KEY', winding);
-  MECH_ITEMS = lbl;
+  const RANK = ['MAINSPRING', 'KEY', 'WINDING ARBOR', 'RATCHET WHEEL', 'CLICK', 'GREAT WHEEL', 'CRANK PINION', 'CRANK AXLE', 'STAR WHEEL', 'ANCHOR',
+    'STOP LEVER', 'LEG', 'RIGHT CRANK', 'CRANK PIN', 'SECOND WHEEL', 'THIRD PINION', 'THIRD WHEEL', 'GOVERNOR PINION', 'BALANCE WEIGHT', 'LEG SLOT',
+    'GUIDE PIN', 'ARM LINK', 'ARM LEVER', 'SHOULDER AXLE', 'FOOT', 'SPRING ANCHOR', 'CLICK SPRING', 'STOP HANDLE', 'LEFT CRANK', 'RIGHT PLATE',
+    'LEFT PLATE', 'BASE PLATE', 'PILLAR'];
+  MECH_ITEMS = lbl.sort((a, b) => (RANK.indexOf(a.text) + 99) % 99 - (RANK.indexOf(b.text) + 99) % 99);
   return byDepth(parts);
 }
 function springItem(st, K){
-  const N = 7, r0 = 1.6, R = 3.7 + (1 - Math.min(1, st.w/WMAX))*3.6, ya = 31.5, yb = 38.5, n = N*22, pts = [];
+  const N = 7, r0 = 1.6, R = 3.7 + (1 - Math.min(1, st.w/WMAX))*3.6, ya = 31.5, yb = 38.5, n = N*14, pts = [];
   for (let i = 0; i <= n; i++){ const t = i/n, th = K.a1 - t*N*2*Math.PI, r = r0 + (R - r0)*Math.pow(t, .9); pts.push([A1[0] + r*Math.cos(th), A1[1] + r*Math.sin(th), th]); }
   // tail: the free outer end runs to the anchor pillar and hooks round it
   const e = pts[pts.length - 1], hk = [SPRING_ANCHOR[0] - 1.1, SPRING_ANCHOR[1]];
@@ -352,6 +363,31 @@ function springItem(st, K){
 }
 
 /* ---------- the scene ---------- */
+// xrCallouts splits the pills at the middle of B, but the motor sits off-centre in the body and the right column may not
+// rise into the See-through switches. So choose the columns here: half each, fewer on the right if its centred column
+// would reach the switches, then call xrCallouts once per column with B stretched far out on the other side
+// (B only sets the columns' edges and the split, so a stretched side sends every pill to the near column)
+function callouts(items, B){
+  const a = Dv(1,0,0)[0], b = Dv(0,1,0)[0], useX = Math.abs(a) >= Math.abs(b), i = useX ? 0 : 2;
+  const away = side => { const B2 = B.slice(), amt = side*1e4/(useX ? a : b); if (amt > 0) B2[i + 1] += amt; else B2[i] += amt; return B2; };
+  const its = items.map((it, k) => { const [X, Y] = P(...it.at); return { ...it, X, Y, k }; }).sort((u, v) => u.X - v.X), n = its.length;
+  const u = window.LBL_U ? LBL_U() : 0, hgt = u ? 17*u : 8.6*INK_K*1.8, gap = hgt + (u ? 3*u : 3*INK_K);
+  const svg = document.getElementById('fig'), vb = svg.viewBox.baseVal;
+  let lim = -1e9;   // the lowest of the top-right panels (switches, stats) that sit over the drawing
+  if (svg.getScreenCTM()) for (const el of [document.querySelector('.vset'), document.getElementById('stats')]){ if (!el) continue;
+    const r = el.getBoundingClientRect(), y = new DOMPoint(r.left, r.bottom + 6).matrixTransform(svg.getScreenCTM().inverse()).y + hgt/2;
+    if (y < vb.y + vb.height/2) lim = Math.max(lim, y); }
+  // the left column starts under the buttons and must end above the bottom of the drawing; from steep views not every
+  // pill fits, and the last-listed (least important) ones on the left are left out
+  const bot = vb.y + vb.height - hgt/2, btn = document.getElementById('btns');
+  let topL = -1e9; if (btn && svg.getScreenCTM()){ const r = btn.getBoundingClientRect(); topL = new DOMPoint(r.right, r.bottom + 50).matrixTransform(svg.getScreenCTM().inverse()).y + hgt; }
+  const meanY = c => c.reduce((s, p) => s + p.Y, 0)/c.length;
+  let nR = n >> 1, Lc;
+  while (nR > 0 && meanY(its.slice(n - nR)) - (nR - 1)*gap/2 < lim) nR--;
+  const R = its.slice(n - nR); Lc = its.slice(0, n - nR);
+  while (Lc.length && Math.max(meanY(Lc) + (Lc.length - 1)*gap/2, topL + (Lc.length - 1)*gap) > bot){ const kmax = Math.max(...Lc.map(c => c.k)); Lc = Lc.filter(c => c.k !== kmax); }
+  return xrCallouts(Lc, away(1)) + xrCallouts(R, away(-1));
+}
 function shadowPts(K, st){
   const p = [];
   for (const x of [4, 44]) for (const y of [8, 62]) for (const z of [32, 82]) p.push([x, y, z]);
@@ -376,8 +412,8 @@ function scene(st, m){
   s += `<g transform="translate(${f(dx)} ${f(dy)})">${byDepth(items)}</g>`;
   const B = [off[0] + 4, off[0] + 47, off[1], off[1] + 72, off[2], off[2] + 120];
   const wl = isWalking(st);
-  if (k > .6) s += xrCallouts(MECH_ITEMS.map(it => ({ ...it, at: W2(it.at) })), B);
-  else s += xrCallouts([
+  if (k > .6) s += callouts(MECH_ITEMS.map(it => ({ ...it, at: W2(it.at) })), B);
+  else s += callouts([
     { at: W2([A1[0], 71.5, A1[1] + 5.5]), text:'KEY', on: st.windQ > 0 },
     { at: W2([SPV[0] + 2, 64.4, SPV[1] - 5]), text:'STOP LEVER', on: st.lev > .5 },
     { at: W2([SHO[0], 68.5, SHO[1] - 14]), text:'ARM', on: wl },
@@ -430,10 +466,10 @@ function pick(st){
 }
 
 ui = mountFigure({
-  fig:'W1', title:'Wind-up toy', size:[BX1, BY1, 124 + LIFT], palette:'cobalt',
+  fig:'W1', title:'Wind-up toy', size:[BX1, BY1, 124 + LIFT], palette:'cobalt', turn:'full',
   state:{ w:0, a1:0, g1:0, run:false, lev:0, X:0, lift:0, carry:null, carryV:0, windQ:0 },
   scene,
-  stats: st => [{ label:'Spring', value: st.w.toFixed(1) + ' turns' }, { label:'Walked', value: (st.X*UNIT_CM).toFixed(1) + ' cm', small:true }],
+  stats: st => [{ label:'Spring', value: st.w.toFixed(1) + ' turns' }],
   buttons:[
     { label:'Wind the key', onClick:(st) => wind(st) },
     { label:'Flip the stop lever', onClick:(st) => flip(st) },
