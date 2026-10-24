@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MPU-6050 IMU</title></head><body>
+<script src="core.js"></script>
+<script>
+/* MPU-6050 IMU on a GY-521 breakout, on a tilt jig, read by an Arduino Nano. 1 unit = 1 mm. x = depth (front at high x),
+   y = width, z = up.
+
+   How it really works (where the power, the data and the numbers are after each step):
+   1. Power: USB 5 V reaches the Nano. Its 5V pin feeds the red jumper to the GY-521's VCC pin; black ties GND. On the
+      breakout, a 662K (XC6206P332, SOT-23) low-dropout regulator turns that 5 V into 3.3 V for the MPU-6050 (VDD and
+      VLOGIC), with a ceramic cap on its input and its output. The red power LED (with its series resistor) lights
+      from 3.3 V.
+   2. I2C: SCL (yellow) goes to A5 and SDA (green) to A4. The 4.7 kohm pull-ups on the breakout hold both lines at
+      3.3 V; the ATmega328P reads that as HIGH. The AD0 pin is pulled low (4.7 kohm), so the address is 0x68. XDA/XCL
+      (an aux bus for a magnetometer) and INT (data-ready) are left unused.
+   3. Reading: the Nano wakes the chip (it boots asleep: write 0 to PWR_MGMT_1, 0x6B), then reads 14 bytes from 0x3B
+      every 10 ms: ACCEL X/Y/Z, TEMP, GYRO X/Y/Z, 16 bits each. +-2 g = 16384 LSB/g; +-250 deg/s = 131 LSB per deg/s.
+      Each reading makes the TX LED blink as the Nano sends the numbers to the computer.
+   4. Tilt: the jig's axle runs along the board's X axis, so the knob rolls the board about X.
+      accel angle = atan2(ay, az): right on average, but noise (about 1 deg here) and every shake moves it.
+      gyro angle += gx * dt: smooth, but the uncalibrated zero-rate offset (1.6 deg/s on this unit; the datasheet
+      allows +-20) is added up too, so the angle creeps away and never comes back.
+      complementary filter: angle = 0.98 * (angle + gx * dt) + 0.02 * accel angle, at 100 Hz: the gyro follows fast
+      motion; the accelerometer pulls it back with a time constant of about 0.5 s, so the drift is gone and the jitter is
+      averaged out.
+   5. Inside the chip (QFN-24, 4 x 4 x 0.9 mm): a MEMS die bonded onto a CMOS die. Three gyro proof masses are driven
+      back and forth (around 30 kHz); turning the chip adds a Coriolis force that pushes them sideways, and comb
+      capacitors sense it. Accelerometer proof masses hang on springs (X/Y move in the plane, Z is a teeter-totter);
+      gravity and acceleration move them against comb fingers. Six 16-bit ADCs, a temperature sensor, the clock, the
+      DMP (motion processor), a 1024-byte FIFO and the I2C interface are on the CMOS side. Gold bond wires join the die
+      pads to the 24 leads of the lead frame.
+
+   Parts (each held by another):
+   DESK       wooden desk top
+   BREADBOARD 170-point mini breadboard . 17 x 2 spring clip strips inside
+   NANO       blue PCB on two 15-pin headers (pins in the breadboard) . ATmega328P . USB mini-B port . reset button .
+              resonator . regulator . POW, L, TX, RX LEDs . USB plug, strain relief and cable over the right edge
+   JUMPERS    male end in the breadboard (5V col 12, GND col 14, A5 col 9, A4 col 8) . female end on the GY-521 pins
+              (red VCC, black GND, yellow SCL, green SDA)
+   JIG        printed base . back and front posts . axle . tilt knob with index mark . cradle hub . cradle plate .
+              protractor (clear, lower half) . red pointer on the axle . hex nut
+   GY-521     blue PCB on two brass M3 standoffs with M3 screws . 8-pin header (VCC GND SCL SDA XDA XCL AD0 INT) .
+              MPU-6050 QFN . 662K regulator . two regulator caps . VDD and VLOGIC decoupling caps . REGOUT and CPOUT caps .
+              SCL and SDA pull-ups . AD0 pull-down . power LED . LED resistor . silkscreen pin names, X/Y arrows
+   DIE (x8)   lead frame paddle . 24 leads . die . bond pads . 24 bond wires . X, Y, Z gyro masses with drive combs and
+              springs . accel X/Y mass with sense combs . accel Z teeter mass . six ADCs . DMP . FIFO . I2C . OSC . TEMP .
+              charge pump */
+
+/* ---------- layout ---------- */
+const BH = 3;                                                           // desk top
+const DESK = [2, 0, 76, 122];
+const BX0 = 22, BY0 = 30, BBW = 38, BBL = 47, BT = BH + 8.5;            // mini breadboard
+const ROWS = { j:5.0, i:7.54, h:10.08, g:12.62, f:15.16, e:22.78, d:25.32, c:27.86, b:30.4, a:32.94 };
+const RX = r => BX0 + ROWS[r];
+const CY = c => BY0 + 3.2 + (c - 1)*2.54;
+const AZ = BT + 2.5, AZT = AZ + 1.6;                                    // Nano PCB bottom / top
+const NC = [(RX('h') + RX('d'))/2, (CY(1) + CY(15))/2];                 // Nano centre (pins in rows d and h, cols 1-15)
+const JX0 = 22, JX1 = 58, JY = 98, JZ = BH + 17, JBT = BH + 4;          // jig: post faces, axle line, base top
+const GX0 = 29.4, GX1 = 50.6, GY0 = JY - 8.2, GY1 = JY + 8.2, GZ = JZ + 9, GZT = GZ + 1.6;   // GY-521 (drawn level)
+const PIN_N = ['VCC', 'GND', 'SCL', 'SDA', 'XDA', 'XCL', 'AD0', 'INT'];
+const PINX = i => 40 + (3.5 - i)*2.54, PINY = GY0 + 1.4;
+const HZ = GZT + 2.5, DZ = HZ + 14;                                     // header plastic top, female housing top
+const HOLES = [[31.9, GY1 - 2.5], [48.1, GY1 - 2.5]];
+const PR = 12;                                                          // protractor radius
+const MG = [36, JY + 12, BH + 46];                                      // magnified die (x8), floating beside the header
+const TILTS = [-45, -20, 0, 20, 45];
+const IMU_DT = .01, GBIAS = 1.6, GNOISE = .25, ANOISE = .018, ALPHA = .98;
+const WR = .62;
+const JUMP = [{ pin:0, c:12, col:'#e2483d' }, { pin:1, c:14, col:'#2b2724' }, { pin:2, c:9, col:'#f2c230' }, { pin:3, c:8, col:'#3fa55b' }];
+const NEED = { g:'#ef8a3a', a:'#3e86d9', f:'#2f9e57' };
+
+/* ---------- colours ---------- */
+const BBM = { l:'#fbfaf3', m:'#e6e2d6', d:'#c2bcae' };
+const PCBB = { l:'#3f7fc9', m:'#2c64a8', d:'#1b3f6e' };
+const BLK = { l:'#4a4642', m:'#34312e', d:'#211f1d' }, ALU = { l:'#e9ecee', m:'#c3c9cc', d:'#8e979b' };
+const JIG = { l:'#f1ece0', m:'#d9d2c2', d:'#aea694' }, BRASS = matOf('#d8b45c'), GOLDM = matOf('#e0bd5c');
+const DUP = matOf('#34302c'), CABLE = matOf('#3a3632'), TANM = matOf('#c9a46a'), WHT = matOf('#f3efe4');
+const SI = { l:'#c3c7d8', m:'#9aa0b6', d:'#666b82' }, COPR = matOf('#c98b5e');
+const BLOCKS = { adc:'#8fb3d9', dmp:'#e0a35e', fifo:'#9ccf8f', i2c:'#d98fb0', osc:'#d4cc6a', temp:'#e07b6a', cp:'#b7a6d9' };
+
+/* ---------- helpers ---------- */
+const aItem = (b, svg) => ({ box: b, svg });
+const aBoxI = (x0, y0, z0, x1, y1, z1, m, w = .5, extra = '') => aItem([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, m, toneI, w) + (vis([0,0,1]) ? extra : ''));
+function aPrism(poly, z0, z1, m, w = .6, shade = toneI, top = ''){
+  const A = poly.map(([x, y]) => [x, y, z0]), B = poly.map(([x, y]) => [x, y, z1]);
+  let s = loft(A, B, n => shade(n, m));
+  if (vis([0,0,1])) s += fill(pd(B), shade([0,0,1], m)) + top + ink(pd(B), w*.8);
+  return s + hullInk([...A, ...B], w);
+}
+const aRect = (cx, cy, hu, hv, a = 0) => { const c = Math.cos(a*Math.PI/180), s2 = Math.sin(a*Math.PI/180);
+  return [[-hu,-hv],[hu,-hv],[hu,hv],[-hu,hv]].map(([u, v]) => [cx + u*c - v*s2, cy + u*s2 + v*c]); };
+const aStack = its => { const lo = its.filter(i => i.box[1][2] <= AZT + 1e-6), hi = its.filter(i => i.box[1][2] > AZT + 1e-6);
+  return aItem([[0,1,2].map(k => Math.min(...its.map(i => i.box[0][k]))), [0,1,2].map(k => Math.max(...its.map(i => i.box[1][k])))], byDepth(lo) + byDepth(hi)); };
+const aCirc = (cx, cy, r, n = 20) => ellUV(cx, cy, r, r, n);
+const aBounds = (pts, e = .05, zf = -1e9) => { const b = [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+  b[0][2] = Math.max(b[0][2], zf); return b; };
+const aDisc = (x, y, z, r, col, w = .3, n = 14) => { const d = pd(on(PZ(z), aCirc(x, y, r, n))); return fill(d, col) + (w ? ink(d, w) : ''); };
+const aTxZ = (x, y, z, str, size, col = INK) => `<text transform="${txM(P(x, y, z), Dv(0,-1,0), Dv(1,0,0))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800">${str}</text>`;
+const glowM = (base, g) => matOf(mix(base, '#ff7a2a', Math.max(0, Math.min(1, g))));
+const clamp1 = v => Math.max(0, Math.min(1, v));
+// round each corner of a route (a wire bends, it doesn't kink)
+const aBend = (pts, r = .9) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...sub(a, b)), lc = Math.hypot(...sub(c, b)), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k])*d/la), q = c.map((v, k) => b[k] + (v - b[k])*d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+const wirePath = (d, col, r, cap = 'round') => `<path d="${d}" fill="none" stroke="${INK}" style="stroke-width:${(2*r + .45).toFixed(2)}" stroke-linecap="${cap}" stroke-linejoin="round"/>`
+  + `<path d="${d}" fill="none" stroke="${col}" style="stroke-width:${(2*r).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+// a wire cut into short pieces, each with its own box, so it sorts behind or in front of what it passes
+function aWire(pts, col, r = WR, zf = BT, Lp = 4){
+  const q = aBend(pts, Math.max(1.6, r*2.5)), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = Math.hypot(...sub(q[j], q[i]));
+    while (j < q.length - 1 && len < Lp){ j++; len += Math.hypot(...sub(q[j], q[j - 1])); }
+    const seg = q.slice(i, j + 1);
+    out.push(aItem(aBounds(seg, r, zf), wirePath(pd(seg, false), col, r, 'butt')));
+    i = j; }
+  return out;
+}
+const wireSvg = (pts, col, r) => wirePath(pd(aBend(pts, 1.4), false), col, r);
+
+/* ---------- the tilting cradle: parts are drawn level, then turned about the axle (x axis through JY, JZ) ---------- */
+let imuCos = 1, imuSin = 0;
+const imuSet = deg => { imuCos = Math.cos(deg*Math.PI/180); imuSin = Math.sin(deg*Math.PI/180); };
+const imuN = ([x, y, z]) => [x, y*imuCos - z*imuSin, y*imuSin + z*imuCos];
+const imuNi = ([x, y, z]) => [x, y*imuCos + z*imuSin, -y*imuSin + z*imuCos];
+const imuR = ([x, y, z]) => { const r = imuN([0, y - JY, z - JZ]); return [x, JY + r[1], JZ + r[2]]; };
+const upF = () => vis(imuN([0,0,1]));
+// a box in the cradle's frame: all six faces, each drawn only when it faces the viewer; top extras on the top face
+function rBox(x0, y0, z0, x1, y1, z1, m, w = .5, top = ''){
+  const F = [[[0,1,0], [[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]]], [[1,0,0], [[x1,y0,z0],[x1,y1,z0],[x1,y1,z1],[x1,y0,z1]]],
+    [[0,-1,0], [[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1]]], [[-1,0,0], [[x0,y0,z0],[x0,y1,z0],[x0,y1,z1],[x0,y0,z1]]],
+    [[0,0,-1], [[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0]]], [[0,0,1], [[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]]]];
+  let s = '';
+  for (const [n, q] of F){ const nr = imuN(n); if (vis(nr)) s += shape(q.map(imuR), toneI(nr, m), w) + (n[2] === 1 ? top : ''); }
+  return aItem([[x0, y0, z0], [x1, y1, z1]], s);
+}
+// sort parts by their boxes in the cradle's own frame (the boxes stay axis-aligned there)
+function rSort(parts){
+  const v = imuNi(CAM_V);
+  const sep = (p, q) => { for (let k = 0; k < 3; k++){ if (p.box[1][k] <= q.box[0][k] + 1e-6) return v[k] >= 0 ? -1 : 1; if (q.box[1][k] <= p.box[0][k] + 1e-6) return v[k] >= 0 ? 1 : -1; } return 0; };
+  const dep = b => dot(boxMid(b), v);
+  return parts.filter(Boolean).sort((p, q) => sep(p, q) || dep(p.box) - dep(q.box)).map(p => p.svg).join('');
+}
+const rPd = (pts, close = true) => pd(pts.map(imuR), close);
+const rDisc = (x, y, z, r, col, w = .3, n = 14) => { const d = rPd(aCirc(x, y, r, n).map(([u, v]) => [u, v, z])); return fill(d, col) + (w ? ink(d, w) : ''); };
+const rLine = (pts, col, w) => `<path d="${rPd(pts, false)}" fill="none" stroke="${col}" style="stroke-width:${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+const rTx = (x, y, z, str, size, col = INK) => `<text transform="${txM(P(...imuR([x, y, z])), Dv(...imuN([0,-1,0])), Dv(...imuN([1,0,0])))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800">${str}</text>`;
+const rRod = (a, b, r, m, w = .4, n = 12) => aItem(aBounds([a, b], r), rod(imuR(a), imuR(b), r, m, toneI, w, r, n));
+// chip resistor / capacitor on the GY-521: body with tinned ends
+function rSmd(x0, y0, x1, y1, h, m, along = 'y'){
+  const z0 = GZT, z1 = GZT + h, e = .3;
+  const ends = along === 'y' ? [[x0, y0, x1, y0 + e], [x0, y1 - e, x1, y1]] : [[x0, y0, x0 + e, y1], [x1 - e, y0, x1, y1]];
+  const mid = along === 'y' ? [x0, y0 + e, x1, y1 - e] : [x0 + e, y0, x1 - e, y1];
+  return aItem([[x0, y0, z0], [x1, y1, z1]], rSort([rBox(ends[0][0], ends[0][1], z0, ends[0][2], ends[0][3], z1, ALU, .3),
+    rBox(ends[1][0], ends[1][1], z0, ends[1][2], ends[1][3], z1, ALU, .3), rBox(mid[0], mid[1], z0, mid[2], mid[3], z1, m, .3)]));
+}
+
+/* ---------- the sensor numbers ---------- */
+const imuRand = st => { st.seed = (st.seed*1664525 + 1013904223) % 4294967296; return st.seed/4294967296; };
+const imuGauss = st => Math.sqrt(-2*Math.log(1 - imuRand(st)))*Math.cos(2*Math.PI*imuRand(st));
+function imuSample(st){
+  if (st.thT < 1){ st.thT = Math.min(1, st.thT + IMU_DT/st.thDur); st.th = st.thFrom + (st.thTo - st.thFrom)*ease(st.thT); }
+  st.tap += IMU_DT;
+  const prev = st.vis, tp = st.tap;
+  st.vis = st.th + (tp < 2 ? .8*Math.exp(-tp/.3)*Math.sin(2*Math.PI*9*tp) : 0);    // the jig rings after a knock
+  if (!st.on) return;
+  st.t += IMU_DT;
+  const w = (st.vis - prev)/IMU_DT, r = st.vis*Math.PI/180;
+  const shake = tp < 2 ? .45*Math.exp(-tp/.2)*Math.sin(2*Math.PI*23*tp + 1) : 0, hand = st.thT < 1 ? .05 : 0;
+  const ay = Math.sin(r) + shake + (ANOISE + hand)*imuGauss(st), az = Math.cos(r) + .5*shake + ANOISE*imuGauss(st);
+  st.ay = ay; st.aA = Math.atan2(ay, az)*180/Math.PI;
+  const g = w + GBIAS + GNOISE*imuGauss(st);
+  st.gA += g*IMU_DT;
+  if (st.filt) st.fA = st.fA == null ? st.aA : ALPHA*(st.fA + g*IMU_DT) + (1 - ALPHA)*st.aA;
+}
+const imuData = st => st.on && Math.floor(st.t*12) % 2 === 1;      // a reading on the bus / a line out of TX
+
+/* ---------- breadboard ---------- */
+const HOLE_IN = [];                                                    // everything pushed into a hole (for the see-through pin stubs)
+for (let c = 1; c <= 15; c++) HOLE_IN.push([RX('d'), CY(c)], [RX('h'), CY(c)]);
+for (const j of JUMP) HOLE_IN.push([RX('b'), CY(j.c)]);
+function bbTop(){
+  const z = BT + .02, sq = (x, y, h = .5) => pd([[x - h, y - h, z], [x + h, y - h, z], [x + h, y + h, z], [x - h, y + h, z]]);
+  let s = fill(pd([[BX0 + 17.6, BY0 + 2, z], [BX0 + 20.4, BY0 + 2, z], [BX0 + 20.4, BY0 + BBL - 2, z], [BX0 + 17.6, BY0 + BBL - 2, z]]), mix(BBM.m, '#000000', .14));
+  let holes = '';
+  for (let c = 1; c <= 17; c++) for (const r of 'abcdefghij') holes += sq(RX(r), CY(c));
+  return s + fill(holes, '#3a3632');
+}
+function bbInside(st){
+  const parts = [], dat = imuData(st);
+  for (let c = 1; c <= 17; c++) for (const back of [true, false]){
+    const x0 = back ? RX('j') - 1.1 : RX('e') - 1.1, x1 = back ? RX('f') + 1.1 : RX('a') + 1.1, y = CY(c);
+    const lit = !back && st.on && (c === 12 ? .45 : (c === 8 || c === 9) && dat ? .8 : 0);
+    parts.push(aBoxI(x0, y - .65, BH + 3, x1, y + .65, BT - 1, lit ? glowM(METAL.l, lit) : METAL, .35)); }
+  let stubs = '';
+  for (const [x, y] of HOLE_IN){ const d = pd([[x, y, BT], [x, y, BH + 3.6]], false);
+    stubs += `<path d="${d}" stroke="${INK}" style="stroke-width:.95" fill="none"/><path d="${d}" stroke="#e6e9ea" style="stroke-width:.55" fill="none"/>`; }
+  return byDepth(parts) + stubs;
+}
+function bbItem(st, k){
+  let body = box(BX0, BY0, BH, BX0 + BBW, BY0 + BBL, BT, BBM, tone, .9) + (vis([0,0,1]) ? bbTop() : '');
+  body += hullInk([[BX0, BY0, BH], [BX0 + BBW, BY0, BH], [BX0 + BBW, BY0 + BBL, BH], [BX0, BY0 + BBL, BH],
+    [BX0, BY0, BT], [BX0 + BBW, BY0, BT], [BX0 + BBW, BY0 + BBL, BT], [BX0, BY0 + BBL, BT]], 2.2);
+  const svg = k > 0 ? `<g opacity="${f(k)}">${bbInside(st)}</g><g opacity="${f(1 - .8*k)}">${body}</g>` : body;
+  return aItem([[BX0, BY0, BH], [BX0 + BBW, BY0 + BBL, BT]], svg);
+}
+
+/* ---------- Arduino Nano ---------- */
+function nanoItems(st){
+  const it = [], x0 = NC[0] - 9, x1 = NC[0] + 9, y0 = NC[1] - 21.59, y1 = NC[1] + 21.59;
+  for (const x of [RX('d'), RX('h')]) it.push(aBoxI(x - 1.27, CY(1) - 1.27, BT, x + 1.27, CY(15) + 1.27, AZ, BLK, .5));
+  let top = '';
+  for (let c = 1; c <= 15; c++) for (const x of [RX('d'), RX('h')]) top += aDisc(x, CY(c), AZT + .02, .85, '#e3e6e3', .3, 12) + aDisc(x, CY(c), AZT + .04, .38, '#9aa2a4', 0, 8);
+  const lit = [st.on ? '#ff4a3d' : '#8d877a', '#8d877a', imuData(st) ? '#ffd23a' : '#8d877a', '#8d877a'];      // POW, L, TX, RX
+  [-19, -17, -15, -13].forEach((dy, i) => { const y = NC[1] + dy, q = [[NC[0] + 4.4, y - .6, AZT + .3], [NC[0] + 5.6, y - .6, AZT + .3], [NC[0] + 5.6, y + .6, AZT + .3], [NC[0] + 4.4, y + .6, AZT + .3]];
+    top += fill(pd(q), lit[i]) + ink(pd(q), .3); });
+  top += aTxZ(NC[0] + 7.2, NC[1] - 2, AZT + .02, 'NANO V3', .95, '#e8eef6');
+  it.push(aItem([[x0, y0, AZ], [x1, y1, AZT]], box(x0, y0, AZ, x1, y1, AZT, PCBB, toneI, .6) + (vis([0,0,1]) ? top : '')));
+  // ATmega328P, turned 45 degrees, on its ring of gull-wing leads
+  { const c = [NC[0], NC[1] + 1.8];
+    it.push(aItem([[c[0] - 6.3, c[1] - 6.3, AZT], [c[0] + 6.3, c[1] + 6.3, AZT + 1.2]], aPrism(aRect(c[0], c[1], 4.4, 4.4, 45), AZT, AZT + .3, ALU, .4)
+      + aPrism(aRect(c[0], c[1], 3.5, 3.5, 45), AZT + .3, AZT + 1.2, BLK, .5, toneI, aTxZ(c[0], c[1], AZT + 1.21, 'ATMEGA', .9, '#d9d4c7') + aTxZ(c[0] + 1.1, c[1], AZT + 1.21, '328P', .9, '#d9d4c7')))); }
+  // USB mini-B port at the end, opening toward -y
+  it.push(aBoxI(NC[0] - 3.8, y0 - 1.5, AZT, NC[0] + 3.8, y0 + 7.5, AZT + 3.9, ALU, .5,
+    fill(pd([[NC[0] - 2.6, y0 - 1.48, AZT + 1], [NC[0] + 2.6, y0 - 1.48, AZT + 1], [NC[0] + 2.6, y0 - 1.48, AZT + 2.9], [NC[0] - 2.6, y0 - 1.48, AZT + 2.9]]), '#2b2724')));
+  // reset button, resonator, regulator
+  it.push(aItem([[NC[0] - 1.75, NC[1] - 11.2, AZT], [NC[0] + 1.75, NC[1] - 5.2, AZT + 2.4]], box(NC[0] - 1.75, NC[1] - 11.2, AZT, NC[0] + 1.75, NC[1] - 5.2, AZT + 1.5, WHT, toneI, .45)
+    + cyl(NC[0], NC[1] - 8.2, AZT + 1.5, AZT + 2.4, 1.0, BLK, toneI, .45, 14)));
+  it.push(aBoxI(NC[0] - 6.2, NC[1] + 10, AZT, NC[0] - 3.6, NC[1] + 13, AZT + 1.1, ALU, .45));
+  it.push(aItem([[NC[0] + 1, NC[1] + 12, AZT], [NC[0] + 5.5, NC[1] + 19.6, AZT + 1.6]], byDepth([aBoxI(NC[0] + 1, NC[1] + 12, AZT, NC[0] + 5.5, NC[1] + 18.4, AZT + 1.6, BLK, .45),
+    aBoxI(NC[0] + 1.9, NC[1] + 18.4, AZT, NC[0] + 4.6, NC[1] + 19.6, AZT + .4, ALU, .35)])));
+  return [aStack(it)];
+}
+// USB plug: lies on the desk when unplugged; lifts, then slides into the port
+const usbPose = st => { const a = ease(clamp1(st.plug*2)), b = ease(clamp1(st.plug*2 - 1)), cz = AZT + 1.85;
+  return { x: NC[0] + 7*(1 - a), y0: NC[1] - 21.59 - 7*(1 - b), z: cz + (BH + 3.15 - cz)*(1 - a) }; };
+function usbItems(st){
+  const { x, y0, z } = usbPose(st), port = NC[1] - 21.59 - 1.5, it = [];
+  it.push(aBoxI(x - 4.4, y0 - 16.6, z - 3.15, x + 4.4, y0 - 1.5, z + 3.15, CABLE, .7));
+  const tipE = Math.min(port, y0 + 3.5);                                 // the metal tip, until it is inside the port
+  if (tipE > y0 - 1.45) it.push(aBoxI(x - 3.3, y0 - 1.5, z - 1.2, x + 3.3, tipE, z + 1.2, ALU, .45));
+  it.push(aItem([[x - 2.6, y0 - 21, z - 2.6], [x + 2.6, y0 - 16.6, z + 2.6]], rod([x, y0 - 16.6, z], [x, y0 - 21, z], 2.4, CABLE, toneI, .7, 1.5)));
+  const ye = y0 - 21;
+  it.push(...aWire([[x, ye, z], [(x + NC[0] + 2.5)/2, (ye + .4)/2, (z + BH + 1.3)/2], [NC[0] + 2.5, .4, BH + 1.3]], '#3a3632', 1.3, BH));
+  return it;
+}
+const usbTail = () => wireSvg([[NC[0] + 2.5, .4, BH + 1.3], [NC[0] + 2.5, -1.2, BH - .2], [NC[0] + 2.5, -1.7, -7]], '#3a3632', 1.3);
+
+/* ---------- tilt jig (fixed parts) ---------- */
+// a flat plate with outline poly (u = y, v = z) between x0 and x1
+function jPlateX(x0, x1, poly, m, w = .6, op = 1){
+  const A = on(PX(x0), poly), B = on(PX(x1), poly), fF = vis([1,0,0]), cap = fF ? B : A, cn = fF ? [1,0,0] : [-1,0,0];
+  return `<g opacity="${op}">` + loft(A, B, n => toneI(n, m)) + fill(pd(cap), toneI(cn, m)) + `</g>` + ink(pd(cap), w*.8) + hullInk([...A, ...B], w);
+}
+const protPoly = () => { const p = [[JY - PR, JZ + 2], [JY + PR, JZ + 2]]; for (let a = 90; a >= -90; a -= 6) p.push([JY + PR*Math.sin(a*Math.PI/180), JZ - PR*Math.cos(a*Math.PI/180)]); return p; };
+const needleUV = (deg, r0, r1) => { const a = deg*Math.PI/180, d = [Math.sin(a), -Math.cos(a)]; return [[JY + d[0]*r0, JZ + d[1]*r0], [JY + d[0]*r1, JZ + d[1]*r1]]; };
+function protractorItem(st){
+  const xf = JX1 + 1.5, fF = vis([1,0,0]);
+  let s = jPlateX(JX1, xf, protPoly(), CLEAR, .6, .62);
+  // ticks every 10 degrees, long ones every 30, numbers on the front face
+  let tk = '';
+  for (let a = -90; a <= 90; a += 10){ const [p, q] = needleUV(a, a % 30 ? PR - 1.3 : PR - 2.4, PR - .3); tk += pd([[xf + .02, ...p], [xf + .02, ...q]], false); }
+  s += `<path d="${tk}" fill="none" stroke="${INK}" style="stroke-width:.35"/>`;
+  if (fF) for (const a of [-60, -30, 0, 30, 60]){ const [, q] = needleUV(a, 0, PR - 4.1); s += tx(xf + .02, q[0], q[1] - .5, String(Math.abs(a)), 1.35, INK, 800); }
+  // what the chip thinks: gyro (orange), accelerometer (blue), filter (green)
+  if (st.on){ const nd = (deg, col) => { const [p, q] = needleUV(deg, 2.6, PR - 2.6);
+      return `<path d="${pd([[xf + .05, ...p], [xf + .05, ...q]], false)}" stroke="${col}" style="stroke-width:.7" stroke-linecap="round"/>` + fill(pd(on(PX(xf + .06), aCirc(q[0], q[1], .6, 10))), col) + ink(pd(on(PX(xf + .06), aCirc(q[0], q[1], .6, 10))), .25); };
+    s += nd(st.gA, NEED.g) + nd(st.aA, NEED.a) + (st.filt && st.fA != null ? nd(st.fA, NEED.f) : ''); }
+  // red pointer on the axle, and the nut that clamps it
+  const a = st.vis*Math.PI/180, d = [Math.sin(a), -Math.cos(a)], pp = [Math.cos(a), Math.sin(a)];
+  const V = (t, wd) => [JY + d[0]*t + pp[0]*wd, JZ + d[1]*t + pp[1]*wd];
+  const ptr = jPlateX(JX1 + 2, JX1 + 2.5, [V(-2.6, .8), V(PR - 1.6, .4), V(PR - .2, 0), V(PR - 1.6, -.4), V(-2.6, -.8)], matOf('#e2483d'), .45);
+  const nut = cylX(JX1 + 2.5, JX1 + 3.6, JY, JZ, 2.1, METAL, toneI, .5, 6) + cylX(JX1 + 1.5, JX1 + 2, JY, JZ, 1.5, METAL, toneI, .4, 12);
+  s = fF ? s + ptr + nut : nut + ptr + s;
+  return aItem([[JX1, JY - PR, JZ - PR], [JX1 + 3.6, JY + PR, JZ + 2]], s);
+}
+function jigItems(st){
+  const it = [];
+  it.push(aBoxI(JX0 - 2, JY - 16, BH, JX1 + 2, JY + 16, JBT, JIG, .8));
+  for (const [x0, x1] of [[JX0, JX0 + 4], [JX1 - 4, JX1]]){
+    it.push(aBoxI(x0, JY - 4, JBT, x1, JY + 4, JZ + 3, JIG, .7)); }
+  // axle stubs between the posts and the cradle hub
+  it.push(aItem([[JX0 + 4, JY - 1.5, JZ - 1.5], [27, JY + 1.5, JZ + 1.5]], cylX(JX0 + 4, 27, JY, JZ, 1.5, METAL, toneI, .4, 12)));
+  it.push(aItem([[53, JY - 1.5, JZ - 1.5], [JX1 - 4, JY + 1.5, JZ + 1.5]], cylX(53, JX1 - 4, JY, JZ, 1.5, METAL, toneI, .4, 12)));
+  // tilt knob on the back end of the axle, with its index mark
+  { let s = cylX(JX0 - 1.4, JX0, JY, JZ, 2.4, METAL, toneI, .4, 14) + cylX(JX0 - 7, JX0 - 1.4, JY, JZ, 4.5, DARK, toneI, .8, 28);
+    const a = st.vis*Math.PI/180;
+    if (vis([-1,0,0])) s += `<path d="${pd([[JX0 - 7.02, JY, JZ], [JX0 - 7.02, JY - 3.8*Math.sin(a), JZ + 3.8*Math.cos(a)]], false)}" stroke="#f3efe4" style="stroke-width:.7" stroke-linecap="round"/>`;
+    // knurling: a few lines along the knob where it faces us
+    for (let i = 0; i < 28; i += 2){ const t = i/28*2*Math.PI, n = [0, Math.cos(t), Math.sin(t)];
+      if (vis(n)) s += `<path d="${pd([[JX0 - 6.6, JY + 4.5*n[1], JZ + 4.5*n[2]], [JX0 - 1.8, JY + 4.5*n[1], JZ + 4.5*n[2]]], false)}" stroke="#1d1b19" style="stroke-width:.3"/>`; }
+    it.push(aItem([[JX0 - 7, JY - 4.5, JZ - 4.5], [JX0, JY + 4.5, JZ + 4.5]], s)); }
+  it.push(protractorItem(st));
+  return it;
+}
+
+/* ---------- GY-521 on the cradle ---------- */
+function gyItem(st, k){
+  const it = [], pw = st.on, up = upF();
+  it.push(rBox(27, JY - 3, JZ - 3, 53, JY + 3, JZ + 3, JIG, .6));                  // hub round the axle
+  it.push(rBox(27, JY - 12, JZ + 3, 53, JY + 12, JZ + 5, JIG, .7));                // cradle plate
+  for (const [hx, hy] of HOLES){
+    it.push(rRod([hx, hy, JZ + 5], [hx, hy, GZ], 2.1, BRASS, .5, 6));             // brass hex standoff
+    let hd = rod(imuR([hx, hy, GZT]), imuR([hx, hy, GZT + 1.6]), 2.6, METAL, toneI, .5, 2.6, 16);
+    if (up) hd += rLine([[hx - 1.4, hy, GZT + 1.62], [hx + 1.4, hy, GZT + 1.62]], INK, .4) + rLine([[hx, hy - 1.4, GZT + 1.62], [hx, hy + 1.4, GZT + 1.62]], INK, .4);
+    it.push(aItem([[hx - 2.6, hy - 2.6, GZT], [hx + 2.6, hy + 2.6, GZT + 1.6]], hd)); }
+  // the board: traces, silkscreen, vias on top
+  let top = '';
+  const TR = [[[PINX(0), PINY + 1.3], [PINX(0), JY - 3.6], [48, JY - 3.1]], [[PINX(1), PINY + 1.3], [PINX(1), JY - 3.1]],
+    [[PINX(2), PINY + 1.3], [PINX(2), JY - 2.2], [42, JY - .6]], [[PINX(3), PINY + 1.3], [PINX(3), JY - 1.4]],
+    [[PINX(4), PINY + 1.3], [PINX(4), JY - 1.4]], [[PINX(5), PINY + 1.3], [PINX(5), JY - 2.4], [38, JY - .9]],
+    [[PINX(6), PINY + 1.3], [PINX(6), JY - 3.4]], [[PINX(7), PINY + 1.3], [PINX(7), JY - 2.0], [37.6, JY - 2.0], [38, JY - 1.6]],
+    [[47.05, JY - .8], [47.05, JY + 2.6], [44.4, JY + 3.2], [42, JY + 1.8]], [[32.4, JY + 1.8], [32.4, JY + 2.6], [37, JY + 2.6], [38, JY + 2.2]]];
+  top += `<path d="${TR.map(t => rPd(t.map(([x, y]) => [x, y, GZT + .01]), false)).join('')}" fill="none" stroke="${PCBB.l}" style="stroke-width:.4" stroke-linecap="round" stroke-linejoin="round"/>`;
+  for (const [x, y] of [[44.4, JY + 3.2], [37, JY + 2.6], [34.8, JY - 1.2], [45.2, JY - 4.2], [39.2, JY + 4.6]]) top += rDisc(x, y, GZT + .02, .4, '#e3c46a', .2, 8);
+  for (let i = 0; i < 8; i++) top += rTx(PINX(i), PINY + 2.4, GZT + .02, PIN_N[i], .7, '#eef2f6');
+  top += rTx(41.2, JY + 5.6, GZT + .02, 'GY-521', 1.4, '#eef2f6');
+  // the X and Y arrows printed by the chip (the jig turns the board about X)
+  top += rLine([[35.4, JY + 3.6], [38.2, JY + 3.6]].map(([x, y]) => [x, y, GZT + .02]), '#eef2f6', .3) + rLine([[37.6, JY + 3.2], [38.2, JY + 3.6], [37.6, JY + 4]].map(([x, y]) => [x, y, GZT + .02]), '#eef2f6', .3)
+    + rLine([[35.4, JY + 3.6], [35.4, JY + 6.6]].map(([x, y]) => [x, y, GZT + .02]), '#eef2f6', .3) + rLine([[35, JY + 6], [35.4, JY + 6.6], [35.8, JY + 6]].map(([x, y]) => [x, y, GZT + .02]), '#eef2f6', .3)
+    + rTx(38.9, JY + 3.6, GZT + .02, 'X', .8, '#eef2f6') + rTx(35.4, JY + 7.2, GZT + .02, 'Y', .8, '#eef2f6');
+  // chip outline on the silkscreen
+  top += rLine([[37.6, JY - 1.8], [42.4, JY - 1.8], [42.4, JY + 3], [37.6, JY + 3], [37.6, JY - 1.8]].map(([x, y]) => [x, y, GZT + .02]), '#eef2f6', .2);
+  it.push(rBox(GX0, GY0, GZ, GX1, GY1, GZT, PCBB, .7, top));
+  // header: plastic strip, pins up, pin tails under the board
+  it.push(rBox(PINX(7) - 1.27, PINY - 1.27, GZT, PINX(0) + 1.27, PINY + 1.27, HZ, BLK, .5));
+  for (let i = 0; i < 8; i++){
+    it.push(rRod([PINX(i), PINY, GZ - 1.6], [PINX(i), PINY, GZ], .32, GOLDM, .3, 4));
+    if (i > 3) it.push(rRod([PINX(i), PINY, HZ], [PINX(i), PINY, HZ + 6], .32, GOLDM, .3, 4)); }
+  // female jumper housings on VCC, GND, SCL, SDA, and the wire as it leaves each one
+  for (const j of JUMP){ const px = PINX(j.pin);
+    it.push(rBox(px - 1.25, PINY - 1.25, HZ + .1, px + 1.25, PINY + 1.25, DZ, DUP, .5, rDisc(px, PINY, DZ + .01, .6, '#16130f', 0, 8)));
+    it.push(aItem([[px - .7, PINY - .7, DZ], [px + .7, PINY + .7, DZ + 3]], wirePath(rPd([[px, PINY, DZ], [px, PINY, DZ + 3]], false), wireCol(st, j, k), WR, 'butt'))); }
+  // MPU-6050: QFN, mould fades in see-through to show the die on its paddle
+  { const die = rBox(38.7, JY - .8, GZT + .15, 41.3, JY + 2, GZT + .45, SI, .3, rDisc(40, JY + .6, GZT + .46, .5, mix(SI.d, '#000000', .3), 0, 8)).svg;
+    const mould = rBox(38, JY - 1.4, GZT, 42, JY + 2.6, GZT + .9, BLK, .5, rTx(39.7, JY + .6, GZT + .91, 'MPU-6050', .55, '#d9d4c7') + rTx(40.6, JY + .6, GZT + .91, 'INVENSENSE', .38, '#b9b3a6')
+      + rDisc(38.5, JY - .9, GZT + .92, .22, '#8a847a', 0, 8)).svg;
+    it.push(aItem([[38, JY - 1.4, GZT], [42, JY + 2.6, GZT + .9]], (k > 0 ? die : '') + `<g opacity="${f(1 - .75*k)}">${mould}</g>`)); }
+  // 662K regulator (SOT-23): body and three legs
+  it.push(aItem([[45.6, JY - 3.1, GZT], [48.5, JY - .8, GZT + 1.1]], rSort([rBox(45.6, JY - 2.6, GZT + .1, 48.5, JY - 1.3, GZT + 1.1, BLK, .4, rTx(47.05, JY - 1.95, GZT + 1.11, '662K', .5, '#d9d4c7')),
+    rBox(45.85, JY - 3.1, GZT, 46.35, JY - 2.6, GZT + .3, ALU, .25), rBox(47.75, JY - 3.1, GZT, 48.25, JY - 2.6, GZT + .3, ALU, .25), rBox(46.8, JY - 1.3, GZT, 47.3, JY - .8, GZT + .3, ALU, .25)])));
+  // caps (tan) and resistors (black)
+  for (const [x0, y0] of [[47.4, .2], [45.6, .2], [43, -.6], [43, 1.4], [36, .6], [36, -1.6]]) it.push(rSmd(x0, JY + y0, x0 + .8, JY + y0 + 1.6, .8, TANM, 'y'));
+  for (const [x0, y0] of [[42.4, -3.4], [39.4, -3.4], [33, -3.4], [31.6, 1]]) it.push(rSmd(x0, JY + y0, x0 + 1.6, JY + y0 + .8, .5, BLK, 'x'));
+  // power LED: lights from 3.3 V
+  { const led = pw ? matOf('#ff4a3d') : matOf('#e9b8ae');
+    it.push(aItem([[31.6, JY - .4, GZT], [33.2, JY + .4, GZT + .6]], rBox(31.6, JY - .4, GZT, 33.2, JY + .4, GZT + .6, led, .3,
+      pw ? rDisc(32.4, JY, GZT + .62, 1.6, '#ff5a3a', 0, 16).replace('<path', '<path opacity=".5"') : '').svg)); }
+  return it;
+}
+const wireCol = (st, j, k) => j.pin >= 2 && k > .3 && imuData(st) ? mix(j.col, '#ffffff', .55) : j.col;
+function jumperItems(st, k){
+  const it = [];
+  JUMP.forEach((j, i) => { const px = PINX(j.pin), hx = RX('b'), hy = CY(j.c), col = wireCol(st, j, k);
+    const a = imuR([px, PINY, DZ + 3]), b = imuR([px, PINY - 3, DZ + 7]);
+    const pts = [a, b, [px + (hx - px)*.45, (b[1] + hy)/2 + 3, Math.max(b[2], BT + 20) + 1.5 - i*1.4], [hx, hy + 6, BT + 15 - i*.8], [hx, hy + 1, BT + 10], [hx, hy, BT + 8]];
+    it.push(...aWire(pts, col, WR, BT + 8));
+    // male end: housing above the hole, the pin goes into the clip below
+    it.push(aItem([[hx - 1.25, hy - 1.25, BT], [hx + 1.25, hy + 1.25, BT + 8]], line([[hx, hy, BT], [hx, hy, BT + 1]], .5) + box(hx - 1.25, hy - 1.25, BT + 1, hx + 1.25, hy + 1.25, BT + 8, DUP, toneI, .5))); });
+  return it;
+}
+
+/* ---------- the die, magnified x8, over the chip (see-through) ---------- */
+const DIE = (u, v, dz) => [MG[0] + u, MG[1] + v, MG[2] + dz];
+function dieView(st, k){
+  const [cx, cy, z0] = MG, z1 = z0 + 1.4, pw = st.on, low = [], top = [];
+  low.push(aBoxI(cx - 12.6, cy - 12.6, z0 - .8, cx + 12.6, cy + 12.6, z0, COPR, .5));                       // paddle
+  const SIDES = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+  let wires = '', pads = '';
+  for (const [ax, ay] of SIDES) for (let i = 0; i < 6; i++){ const o = (i - 2.5)*4;
+    const P2 = (r, t) => ax ? [cx + ax*r, cy + o + t] : [cx + o + t, cy + ay*r];
+    const [a0, a1] = [P2(13.4, -1), P2(16, 1)];
+    low.push(aBoxI(Math.min(a0[0], a1[0]), Math.min(a0[1], a1[1]), z0 - .8, Math.max(a0[0], a1[0]), Math.max(a0[1], a1[1]), z0 - .1, ALU, .4));
+    const [p0, p1] = [P2(10.4, -.55), P2(11.5, .55)];
+    pads += fill(pd([[p0[0], p0[1], z1 + .03], [p1[0], p0[1], z1 + .03], [p1[0], p1[1], z1 + .03], [p0[0], p1[1], z1 + .03]]), '#e8c766');
+    const wp = []; for (let t = 0; t <= 1.0001; t += .125){ const [x, y] = P2(10.95 + 3.8*t, 0); wp.push([x, y, z1 + (z0 - .1 - z1)*t + 2.6*Math.sin(Math.PI*Math.min(1, t*1.25))]); }
+    wires += `<path d="${pd(wp, false)}" fill="none" stroke="${INK}" style="stroke-width:.65"/><path d="${pd(wp, false)}" fill="none" stroke="#f0c94a" style="stroke-width:.35"/>`; }
+  // die top: the etched MEMS cavity (header side) and the CMOS side
+  const cav = [[-11.2, -11.2], [11.2, -11.2], [11.2, -.6], [-11.2, -.6]].map(([u, v]) => DIE(u, v, 1.42));
+  const dieTop = fill(pd(cav), mix(SI.d, '#2a2c3a', .35)) + ink(pd(cav), .35) + pads;
+  const die = aBoxI(cx - 12, cy - 12, z0, cx + 12, cy + 12, z1, SI, .6, dieTop);
+  // gyro masses: driven back and forth along u between comb fingers, on springs to the anchors
+  const comb = (u0, v0, v1, dir, len, col = '#2a2c3a') => { let d = ''; for (let v = v0; v <= v1 + 1e-6; v += .6) d += pd([DIE(u0, v, 1.95), DIE(u0 + dir*len, v, 1.95)], false);
+    return `<path d="${d}" fill="none" stroke="${col}" style="stroke-width:.22"/>`; };
+  const zig = (a, b, n = 5, amp = .35) => { const pts = []; for (let i = 0; i <= n*2; i++){ const t = i/(n*2), p = [a[0] + (b[0] - a[0])*t, a[1] + (b[1] - a[1])*t];
+      const off = i === 0 || i === n*2 ? 0 : (i % 2 ? amp : -amp), dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1; pts.push(DIE(p[0] - dy/l*off, p[1] + dx/l*off, 1.6)); }
+    return `<path d="${pd(pts, false)}" fill="none" stroke="#2a2c3a" style="stroke-width:.25"/>`; };
+  const anc = (u, v, hu = .45, hv = .45) => aBoxI(cx + u - hu, cy + v - hv, z1, cx + u + hu, cy + v + hv, z1 + .5, SI, .3);
+  const mass = (u, v, hu, hv, h, extra = '') => aBoxI(cx + u - hu, cy + v - hv, z1 + .1, cx + u + hu, cy + v + hv, z1 + h, matOf('#dde1ee'), .35, extra);
+  [-7.3, 0, 7.3].forEach((u0, j) => { const du = pw ? .4*Math.sin(st.t*61 + j*2.1) : 0, u = u0 + du, v = -8;
+    let holes = ''; for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b += 2) holes += fill(pd(on(PZ(z1 + .52), aRect(cx + u + a*.9, cy + v + b*.6, .18, .18))), '#8f94a8');
+    top.push(mass(u, v, 1.8, 1.5, .5, holes));
+    for (const s of [-1, 1]){ top.push(anc(u0 + s*3.1, v, .4, 1.4)); top.push(anc(u0 + s*1.8, v + s*2.6)); top.push(anc(u0 - s*1.8, v + s*2.6)); }
+    top.push(aItem([[cx + u0 - 3.6, cy + v - 3, z1], [cx + u0 + 3.6, cy + v + 3, z1 + .1]], comb(u + 1.8, v - 1.2, v + 1.2, 1, .9) + comb(u - 1.8, v - 1.2, v + 1.2, -1, .9)
+      + comb(u0 + 2.7, v - .9, v + .9, -1, .9, '#555a70') + comb(u0 - 2.7, v - .9, v + .9, 1, .9, '#555a70')
+      + zig([u - 1.2, v - 1.5], [u0 - 1.8, v - 2.6]) + zig([u + 1.2, v - 1.5], [u0 + 1.8, v - 2.6]) + zig([u - 1.2, v + 1.5], [u0 - 1.8, v + 2.6]) + zig([u + 1.2, v + 1.5], [u0 + 1.8, v + 2.6]))); });
+  // accelerometer X/Y: a proof mass on four folded springs, sense combs on its long sides; gravity pulls it along v
+  { const dv = pw ? Math.max(-.9, Math.min(.9, -.9*(st.ay || 0))) : 0, u = -5.6, v = -3 + dv;
+    top.push(mass(u, v, 2.8, 1.2, .55));
+    for (const s of [-1, 1]){ top.push(anc(u + s*4, -3, .4, .4)); top.push(anc(-5.6 + s*1.8, -3 + s*2.2, 1.1, .3)); }
+    top.push(aItem([[cx + u - 4.4, cy - 5.5, z1], [cx + u + 4.4, cy - .5, z1 + .1]], zig([u - 2.8, v], [u - 4, -3], 3, .3) + zig([u + 2.8, v], [u + 4, -3], 3, .3)
+      + `<path d="${[-2.2, -1.4, -.6, .2, 1, 1.8].map(t => pd([DIE(u + t, v - 1.2, 1.95), DIE(u + t, v - 1.9, 1.95)], false) + pd([DIE(u + t, v + 1.2, 1.95), DIE(u + t, v + 1.9, 1.95)], false)).join('')}" fill="none" stroke="#2a2c3a" style="stroke-width:.22"/>`)); }
+  // accelerometer Z: a teeter-totter, heavier on one side of its torsion bar
+  { const u = 5.6, v = -3;
+    top.push(mass(u, v, 2.8, 1.2, .55, `<path d="${pd([DIE(u - 1, v - 1.2, 1.97), DIE(u - 1, v + 1.2, 1.97)], false)}" stroke="#2a2c3a" style="stroke-width:.3"/>`));
+    top.push(aBoxI(cx + u + .4, cy + v - 1, z1 + .55, cx + u + 2.6, cy + v + 1, z1 + .9, matOf('#c9cede'), .3));
+    top.push(anc(u - 1, v - 2, .35, .35)); top.push(anc(u - 1, v + 2, .35, .35)); }
+  // CMOS side: six ADCs, DMP, FIFO, I2C, clock, temperature sensor, charge pump
+  const blk = (u0, v0, u1, v1, col, txt = '', ts = 1.3) => aBoxI(cx + u0, cy + v0, z1, cx + u1, cy + v1, z1 + .25, matOf(col), .35, txt ? aTxZ(cx + (u0 + u1)/2 + ts*.35, cy + (v0 + v1)/2, z1 + .26, txt, ts, '#2a2c3a') : '');
+  for (let j = 0; j < 6; j++) top.push(blk(-10.8 + j*1.75, 1, -9.4 + j*1.75, 3.6, BLOCKS.adc));
+  top.push(blk(.2, 1, 5.6, 5, BLOCKS.dmp, 'DMP'), blk(6.4, 1, 10.8, 5, BLOCKS.fifo, 'FIFO', 1.1), blk(6.4, 5.8, 10.8, 9.8, BLOCKS.i2c, 'I2C'),
+    blk(-10.8, 4.4, -7, 8.4, BLOCKS.osc, 'OSC', 1.1), blk(-6.2, 4.4, -3.2, 8.4, BLOCKS.temp, 'T', 1.3), blk(-2.4, 5.8, 5.6, 9.8, BLOCKS.cp, 'CP', 1.2));
+  const s = byDepth(low) + die.svg + byDepth(top) + wires;
+  return `<g opacity="${f(k)}">${s}</g>`;
+}
+function dieLinks(st, k){
+  // dashed lines from the chip's corners on the board up to the magnified package
+  const cs = [[38, JY - 1.4], [42, JY - 1.4], [42, JY + 2.6], [38, JY + 2.6]].map(([x, y]) => imuR([x, y, GZT + .9]));
+  const ps = [[-16, -16], [16, -16], [16, 16], [-16, 16]].map(([u, v]) => DIE(u, v, -.8));
+  let d = ''; for (let i = 0; i < 4; i++) d += pd([cs[i], ps[i]], false);
+  return `<path d="${d}" fill="none" stroke="${INK}" style="stroke-width:.4" stroke-dasharray="1.6 1.2" opacity="${f(.55*k)}"/>`
+    + `<g opacity="${f(k)}">${aTxZ(MG[0] + 17.6, MG[1] - 13, MG[2] - .8, '×8', 2.4)}</g>`;
+}
+
+/* ---------- labels ---------- */
+const LB = [16, 62, 30, 122, BH, 50];
+function dieLabels(st){
+  const pw = st.on, dat = imuData(st);
+  return [
+    { at: DIE(-7.3, -8, 2), text:'X GYRO MASS', on: pw },
+    { at: DIE(0, -8, 2), text:'Y GYRO MASS', on: pw },
+    { at: DIE(7.3, -8, 2), text:'Z GYRO MASS', on: pw },
+    { at: DIE(-5.6, -3, 2), text:'ACCEL X/Y MASS', on: pw },
+    { at: DIE(7, -3, 2.3), text:'ACCEL Z TEETER', on: pw },
+    { at: DIE(-7.3 + 2.4, -8.6, 2), text:'COMB FINGERS', on: false },
+    { at: DIE(-9.6, -3, 1.7), text:'SPRINGS', on: false },
+    { at: DIE(-6.5, 2.3, 1.7), text:'16-BIT ADCS', on: pw },
+    { at: DIE(2.9, 3, 1.7), text:'DMP', on: false },
+    { at: DIE(8.6, 3, 1.7), text:'FIFO 1 KB', on: false },
+    { at: DIE(8.6, 7.8, 1.7), text:'I2C INTERFACE', on: dat },
+    { at: DIE(-8.9, 6.4, 1.7), text:'CLOCK OSC', on: pw },
+    { at: DIE(12.6, 8, 2.6), text:'BOND WIRES', on: false },
+  ];
+}
+function boardLabels(st){
+  const pw = st.on, dat = imuData(st), R = p => imuR(p);
+  return [
+    { at: R([40, JY + .6, GZT + .9]), text:'MPU-6050 QFN', on: pw },
+    { at: R([47.05, JY - 1.95, GZT + 1.1]), text:'3.3V REGULATOR', on: pw },
+    { at: R([47.8, JY + 1, GZT + .8]), text:'REGULATOR CAPS', on: false },
+    { at: R([43.4, JY + 1.2, GZT + .8]), text:'DECOUPLING CAPS', on: false },
+    { at: R([43.2, JY - 3, GZT + .5]), text:'SCL PULL-UP 4.7K', on: dat },
+    { at: R([40.2, JY - 3, GZT + .5]), text:'SDA PULL-UP 4.7K', on: dat },
+    { at: R([33.8, JY - 3, GZT + .5]), text:'AD0 PULL-DOWN', on: false },
+    { at: R([32.4, JY, GZT + .6]), text:'POWER LED', on: pw },
+    { at: R([PINX(0), PINY, DZ]), text:'VCC PIN', on: pw },
+    { at: R([PINX(1), PINY, DZ]), text:'GND PIN', on: false },
+    { at: R([PINX(2), PINY, DZ]), text:'SCL PIN', on: dat },
+    { at: R([PINX(3), PINY, DZ]), text:'SDA PIN', on: dat },
+    { at: R([(PINX(4) + PINX(5))/2, PINY, HZ + 6]), text:'XDA XCL PINS', on: false },
+    { at: R([PINX(6), PINY, HZ + 6]), text:'AD0 PIN', on: false },
+    { at: R([PINX(7), PINY, HZ + 6]), text:'INT PIN', on: false },
+    { at:[NC[0], NC[1] + 1.8, AZT + 1.2], text:'ATMEGA328P', on: pw },
+    { at:[RX('d'), (CY(8) + CY(9))/2, AZT + .2], text:'A4 A5 = SDA SCL', on: dat },
+  ];
+}
+function surfaceLabels(st){
+  const pw = st.on, R = p => imuR(p);
+  return [
+    { at: R([GX0 + 1.5, GY1 - 1.2, GZT]), text:'GY-521 BREAKOUT', on: false },
+    { at: R([40, JY + .6, GZT + .9]), text:'MPU-6050', on: pw },
+    { at: R([47.05, JY - 1.95, GZT + 1.1]), text:'3.3V REGULATOR', on: pw },
+    { at: R([PINX(2), PINY, DZ]), text:'I2C PINS', on: imuData(st) },
+    { at: R([32.4, JY, GZT + .6]), text:'POWER LED', on: pw },
+    { at:[JX0 - 4, JY, JZ + 4.5], text:'TILT KNOB', on: st.thT < 1 },
+    { at:[JX1 + 1.5, JY - PR*.7, JZ - PR*.7], text:'PROTRACTOR', on: false },
+    { at:[NC[0], NC[1] - 8, AZT + 1], text:'ARDUINO NANO', on: pw },
+    { at:[BX0 + 2, BY0 + 40, BT], text:'BREADBOARD', on: false },
+    { at:[usbPose(st).x, usbPose(st).y0 - 10, usbPose(st).z + 3.15], text:'USB CABLE', on: pw },
+  ];
+}
+
+// see-through labels, two columns: the die's labels on the die's side of the board, the board's on the other (only the
+// few nearest the die move over when that column is full), so leaders don't cross the drawing. Same pills and phone
+// badges as xrCallouts; each column keeps its side and starts below the buttons / switches above it.
+function imuCallouts(st){
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, ctm = svgEl.getScreenCTM();
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 3*k);
+  const under = (sel, pad) => { const el = document.querySelector(sel); if (!el || !ctm || !el.offsetHeight) return -1e9;
+    return new DOMPoint(0, el.getBoundingClientRect().bottom + pad).matrixTransform(ctm.inverse()).y + hgt/2; };
+  const top = { [-1]: Math.max(vb.y + fs, under('#btns', 50)), [1]: Math.max(vb.y + fs + 30*k, under('.vset', 8)) }, bot = vb.y + vb.height - hgt/2;
+  const cap = sd => Math.max(0, Math.floor((bot - top[sd])/gap) + 1);
+  const cs = []; for (const x of [LB[0], LB[1]]) for (const y of [LB[2], LB[3]]) for (const z of [LB[4], LB[5]]) cs.push(P(x, y, z)[0]);
+  const xmin = Math.min(...cs), xmax = Math.max(...cs);
+  const X = p => P(...p)[0], ds = X(MG) < X(imuR([40, JY, GZT])) ? -1 : 1, at = l => { const [X1, Y1] = P(...l.at); return { ...l, X: X1, Y: Y1 }; };
+  const dl = dieLabels(st).map(at), bl = boardLabels(st).map(at).sort((a, b) => (a.X - b.X)*-ds);
+  const nd = Math.max(0, Math.min(bl.length - cap(-ds), cap(ds) - dl.length));
+  const cols = { [ds]: [...dl, ...bl.slice(0, nd)], [-ds]: bl.slice(nd) };
+  let s = '';
+  for (const side of [-1, 1]){ const col = cols[side];
+    if (!col.length) continue;
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    const shift = Math.max(0, col.reduce((a, c) => a + c.py - c.Y, 0)/col.length), over = col[col.length - 1].py - bot;
+    const lift = Math.min(Math.max(shift, over), col[0].py - top[side]); for (const c of col) c.py -= lift;
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`; } }
+  return s;
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0), rightF = vis([0, -1, 0]);
+  imuSet(st.vis);
+  let s = '';
+  if (!rightF) s += usbTail();
+  s += board(DESK[0], DESK[1], DESK[2], DESK[3], BH, 6, WOOD);
+  const top = boardTop(DESK[0], DESK[1], DESK[2], DESK[3], BH, 6);
+  const bbP = []; for (const x of [BX0, BX0 + BBW]) for (const y of [BY0, BY0 + BBL]) for (const z of [BH, BT]) bbP.push([x, y, z]);
+  const jgP = []; for (const x of [JX0 - 2, JX1 + 2]) for (const y of [JY - 16, JY + 16]) jgP.push([x, y, BH], [x, y, JBT]);
+  for (const x of [27, 53]) for (const y of [JY - 12, JY + 12]) for (const z of [JZ + 5, GZT]) jgP.push(imuR([x, y, z]));
+  for (const x of [PINX(0), PINX(3)]) jgP.push(imuR([x, PINY, DZ]));
+  s += castShadow(bbP, BH, top) + castShadow(jgP, BH, top);
+  const items = [bbItem(st, k), ...nanoItems(st), ...usbItems(st), ...jigItems(st), ...jumperItems(st, k)];
+  const gy = gyItem(st, k);
+  // the cradle and everything on it sorts as one part, in its own frame
+  const cr = [[27, JY - 12, JZ - 3], [53, JY + 12, DZ + 3]], cP = []; for (const x of [cr[0][0], cr[1][0]]) for (const y of [cr[0][1], cr[1][1]]) for (const z of [cr[0][2], cr[1][2]]) cP.push(imuR([x, y, z]));
+  // layers (under the board, the board, on top of it) in the order the viewer sees them, each sorted in the cradle's frame
+  const lay = [gy.filter(p => p.box[1][2] <= GZ + 1e-6), gy.filter(p => p.box[0][2] < GZT - 1e-6 && p.box[1][2] > GZ + 1e-6), gy.filter(p => p.box[0][2] >= GZT - 1e-6)];
+  items.push(aItem(aBounds(cP, 0), (upF() ? lay : lay.reverse()).map(rSort).join('')));
+  s += byDepth(items);
+  if (rightF) s += usbTail();
+  if (k > 0) s += dieLinks(st, k) + dieView(st, k);
+  return s + (k > .6 ? imuCallouts(st) : xrCallouts(surfaceLabels(st), LB));
+}
+
+/* ---------- behaviour (one state object, one loop) ---------- */
+let ui, imuLooping = false;
+function imuTick(dt){
+  const st = ui.st;
+  if (st.plug !== st.plugT){ st.plug = st.plugT > st.plug ? Math.min(1, st.plug + dt/.9) : Math.max(0, st.plug - dt/.9);
+    if (st.plug === 1 && !st.on){ st.on = true; st.t = 0; st.gA = 0; st.aA = st.vis; st.fA = null; } }
+  st.acc += dt;
+  while (st.acc >= IMU_DT){ st.acc -= IMU_DT; imuSample(st); }
+  return st.on || st.plug !== st.plugT || st.thT < 1 || st.tap < 2;
+}
+function imuKick(){ if (imuLooping) return; imuLooping = true; ui.animate(dt => { const b = imuTick(dt); if (!b) imuLooping = false; return b; }); }
+function setUsb(st, plug){
+  st.plugT = plug ? 1 : 0;
+  if (!plug){ st.on = false; ui.flash('unplugged: no 5 V, no 3.3 V, no readings'); }
+  else ui.flash('5 V in, 662K makes 3.3 V; the Nano reads 14 bytes from 0x68 every 10 ms', 2400);
+  imuKick();
+}
+function setTilt(st, a){ st.thFrom = st.th; st.thTo = a; st.thT = 0; st.thDur = .4 + Math.abs(a - st.th)/45; imuKick(); }
+function tapDesk(st){ st.tap = 0; ui.flash(st.on ? 'the accelerometer feels the knock; the gyro barely does' : 'the jig rings, but nothing is reading it'); imuKick(); }
+function setFilter(st, onF){
+  st.filt = onF; st.fA = null;
+  ui.flash(onF ? 'angle = 0.98 × (angle + gyro × dt) + 0.02 × accel' : 'filter off: raw gyro and raw accelerometer only', 2200);
+  imuKick();
+}
+const degS = v => { const r = Math.round(v*10)/10; return (r > 0 ? '+' : r < 0 ? '−' : '') + Math.abs(r).toFixed(1) + '°'; };
+const dotS = (col, v) => `<b style="color:${col}">●</b> ${v}`;
+ui = mountFigure({
+  fig:'M6', title:'MPU-6050 IMU',
+  size:[74, 122, 48], palette:'mint', turn:'full',
+  state:{ plug:0, plugT:0, on:false, th:0, thFrom:0, thTo:0, thT:1, thDur:1, vis:0, tap:9, t:0, acc:0, gA:0, aA:0, fA:null, ay:0, filt:false, seed:12345 },
+  scene,
+  stats: st => [
+    { label:'Tilt', value: degS(st.vis) },
+    { label:'Gyro', value: st.on ? dotS(NEED.g, degS(st.gA)) : '—', small:true },
+    { label:'Accel', value: st.on ? dotS(NEED.a, degS(st.aA)) : '—', small:true },
+    { label:'Filter', value: !st.filt ? 'off' : st.on && st.fA != null ? dotS(NEED.f, degS(st.fA)) : 'on', small:true },
+  ],
+  buttons:[
+    { label:'USB power', choices: st => [
+        { label:'Plugged in', current: st.plugT === 1, onClick: st => setUsb(st, true) },
+        { label:'Unplugged', current: st.plugT === 0, onClick: st => setUsb(st, false) } ] },
+    { label:'Tilt', choices: st => TILTS.map(a => ({ label: (a > 0 ? '+' : '') + a + '°', current: st.thTo === a, onClick: st => setTilt(st, a) })) },
+    { label:'Tap the desk', onClick: st => tapDesk(st) },
+    { label:'Complementary filter', choices: st => [
+        { label:'Off', current: !st.filt, onClick: st => setFilter(st, false) },
+        { label:'On (α = 0.98)', current: st.filt, onClick: st => setFilter(st, true) } ] },
+  ],
+  params:(st, q) => {
+    if (q.has('th')) st.th = st.thTo = st.thFrom = st.vis = +q.get('th');
+    if (q.get('pwr') === '1'){ st.plug = st.plugT = 1; st.on = true; st.aA = st.vis; }
+    if (q.get('filt') === '1') st.filt = true;
+    if (q.has('plug')) st.plug = +q.get('plug');
+    if (q.has('sim')) for (let i = 0; i < +q.get('sim')/IMU_DT; i++) imuSample(st);
+    if (q.has('tap')) st.tap = +q.get('tap');
+  },
+});
+xrMount(() => ui, () => '');
+if (ui.st.on) imuKick();
+</script></body></html>
