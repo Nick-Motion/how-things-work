@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Retro Pentium PC</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   A representative early Pentium AT tower, not a reproduction of one motherboard.
+   The AT mains switch feeds the supply. Its low-voltage harness feeds the motherboard
+   and drive connectors. Power starts the cooling fans; Turbo selects normal versus
+   compatibility speed. The jumper-programmed 33/66 front display is a preset, not a
+   frequency counter. It does not overclock the CPU. Implementation of slow mode
+   differed between boards. The GA-586AL manual describes half-speed switching.
+   A floppy leaves the desk, rises in front of the slot and slides into its guides.
+   A CD waits on the desk while the powered tray opens, then rises onto the tray's
+   recess. The tray closes before the spindle turns. Repeating either action ejects
+   and returns that same medium. No disc is made inside the drive.
+   The user slides the removable side cover out and sets its lower edge on the desk.
+   The see-through is a teaching cutaway. Drive housings also fade to show their parts.
+   Parts and attachments.
+   CASE. Feet and chassis floor support rear/front panels and top. The side cover
+   engages the floor/top guides. The steel motherboard tray carries brass standoffs.
+   BOARD. Motherboard on standoffs; CPU in socket; heatsink on CPU; fan on heatsink.
+   Paired 72-pin SIMMs in sockets; chipset, cache, BIOS, battery and crystal on board.
+   PCI/ISA slots carry VGA and sound cards secured to the rear expansion brackets.
+   DRIVES. Drive cage bolted to chassis supports CD-ROM, floppy and hard disk.
+   CD tray runs on side rails; spindle and optical sled are fixed to the drive deck.
+   Floppy head rests on its guide; disk enters above it. Hard disk remains sealed.
+   POWER. PSU bolted at rear/top; fan and mains inlet on its rear wall. Harness runs
+   along the rear/floor and drive cage to AT and drive power connectors. Front mains
+   switch has its own sheathed lead back to PSU. No exposed mains internals are shown.
+   CONTROL. Display board and Turbo switch fixed behind front bezel. IDE and floppy
+   ribbons run from board headers, along the cage, to the rear of their drives.
+   Sources. Gigabyte GA-586AL user manual, pages 13 and 17, and GA-586HX manual,
+   pages 37-45, for connectors and period board structure. Seagate ST3491 family
+   installation guide, April 1994, for drive mounting, IDE ribbon and DC connector.
+   This simplified model enlarges chips and cable thickness for legibility. */
+const pcCase = {l:'#f1e5c7',m:'#d7c9a7',d:'#a89b7d'};
+const pcPCB = matOf('#4a996f'), pcGold = matOf('#d5ae50');
+const pcSteel = matOf('#aeb9bd'), pcBlack = matOf('#45423e');
+const pcProfile = rectUV(0,3,26,68);
+const pcBounds = [0,70,0,42,0,68];
+const pcBoxBounds = p => [[0,1,2].map(i=>Math.min(...p.map(q=>q[i]))-.15),[0,1,2].map(i=>Math.max(...p.map(q=>q[i]))+.15)];
+const pcPath = (pts,col,w=.6) => `<path d="${pd(pts,false)}" fill="none" stroke="${INK}" stroke-width="${w+.5}" stroke-linejoin="round" stroke-linecap="round"/><path d="${pd(pts,false)}" fill="none" stroke="${col}" stroke-width="${w}" stroke-linejoin="round" stroke-linecap="round"/>`;
+function pcFan(a,b,r,angle){
+  const axis=norm(sub(b,a)), u=Math.abs(axis[0])>.9?[0,1,0]:[1,0,0], v=cross(axis,u);
+  const cap=vis(axis)?b:a;
+  const point=(radius,th)=>cap.map((n,i)=>n+radius*(u[i]*Math.cos(th)+v[i]*Math.sin(th)));
+  let s=rod(a,b,r,pcBlack,toneI,.8,r,24);
+  for(let i=0;i<5;i++){
+    const th=angle+i*Math.PI*2/5;
+    s+=shape([point(r*.2,th),point(r*.82,th+.15),point(r*.87,th+.7),point(r*.36,th+.9)],'#879396',.5);
+  }
+  s+=shape(Array.from({length:16},(_,i)=>point(r*.22,i*Math.PI/8)),METAL.l,.5);
+  return s;
+}
+function pcMedia(st,external=false){
+  const parts=[];
+  const fp=st.floppy;
+  const lift=Math.min(1,fp/.45), slide=Math.max(0,(fp-.45)/.55);
+  const fx=65-21*slide, fy=31-17*lift, fz=3.7+40*lift;
+  const disk=box(fx-4.4,fy-4.4,fz,fx+4.4,fy+4.4,fz+.45,matOf('#375d96'),toneI,.7)
+    +shape(on(PZ(fz+.46),rectUV(fx-3,fy-2,fx+1,fy+2)),'#e2e3dc',.4)
+    +shape(on(PZ(fz+.47),rectUV(fx+1,fy-2.8,fx+4.1,fy+2.8)),METAL.l,.5);
+  const exposed=(svg,z)=>clipTo(on(PZ(z),rectUV(50.15,-10,90,45)),svg);
+  if(!external||fx+4.4>50.15)parts.push({box:[[fx-4.4,fy-4.4,fz],[fx+4.4,fy+4.4,fz+.5]],svg:external&&fx-4.4<50.15?exposed(disk,fz+.45):disk});
+  const cp=st.cd, tray=cp<.25?cp/.25:cp<.65?1:(1-cp)/.35;
+  const trayX=40+17*tray;
+  let tr=box(trayX-9,5,55.4,trayX+9,23,56,pcBlack,toneI,.8)
+    +shape(on(PZ(56.02),ellUV(trayX,14,6.3,6.3,32)),'#252b2b',.5);
+  if(vis([1,0,0])) tr+=shape(on(PX(trayX+9.1),rectUV(5,55.2,23,56.9)),pcCase.l,.8);
+  if(!external||trayX+9.1>50.15)parts.push({box:[[trayX-9,5,55.2],[trayX+9.1,23,56.9]],svg:external?exposed(tr,56):tr});
+  const carry=Math.max(0,Math.min(1,(cp-.25)/.3));
+  const cx=cp<.65?65-8*carry:trayX;
+  const cz=3.6+52.6*carry+9*Math.sin(Math.PI*carry);
+  const cy=14;
+  const discZ=cp>=.65?56.2:cz;
+  const discAngle=st.power&&cp===1?st.angle:0;
+  const rg=on(PZ(discZ+.14),ellUV(cx,cy,6,6,40));
+  let cd=cyl(cx,cy,discZ,discZ+.14,6,matOf('#c3d5dc'),toneI,.6,40)
+    +shape(on(PZ(discZ+.16),ellUV(cx,cy,2.1,2.1,24)),'#f3d25b',.4)
+    +shape(on(PZ(discZ+.18),ellUV(cx,cy,.8,.8,16)),'#6c7778',.4);
+  for(const a of [0,2.1,4.2]) cd+=pcPath([[cx+2.5*Math.cos(a+discAngle),cy+2.5*Math.sin(a+discAngle),discZ+.2],[cx+5.3*Math.cos(a+discAngle+.15),cy+5.3*Math.sin(a+discAngle+.15),discZ+.2]],'#edf7f5',.4);
+  cd+=ink(pd(rg),.6);
+  if(!external||cx+6>50.15)parts.push({box:[[cx-6,cy-6,discZ],[cx+6,cy+6,discZ+.2]],svg:external&&cx-6<50.15?exposed(cd,discZ+.14):cd});
+  return parts;
+}
+function pcInside(st){
+  const parts=[], labels=[];
+  const put=(name,b,svg,active=false)=>{parts.push({box:b,svg});if(name)labels.push({at:boxMid(b),text:name,on:active});};
+  const bx=(name,b,m,active=false)=>put(name,[[b[0],b[1],b[2]],[b[3],b[4],b[5]]],box(...b,m,toneI,.65),active);
+  const cable=(name,pts,col,w=.7)=>{
+    if(name)labels.push({at:pts[Math.floor(pts.length/2)],text:name,on:st.power});
+    for(let i=1;i<pts.length;i++)put('',pcBoxBounds([pts[i-1],pts[i]]),pcPath([pts[i-1],pts[i]],col,w));
+  };
+  bx('',[2,1.6,7,36,2.1,50],pcSteel);
+  for(const x of [5,33])for(const z of [10,47])put('',[[x-.6,2.1,z-.6],[x+.6,3,z+.6]],rod([x,2.1,z],[x,3,z],.6,pcGold,toneI,.5));
+  bx('MOTHERBOARD',[3,3,8,35,3.7,49],pcPCB,st.power);
+  if(vis([0,1,0]))for(let i=0;i<9;i++){
+    const x=5+i*3;
+    put('',[[x,3.71,10],[x+1,3.74,47]],pcPath([[x,3.73,10],[x,3.73,26],[x+1,3.73,28],[x+1,3.73,47]],'#aad49d',.15));
+  }
+  const backing=parts.splice(0), cpuStart=parts.length;
+  bx('CPU SOCKET',[13,3.7,33,25,4.8,45],CERAMIC);
+  bx('PENTIUM CPU',[14,4.8,34,24,5.4,44],matOf('#726c59'),st.power);
+  bx('HEATSINK',[14,5.4,34,24,6,44],METAL,st.power);
+  for(let x=14;x<24;x+=1.4)bx('',[x,6,34,x+.55,9.5,44],METAL);
+  put('CPU FAN',[[14.2,9.5,34.2],[23.8,11,43.8]],pcFan([19,9.5,39],[19,11,39],4.8,st.angle),st.power);
+  const cpuParts=parts.splice(cpuStart);
+  put('',[[13,3.7,33],[25,11,45]],byDepth(cpuParts));
+  bx('SIMM SOCKETS',[29,3.7,26,34,5.2,46],CERAMIC);
+  for(const x of [30,33]){
+    bx('',[x-.4,5.2,27,x+.4,11,45],pcPCB);
+    for(let z=28;z<44;z+=3.6)bx('',[x+.4,6,z,x+.9,10,z+2.6],pcBlack);
+  }
+  labels.push({at:[33,8,37],text:'PAIRED RAM',on:st.power});
+  bx('CHIPSET',[8,3.7,24,14,5,30],pcBlack,st.power);
+  bx('L2 CACHE',[4,3.7,34,10,4.8,44],pcBlack,st.power);
+  bx('BIOS ROM',[24,3.7,19,32,4.7,22],pcBlack,st.power);
+  put('CMOS BATTERY',[[26,3.7,11],[31,4.6,16]],rod([28.5,3.7,13.5],[28.5,4.6,13.5],2.4,METAL,toneI,.6));
+  bx('',[20,3.7,26,23.5,4.6,28],METAL,st.power);
+  bx('',[21,3.7,46,28,6,48],CERAMIC,st.power);
+  bx('',[29,3.7,23,34,5.5,24.5],pcBlack,st.power);
+  bx('',[29,3.7,8.5,34,5.5,10],pcBlack,st.power);
+  for(const z of [12,18])bx('',[5,3.7,z,20,5,z+1.1],CERAMIC);
+  bx('',[4,3.7,22,22,5,23.2],pcBlack);
+  bx('VGA CARD',[1.2,5,12.1,20,21,12.8],pcPCB,st.power);
+  bx('',[7,10,12.8,12,15,13.7],pcBlack);
+  bx('SOUND CARD',[1.2,5,22.1,22,19,22.8],matOf('#8f754b'),st.power);
+  for(const z of [12,22])bx('',[.9,5,z-1,1.4,22,z+2],METAL);
+  put('PC SPEAKER',[[37,16,4],[43,22,6]],cyl(40,19,4,6,3,pcBlack,toneI,.7),st.power);
+  bx('DRIVE CAGE',[33,4,30,34,24,61],pcSteel);
+  for(const z of [32,42,53,60])bx('',[34,4,z,49,5,z+.7],pcSteel);
+  bx('HARD DISK',[35,7,31,49,21,35],pcSteel,st.power);
+  if(vis([0,0,1]))put('',[[37,9,35],[46,19,35.1]],shape(on(PZ(35.03),rectUV(37,9,46,19)),'#efeadc',.5));
+  const cdShell=box(31,5,53,49,23,59,pcSteel,toneI,.8);
+  put('4X CD-ROM',[[31,5,53],[49,23,59]],`<g opacity=".2">${cdShell}</g>`,st.power&&st.cd===1);
+  put('CD SPINDLE',[[38,12,53.4],[42,16,55.4]],cyl(40,14,53.4,55.4,2,pcBlack,toneI,.6),st.power&&st.cd===1);
+  bx('OPTICAL PICKUP',[32,12,53.2,35,16,54.6],matOf('#6e8a95'),st.power&&st.cd===1);
+  put('',[[32,13.8,53.8],[40,14.2,54.2]],rod([32,14,54],[40,14,54],.2,METAL,toneI,.4));
+  put('FLOPPY DRIVE',[[35,7,41],[49,21,45]],`<g opacity=".25">${box(35,7,41,49,21,45,pcSteel,toneI,.7)}</g>`,st.power&&st.floppy===1);
+  bx('FLOPPY HEAD',[38,12.5,41.7,42,15.5,43.3],pcBlack,st.power&&st.floppy===1);
+  const psu=box(1.2,5,51,25,24,65,pcSteel,toneI,.9);
+  put('POWER SUPPLY',[[1.2,5,51],[25,24,65]],psu,st.power);
+  put('PSU FAN',[[.9,8.5,52.5],[2,20.5,64.5]],pcFan([.9,14.5,58.5],[2,14.5,58.5],5.8,-st.angle),st.power);
+  bx('MAINS INLET',[.1,6,48,3,12,51],pcBlack,st.power);
+  cable('AT HARNESS',[[25,8,52],[27,5,51],[27,5,47]],'#d79c43',1);
+  cable('DRIVE POWER',[[25,20,52],[29,23,49],[30,23,33],[35,19,33]],'#d79c43',.9);
+  cable('',[[30,23,43],[35,19,43]],'#d79c43',.9);
+  cable('',[[30,23,56],[31,19,56]],'#d79c43',.9);
+  cable('IDE RIBBON',[[32,5.5,24],[32,7,27],[30,23,28],[30,23,50],[31,20,56]],'#c6c6b9',2);
+  cable('',[[30,23,33],[35,16,33]],'#c6c6b9',2);
+  cable('FLOPPY RIBBON',[[32,5.5,9],[34,6,9],[32,24,28],[32,24,43],[35,14,43]],'#bdbeb8',1.6);
+  bx('POWER SWITCH',[47,7,23,50,11,27],pcBlack,st.power);
+  bx('TURBO SWITCH',[47,16,23,50,20,26],pcBlack,st.turbo);
+  bx('DISPLAY BOARD',[47,9,29,49,21,36],pcPCB,st.power);
+  cable('PANEL LEADS',[[48,18,24],[46,23,24],[34,24,8],[34,5,8]],'#a15643',.7);
+  cable('',[[48,9,25],[46,24,25],[29,24,50],[25,21,52]],'#4d504e',1);
+  return {parts,backing,labels};
+}
+function pcShell(st,m){
+  const p=[];
+  const add=(b,svg,near=true)=>p.push({box:[[b[0],b[1],b[2]],[b[3],b[4],b[5]]],svg,near});
+  const bx=(b,near)=>add(b,box(...b,pcCase,tone,1.1),near);
+  bx([0,0,3,50,26,4],false); bx([0,0,4,50,1,67],vis([0,-1,0])); bx([0,0,67,50,26,68],true);
+  let rear=box(0,1,4,1,26,67,pcCase,tone,1.1);
+  if(vis([-1,0,0])){
+    rear+=shape(on(PX(-.06),ellUV(14.5,58.5,5.7,5.7,32)),'#454a48',.8);
+    for(let z=54;z<=63;z+=1.4)rear+=pcPath([[-.1,10,z],[-.1,19,z]],METAL.m,.45);
+    rear+=shape(on(PX(-.1),rectUV(6,48,12,51)),'#302f2b',.7);
+    for(const [z,col] of [[13,'#5482b3'],[23,'#c6aa53']])rear+=shape(on(PX(-.1),rectUV(5,z-1,19,z+1)),col,.7);
+    for(let z=29;z<45;z+=3)rear+=shape(on(PX(-.1),rectUV(6,z,21,z+.7)),'#726d5f',.45);
+  }
+  add([0,1,4,1,26,67],rear,vis([-1,0,0]));
+  let front=box(49,1,4,50,26,67,pcCase,tone,1.2);
+  if(vis([1,0,0])){
+    const plane=PX(50.12);
+    front+=shape(on(plane,rrUV(3,48,24,61,1)),pcCase.l,.9)
+      +shape(on(PX(50.18),rectUV(5,55.3,23,56.8)),'#353735',.6)
+      +tx(50.2,14,59,'4x CD-ROM',2.2)
+      +shape(on(plane,rrUV(5,40,23,46,1)),pcCase.l,.8)
+      +shape(on(PX(50.2),rectUV(9.3,43.2,18.7,44.4)),'#343732',.7)
+      +shape(on(plane,rrUV(4,20,23,38,2)),m.l,1)
+      +shape(on(PX(50.2),rrUV(9,29,21,36,1)),'#24372d',.7)
+      +tx(50.3,15,30.6,st.power?(st.turbo?'66':'33'):'--',4.7,st.power?'#90f2a0':'#50654f',800)
+      +tx(50.3,16.5,36.8,'MHz',1.5)
+      +act('power',cylX(50.2,51,8.5,25,2.4,pcBlack,toneI,.8))
+      +act('turbo',box(50.2,16,23,51,20,26,m,toneI,.7))
+      +tx(50.3,8.5,20.8,'POWER',1.5)+tx(51.1,18,23.6,'T',1.5)
+      +tx(50.2,14,15,'PENTIUM',3,INK,800);
+    for(let z=7;z<13;z+=1.4)front+=pcPath([[50.2,5,z],[50.2,23,z]],'#746c59',.5);
+    front+=shape(on(PX(50.3),ellUV(6,32,1,1,12)),st.power?'#64d382':'#787e66',.5);
+  }
+  add([49,1,4,51,26,67],front,vis([1,0,0]));
+  const pp=ease(st.panel), py=26+13*pp, px=-4*pp, pz=-1.5*pp;
+  let panel=box(px,py,4+pz,49+px,py+.7,67+pz,pcCase,tone,1.3);
+  if(vis([0,1,0])){
+    panel+=shape(on(PY(py+.75),rectUV(3+px,8+pz,45+px,63+pz)),tone([0,1,0],pcCase),.8);
+    for(let x=8;x<35;x+=3)panel+=pcPath([[x+px,py+.8,12+pz],[x+px,py+.8,22+pz]],'#847d68',.5);
+    for(const x of [4,44])panel+=shape(on(PY(py+.8),ellUV(x+px,61+pz,.6,.6,10)),METAL.l,.5);
+  }
+  add([px,py,4+pz,49+px,py+.8,67+pz],act('panel',panel),vis([0,1,0]));
+  return p;
+}
+function pcMechanism(mech,media,xray){
+  const back=byDepth(mech.backing), contents=byDepth([...mech.parts,...media]);
+  return vis([0,1,0])?back+contents:contents+`<g opacity="${xray ? .18 : 1}">${back}</g>`;
+}
+function pcLabels(items){
+  const fig=document.getElementById('fig'), vb=fig.viewBox.baseVal, k=INK_K;
+  const u=window.LBL_U?LBL_U():0, fs=u?10*u:8.6*k, h=u?17*u:fs*1.8;
+  const all=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  const half=Math.ceil(all.length/2), columns=[all.slice(0,half),all.slice(half)];
+  const points=[];
+  for(const x of [pcBounds[0],pcBounds[1]])for(const y of [pcBounds[2],pcBounds[3]])for(const z of [0,68])points.push(P(x,y,z));
+  const left=Math.min(...points.map(p=>p[0])), right=Math.max(...points.map(p=>p[0]));
+  const buttons=document.getElementById('btns').getBoundingClientRect();
+  const topLeft=new DOMPoint(buttons.right,buttons.bottom+15).matrixTransform(fig.getScreenCTM().inverse()).y+h;
+  let svg='';
+  columns.forEach((col,index)=>{
+    col.sort((a,b)=>a.p[1]-b.p[1]);
+    const top=index===0?Math.max(vb.y+h,topLeft):vb.y+h*2, bottom=vb.y+vb.height-h;
+    const gap=Math.min(h+(u?3*u:3*k),(bottom-top)/Math.max(1,col.length-1));
+    let prev=top-gap;
+    col.forEach((it,i)=>{
+      const n=((window.__ln||(window.__ln={}))[it.text]||(__ln[it.text]=Object.keys(__ln).length+1));
+      const w=u?h*(n>9?1.3:1):it.text.length*fs*.62+fs*1.5;
+      const side=index===0?-1:1;
+      const x=Math.max(vb.x+w/2+2*k,Math.min(vb.x+vb.width-w/2-2*k,(side<0?left-w/2-10*k:right+w/2+10*k)));
+      const y=Math.max(prev+gap,Math.min(it.p[1],bottom-(col.length-1-i)*gap)); prev=y;
+      const ex=x-side*w/2;
+      svg+=`<g class="tag${it.on?' on':''}" data-n="${n}" data-t="${it.text}"><path d="M${f(it.p[0])} ${f(it.p[1])}L${f(ex-side*4*k)} ${f(y)}L${f(ex)} ${f(y)}" fill="none" stroke="${INK}" stroke-width="1"/><circle cx="${f(it.p[0])}" cy="${f(it.p[1])}" r="${f(1.4*k)}" fill="${INK}"/><rect x="${f(x-w/2)}" y="${f(y-h/2)}" width="${f(w)}" height="${f(h)}" rx="${f(h/2)}" fill="${it.on?'var(--accent,#f4b829)':'#fff4d6'}" stroke="${INK}" stroke-width="1.2"/><text x="${f(x)}" y="${f(y+fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">${u?n:it.text}</text></g>`;
+    });
+  });
+  return svg;
+}
+function pcScene(st,m){
+  const mech=pcInside(st), shell=pcShell(st,m), media=pcMedia(st), k=ease(st.xr||0);
+  let s=board(-5,0,75,43,2.5,3,WOOD);
+  s+=castShadow([...on(PX(0),pcProfile),...on(PX(50),pcProfile)],2.5,boardTop(-5,0,75,43,2.5,3));
+  const feet=[];
+  for(const x of [3,44])for(const y of [3,22])feet.push({box:[[x,y,2.5],[x+3,y+2,3.8]],svg:box(x,y,2.5,x+3,y+2,3.8,pcBlack,toneI,.8)});
+  if(k>0)s+=byDepth(feet)+xrGhost(byDepth(shell),'',k,pcProfile,0,50,pcCase)+`<g opacity="${k}">${pcMechanism(mech,media,true)}</g>`;
+  else{
+    const outside=byDepth(pcMedia(st,true));
+    s+=byDepth(feet)+(vis([1,0,0])?'':outside)+byDepth(shell.filter(p=>!p.near));
+    if(st.panel>0)s+=pcMechanism(mech,media,false);
+    s+=byDepth(shell.filter(p=>p.near))+(vis([1,0,0])?outside:'');
+  }
+  if(k>.6){
+    const labelInk=INK_K; INK_K*=.85;
+    s+=pcLabels(mech.labels); INK_K=labelInk;
+  }
+  return s;
+}
+let pcRunning=false;
+function pcRun(st,ui){
+  if(pcRunning)return;
+  pcRunning=true;
+  ui.animate(dt=>{
+    for(const key of ['floppy','cd','panel']){
+      if(key==='cd'&&!st.power)continue;
+      const goal=st[key+'T']; st[key]+=Math.sign(goal-st[key])*Math.min(Math.abs(goal-st[key]),dt/(key==='cd'?2.2:1.4));
+    }
+    if(st.power)st.angle=(st.angle+dt*9)%(Math.PI*2);
+    const more=st.power||['floppy','panel'].some(key=>st[key]!==st[key+'T']);
+    if(!more)pcRunning=false;
+    return more;
+  });
+}
+function pcPower(st,ui){st.power=!st.power;pcRun(st,ui);}
+function pcTurbo(st,ui){if(!st.power)return ui.flash('Press Power first');st.turbo=!st.turbo;}
+function pcFloppy(st,ui){st.floppyT=1-st.floppyT;pcRun(st,ui);}
+function pcCD(st,ui){if(!st.power)return ui.flash('Power the CD-ROM drive first');st.cdT=1-st.cdT;pcRun(st,ui);}
+function pcPanel(st,ui){st.panelT=1-st.panelT;pcRun(st,ui);}
+const pcUI=mountFigure({
+  fig:'PC',turn:'full',title:'Retro Pentium PC',size:[75,43,68],center:[33,20],palette:'mustard',
+  state:{power:false,turbo:false,angle:0,floppy:0,floppyT:0,cd:0,cdT:0,panel:0,panelT:0},scene:pcScene,
+  buttons:[{label:'Power',onClick:pcPower},{label:'Turbo',onClick:pcTurbo},{label:'Insert floppy',onClick:pcFloppy},{label:'Insert CD',onClick:pcCD},{label:'Side panel',onClick:pcPanel}],
+  acts:{power:(st,el,ui)=>pcPower(st,ui),turbo:(st,el,ui)=>pcTurbo(st,ui),panel:(st,el,ui)=>pcPanel(st,ui)},
+  stats:st=>[{label:'Panel preset',value:st.power?(st.turbo?'66 MHz':'33 MHz'):'Off',small:true},{label:'CD-ROM',value:st.power&&st.cd===1?'4x':'Idle',small:true}],
+  params:(st,q)=>{st.power=q.get('power')==='1';st.turbo=q.get('turbo')==='1';for(const key of ['floppy','cd','panel'])st[key]=st[key+'T']=q.get(key)==='1'?1:0;},
+});
+xrMount(()=>pcUI,()=> '');
+if(pcUI.st.power)pcRun(pcUI.st,pcUI);
+</script></body></html>
