@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pliers</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Book evidence is printed page 22 in the saved 1998 and 2016 scans. Two first-class levers share a fulcrum.
+   Squeeze brings the jaws onto the fixed rod, then applies 20 N at each handle. The rod stays in its bench collar.
+   Move hand slides the two illustrated finger pads from 34 to 60 mm perpendicular effort arm, at fixed contact
+   and fixed 20 N finger force. Each jaw then applies 34 or 60 N in the ideal frictionless model, Fh*dh = Fj*dj.
+   Release represents the operator opening ordinary unsprung pliers. There is no return spring or locking toggle.
+   Representative construction uses two steel halves and a fixed lap-joint rivet. KNIPEX's joint and lever pages
+   support this construction. Grip covers fade to expose steel tangs; the rivet shank is revealed through its head.
+   Teaching adaptations are the bench collar, base, illustrated finger pads, force arrows and moment-arm lines.
+   Parts. Structure has a board, collar and fixed test rod. Tool has two forged halves, each jaw joined through its
+   pivot eye to its handle tang, two attached grip covers, serrated jaw faces and jaw tips. The rivet passes through
+   both eyes and is retained by its head and upset tail. These are the real anatomy; overlays do not pad the count.
+   1988 is inaccessible and unverified. This is not an edition-union claim. */
+const plPivot = [38,38], plJawArm = 20, plFingerForce = 20;
+const plBounds = [6,110,5,71,0,26];
+const plState = {opening:0, openingT:0, effort:0, effortT:0, hand:34, handT:34, moving:false};
+const plSteel = matOf('#9baab0'), plCopper = matOf('#d69a53'), plSkin = matOf('#edbc94');
+const plAt = (st,s,x,y,z) => { const a=-s*st.opening, co=Math.cos(a), si=Math.sin(a); return [38+x*co-y*si,38+x*si+y*co,z]; };
+const plBox = pts => [0,1].map(k => [0,1,2].map(i => (k ? Math.max : Math.min)(...pts.map(p=>p[i])) + (k ? .2 : -.2)));
+function plPrism(points,z0,z1,material){
+  const a=points.map(p=>[p[0],p[1],z0]), b=points.map(p=>[p[0],p[1],z1]);
+  return loft(a,b,n=>tone(n,material))+shape(b,tone([0,0,1],material),.8)+hullInk([...a,...b],2);
+}
+function plArrow(a,b,col){
+  const pa=P(...a), pb=P(...b), dx=pb[0]-pa[0],dy=pb[1]-pa[1],len=Math.hypot(dx,dy)||1;
+  const ux=dx/len,uy=dy/len,h=3.5*INK_K;
+  return `<path d="M${pa.join(' ')}L${pb.join(' ')}" fill="none" stroke="${col}" stroke-width="2"/><path d="M${pb.join(' ')}L${pb[0]-ux*h-uy*h*.5} ${pb[1]-uy*h+ux*h*.5}L${pb[0]-ux*h+uy*h*.5} ${pb[1]-uy*h-ux*h*.5}Z" fill="${col}"/>`;
+}
+function plOverlayText(at,text,col='#24659a'){
+  const p=P(...at);return `<text x="${p[0]}" y="${p[1]}" font-family="ui-monospace,monospace" font-size="${7.2*INK_K}" font-weight="800" fill="${col}" text-anchor="middle">${text}</text>`;
+}
+function plScene(st,m){
+  const k=ease(st.xr||0), parts=[],labels=[];
+  const put=(pts,svg)=>parts.push({box:plBox(pts),svg});
+  const label=(at,text,on=false)=>labels.push({at,text,on});
+  let out=board(2,3,112,73,3,4,WOOD);
+  out+=castShadow([[13,29,24],[13,47,24],[105,8,14],[105,68,14]],3,boardTop(2,3,112,73,3,4));
+  put([[12,32,3],[24,44,6]],box(12,32,3,24,44,6,DARK));
+  put([[18,38,6],[18,38,10]],cyl(18,38,6,10,5,plCopper));
+  put([[14.5,34.5,10],[21.5,41.5,24]],cyl(18,38,10,24,3.5,METAL));
+  label([18,34,5],'FIXTURE BASE');label([18,42,8],'ROD COLLAR');
+  for(const s of [-1,1]){
+    const z=s===1?12:9, at=(x,y,dz=0)=>plAt(st,s,x,s*y,z+dz);
+    const plate=uv=>uv.map(([x,y])=>at(x,y)).map(p=>p.slice(0,2));
+    const jaw=[[-27,3.5],[-10,3.5],[-5,5],[-9,9],[-24,9],[-28,7]];
+    const neck=[[-11,3.5],[1,-5],[9,-7],[12,-4],[-7,9]];
+    for(const profile of [jaw,neck]){const pts=plate(profile);put([...pts.map(p=>[...p,z]),...pts.map(p=>[...p,z+3])],`<g opacity="${profile===neck?1-.84*k:1}">${plPrism(pts,z,z+3,plSteel)}</g>`);}
+    put([at(-6,-6),at(6,6,3)],`<g opacity="${1-.84*k}">${cyl(38,38,z,z+3,6,plSteel)}</g>`);
+    const path=[[5,-3],[18,-8],[35,-12],[52,-16],[66,-18]];
+    for(let i=0;i<path.length-1;i++){
+      const a=at(...path[i],1.5),b=at(...path[i+1],1.5);
+      put([a.map(v=>v-2),b.map(v=>v+2)],rod(a,b,1.9,plSteel,tone,1.2));
+      if(i>0)put([a.map(v=>v-3),b.map(v=>v+3)],`<g opacity="${1-.8*k}">${rod(a,b,3,m,tone,1.6)}</g>`);
+    }
+    for(let x=-26;x<=-12;x+=2){const a=at(x,3.5,.1),b=at(x,4.3,2.8);put([a,b],line([a,b],.7));}
+    const effortY=-(8+(st.hand-18)*10/48);
+    const finger=at(st.hand,effortY,5);
+    put([finger.map(v=>v-2.4),finger.map(v=>v+2.4)],rod([finger[0],finger[1],finger[2]-2],[finger[0],finger[1],finger[2]+2],2.4,plSkin));
+    label(at(-21,7,3),s===1?'JAW A':'JAW B',st.effort>0);
+    label(at(-27,5,3),s===1?'JAW TIP A':'JAW TIP B');
+    label(at(-18,3.6,2),s===1?'SERRATED FACE A':'SERRATED FACE B',st.effort>0);
+    label(at(12,-6,2),s===1?'STEEL LEVER A':'STEEL LEVER B',st.moving);
+    label(at(52,-16,3),s===1?'HANDLE GRIP A':'HANDLE GRIP B',st.effort>0);
+  }
+  put([[36.4,36.4,8],[39.6,39.6,16]],cyl(38,38,8,16,1.6,METAL));
+  put([[34.8,34.8,15],[41.2,41.2,16.2]],`<g opacity="${1-.85*k}">${cyl(38,38,15,16.2,3.2,METAL)}</g>`);
+  put([[35,35,8],[41,41,9]],cyl(38,38,8,9,3,METAL));
+  label([38,38,15.8],'RIVET HEAD');label([38,38,11.8],'FIXED PIVOT SHANK',st.moving);label([38,38,8.5],'RIVET TAIL');
+  out+=byDepth(parts);
+  if(k>.01){
+    let overlay='';
+    for(const s of [-1,1]){
+      const at=(x,y,z)=>plAt(st,s,x,s*y,z),y=-(8+(st.hand-18)*10/48),z=22;
+      overlay+=line([at(0,0,z),at(st.hand,0,z),at(st.hand,y,z)],.6).replaceAll(INK,'#24659a');
+      overlay+=line([at(-20,3.5,z),at(0,3.5,z),at(0,0,z)],.6).replaceAll(INK,'#a34829');
+      overlay+=plOverlayText(at(st.hand/2,-12,z+2),`${Math.round(st.hand)} mm EFFORT ARM`);
+      if(st.effort>.01){
+        overlay+=plArrow(at(st.hand,y-10,z),at(st.hand,y-2,z),'#24659a');
+        overlay+=plArrow(at(-20,1,z),at(-20,9,z),'#a34829');
+      }
+    }
+    overlay+=plOverlayText([25,38,25],'20 mm JAW ARM','#a34829');
+    overlay+=plOverlayText([72,63,22],'TWO FIRST-CLASS LEVERS');
+    overlay+=plOverlayText([82,9,22],'HAND POSITION COMPARISON');
+    if(st.effort>.01){overlay+=plOverlayText([99,38,24],'EFFORT 20 N EACH');overlay+=plOverlayText([8,38,26],'JAW RESISTANCE');}
+    out+=`<g opacity="${k}">${overlay}</g>`;
+  }
+  if(k>.6)out+=xrCallouts(labels,plBounds);
+  return out;
+}
+function plRun(st,ui){
+  if(st.moving)return;st.moving=true;
+  ui.animate(dt=>{
+    for(const [key,speed] of [['opening',.3],['effort',2],['hand',35]]){
+      const target=st[key+'T'];st[key]+=Math.sign(target-st[key])*Math.min(Math.abs(target-st[key]),dt*speed);
+    }
+    if(st.openingT===0&&st.opening>0)st.effort=0;
+    const more=['opening','effort','hand'].some(key=>st[key]!==st[key+'T']);st.moving=more;return more;
+  });
+}
+const ui=mountFigure({fig:'13',title:'Pliers',turn:'full',size:[114,76,28],palette:'tomato',state:plState,scene:plScene,
+  stats:st=>[
+    {label:'Force per jaw',value:`${(st.effort*plFingerForce*st.hand/plJawArm).toFixed(0)} N`},
+    {label:'Finger effort each',value:`${(st.effort*plFingerForce).toFixed(0)} N`,small:true},
+    {label:'Effort arm',value:`${Math.round(st.hand)} mm`,small:true}],
+  buttons:[
+    {label:'Squeeze',onClick:(st,ui)=>{st.openingT=0;st.effortT=1;plRun(st,ui);}},
+    {label:'Move hand',onClick:(st,ui)=>{st.handT=st.handT===34?60:34;plRun(st,ui);}},
+    {label:'Release',onClick:(st,ui)=>{st.effort=st.effortT=0;st.openingT=.18;plRun(st,ui);}}],
+  params:(st,q)=>{
+    if(q.get('hand')==='far')st.hand=st.handT=60;
+    if(q.get('open')==='1')st.opening=st.openingT=.18;
+    if(q.get('squeeze')==='1'){st.opening=st.openingT=0;st.effort=st.effortT=1;}
+  }
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
