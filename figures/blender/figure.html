@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Blender</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Blender — a countertop jug blender on a wooden board, with a bowl of fruit and a glass.
+   1 unit = 5 mm. x = depth (front at high x), y = width (+y goes left on screen), z = up.
+
+   TRUTH FIRST (how a real one is built)
+   - The base holds a vertical universal (series-wound) motor, about 1000 W, spinning up to ~20,000 rpm. Its shaft runs
+     in a bearing at each end bracket. The carbon brushes ride on the commutator. The field coils sit on the stator poles
+     either side of the armature.
+   - Speed: a rotary switch picks a tap on the field winding. With less field winding in the circuit the field is
+     weaker, so a series motor runs faster. PULSE is a momentary switch that runs it at HIGH only while held.
+   - A cooling fan on the bottom of the shaft pulls air in through the base plate and pushes it out through slots in the
+     back. The motor stands on rubber mounts to soak up vibration. Suction feet hold the base to the counter.
+   - On top of the shaft, a toothed motor coupling (the male drive) pokes up through the jar pad. The jar's blade
+     assembly has a female drive socket underneath that drops over it, so the jar lifts straight off.
+   - The blade assembly is sealed through the jar floor (a seal ring, a bearing housing, a nut). Four steel blades: two
+     bent up and two bent down, so the food is pulled down into a vortex and thrown out against the walls.
+   - Interlock: the motor gets no power unless the safety microswitch in the base is closed. Locking the lid folds the
+     latch over the handle and pushes a spring-loaded rod down inside the hollow handle. The rod's pin goes through the
+     collar into a hole in the base top and closes the switch, which only works with the jar seated and the lid locked.
+   - A thermal cutout on the field winding opens if the motor overheats. An X2 capacitor and a choke on the small board
+     keep brush sparks out of the mains.
+
+   PARTS LIST
+   CASE       base housing . front control panel . jar pad . exhaust vents . rating plate . 4 suction feet . base plate
+              with air intake slots . cord strain relief + power cord + plug
+   STRUCTURE  lower motor bracket (cross) . top motor bracket . two tie posts . two rubber mounts
+   MOTOR      shaft . bottom bearing . top bearing . cooling fan . commutator . two carbon brushes in brass holders on
+              stands . armature (laminated, end windings) . two stator poles . four field-coil ends . thermal cutout .
+              motor coupling (star)
+   CONTROLS   speed knob (OFF/LOW/HIGH) . rotary speed switch + terminal block . pulse button . pulse microswitch .
+              ready light . control board on standoffs . X2 capacitor . choke . safety microswitch + plunger + bracket
+   POWER      cord grip . live, neutral, switched and field-tap wires
+   JAR        clear jar (2 L, marks) . jar collar . drive socket . lower bearing housing . seal ring . bearing housing .
+              blade shaft . hub . four blades . blade nut . handle (grip, top arm, lower arm) . interlock rod . rod spring
+              . rod button . link + pin
+   LID        lid . filler cap with its grip bar . spout opening . spout cap (flip) . latch tab with hook lip
+   PROPS      wooden board . fruit bowl (strawberries, mango, banana) . glass */
+
+const JX = 34, JY = 62, BH = 3, FZ = 4.5, BZT = 38, BWD = 80, BDP = 112;      // jar axis, board, base bottom / top
+const KY = JY + 4, KZ = 20, PBY = JY - 7, PBZ = 20, LEDZ = 26.4;            // speed knob, pulse button, ready light
+const GX = 34, GY = 18, BWX = 57, BWY = 97;                                 // glass, fruit bowl
+const LOFF = [62 - JX, 26 - JY, BH + .05 - 86];                             // where the lid is set down while filling
+const LIQ = .42, BL_RPM = 21000;
+const BL_B = [JX - 25, JX + 25, JY - 21, JY + 21, 0, 94];
+const BTOPP = boardTop(0, 0, BWD, BDP, BH, 6);
+const BL_STEEL = matOf('#b9c0c4'), BL_LAM = matOf('#8d969b'), BL_COP = { l:'#f0b07a', m:'#d08a52', d:'#9a5a2c' }, BL_BRASS = matOf('#d8b25a');
+const BL_RUB = matOf('#3a3632'), BL_WHITE = matOf('#ece8dc'), BL_RED = matOf('#e2483d'), BL_YEL = matOf('#f2c230'), BL_PCB = matOf('#4f9a62');
+const BL_PADM = matOf('#4f4a45'), BL_TAB = matOf('#7d868c'), BLSM = { l:'#f6a49a', m:'#ef8a80', d:'#c4645b' }, BL_BOWL = PALS.cobalt;
+const BL_FRC = { s:'#e2483d', m:'#f4a52a', b:'#f3e2a0' };
+// type, place in the bowl (offset from its centre), place in the jar (offset from the axis)
+const BL_FR = [
+  ['s', [-3, -2.2, 6.3], [-4, -3.2, 50.6]], ['m', [2.6, -3, 6.2], [3.6, -4, 50.4]], ['b', [.2, 3.4, 5.6], [0, 4.6, 50]],
+  ['s', [4.2, 1.8, 6.5], [4.6, 3, 50.8]], ['m', [-4.2, 2.6, 6.4], [-4.6, 3.4, 51.2]], ['s', [.2, -.4, 8.4], [0, 0, 54.4]],
+  ['b', [-1.4, -4.8, 6], [-2, -5.2, 53]], ['m', [2.8, -.2, 8.6], [3, 1, 55.2]] ];
+
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const blXF = z => 55 - 2*(z - FZ)/(BZT - FZ);                               // the sloping front face, x at height z
+const blXB = z => 13 + 2*(z - FZ)/(BZT - FZ);                               // the back face
+const blRing = z => { const t = (z - FZ)/(BZT - FZ); return on(PZ(z), rrUV(13 + 2*t, 43 + 2*t, 55 - 2*t, 81 - 2*t, 6 - t)); };
+const BA = blRing(FZ), BB = blRing(BZT);
+const BL_FN = norm([BZT - FZ, 0, 2]), BL_BN = norm([-(BZT - FZ), 0, 2]);
+const jarHW = z => 9.5 + 3*(z - 46)/40;
+const jarRing = (z, ins = 0) => { const h = jarHW(z) - ins, r = 4 + (z - 46)/40 - ins*.5; return on(PZ(z), rrUV(JX - h, JY - h, JX + h, JY + h, r)); };
+const blBoxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const bxI = (x0, y0, z0, x1, y1, z1, mat, w = .7) => ({ box: [[x0, y0, z0], [x1, y1, z1]], svg: box(x0, y0, z0, x1, y1, z1, mat, toneI, w) });
+const cyI = (x, y, z0, z1, r, mat, w = .8, n = 18) => ({ box: [[x - r, y - r, z0], [x + r, y + r, z1]], svg: cyl(x, y, z0, z1, r, mat, toneI, w, n) });
+const cxI = (x0, x1, y, z, r, mat, w = .8, n = 16) => ({ box: [[x0, y - r, z - r], [x1, y + r, z + r]], svg: cylX(x0, x1, y, z, r, mat, toneI, w, n) });
+const blRod = (a, b, r, mat, w = .6) => ({ box: blBoxOf([a, b], r + .05), svg: rod(a, b, r, mat, toneI, w) });
+const blStroke = (pts, col, w, wi = w + 1) => { const d = pd(pts, false);
+  return `<path d="${d}" fill="none" stroke="${INK}" style="stroke-width:${f(wi)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" style="stroke-width:${f(w)}" stroke-linecap="round" stroke-linejoin="round"/>`; };
+const blTxB = (x, y, z, str, size, col = INK, weight = 700) => `<text transform="${txM(P(x,y,z), Dv(0,1,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+
+/* ---------- shapes under any placement F (the jar tilts when it pours, the lid flies to the board) ---------- */
+function tBox(F, x0, y0, z0, x1, y1, z1, mat, w = .8, sh = toneI){
+  const c = [[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0],[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]].map(F), cen = avg(c);
+  let sv = '';
+  for (const q of [[0,1,2,3],[4,5,6,7],[0,1,5,4],[1,2,6,5],[2,3,7,6],[3,0,4,7]]){ const pts = q.map(i => c[i]);
+    let nr = norm(cross(sub(pts[1], pts[0]), sub(pts[3], pts[0]))); if (dot(nr, sub(avg(pts), cen)) < 0) nr = nr.map(v => -v);
+    if (vis(nr)) sv += shape(pts, sh(nr, mat), w); }
+  return { box: blBoxOf(c), svg: sv };
+}
+function tCyl(F, cx, cy, z0, z1, r, mat, w = .8, n = 18, sh = toneI){
+  const A = on(PZ(z0), ellUV(cx, cy, r, r, n)).map(F), B = on(PZ(z1), ellUV(cx, cy, r, r, n)).map(F);
+  const ax = sub(F([cx, cy, z1]), F([cx, cy, z0])), up = vis(ax), cap = up ? B : A, cn = norm(up ? ax : ax.map(v => -v));
+  return { box: blBoxOf([...A, ...B]), svg: loft(A, B, nr => sh(nr, mat)) + fill(pd(cap), sh(cn, mat)) + hullInk([...A, ...B], w) + ink(pd(cap), w*.8) };
+}
+const blQuad = (q, mat = METAL, w = .6) => { let nr = norm(cross(sub(q[1], q[0]), sub(q[3], q[0]))); if (!vis(nr)) nr = nr.map(v => -v); return shape(q, toneI(nr, mat), w); };
+const blBall = (p, r, col) => { const [X, Y] = P(...p), R = r*CAM_K;
+  return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="${col}" stroke="${INK}" stroke-width=".8"/><circle cx="${f(X - .35*R)}" cy="${f(Y - .38*R)}" r="${f(.3*R)}" fill="#ffffff" opacity=".4"/>`; };
+// lines along a turning cylinder (armature slots, commutator bars), only on the side toward the viewer
+const blSpin = (x, y, z0, z1, r, a0, n, w = .5) => { let d = '';
+  for (let i = 0; i < n; i++){ const a = a0 + i*2*Math.PI/n, c = Math.cos(a), s2 = Math.sin(a); if (!vis([c, s2, 0])) continue; d += pd([[x + r*c, y + r*s2, z0], [x + r*c, y + r*s2, z1]], false); }
+  return d ? `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${w}"/>` : ''; };
+// a cable cut into short pieces, each with its own box, so it sorts with the solids it passes
+const blBend = (pts, r = 1.2) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k])*d/la), q = c.map((v, k) => b[k] + (v - b[k])*d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+const blWire = (pts, col, w = .3, Lseg = 3) => { const q = blBend(pts), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < Lseg){ len += Math.hypot(...q[j].map((v, k) => v - q[j - 1][k])); j++; }
+    if (len < Lseg) while (j < q.length - 1) j++;
+    const seg = q.slice(i, j + 1), d = pd(seg, false);
+    out.push({ box: blBoxOf(seg), svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w + .9)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linecap="round" stroke-linejoin="round"/>` });
+    i = j; }
+  return out; };
+
+/* ---------- where things are ---------- */
+// the jar: seated, or lifted, tipped toward the glass (about its -y bottom edge) and carried back over the base
+function blJarT(st){
+  const pp = st.pour || 0, Lz = 5*ease(clamp01(pp/.3)), tk = ease(clamp01((pp - .3)/.7)), th = 95*tk*Math.PI/180, sy = 17*tk;
+  const c = Math.cos(th), s2 = Math.sin(th), py = JY - 11, pz = 38.3;
+  if (pp <= 0) return p => p;
+  return p => { const dy = p[1] - py, dz = p[2] - pz; return [p[0], py + dy*c - dz*s2 + sy, pz + dy*s2 + dz*c + Lz]; };
+}
+// the lid: on the jar, or on its way to / resting on the board
+function blLidF(st){
+  if (st.lid < .001) return blJarT(st);
+  const e = st.lid, eh = ease(clamp01((e - .15)/.6)), zo = e < .3 ? 10*e/.3 : 10 + (LOFF[2] - 10)*(e - .3)/.7;
+  return p => [p[0] + LOFF[0]*eh, p[1] + LOFF[1]*eh, p[2] + zo];
+}
+const blSafe = st => st.latch > .99 && st.lid < .001 && (st.pour || 0) < .001;
+const blRodD = st => st.lid < .001 ? 1.2*st.latch : 0;                         // how far the latch pushes the rod down
+const blPinTip = st => (st.pour || 0) < .001 && st.lid < .001 ? 38.5 - blRodD(st) : 99;
+function blChunkAt(i, st){
+  const [, b, j] = BL_FR[i], u = clamp01((st.fill - i*.07)/.45);
+  const P0 = [BWX + b[0], BWY + b[1], b[2]];
+  let dx = j[0], dy = j[1], dz = j[2];
+  if (u >= 1 && st.swirl){ const a = st.swirl*(1 + .15*i), c = Math.cos(a), s2 = Math.sin(a); [dx, dy] = [dx*c - dy*s2, dx*s2 + dy*c]; dz += .6*Math.sin(st.swirl*2 + i)*st.spd; }
+  const R = [JX + dx, JY + dy, dz], Q = [R[0], R[1], 92];
+  if (u <= 0) return { where: 'bowl', p: P0 };
+  if (u < .7){ const t = u/.7, Cc = [(P0[0] + Q[0])/2, (P0[1] + Q[1])/2, 118]; return { where: 'fly', p: [0,1,2].map(a => (1-t)*(1-t)*P0[a] + 2*(1-t)*t*Cc[a] + t*t*Q[a]) }; }
+  const t = (u - .7)/.3, z = 92 - (92 - R[2])*t*t; return { where: z > 86 ? 'fly' : 'jar', p: [R[0], R[1], z] };
+}
+function blChunk(i, p, st){
+  const type = BL_FR[i][0], sc = st.fill >= 1 ? Math.pow(Math.max(0, 1 - st.mix/.9), .8) : 1, col = mix(BL_FRC[type], BLSM.m, .6*st.mix);
+  if (sc < .05) return null;
+  if (type === 's'){ const r = 1.9*sc; return { box: [[p[0]-r, p[1]-r, p[2]-r], [p[0]+r, p[1]+r, p[2]+r]], svg: blBall(p, r, col) }; }
+  if (type === 'm'){ const h = 1.3*sc; return bxI(p[0]-h, p[1]-h, p[2]-h, p[0]+h, p[1]+h, p[2]+h, matOf(col), .7); }
+  const r = 1.8*sc, hh = .55*sc; return cyI(p[0], p[1], p[2] - hh, p[2] + hh, r, matOf(col), .7, 16);
+}
+
+/* ---------- the smoothie: whatever part of the jar lies below a level surface, found for any tilt ---------- */
+function blLiquid(F, frac, op, swirl){
+  if (frac < .004) return { svg: '', h: -1 };
+  const A = jarRing(46.7, .35).map(F), B = jarRing(86, .35).map(F), n = A.length;
+  const zs = [...A, ...B].map(p => p[2]);
+  const fr = h => { let s2 = 0; for (let i = 0; i < n; i++){ const lo = Math.min(A[i][2], B[i][2]), hi = Math.max(A[i][2], B[i][2]); s2 += hi - lo < 1e-6 ? (h > lo ? 1 : 0) : clamp01((h - lo)/(hi - lo)); } return s2/n; };
+  let lo = Math.min(...zs), hi = Math.max(...zs);
+  for (let it = 0; it < 26; it++){ const md = (lo + hi)/2; if (fr(md) < frac) lo = md; else hi = md; }
+  const h = (lo + hi)/2, cut = [], edges = [];
+  for (let i = 0; i < n; i++){ edges.push([A[i], B[i]], [A[i], A[(i + 1) % n]], [B[i], B[(i + 1) % n]]); }
+  for (const [p, q] of edges) if ((p[2] - h)*(q[2] - h) < 0){ const t = (h - p[2])/(q[2] - p[2]); cut.push(p.map((v, k) => v + (q[k] - v)*t)); }
+  const below = [...A, ...B].filter(p => p[2] < h);
+  const sil = hull([...below, ...cut].map(p => P(...p))), top = cut.length > 2 ? hull(cut.map(p => P(...p))) : [];
+  let sv = fill(sp(sil), BLSM.m) + (top.length > 2 ? fill(sp(top), BLSM.l) + ink(sp(top), .6) : '');
+  if (swirl > .02 && top.length > 2){ const rv = 1 + 4*swirl;
+    sv += fill(pd(on(PZ(h + .03), ellUV(JX, JY, rv, rv, 20))), BLSM.d, 'opacity=".75"');
+    let d = ''; for (let j = 0; j < 3; j++){ const pts = []; for (let t = 0; t <= 8; t++){ const a = swirl*0 + (window.__blSw || 0) + j*2.09 + t*.32, r = rv + t*.55; pts.push([JX + r*Math.cos(a), JY + r*Math.sin(a), h + .04]); } d += pd(pts, false); }
+    sv += `<path d="${d}" fill="none" stroke="${BLSM.d}" stroke-width=".8" stroke-linecap="round"/>`; }
+  return { svg: `<g opacity="${f(op)}">${sv}</g>`, h };
+}
+
+/* ---------- the base ---------- */
+const BL_CORD_ON = [[10.6, 72, 9], [8.5, 72.6, 7.5], [6.5, 73.6, 4.6], [4.5, 75, 3.75], [1.5, 77, 3.75], [0, 77.8, 3.7]];
+const BL_CORD_OFF = [[0, 77.8, 3.7], [-1, 78.3, 3.1], [-1.6, 78.8, 1.6], [-2.6, 79.4, .6], [-8, 82, .5], [-15, 83, .6]];
+const blCord = pts => blStroke(pts, DARK.m, 1.6, 2.7);
+const BL_FEET = [[18.5, 48.5], [49.5, 48.5], [18.5, 75.5], [49.5, 75.5]];
+function blControls(st){
+  const xk = blXF(KZ), a = (-60 + 60*st.kn)*Math.PI/180, dy = Math.sin(a), dz = Math.cos(a);
+  const ridge = blRod([xk + 3.6, KY + 3.1*dy, KZ - 3.1*dz], [xk + 3.6, KY - 3.1*dy, KZ + 3.1*dz], .75, DARK, .8);
+  if (facing([1, 0, 0])){ const [X, Y] = P(xk + 4.4, KY - 2.6*dy, KZ + 2.6*dz); ridge.svg += `<circle cx="${f(X)}" cy="${f(Y)}" r=".7" fill="#f4efe2"/>`; }
+  const knob = byDepth([cxI(xk, xk + .8, KY, KZ, 4.8, METAL, .9, 24), cxI(xk + .8, xk + 3, KY, KZ, 4, DARK, 1.1, 22), ridge]);
+  const xp = blXF(PBZ), pr = st.pulseT > 0 ? .7 : 0;
+  return act('knob', knob) + act('pulse', cylX(xp, xp + 1.5 - pr, PBY, PBZ, 2.4, BL_RED, toneI, 1, 18));
+}
+function blBody(st, m, k){
+  const FRONT = facing(BL_FN), BACK = facing(BL_BN);
+  const feet = byDepth(BL_FEET.map(([x, y]) => cyI(x, y, BH, FZ + .3, 2.2, BL_RUB, .8, 14)));
+  let body = loft(BA, BB, n => tone(n, m)) + fill(pd(BB), tone([0, 0, 1], m)) + ink(pd(BB), 1.5);
+  body += shape(on(PZ(BZT + .02), ellUV(JX, JY + 10.5, .9, .9, 12)), '#1b1816', .6);                     // interlock hole
+  if (FRONT){ const FP = (u, v, d = .08) => [blXF(v) + d, u, v];
+    body += shape(rrUV(JY - 11, 11, JY + 11, 29, 2.5).map(([u, v]) => FP(u, v)), '#e9ecec', 1.2);
+    ['OFF', 'LOW', 'HIGH'].forEach((t, i) => { const a = (-60 + 60*i)*Math.PI/180; body += tx(blXF(KZ) + .12, KY - 6.6*Math.sin(a), KZ + 6.6*Math.cos(a) - .7, t, 1.8, INK, 800); });
+    body += tx(blXF(15) + .12, PBY, 15.4, 'PULSE', 1.7, INK, 800);
+    body += shape(ellUV(PBY, LEDZ, .9, .9, 12).map(([u, v]) => FP(u, v, .12)), blSafe(st) ? '#43c25c' : '#6d6862', .6);
+    body += tx(blXF(24) + .12, PBY, 23.6, 'READY', 1.5, INK, 700);
+    body += tx(blXF(32) + .1, JY, 32.4, 'VORTEX', 3, mix(m.d, '#000000', .25), 800); }
+  if (BACK){ const BP = (u, v, d = .08) => [blXB(v) - d, u, v];
+    for (let i = 0; i < 6; i++){ const z = 22 + i*2.2; body += shape(rrUV(JY - 12, z, JY + 8, z + 1, .5).map(([u, v]) => BP(u, v)), '#2b2523', .6); }
+    body += shape(rrUV(JY - 13, 9.5, JY - 1, 16.5, 1).map(([u, v]) => BP(u, v)), '#f3f0e6', .8);
+    body += blTxB(blXB(14) - .14, JY - 7, 13.8, '120V 60HZ', 1.5, INK, 800) + blTxB(blXB(11) - .14, JY - 7, 11.2, '1000 W', 1.5, INK, 700); }
+  body += hullInk([...BA, ...BB], 2.6);
+  const ctl = blControls(st), relief = cylX(10.6, blXB(9), 72, 9, 1.7, DARK, toneI, .9, 14);
+  const pre = (FRONT ? '' : ctl) + (BACK ? '' : relief), post = (FRONT ? ctl : '') + (BACK ? relief : '');
+  if (k <= 0) return pre + feet + body + post;
+  return pre + xrGhostRings(feet + body, '', k, BA, BB, m) + `<g opacity="${f(k)}">${blMech(st)}</g>` + post;
+}
+function blPad(st, k){
+  const A = on(PZ(BZT), rrUV(JX - 10, JY - 10, JX + 10, JY + 10, 3)), B = on(PZ(40.5), rrUV(JX - 10, JY - 10, JX + 10, JY + 10, 3));
+  const pad = loft(A, B, n => tone(n, BL_PADM)) + fill(pd(B), tone([0, 0, 1], BL_PADM)) + ink(pd(B), 1) + hullInk([...A, ...B], 1.6);
+  let cp = cyl(JX, JY, 40.5, 42.3, 2.6, BL_STEEL, toneI, .9, 20), star = [];
+  for (let i = 0; i < 12; i++){ const t = st.ma + i*Math.PI/6, r = i % 2 ? 1.1 : 2.3; star.push([JX + r*Math.cos(t), JY + r*Math.sin(t), 42.33]); }
+  cp += shape(star, '#5c6369', .5);
+  return (k > 0 ? `<g opacity="${f(1 - .8*k)}">${pad}</g>` : pad) + cp;
+}
+// inside the base: the motor and everything that switches it
+function blMech(st){
+  const parts = [], a = st.ma, push = it => parts.push(it);
+  { let sv = shape(on(PZ(5.3), rrUV(13.8, 43.8, 54.2, 80.2, 5.5)), '#a9b0b3', .9), d = '';
+    for (let i = 0; i < 12; i++){ const t = i*Math.PI/6, c = Math.cos(t), s2 = Math.sin(t); d += pd([[JX + 3.2*c, JY + 3.2*s2, 5.32], [JX + 7*c, JY + 7*s2, 5.32]], false); }
+    push({ box: [[13.5, 43.5, 4.5], [54.5, 80.5, 5.3]], svg: sv + `<path d="${d}" fill="none" stroke="#2b2523" stroke-width="1.3" stroke-linecap="round"/>` }); }
+  // cooling fan: radial vanes under a disc, on the bottom of the shaft
+  { const vanes = [];
+    for (let i = 0; i < 8; i++){ const t = a + i*Math.PI/4, c = Math.cos(t), s2 = Math.sin(t);
+      vanes.push({ at: [JX + 4*c, JY + 4*s2, 6.5], svg: blQuad([[JX + 1.4*c, JY + 1.4*s2, 6], [JX + 7*c, JY + 7*s2, 6], [JX + 7*c, JY + 7*s2, 7.1], [JX + 1.4*c, JY + 1.4*s2, 7.1]], BL_WHITE, .6) }); }
+    let sv = byDepth(vanes) + cyl(JX, JY, 7.1, 7.6, 7.3, BL_WHITE, toneI, .9, 28), d = '';
+    for (let i = 0; i < 4; i++){ const t = a + i*Math.PI/2; d += pd([[JX + 1.8*Math.cos(t), JY + 1.8*Math.sin(t), 7.62], [JX + 6.6*Math.cos(t), JY + 6.6*Math.sin(t), 7.62]], false); }
+    sv += `<path d="${d}" fill="none" stroke="${INK}" stroke-width=".5"/>` + cyl(JX, JY, 7.6, 8, 1.4, BL_STEEL, toneI, .7, 14);
+    push({ box: [[JX - 7.3, JY - 7.3, 6], [JX + 7.3, JY + 7.3, 8]], svg: sv }); }
+  // frame: rubber mounts, a cross-shaped lower bracket, two tie posts, the top bracket
+  for (const sy of [-1, 1]){ const y0 = sy > 0 ? JY + 2 : JY - 11.3, y1 = sy > 0 ? JY + 11.3 : JY - 2;
+    push(cyI(JX, JY + 10.5*sy, 5.3, 8, 1.7, BL_RUB, .8, 14));
+    push(bxI(JX - 2, y0, 8, JX + 2, y1, 9.6, BL_STEEL)); push(bxI(JX - 2, y0, 27.5, JX + 2, y1, 29, BL_STEEL));
+    push(blRod([JX, JY + 10.5*sy, 9.6], [JX, JY + 10.5*sy, 27.5], .7, BL_STEEL, .7)); }
+  for (const sx of [-1, 1]) push(bxI(sx > 0 ? JX + 2 : JX - 9, JY - 2, 8, sx > 0 ? JX + 9 : JX - 2, JY + 2, 9.6, BL_STEEL));
+  push(bxI(JX - 2, JY - 2, 8, JX + 2, JY + 2, 9.6, BL_STEEL)); push(bxI(JX - 2, JY - 2, 27.5, JX + 2, JY + 2, 29, BL_STEEL));
+  push(cyI(JX, JY, 9.6, 10.6, 1.8, BL_BRASS)); push(cyI(JX, JY, 29, 30.2, 1.8, BL_BRASS));
+  for (const [z0, z1] of [[5.4, 6], [10.6, 11], [14.5, 15.5], [26, 27.5], [30.2, 40.5]]) push(cyI(JX, JY, z0, z1, .7, BL_STEEL, .6, 12));
+  // commutator, brushes in brass holders on stands
+  push({ box: [[JX - 2.5, JY - 2.5, 11], [JX + 2.5, JY + 2.5, 14.5]], svg: cyl(JX, JY, 11, 14.5, 2.5, BL_COP, toneI, .8, 20) + blSpin(JX, JY, 11.1, 14.4, 2.52, a, 12, .45) });
+  for (const sx of [-1, 1]){
+    push(bxI(sx > 0 ? JX + 3 : JX - 8.4, JY - 1.2, 11.7, sx > 0 ? JX + 8.4 : JX - 3, JY + 1.2, 13.8, BL_BRASS));
+    push(bxI(sx > 0 ? JX + 2.5 : JX - 3, JY - .9, 12, sx > 0 ? JX + 3 : JX - 2.5, JY + .9, 13.5, BL_RUB));
+    push(bxI(sx > 0 ? JX + 7.6 : JX - 8.4, JY - 1, 9.6, sx > 0 ? JX + 8.4 : JX - 7.6, JY + 1, 11.7, BL_STEEL)); }
+  // armature with its end windings, between the two stator poles; field-coil ends stick out of each pole
+  push(cyI(JX, JY, 15.5, 16.8, 4, BL_COP));
+  push({ box: [[JX - 4.4, JY - 4.4, 16.8], [JX + 4.4, JY + 4.4, 24.7]], svg: cyl(JX, JY, 16.8, 24.7, 4.4, BL_LAM, toneI, .9, 24) + blSpin(JX, JY, 16.9, 24.6, 4.42, a, 12, .55) });
+  push(cyI(JX, JY, 24.7, 26, 4, BL_COP));
+  for (const sy of [-1, 1]){ const y0 = sy > 0 ? JY + 4.8 : JY - 9.8, y1 = sy > 0 ? JY + 9.8 : JY - 4.8, yf = sy > 0 ? y1 : y0;
+    let sv = box(JX - 6, y0, 15, JX + 6, y1, 26.5, BL_LAM, toneI, .8);
+    if (facing([0, sy, 0])){ let d = ''; for (let z = 16.2; z < 26; z += 1.15) d += pd([[JX - 5.8, yf + .03*sy, z], [JX + 5.8, yf + .03*sy, z]], false); sv += `<path d="${d}" fill="none" stroke="${INK}" stroke-width=".35" opacity=".55"/>`; }
+    push({ box: [[JX - 6, y0, 15], [JX + 6, y1, 26.5]], svg: sv });
+    for (const sx of [-1, 1]) push(bxI(sx > 0 ? JX + 6 : JX - 8.3, sy > 0 ? JY + 5 : JY - 9.4, 16.5, sx > 0 ? JX + 8.3 : JX - 6, sy > 0 ? JY + 9.4 : JY - 5, 25, BL_COP, .8)); }
+  push(bxI(JX + 8.3, JY + 5.8, 21.5, JX + 9.2, JY + 8, 23.5, matOf('#d9d4c4'), .6));                        // thermal cutout
+  // speed switch behind the knob, pulse microswitch behind the button
+  const xk = blXF(KZ);
+  push(cxI(46.5, 53.9, KY, KZ, 3.2, BL_WHITE, .9, 18)); push(cxI(53.9, xk, KY, KZ, .7, BL_STEEL, .5, 10));
+  push(bxI(45.2, KY - 2.4, KZ - 2.4, 46.5, KY + 2.4, KZ + 2.4, BL_BRASS, .6));
+  push(bxI(50.4, PBY - 2, PBZ - 1.6, 53.9, PBY + 2, PBZ + 1.6, BL_RUB, .7)); push(cxI(53.9, blXF(PBZ) + .05, PBY, PBZ, .6, BL_WHITE, .5, 10));
+  // control board on standoffs: X2 capacitor and choke
+  push(bxI(43.5, JY - 11, 6.6, 53, JY + 3, 7.1, BL_PCB, .7));
+  for (const [x, y] of [[44.2, JY - 10.3], [52.3, JY - 10.3], [44.2, JY + 2.3], [52.3, JY + 2.3]]) push(cyI(x, y, 5.3, 6.6, .4, BL_WHITE, .4, 8));
+  push(bxI(44.5, JY - 9.5, 7.1, 48, JY - 4.5, 10.4, BL_YEL, .7)); push(cyI(50.8, JY - 1, 7.1, 9, 1.8, BL_COP, .7, 16));
+  // safety switch under the hole in the base top: the interlock pin pushes its plunger
+  const plTop = Math.min(37.8, blPinTip(st));
+  push(bxI(JX - 2, JY + 8.5, 33, JX + 2, JY + 12.5, 36.3, BL_RUB, .8)); push(cyI(JX, JY + 10.5, 36.3, plTop, .5, BL_WHITE, .5, 10));
+  push(bxI(JX + 2, JY + 8.5, 33, JX + 2.6, JY + 12.5, BZT, BL_STEEL, .6));
+  push(bxI(13.6, 70.5, 7.3, 17.5, 73.5, 10.7, BL_RUB, .8));                                                // cord grip
+  // wiring: live through the safety switch to the speed switch, LOW to the whole field, HIGH to a tap; neutral to a brush
+  const LIVE = '#9a5a2c', NEU = '#3c6fb4', SW = '#e2483d', TAP = '#f2a23a';
+  for (const [pts, col] of [
+    [[[17.5, 72.8, 9], [20, 76, 9.5], [24, 76, 30], [32, 73.5, 34]], LIVE],
+    [[[36, 73.5, 34], [44, 73, 30], [46, 68, 22], [45.2, KY + 1, KZ + 1]], SW],
+    [[[45.2, KY - 1, KZ - 1.5], [43.5, 68, 19.5], [42.3, 68.5, 20]], SW],
+    [[[45.2, KY - 2, KZ - 2], [43.6, 60, 17], [42.3, 55.5, 20]], TAP],
+    [[[17.5, 71.2, 9], [22, 66, 10.5], [25.6, 62, 12.8]], NEU],
+    [[[42.4, 62, 12.8], [43.6, 58.5, 14.5], [42.3, 55.5, 17.5]], NEU],
+    [[[50.4, PBY + 1, PBZ], [47, 60, 20.5], [45.2, KY - 1.5, KZ]], SW],
+    [[[47, JY - 4.5, 8.6], [45.5, 61, 14], [45.2, KY - 2, KZ - 2.2]], LIVE] ]) parts.push(...blWire(pts, col, .3));
+  return byDepth(parts);
+}
+
+/* ---------- the jar, its blade assembly, handle and lid ---------- */
+function blLid(st, k){
+  const FL = blLidF(st), ax = sub(FL([JX, JY, 1]), FL([JX, JY, 0])), top = vis(ax);
+  const A = on(PZ(86), rrUV(JX - 12.6, JY - 12.6, JX + 12.6, JY + 12.6, 4.5)).map(FL), B = on(PZ(90), rrUV(JX - 12.6, JY - 12.6, JX + 12.6, JY + 12.6, 4.5)).map(FL);
+  const cap = top ? B : A;
+  let body = loft(A, B, n => tone(n, DARK)) + fill(pd(cap), tone(norm(top ? ax : ax.map(v => -v)), DARK)) + ink(pd(cap), 1.1);
+  if (top) body += shape(on(PZ(90.03), rrUV(JX - 3, JY - 12, JX + 3, JY - 8, 1.2)).map(FL), '#1b1816', .7);
+  body += hullInk([...A, ...B], 1.8);
+  const fc = tCyl(FL, JX, JY + 1.5, 90, 91.4, 3.4, matOf('#5d5852'), .9, 20), bar = tBox(FL, JX - 2.4, JY + 1, 91.4, JX + 2.4, JY + 2, 92.4, matOf('#5d5852'), .8);
+  const ps = st.cap*115*Math.PI/180, cps = Math.cos(ps), sps = Math.sin(ps);
+  const Ff = p => FL([p[0], JY - 8 - (p[1]*cps - p[2]*sps), 90 + p[1]*sps + p[2]*cps]);
+  const flap = tBox(Ff, JX - 3.2, 0, 0, JX + 3.2, 4.4, .7, matOf('#6a645d'), .8);
+  const parts = byDepth([{ box: blBoxOf([...fc.box, ...bar.box]), svg: top ? fc.svg + bar.svg : bar.svg + fc.svg }, flap]);
+  return { svg: top ? body + parts : parts + body, pts: [...A, ...B], top, flapAt: Ff([JX, 2.2, .7]), capAt: FL([JX, JY + 1.5, 92.4]) };
+}
+function blTab(st){
+  const FL = blLidF(st), ph = (1 - st.latch)*Math.PI/2, c = Math.cos(ph), s2 = Math.sin(ph);
+  const Ft = p => FL([p[0], JY + 12.6 + p[1]*c - p[2]*s2, 90 + p[1]*s2 + p[2]*c]);
+  return { svg: act('latch', byDepth([tBox(Ft, JX - 2.4, 0, 0, JX + 2.4, 6, .8, BL_TAB, .8), tBox(Ft, JX - 2.4, 5.2, -2.5, JX + 2.4, 6, 0, BL_TAB, .8)])), at: Ft([JX, 3.5, .8]) };
+}
+function blHandle(st, k, F){
+  const d = blRodD(st), parts = [tBox(F, JX - 2.2, JY + 17, 44, JX + 2.2, JY + 20.5, 87.5, DARK, 1, tone), tBox(F, JX - 2.2, JY + 12.6, 82.5, JX + 2.2, JY + 17, 87.5, DARK, 1, tone),
+    tBox(F, JX - 2.2, JY + 11, 40.5, JX + 2.2, JY + 17, 46, DARK, 1, tone)];
+  if (1.2 - d > .1) parts.push(tCyl(F, JX, JY + 18.2, 87.5, 88.7 - d, .8, BL_RED, .6, 12));
+  let sv = byDepth(parts);
+  if (k <= 0) return sv;
+  // inside the hollow handle: the rod, its spring, the link and the pin that goes down into the base
+  const inner = [blRod(F([JX, JY + 18.2, 45.2 - d]), F([JX, JY + 18.2, 87.4 - d]), .5, METAL), blRod(F([JX, JY + 18.2, 45.2 - d]), F([JX, JY + 10.5, 42.2 - d]), .5, METAL),
+    blRod(F([JX, JY + 10.5, 42.2 - d]), F([JX, JY + 10.5, 38.5 - d]), .5, METAL)];
+  const spr = []; for (let i = 0; i <= 16; i++) spr.push(F([JX + (i && i < 16 ? (i % 2 ? 1 : -1) : 0), JY + 18.2, 79 - d + (86 - 79 + d)*i/16]));
+  inner.push({ box: blBoxOf(spr, .3), svg: blStroke(spr, METAL.l, .5, 1.2) });
+  return `<g opacity="${f(1 - .75*k)}">${sv}</g><g opacity="${f(k)}">${byDepth(inner)}</g>`;
+}
+function blJar(st, k){
+  const F = blJarT(st), ax = sub(F([JX, JY, 1]), F([JX, JY, 0])), upEnd = vis(ax), hFront = vis(sub(F([JX, JY + 1, 60]), F([JX, JY, 60])));
+  const upright = (st.pour || 0) <= 0, run = st.spd > .05;
+  // collar (with the drive socket under the jar floor, seen in see-through)
+  const ringC = z => on(PZ(z), rrUV(JX - 11, JY - 11, JX + 11, JY + 11, 3.5)).map(F);
+  const c0 = ringC(38.3), c1 = ringC(46), c2 = jarRing(47.5).map(F);
+  let collar = loft(c0, c1, n => tone(n, DARK)) + loft(c1, c2, n => tone(n, DARK));
+  if (!upEnd) collar += fill(pd(c0), tone(norm(ax.map(v => -v)), DARK)) + ink(pd(c0), 1) + shape(on(PZ(38.25), ellUV(JX, JY, 3, 3, 16)).map(F), '#1b1816', .7);
+  collar += hullInk([...c0, ...c2], 1.8);
+  if (k > 0) collar = `<g opacity="${f(1 - .75*k)}">${collar}</g><g opacity="${f(k)}">${byDepth([tCyl(F, JX, JY, 44.3, 46, 2.2, METAL, .7), tCyl(F, JX, JY, 42.4, 44.3, 3, BL_STEEL, .8, 6)])}</g>`;
+  // clear walls
+  const JA = jarRing(46).map(F), JB = jarRing(86).map(F);
+  const floor = fill(pd(jarRing(46.05, .2).map(F)), '#a9c6cc', 'opacity=".7"');
+  const far = `<g opacity=".55">${loft(JA, JB, n => toneI(n, CLEAR), true)}</g>`;
+  const near = `<g opacity=".3">${loft(JA, JB, n => tone(n, CLEAR))}</g>`;
+  let marks = '';
+  const fx = facing([1, 0, 0]) ? 1 : facing([-1, 0, 0]) ? -1 : 0;
+  if (fx){ const xo = z => JX + fx*(jarHW(z) + .05);
+    marks += `<path d="${pd([[xo(52), JY - 3, 52], [xo(80), JY - 5.5, 80]].map(F), false)}" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round" opacity=".45"/>`
+      + `<path d="${pd([[xo(58), JY - 6.5, 58], [xo(72), JY - 7.6, 72]].map(F), false)}" fill="none" stroke="#ffffff" stroke-width="1" stroke-linecap="round" opacity=".45"/>`;
+    let d = ''; for (const z of [56, 66, 76]) d += pd([[xo(z), JY + 3, z], [xo(z), JY + 6, z]].map(F), false);
+    marks += `<path d="${d}" fill="none" stroke="${INK}" stroke-width=".7"/>`;
+    if (upright && fx > 0) ['0.5', '1.0', '1.5'].forEach((t, i) => { const z = 56 + 10*i; marks += tx(xo(z), JY + 8.6, z - .6, t, 1.8, INK, 700); }); }
+  const jink = hullInk([...JA, ...JB], 1.8) + ink(pd(JB), 1.1);
+  // contents: blade assembly, fruit, smoothie
+  const blades = [tCyl(F, JX, JY, 46, 46.6, 4.2, BL_RUB, .7, 22), tCyl(F, JX, JY, 46.6, 48.4, 2.6, METAL, .8, 18), tCyl(F, JX, JY, 48.4, 49.4, .55, METAL, .5, 10),
+    tCyl(F, JX, JY, 49.4, 49.9, 1, METAL, .6, 12), tCyl(F, JX, JY, 49.9, 51, 1.25, BL_STEEL, .7, 6)];
+  for (let i = 0; i < 4; i++){ const t = st.ma + i*Math.PI/2, c = Math.cos(t), s2 = Math.sin(t), up = i % 2 ? -1.3 : 2.2, wv = .75;
+    const pt = (r, w, z) => F([JX + r*c - w*s2, JY + r*s2 + w*c, z]);
+    const q1 = [pt(.9, -wv, 49.6), pt(4.2, -wv, 49.6), pt(4.2, wv, 49.6), pt(.9, wv, 49.6)], q2 = [pt(4.2, -wv, 49.6), pt(7.4, -wv*.7, 49.6 + up), pt(7.4, wv*.7, 49.6 + up), pt(4.2, wv, 49.6)];
+    blades.push({ box: blBoxOf([...q1, ...q2]), svg: blQuad(q1) + blQuad(q2) }); }
+  const frac = LIQ*st.mix*(1 - st.poured);
+  if (upright) window.__blSw = st.swirl;
+  const liq = blLiquid(F, frac, k > 0 ? .5 : .92, upright ? st.spd : 0);
+  const lowC = [], highC = [];
+  if (upright) for (let i = 0; i < BL_FR.length; i++){ const c = blChunkAt(i, st); if (c.where !== 'jar') continue; const it = blChunk(i, c.p, st); if (it) (c.p[2] < liq.h ? lowC : highC).push(it); }
+  let cont = byDepth([...blades, ...lowC]);
+  if (run && st.spd > .3) cont += fill(pd(on(PZ(49.9), ellUV(JX, JY, 7.4, 7.4, 28)).map(F)), '#e9eef0', `opacity="${f(.35*st.spd)}"`);
+  cont += liq.svg + byDepth(highC);
+  // assemble: whichever end faces the viewer goes last, the handle on its side
+  const lid = st.lid < .001 ? blLid(st, k) : null, tab = lid ? blTab(st) : null;
+  const handle = blHandle(st, k, F);
+  let sv = hFront ? '' : handle;
+  sv += upEnd ? collar : (lid ? lid.svg + tab.svg : '');
+  sv += floor + far + cont + near + marks + jink;
+  sv += upEnd ? (lid ? lid.svg : '') : collar;
+  if (hFront) sv += handle;
+  if (upEnd && lid) sv += tab.svg;
+  const pts = [...c0, ...JB, ...[[JX - 2.2, JY + 20.5, 40.5], [JX + 2.2, JY + 20.5, 87.5], [JX, JY + 12.6, 90]].map(F)];
+  if (lid) pts.push(...lid.pts);
+  return { svg: sv, box: blBoxOf(pts), pts, F, lid, tab };
+}
+
+/* ---------- props ---------- */
+function blGlass(st){
+  const A = on(PZ(BH + .2), ellUV(GX, GY, 4.6, 4.6, 24)), B = on(PZ(24), ellUV(GX, GY, 5.6, 5.6, 24));
+  const lvl = BH + 1 + 16*st.poured;
+  let sv = `<g opacity=".5">${loft(A, B, n => toneI(n, CLEAR), true)}</g>` + fill(pd(on(PZ(BH + .9), ellUV(GX, GY, 4.5, 4.5, 24))), '#bcd6db', 'opacity=".7"');
+  if (st.poured > .01){ const rl = 4.4 + (lvl - BH)/21;
+    const LA = on(PZ(BH + .9), ellUV(GX, GY, 4.4, 4.4, 24)), LB = on(PZ(lvl), ellUV(GX, GY, rl, rl, 24));
+    sv += loft(LA, LB, n => toneI(n, BLSM)) + fill(pd(LB), BLSM.l) + ink(pd(LB), .6); }
+  let sIn = '', sOut = '';
+  if (st.stream){ const Sp = blJarT(st)([JX, JY - 10.5, 90.4]), E = [GX, GY, lvl], pts = [];
+    for (let i = 0; i <= 12; i++){ const t = i/12; pts.push([Sp[0] + (E[0] - Sp[0])*t, Sp[1] + (E[1] - Sp[1])*Math.sqrt(t), Sp[2] + (E[2] - Sp[2])*t]); }
+    const w = 1.5*(1 - Math.pow(st.poured, 6)) + .3;
+    sIn = blStroke(pts.filter(p => p[2] <= 24.5), BLSM.m, w, w + 1); sOut = blStroke(pts.filter(p => p[2] >= 23.5), BLSM.m, w, w + 1); }
+  sv += sIn + `<g opacity=".3">${loft(A, B, n => tone(n, CLEAR))}</g>` + hullInk([...A, ...B], 1.3) + ink(pd(B), 1);
+  if (facing([1, 0, 0]) || facing([0, -1, 0])){ const a = (YAW - 18)*Math.PI/180; sv += `<path d="${pd([[GX + 5*Math.cos(a), GY + 5*Math.sin(a), 6], [GX + 5.4*Math.cos(a), GY + 5.4*Math.sin(a), 21]], false)}" fill="none" stroke="#ffffff" stroke-width="1.3" opacity=".45" stroke-linecap="round"/>`; }
+  return sv + sOut;
+}
+function blBowl(st){
+  const R0 = on(PZ(BH + .2), ellUV(BWX, BWY, 6, 6, 24)), R1 = on(PZ(BH + 3.6), ellUV(BWX, BWY, 9.6, 9.6, 24)), R2 = on(PZ(BH + 7), ellUV(BWX, BWY, 10.6, 10.6, 24));
+  const inC = []; for (let i = 0; i < BL_FR.length; i++){ const c = blChunkAt(i, st); if (c.where === 'bowl'){ const it = blChunk(i, c.p, st); if (it) inC.push(it); } }
+  return loft(R0, R1, n => toneI(n, CERAMIC), true) + loft(R1, R2, n => toneI(n, CERAMIC), true) + fill(pd(on(PZ(BH + 1.2), ellUV(BWX, BWY, 5.6, 5.6, 24))), CERAMIC.m)
+    + byDepth(inC) + loft(R0, R1, n => tone(n, BL_BOWL)) + loft(R1, R2, n => tone(n, BL_BOWL)) + ink(pd(R2), 1.1) + hullInk([...R0, ...R2], 1.8);
+}
+function blShadows(st, jar){
+  let sv = castShadow([...BA, ...BB], BH) + castShadow([...on(PZ(BH), ellUV(BWX, BWY, 6, 6, 16)), ...on(PZ(BH + 7), ellUV(BWX, BWY, 10.6, 10.6, 16))], BH);
+  sv += `<g opacity=".55">${castShadow(jar.pts, BH)}</g>`;
+  sv += `<g opacity=".45">${castShadow([...on(PZ(BH), ellUV(GX, GY, 4.6, 4.6, 16)), ...on(PZ(24), ellUV(GX, GY, 5.6, 5.6, 16))], BH)}</g>`;
+  if (st.lid > .001){ const FL = blLidF(st); sv += castShadow([...on(PZ(86), rrUV(JX - 12.6, JY - 12.6, JX + 12.6, JY + 12.6, 4.5)), ...on(PZ(90), rrUV(JX - 12.6, JY - 12.6, JX + 12.6, JY + 12.6, 4.5))].map(FL), BH); }
+  return clipTo(BTOPP, sv);
+}
+
+/* ---------- labels ---------- */
+// parts on the motor axis (or in pairs) can be labelled from either side; pick sides so the two label columns stay even
+const blAx = (F, z, r) => { const R = norm([CAM_R[0], CAM_R[1], 0]); return [F([JX - r*R[0], JY - r*R[1], z]), F([JX + r*R[0], JY + r*R[1], z])]; };
+function blBalance(items){
+  const cx = P(JX, JY, 0)[0], side = p => P(...p)[0] < cx ? 0 : 1, n = [0, 0];
+  for (const it of items) if (it.at) n[side(it.at)]++;
+  for (const it of items.filter(it => it.alts).sort((a, b) => P(...a.alts[0])[1] - P(...b.alts[0])[1])){
+    const xs = it.alts.map(p => P(...p)[0]), right = n[1] + 1 < n[0];
+    it.at = it.alts[xs.indexOf(right ? Math.max(...xs) : Math.min(...xs))]; n[side(it.at)]++; }
+  return items;
+}
+function blInside(st, jar){
+  const F = jar.F, I = p => p, run = st.spd > .05, d = blRodD(st), lid = jar.lid || blLid(st, 1), tab = jar.tab || blTab(st);
+  return blBalance([
+    { alts: blAx(I, 5.3, 5), text: 'AIR INTAKE', on: run }, { alts: [[JX, JY - 10.5, 6.6], [JX, JY + 10.5, 6.6]], text: 'RUBBER MOUNTS', on: false },
+    { alts: [[JX, JY - 8, 29], [JX, JY + 8, 29]], text: 'MOTOR BRACKET', on: false }, { alts: blAx(I, 7.4, 7.3), text: 'COOLING FAN', on: run },
+    { alts: blAx(I, 10.1, 1.8), text: 'BOTTOM BEARING', on: run }, { alts: blAx(I, 13, 2.5), text: 'COMMUTATOR', on: run },
+    { alts: [[JX - 6, JY, 13.8], [JX + 6, JY, 13.8]], text: 'CARBON BRUSHES', on: run }, { alts: blAx(I, 21, 4.4), text: 'ARMATURE', on: run },
+    { alts: [[JX, JY - 9.8, 24], [JX, JY + 9.8, 24]], text: 'STATOR', on: run },
+    { alts: [[JX + 7.2, JY - 9.4, 20], [JX - 7.2, JY + 9.4, 20], [JX + 7.2, JY + 9.4, 20], [JX - 7.2, JY - 9.4, 20]], text: 'FIELD COILS', on: run },
+    { at: [JX + 9.2, JY + 6.9, 22.5], text: 'THERMAL CUTOUT', on: false }, { alts: blAx(I, 29.6, 1.8), text: 'TOP BEARING', on: run },
+    { alts: blAx(I, 34, .7), text: 'MOTOR SHAFT', on: run }, { alts: blAx(I, 41.5, 2.6), text: 'MOTOR COUPLING', on: run },
+    { at: [50, KY, KZ + 3.2], text: 'SPEED SWITCH', on: st.mode !== 'off' }, { at: [52, PBY, PBZ + 1.6], text: 'PULSE SWITCH', on: st.pulseT > 0 },
+    { at: [52, JY - 10, 7.1], text: 'CONTROL BOARD', on: run }, { at: [46, JY - 7, 10.4], text: 'CAPACITOR', on: run },
+    { at: [JX, JY + 12.5, 35], text: 'SAFETY SWITCH', on: blSafe(st) }, { at: [blXB(27) - .1, 56, 27], text: 'EXHAUST VENTS', on: run },
+    { alts: blAx(F, 43.3, 3), text: 'DRIVE SOCKET', on: run }, { alts: blAx(F, 47.5, 2.6), text: 'BLADE BEARING', on: run },
+    { alts: blAx(F, 46.3, 4.2), text: 'JAR SEAL', on: false }, { at: F([JX + 7.4*Math.cos(st.ma), JY + 7.4*Math.sin(st.ma), 51.8]), text: 'BLADES', on: run },
+    { alts: blAx(F, 42, 11), text: 'JAR COLLAR', on: false }, { at: F([JX, JY + 20.5, 66]), text: 'HANDLE', on: false },
+    { at: F([JX, JY + 18.2, 62 - d]), text: 'INTERLOCK ROD', on: d > .05 }, { at: F([JX + 1, JY + 18.2, 82.5]), text: 'ROD SPRING', on: st.latch > .05 && st.latch < .95 },
+    { at: tab.at, text: 'LID LATCH', on: st.latch > .95 && st.lid < .001 }, { at: [10.6, 72, 9], text: 'POWER CORD', on: run },
+    { at: lid.capAt, text: 'FILLER CAP', on: false } ]);
+}
+function blSurface(st, jar){
+  const F = jar.F, lid = jar.lid || blLid(st, 0), tab = jar.tab || blTab(st), FRONT = facing(BL_FN);
+  return [
+    ...(FRONT ? [{ at: [blXF(KZ) + 3, KY, KZ + 4], text: 'SPEED KNOB', on: st.mode !== 'off' }, { at: [blXF(PBZ) + 1.5, PBY, PBZ + 2.4], text: 'PULSE BUTTON', on: st.pulseT > 0 },
+      { at: [blXF(LEDZ) + .1, PBY, LEDZ], text: 'READY LIGHT', on: blSafe(st) }] : []),
+    { at: F([JX + 11, JY - 2, 70]), text: 'JAR', on: st.spd > .05 }, { at: lid.capAt, text: 'LID', on: false }, { at: tab.at, text: 'LID LATCH', on: st.latch > .95 },
+    { at: F([JX, JY + 20.5, 66]), text: 'HANDLE', on: false }, { at: lid.flapAt, text: 'SPOUT CAP', on: st.cap > .05 },
+    { at: [BWX, BWY + 10.6, BH + 7], text: 'FRUIT BOWL', on: false }, { at: [GX + 5.6, GY, 20], text: 'GLASS', on: st.poured > .01 } ];
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0), behind = facing([-1, 0, 0]);
+  const cordOff = blCord(BL_CORD_OFF) + box(-19, 81.5, 0, -15, 84.5, 2.6, DARK, toneI, 1);
+  const jar = blJar(st, k);
+  let s = (behind ? '' : cordOff) + board(0, 0, BWD, BDP, BH, 6, WOOD) + (behind ? cordOff : '') + blShadows(st, jar);
+  const items = [
+    { box: [[10.5, 43, BH], [58.5, 81, BZT]], svg: blBody(st, m, k) },
+    { box: [[JX - 10, JY - 10, BZT], [JX + 10, JY + 10, 42.3]], svg: blPad(st, k) },
+    { box: jar.box, svg: jar.svg },
+    { box: [[GX - 5.6, GY - 5.6, BH], [GX + 5.6, GY + 5.6, 24]], svg: blGlass(st) },
+    { box: [[BWX - 10.6, BWY - 10.6, BH], [BWX + 10.6, BWY + 10.6, 11]], svg: blBowl(st) },
+    { box: [[0, 71.5, BH], [10.5, 78.5, 10]], svg: blCord(BL_CORD_ON) } ];
+  if (st.lid > .001){ const l = blLid(st, k), t = blTab(st); items.push({ box: blBoxOf(l.pts), svg: l.top ? l.svg + t.svg : t.svg + l.svg }); }
+  s += byDepth(items);
+  // fruit in the air, on its way from the bowl into the jar
+  const fly = []; for (let i = 0; i < BL_FR.length; i++){ const c = blChunkAt(i, st); if (c.where === 'fly'){ const it = blChunk(i, c.p, st); if (it) fly.push(it); } }
+  s += byDepth(fly);
+  s += xrCallouts(k > .6 ? blInside(st, jar) : blSurface(st, jar), BL_B);
+  return s;
+}
+
+/* ---------- behaviour: one state, one clock; button presses queue timed steps ---------- */
+let ui, blLoop = false;
+const blQ = [];
+const blTw = (key, to, ms) => { let a = null; return { d: ms, fn: (st, e) => { if (a == null) a = st[key]; st[key] = a + (to - a)*e; } }; };
+const blDo = fn => ({ d: 0, fn: st => fn(st) });
+const blUntil = cond => ({ until: cond });
+const blTarget = st => !blSafe(st) ? 0 : st.mode === 'low' ? .55 : st.mode === 'high' ? 1 : st.pulseT > 0 ? 1 : 0;
+const blKnT = st => st.mode === 'low' ? 1 : st.mode === 'high' ? 2 : 0;
+function blStep(st, dt){
+  let first = true;
+  while (blQ.length){ const p = blQ[0];
+    if (p.until){ if (p.until(st)){ blQ.shift(); continue; } break; }
+    p.t = (p.t || 0) + (first ? dt*1000 : 0); first = false;
+    const kk = p.d ? Math.min(1, p.t/p.d) : 1; p.fn(st, ease(kk));
+    if (kk < 1) break; blQ.shift(); }
+  st.pulseT = Math.max(0, st.pulseT - dt);
+  const tg = blTarget(st);
+  st.spd = tg > st.spd ? Math.min(tg, st.spd + dt*1.8) : Math.max(tg, st.spd - dt*1.1);
+  st.ma = (st.ma + st.spd*dt*36) % (2*Math.PI);
+  st.swirl += st.spd*dt*4.5;
+  const kt = blKnT(st); st.kn += Math.sign(kt - st.kn)*Math.min(Math.abs(kt - st.kn), dt*8);
+  if (st.fill >= 1 && st.poured < 1 && st.spd > .05 && st.mix < 1){ st.mix = Math.min(1, st.mix + dt*.2*Math.pow(st.spd, 1.5)); if (st.mix >= 1) ui.flash('Smooth! Stop the motor and pour', 2200); }
+}
+function blRun(){
+  if (blLoop) return; blLoop = true;
+  ui.animate(dt => { const st = ui.st; blStep(st, dt);
+    const go = blQ.length > 0 || st.spd > 0 || blTarget(st) > 0 || Math.abs(st.kn - blKnT(st)) > 1e-3;
+    if (!go) blLoop = false; return go; });
+}
+const blPlay = (...steps) => { blQ.push(...steps); blRun(); };
+const blBusy = () => blQ.length ? ui.flash('One moment…') || true : false;
+function blAdd(st){
+  if (blBusy()) return;
+  if (st.spd > .01 || blTarget(st) > 0) return ui.flash('Stop the motor first');
+  if (st.fill >= 1 && st.poured < 1) return ui.flash(st.mix >= .95 ? 'It is blended — pour it' : 'The jar is full — lock the lid and blend');
+  const steps = [];
+  if (st.poured >= 1) steps.push(blDo(s => { s.fill = 0; s.mix = 0; s.poured = 0; }));          // a fresh bowl of fruit, a clean glass
+  if (st.latch > 0) steps.push(blTw('latch', 0, 300));
+  if (st.lid < 1) steps.push(blTw('lid', 1, 900));
+  steps.push(blTw('fill', 1, 1900));
+  blPlay(...steps);
+}
+function blLock(st){
+  if (blBusy()) return;
+  if (st.latch >= 1 && st.lid < .001) return ui.flash('The lid is already locked');
+  const steps = []; if (st.lid > 0) steps.push(blTw('lid', 0, 900)); steps.push(blTw('latch', 1, 380));
+  blPlay(...steps);
+}
+const blWhy = st => blQ.length ? 'One moment…' : st.lid > .001 || st.latch < 1 ? 'Lock the lid first — the safety switch is open'
+  : st.fill < 1 ? 'Add fruit first' : st.poured >= 1 ? 'The jar is empty — add fruit' : '';
+function blSet(st, mode){ st.mode = mode; st.pulseT = 0; blRun(); }
+function blPulse(st){ const why = blWhy(st); if (why) return ui.flash(why); st.mode = 'off'; st.pulseT = .7; blRun(); }
+function blPour(st){
+  if (blBusy()) return;
+  if (st.poured >= 1) return ui.flash('Already poured — add more fruit');
+  if (st.fill < 1) return ui.flash('Add fruit and blend it first');
+  if (st.mix < .95) return ui.flash('Still chunky — blend it smooth first');
+  const steps = [blDo(s => { s.mode = 'off'; s.pulseT = 0; }), blUntil(s => s.spd <= 0)];
+  if (st.lid > 0) steps.push(blTw('lid', 0, 900));
+  if (st.latch < 1) steps.push(blTw('latch', 1, 380));
+  steps.push(blTw('cap', 1, 280), blTw('pour', 1, 1200), blDo(s => { s.stream = 1; }), blTw('poured', 1, 1800), blDo(s => { s.stream = 0; }), blTw('pour', 0, 1100), blTw('cap', 0, 260));
+  blPlay(...steps);
+}
+const blRpm = st => String(Math.round(st.spd*BL_RPM/100)*100).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+ui = mountFigure({
+  fig:'', turn:'full', title:'Blender',
+  size:[BWD, BDP, 100], palette:'tomato',
+  // lid: 0 on the jar .. 1 on the board; latch: 0 up .. 1 locked; fill: fruit moved into the jar; mix: 0 chunks .. 1 smooth;
+  // pour: 0 seated .. 1 tipped over the glass; poured: share of the smoothie in the glass; cap: spout cap open; spd: motor 0..1
+  state:{ lid:0, latch:0, fill:0, mix:0, pour:0, poured:0, cap:0, spd:0, ma:.35, swirl:0, kn:0, mode:'off', pulseT:0, stream:0 },
+  scene,
+  stats: st => [{ label:'Motor rpm', value: blRpm(st), small: true }],
+  buttons:[
+    { label:'Add fruit', onClick: st => blAdd(st) },
+    { label:'Lock the lid', onClick: st => blLock(st) },
+    { label:'Blend', choices: st => { const why = blWhy(st);
+        return [{ label:'Pulse', disabled: !!why, why, onClick: st => blPulse(st) },
+          { label:'Low', current: st.mode === 'low', disabled: !!why, why, onClick: st => blSet(st, 'low') },
+          { label:'High', current: st.mode === 'high', disabled: !!why, why, onClick: st => blSet(st, 'high') },
+          { label:'Stop', current: st.mode === 'off' && st.pulseT <= 0 && st.spd < .01, onClick: st => blSet(st, 'off') }]; } },
+    { label:'Pour', onClick: st => blPour(st) },
+  ],
+  acts:{
+    knob: st => { const why = blWhy(st); if (why && st.mode === 'off') return ui.flash(why); blSet(st, st.mode === 'off' ? 'low' : st.mode === 'low' ? 'high' : 'off'); },
+    pulse: st => blPulse(st), latch: st => blLock(st) },
+  params:(st, q) => {
+    for (const key of ['lid', 'latch', 'fill', 'mix', 'pour', 'poured', 'cap', 'spd', 'ma', 'swirl', 'stream', 'pulseT']) if (q.has(key)) st[key] = +q.get(key);
+    if (q.has('mode')) st.mode = q.get('mode');
+    st.kn = blKnT(st);
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
