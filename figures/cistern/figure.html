@@ -1,0 +1,526 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Toilet flush</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Toilet flush: a close-coupled toilet (cistern bolted on the back of the pan), US-style flapper flush valve, a ballcock
+   fill valve with a float on an arm, and a siphon-jet pan.
+   x = depth (the bowl's front is at x = 71, a wall would be at x = 0), y = width (+y is the user's left), z = up. 1 unit = 1 cm.
+
+   How it really works (where the water is after each step):
+   0. At rest: the cistern holds water up to the water line (60), 2.5 cm under the top of the overflow tube (62.5). The
+      flapper sits on the flush valve seat; the float rides high, so the fill valve is shut. The pan holds a water seal up
+      to the weir (the crest of the trapway, 25.2): water in the bowl and the up-leg of the trapway blocks sewer gas.
+   1. Press the handle: its shaft turns the trip lever inside, the trip lever lifts the chain, the chain lifts the flapper.
+      Once tipped past ~25 degrees the hollow flapper floats and stays open by itself.
+   2. Cistern water rushes through the flush valve, the spud and the tank-to-bowl gasket into the pan's flush inlet, round
+      the rim channel and out of the rim holes (washing the bowl), and down the jet passage to the siphon jet, which shoots
+      into the trapway.
+   3. The bowl level rises over the weir; the down-leg of the trapway fills completely, and the falling water siphons the
+      bowl: bowl water (and paper) is pulled up over the weir and down through the outlet horn, wax ring and closet flange
+      into the soil pipe.
+   4. The cistern level falls; the float falls with it and opens the fill valve (water from the supply pipe, shut-off
+      valve and supply hose up the fill valve tower). Near the bottom the flapper loses its buoyancy and drops onto the seat.
+   5. The bowl drains down to the trapway inlet, air gets in and the siphon breaks with a gurgle.
+   6. Refill: the fill valve sends most water down the hush tube into the cistern and some through the refill tube into the
+      overflow tube, which runs to the bowl and tops the water seal back up to the weir. The float rises with the water
+      and shuts the valve at the water line. If the float is set too high the water reaches the overflow tube and runs
+      into the bowl non-stop.
+
+   Parts (each is held by another):
+   CASE      pan (foot, ledge, pedestal, bowl, rim) . two bolt caps on the ledge . cistern . cistern lid . seat on two seat
+             hinges bolted to the pan deck . raised lid with bumpers . flush handle (escutcheon + lever) on the cistern front .
+             spare toilet roll on the cistern lid
+   CISTERN   flush valve seat on the cistern floor . spud nut under the floor . tank-to-bowl gasket on the pan deck .
+             overflow tube rising from the flush valve . flapper hinged on the overflow tube's pegs . lift chain from the
+             flapper's tab to the trip lever . trip lever on the handle shaft . handle nut inside the front wall . fill valve:
+             locknut under the floor, tower, valve head, adjusting screw, float arm on the head's pivot, float ball .
+             hush tube from the head to the floor . refill tube from the head clipped into the overflow tube . two tank bolts
+             with washers and nuts under the pan deck
+   SUPPLY    supply pipe up through the floor . escutcheon plate . shut-off valve with its oval handle . braided supply hose .
+             coupling nut on the fill valve shank
+   PAN       flush inlet under the gasket . rim channel round the bowl . rim holes . jet passage down the front . siphon jet
+             port at the sump . sump . trapway (up-leg, weir, down-leg) . outlet horn . wax ring . closet flange on the floor .
+             two closet bolts up through the foot to the bolt caps */
+const CY = 26;                                                         // centre line
+const TOUT = rrUV(3, 38.5, 49, 72.5, 2.4), TLIDP = rrUV(2.4, 72.5, 49.6, 75, 1.1);   // cistern and its lid, (y, z) swept along x
+const TX0 = 3, TX1 = 21, TIN = [4, 20, 4, 48], TFL = 40.5;              // cistern outside x; inside x0,x1,y0,y1; inside floor
+const WL = 60, OVT = 62.5, CLOSE_Z = 51, WEIR = 28, SUMP_TOP = 20.8;  // water line, overflow top, flapper drops, weir, siphon breaks
+const HY = 46.5, HZ = 62.5, ARM_X = 19.4, ARM_L = 20, HOLE = 18.5;      // handle / trip lever
+const FVX = 14.5, OVX = 8.5, PV = [9.8, CY, 44.4];                      // flush valve, overflow tube, flapper pivot
+const FL = [12, 45.5], PIV = [12, 43.6, 63.5], FARM = 11, BALL_R = 3.4; // fill valve tower, float arm pivot, arm, ball
+const SUP = [7, 45.5];                                                  // supply pipe through the floor
+const FLOATS = { low:{ label:'Low', z:56 }, normal:{ label:'Normal', z:WL }, high:{ label:'Too high', z:64 } };
+const CERS = { l:'#fbfaf3', m:'#e8e4d6', d:'#c4bfae' };                 // seat and lid
+const PLAST = matOf('#ecebe4'), PLAST2 = matOf('#8fa7b8'), RUBBER = { l:'#5b5652', m:'#3f3b38', d:'#2a2725' }, BRASS = matOf('#d8b25a');
+const ROLLM = { l:'#ffffff', m:'#eeece4', d:'#cfccc0' }, WAXM = matOf('#e8c96a'), GLAZE = '#f1ecdf', WATER = '#7fc6e6';
+const ARM_A = 20, FLAP_A = 70;                                          // handle turn, flapper fully open (degrees)
+const rad = a => a*Math.PI/180;
+const addv = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]], lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const cl01 = v => Math.max(0, Math.min(1, v));
+const boxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const sty = w => `style="stroke-width:${w.toFixed(2)}"`;               // a stroke not rescaled by inkScale
+
+/* an egg-shaped ring: ellipse at the front (x > xc), squarer superellipse at the back; convex */
+const egg = (x0, xc, x1, ay, nb, n = 48, cy = CY) => Array.from({length:n}, (_, i) => { const t = i/n*2*Math.PI, c = Math.cos(t), s = Math.sin(t);
+  if (c >= 0) return [xc + (x1 - xc)*c, cy + ay*s];
+  const e = 2/nb; return [xc - (xc - x0)*Math.pow(-c, e), cy + ay*Math.sign(s)*Math.pow(Math.abs(s), e)]; });
+// the run of a horizontal ring whose outward normal faces the viewer (for creases and the foot's outline)
+function nearArc(ring){
+  const n = ring.length, fc = ring.map((p, i) => { const a = ring[(i + n - 1) % n], b = ring[(i + 1) % n]; return facing([b[1] - a[1], -(b[0] - a[0]), 0]); });
+  const st0 = fc.findIndex((v, i) => v && !fc[(i + n - 1) % n]); if (st0 < 0) return fc[0] ? ring.concat([ring[0]]) : [];
+  const out = []; for (let k = 0; k < n && fc[(st0 + k) % n]; k++) out.push(ring[(st0 + k) % n]); return out; }
+
+/* ---------- the pan ---------- */
+const PANK = [[0,24,40,60,13,4],[3.6,24,40,60,13,4],[4.4,25.5,40,57.5,10,2],[15,22,40,56,9.5,2.6],[24,15,42,64,14.5,4],[31,12.5,43,69,17.2,4],[36,12,44,71,18,4],[38,12,44,71,18,4]];
+const PANR = PANK.map(([z, ...a]) => on(PZ(z), egg(...a)));
+// the bowl inside: ellipses (z, centre x, half-length, half-width), from the rim opening down to the sump
+const BKEY = [[38,47,19,13],[31,45,14,10.5],[25,43,10.5,8.5],[21,41,6.5,6],[18.5,40,3,3]];
+function bowlP(z){ let i = 0; while (i < BKEY.length - 2 && z < BKEY[i + 1][0]) i++;
+  const a = BKEY[i], b = BKEY[i + 1], t = cl01((a[0] - z)/(a[0] - b[0])); return [a[1] + (b[1]-a[1])*t, a[2] + (b[2]-a[2])*t, a[3] + (b[3]-a[3])*t]; }
+const bowlAt = (z, n = 36) => { const [cx, ax, ay] = bowlP(z); return on(PZ(z), ellUV(cx, CY, ax, ay, n)); };
+const OPEN = bowlAt(38, 48);
+const CAPS = [-1, 1].map(sg => [32, CY + sg*9.8]);
+
+function paperBlob(c, z, sc = 1, rot = 0, wet = 0){
+  const pts = Array.from({length:8}, (_, i) => { const a = rot + i/8*2*Math.PI, r = (2.6 + (i % 3 === 0 ? .7 : i % 2 ? -.3 : .2))*sc; return [c[0] + r*Math.cos(a), c[1] + r*Math.sin(a), z]; });
+  const col = mix('#fbfbf6', '#d9e9ef', wet);
+  return fill(pd(pts), col) + ink(pd(pts), .8) + ink(pd([pts[1], lerp3(pts[1], pts[5], .55)], false), .5) + ink(pd([pts[3], lerp3(pts[3], pts[7], .4)], false), .5);
+}
+function paperInBowl(st){                                             // [x, y, z, scale] while it is in the bowl, else null
+  const p = st.paper; if (!p || p.u > .16) return null;
+  const [cx, ax, ay] = bowlP(st.bowl), sw = st.rim*2.4 + .6, k = p.u/.16;        // floats on the far side of the pool (from where you stood), the side you can see
+  const x = cx + ax*.6*p.fx + sw*Math.cos(p.a)*.6, y = CY + ay*.6*p.fy + sw*Math.sin(p.a)*.6;
+  return [x + (40 - x)*k, y + (CY - y)*k, Math.min(37.5, st.bowl + .15 + 14*p.dz) - 2*k, 1 - .5*k];
+}
+function bowlInside(st, m, mech = false){
+  const b = st.bowl;
+  let s = fill(pd(OPEN), toneI([0,0,1], m));
+  const zs = BKEY.map(k => k[0]).filter(z => z > b).concat([b]);
+  for (let i = 0; i < zs.length - 1; i++) s += loft(bowlAt(zs[i]), bowlAt(zs[i + 1]), n => toneI(n, m), true);
+  // rim wash: streaks running down the far wall from under the rim
+  if (st.rim > .03){ let d = '';
+    for (let i = 0; i < 18; i++){ const a = i/18*2*Math.PI, [c0, ax0, ay0] = bowlP(37.4), [c1, ax1, ay1] = bowlP(b + .4);
+      if (!facing([-Math.cos(a), -Math.sin(a), 0])) continue;
+      d += pd([[c0 + ax0*Math.cos(a), CY + ay0*Math.sin(a), 37.4], [c1 + ax1*Math.cos(a), CY + ay1*Math.sin(a), b + .4]], false); }
+    s += `<path d="${d}" fill="none" stroke="#e6f6ff" ${sty(1.3*INK_K)} stroke-dasharray="${f(3*INK_K)} ${f(2.4*INK_K)}" stroke-dashoffset="${f(-st.tt*28*INK_K)}" opacity="${f(.9*st.rim)}" stroke-linecap="round"/>`; }
+  // the water surface, with a swirl while water comes in or the siphon pulls
+  const wr = bowlAt(b, 36), [cx, ax, ay] = bowlP(b);
+  s += fill(pd(wr), WATER, 'opacity=".88"') + ink(pd(wr), .7);
+  s += fill(pd(on(PZ(b + .02), ellUV(cx + ax*.25, CY - ay*.2, ax*.35, ay*.18, 16))), '#ffffff', 'opacity=".25"');
+  const sw = Math.max(st.rim, st.siphon ? 1 : 0);
+  if (sw > .03){ let d = '';
+    for (const [fr, ph] of [[.75, 0], [.5, 2.1], [.28, 4.2]]){ const a0 = ph + st.tt*(3 + 3*fr); const arc = [];
+      for (let j = 0; j <= 8; j++){ const a = a0 + j/8*1.6; arc.push([cx + ax*fr*Math.cos(a), CY + ay*fr*Math.sin(a), b + .03]); }
+      d += pd(arc, false); }
+    s += `<path d="${d}" fill="none" stroke="#ffffff" ${sty(1*INK_K)} opacity="${f(.8*sw)}" stroke-linecap="round"/>`; }
+  const pp = paperInBowl(st);
+  if (pp && !mech) s += paperBlob(pp, pp[2], pp[3], st.paper.a, cl01(st.paper.wet));
+  return clipTo(OPEN, s);
+}
+function panDraw(st, m){
+  let s = '';
+  // the bolt caps on the far side of the foot are hidden by it
+  const capS = CAPS.map(([x, y]) => ({ y, svg: cyl(x, y, 4.1, 5.2, 1.3, m, tone, 1, 16) + fill(pd(on(PZ(5.25), ellUV(x, y, .7, .7, 10))), mix(m.l, '#ffffff', .4)) }));
+  const capFront = c => camDot(CAM_V, [0, Math.sign(c.y - CY), 0]) > -.2;
+  for (const c of capS) if (!capFront(c)) s += c.svg;
+  for (let i = 0; i < PANR.length - 1; i++) s += loft(PANR[i], PANR[i + 1], n => tone(n, m));
+  // outline: the left and right silhouettes, the foot's near edge, the ledge crease
+  const ext = PANR.map(r => { const q = r.map(p => P(...p)); let lo = 0, hi = 0; q.forEach((v, i) => { if (v[0] < q[lo][0]) lo = i; if (v[0] > q[hi][0]) hi = i; }); return [r[lo], r[hi]]; });
+  s += ink(pd(ext.map(e => e[0]), false), 2.4) + ink(pd(ext.map(e => e[1]), false), 2.4);
+  s += ink(pd(nearArc(PANR[0]), false), 2.4) + ink(pd(nearArc(PANR[1]), false), 1.1) + ink(pd(nearArc(PANR[2]), false), .9);
+  // the rim's top, the bowl inside the opening, then the edges
+  const top = PANR[PANR.length - 1];
+  s += `<path d="${pd(top)}${pd(OPEN)}" fill="${tone([0,0,1], m)}" fill-rule="evenodd"/>`;
+  s += bowlInside(st, m);
+  s += ink(pd(top), 2) + ink(pd(OPEN), 1.5);
+  for (const c of capS) if (capFront(c)) s += c.svg;
+  return s;
+}
+
+/* ---------- seat, raised lid, hinges ---------- */
+const SO = egg(25.5, 46, 69, 17.5, 3, 48), SI = egg(31, 47, 63, 10.5, 2, 48);
+function seatDraw(){
+  const A = on(PZ(38), SO), B = on(PZ(40.5), SO), Ai = on(PZ(38), SI), Bi = on(PZ(40.5), SI);
+  return loft(A, B, n => tone(n, CERS)) + loft(Ai, Bi, n => toneI(n, CERS), true)
+    + `<path d="${pd(B)}${pd(Bi)}" fill="${tone([0,0,1], CERS)}" fill-rule="evenodd"/>` + ink(pd(Bi), 1.1) + ink(pd(B), 1.1) + hullInk([...A, ...B], 1.9);
+}
+const LIDP = egg(25.5, 46, 69, 17.5, 3, 40).map(([x, y]) => [y, 41 + (x - 25.5)]);   // the lid raised: (y, z)
+function lidDraw(){
+  const FR = facing([1,0,0]), BK = facing([-1,0,0]), A = on(PX(22), LIDP), B = on(PX(24.5), LIDP);
+  let s = extrude(LIDP, 22, 24.5, CERS);
+  if (FR){ s += fill(pd(B), tone([1,0,0], CERS)) + ink(pd(B), 1.2);
+    for (const y of [CY - 10, CY + 10]) s += shape(on(PX(24.6), ellUV(y, 76, 1.6, 1.1, 12)), '#cfc9b6', .7); }   // bumpers
+  if (BK) s += fill(pd(A), tone([-1,0,0], CERS)) + ink(pd(A), 1.2);
+  return s + hullInk([...A, ...B], 2.2);
+}
+const hingeDraw = y => box(21.8, y - 2, 38, 25.3, y + 2, 40.5, PLAST, toneI, .9) + cylX(21.8, 25.3, y, 41.2, .9, METAL, toneI, .7, 12);
+
+/* ---------- cistern, lid, handle, roll ---------- */
+function slab(prof, x0, x1, m, w = 2.8){
+  const FR = facing([1,0,0]), BK = facing([-1,0,0]), A = on(PX(x0), prof), B = on(PX(x1), prof);
+  let s = '';
+  if (FR) s += fill(pd(B), tone([1,0,0], m));
+  if (BK) s += fill(pd(A), tone([-1,0,0], m));
+  s += extrude(prof, x0, x1, m);
+  if (FR) s += ink(pd(B), 1.8);
+  if (BK) s += ink(pd(A), 1.8);
+  return s + hullInk([...A, ...B], w);
+}
+function handleDraw(st){
+  const a = rad(ARM_A*st.hand), end = [22.1, HY + 5.4*Math.cos(a), HZ - 5.4*Math.sin(a)];
+  const esc = cylX(21, 21.8, HY, HZ, 1.9, METAL, toneI, 1, 18);
+  const lev = rod([21.9, HY, HZ], end, .55, METAL, toneI, .9) + rod(lerp3([21.9, HY, HZ], end, .55), end, .95, METAL, toneI, .9);
+  return act('handle', facing([1,0,0]) ? esc + lev : lev + esc);
+}
+const rollR = st => Math.max(3.4, 5.2 - .12*st.sheets);
+function rollDraw(st){
+  const r = rollR(st);
+  let s = cyl(11.5, 12, 75, 85, r, ROLLM, toneI, 1.2, 28);
+  s += fill(pd(on(PZ(85.03), ellUV(11.5, 12, 2, 2, 18))), '#c9a26b') + fill(pd(on(PZ(85.05), ellUV(11.5, 12, 1.45, 1.45, 18))), '#5a4630') + ink(pd(on(PZ(85.03), ellUV(11.5, 12, 2, 2, 18))), .7);
+  // the loose end of the paper hanging down its side, toward the viewer
+  const a = rad(YAW), tip = [11.5 + r*Math.cos(a), 12 + r*Math.sin(a)], t = [-Math.sin(a), Math.cos(a)];
+  s += fill(pd([[tip[0], tip[1], 84], [tip[0] + t[0]*2.6, tip[1] + t[1]*2.6, 84], [tip[0] + t[0]*2.6 + .2, tip[1] + t[1]*2.6, 79], [tip[0] + .2, tip[1], 78]]), '#ffffff') + ink(pd([[tip[0], tip[1], 84], [tip[0] + .2, tip[1], 78], [tip[0] + t[0]*2.6 + .2, tip[1] + t[1]*2.6, 79], [tip[0] + t[0]*2.6, tip[1] + t[1]*2.6, 84]], false), .7);
+  return act('roll', s);
+}
+
+/* ---------- tubes: thick strokes cut into short pieces so they sort with the solids ---------- */
+function smooth3(pts, it = 2){
+  for (let k = 0; k < it; k++){ const o = [pts[0]];
+    for (let i = 0; i < pts.length - 1; i++){ const a = pts[i], b = pts[i + 1]; o.push(lerp3(a, b, .25), lerp3(a, b, .75)); }
+    o.push(pts[pts.length - 1]); pts = o; }
+  return pts;
+}
+// opt: water(t) -> share of the bore holding water at path position t (0..1); flow: dash speed; L: piece length
+function tubeP(pts, r, col, opt = {}){
+  const out = [], w = 2*r*CAM_K, iw = w + 1.2*INK_K, PL = opt.L || 3.2;
+  const len = [0]; for (let i = 1; i < pts.length; i++) len.push(len[i - 1] + Math.hypot(...sub(pts[i], pts[i - 1])));
+  const tot = len[len.length - 1] || 1;
+  for (let i = 0; i < pts.length - 1; ){
+    let j = i + 1; while (j < pts.length - 1 && len[j] - len[i] < PL) j++;
+    const seg = pts.slice(i, j + 1), d = pd(seg, false), t = (len[i] + len[j])/2/tot;
+    let svg = `<path d="${d}" fill="none" stroke="${INK}" ${sty(iw)} stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" ${sty(w)} stroke-linecap="round" stroke-linejoin="round"/>`;
+    const wt = opt.water ? opt.water(t) : 0;
+    if (wt > 0) svg += `<path d="${d}" fill="none" stroke="${WATER}" ${sty(w*.66)} stroke-linecap="round" stroke-linejoin="round" opacity="${f(Math.min(1, wt*1.5))}"/>`;
+    if (opt.flow && wt > 0) svg += `<path d="${d}" fill="none" stroke="#ffffff" ${sty(w*.22)} stroke-dasharray="${f(w*.8)} ${f(w*1.5)}" stroke-dashoffset="${f(-(len[i]*CAM_K) - opt.flow)}" stroke-linecap="round" opacity=".85"/>`;
+    out.push({ box: boxOf(seg, r), svg }); i = j; }
+  return out;
+}
+// the trapway: sump, down and back, up-leg to the crest (the weir is its floor), down-leg to the outlet horn
+const TP = smooth3([[40,CY,18.6],[36,CY,15.5],[31,CY,14.4],[26.5,CY,17],[23.8,CY,22.5],[24.4,CY,28.4],[26.8,CY,30.4],[29.6,CY,28.8],[31,CY,22],[31,CY,12],[31,CY,5.2]], 3);
+const TPL = (() => { const l = [0]; for (let i = 1; i < TP.length; i++) l.push(l[i - 1] + Math.hypot(...sub(TP[i], TP[i - 1]))); return l; })();
+const T_CREST = (() => { let k = 0; TP.forEach((p, i) => { if (p[2] > TP[k][2]) k = i; }); return TPL[k]/TPL[TPL.length - 1]; })();
+const tpAt = t => { const L0 = t*TPL[TPL.length - 1]; let i = 1; while (i < TP.length - 1 && TPL[i] < L0) i++; const k = (L0 - TPL[i - 1])/((TPL[i] - TPL[i - 1]) || 1); return lerp3(TP[i - 1], TP[i], cl01(k)); };
+const RIMC = Array.from({length:41}, (_, i) => { const a = i/40*2*Math.PI; return [47 + 20.5*Math.cos(a + Math.PI), CY + 14.6*Math.sin(a + Math.PI), 35.5]; });
+const INLET = smooth3([[FVX,CY,37.2],[FVX + .3,CY,35.6],[19,CY,35.4],[26.5,CY,35.5]], 2);
+const JET = smooth3([[67.5,CY,35],[65,CY,30],[61.5,CY,24.5],[56,CY,19.5],[50,CY,17],[45.4,CY,18.3]], 2);
+const REFILL = smooth3([[11.4,FL[1],65],[10.6,FL[1],66.4],[OVX,FL[1],66.7],[OVX,40,66.7],[OVX,28.4,66.7],[OVX,26.9,65.6],[OVX,26.5,63.8]], 2);
+const HOSE = smooth3([[SUP[0],SUP[1],13.4],[SUP[0],SUP[1],17],[8.6,SUP[1],25],[FL[0],SUP[1],31],[FL[0],SUP[1],33.6]], 3);
+
+/* ---------- supply: pipe from the floor, shut-off valve, braided hose to the fill valve's shank ---------- */
+function supplyParts(st){
+  const [x, y] = SUP, parts = [], put = (b, svg) => parts.push({ box: b, svg });
+  put([[x - 2.2, y - 2.2, 0], [x + 2.2, y + 2.2, .4]], cyl(x, y, 0, .4, 2.2, METAL, toneI, .9, 18));
+  put([[x - 1.3, y - 1.3, .4], [x + 1.3, y + 1.3, 13.4]], cyl(x, y, .4, 9, .75, matOf('#d99a6a'), toneI, .9, 12) + cyl(x, y, 9, 12.4, 1.3, METAL, toneI, 1, 16) + cyl(x, y, 12.4, 13.4, .95, METAL, toneI, .8, 12));
+  const knob = st.supply ? rod([x, 48.9, 9.2], [x, 48.9, 12.2], .75, matOf('#e9e6dc'), toneI, .9) : rod([x - 1.5, 48.9, 10.7], [x + 1.5, 48.9, 10.7], .75, matOf('#e9e6dc'), toneI, .9);
+  put([[x - 1.6, y + 1.3, 8.9], [x + 1.6, 49.7, 12.5]], act('valve', rod([x, y + 1.2, 10.7], [x, 48.3, 10.7], .42, METAL, toneI, .8) + knob));
+  parts.push(...tubeP(HOSE, .55, '#b9bec2', { L: 3.5, water: () => st.fillQ > .02 ? 1 : 0, flow: st.tt*30 }));
+  put([[FL[0] - 2.4, y - 2.4, 33.6], [FL[0] + 2.4, y + 2.4, 38.5]], cyl(FL[0], y, 33.6, 35.4, 1.35, PLAST, toneI, .9, 16) + cyl(FL[0], y, 35.4, 38.5, .95, PLAST2, toneI, .8, 12) + cyl(FL[0], y, 37.2, 38.5, 2.4, PLAST, toneI, .9, 18));
+  return parts;
+}
+
+/* ---------- labels: core's two-column pills, but the parts are shared out between the columns by the room each has
+   (the left column starts under the buttons), split by screen x so leaders still never cross ---------- */
+function cisCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0]));
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 3*k);
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, btn = document.getElementById('btns');
+  const top = { [-1]: fs, [1]: fs + 30*k };
+  // the buttons' bottom edge in drawing units; measuring forces a layout, so do it once per window size
+  // and keep the bottom 46 screen px clear for the zoom chip the built page puts bottom-right
+  const key = `${innerWidth}x${innerHeight}:${vb.width}:${hgt}`;
+  if (cisCallouts.key !== key){ cisCallouts.key = key; cisCallouts.btnY = 0;
+    cisCallouts.chipY = vb.y + vb.height - (svgEl.clientHeight ? 46*vb.height/svgEl.clientHeight : 0);
+    const M = svgEl.getScreenCTM(), toVB = (x, y) => new DOMPoint(x, y).matrixTransform(M.inverse()).y;
+    if (btn && M){ const r = btn.getBoundingClientRect(), y = toVB(r.right, r.bottom + 50); if (y > 0) cisCallouts.btnY = y + hgt; }
+  }
+  if (cisCallouts.btnY) top[-1] = cisCallouts.btnY;
+  const all = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  const bot = Math.min(vb.y + vb.height, cisCallouts.chipY) - hgt/2;
+  const roomL = Math.max(1, bot - top[-1]), roomR = Math.max(1, bot - top[1]);
+  const nL = Math.round(all.length*roomL/(roomL + roomR)), Lc = all.slice(0, nL), Rc = all.slice(nL);
+  let s = '';
+  for (const [col, side] of [[Lc, -1], [Rc, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    let yb = bot + gap; for (let i = col.length - 1; i >= 0; i--){ col[i].py = Math.max(top[side], Math.min(col[i].py, yb - gap)); yb = col[i].py; }   // pushed past the bottom: lift
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+
+/* ---------- the working parts (see-through) ---------- */
+const armEnd = (a, l = HOLE) => [ARM_X, HY - l*Math.cos(rad(a)), HZ + l*Math.sin(rad(a))];
+const rotF = (p, phi) => { const dx = p[0] - PV[0], dz = p[2] - PV[2], c = Math.cos(phi), s2 = Math.sin(phi); return [PV[0] + dx*c - dz*s2, p[1], PV[2] + dx*s2 + dz*c]; };
+const TAB0 = [19.1, CY, 44.2], CHL = Math.hypot(...sub(armEnd(0), TAB0)) + 1.2;
+const ballZ = st => Math.max(PIV[2] - FARM*Math.sin(rad(50)), Math.min(PIV[2] - .3, st.water + .6));
+let MECH_LABELS = '';
+function mech(st, k){
+  const pan = [], tank = [], putP = (b, svg) => pan.push({ box: b, svg }), putT = (b, svg) => tank.push({ box: b, svg });
+  const b = st.bowl, inflow = st.rim > .05, refill = st.fillQ > .02, ph = st.tt*34*INK_K;
+  /* ---- pan: flush inlet, rim channel + holes, jet passage, trapway, bowl water, outlet ---- */
+  pan.push(...tubeP(INLET, 2, GLAZE, { water: () => inflow || refill || st.over ? 1 : 0, flow: ph }));
+  pan.push(...tubeP(RIMC, 1.4, GLAZE, { L: 4, water: () => inflow ? 1 : 0, flow: ph }));
+  for (let i = 0; i < 16; i++){ const a = (i + .5)/16*2*Math.PI, hp = [47 + 19.4*Math.cos(a), CY + 13.4*Math.sin(a), 34.5];
+    let sv = `<circle cx="${f(P(...hp)[0])}" cy="${f(P(...hp)[1])}" r="${f(.8*INK_K)}" fill="${INK}"/>`, bx = [hp, hp];
+    if (st.rim > .05){ const [c1, ax1, ay1] = bowlP(Math.max(b + .5, 29)), q = [c1 + ax1*Math.cos(a), CY + ay1*Math.sin(a), Math.max(b + .5, 29)];
+      sv = `<path d="${pd([hp, q], false)}" fill="none" stroke="${WATER}" ${sty(1.2*INK_K)} stroke-dasharray="${f(2*INK_K)} ${f(1.6*INK_K)}" stroke-dashoffset="${f(-ph)}" opacity="${f(st.rim)}"/>` + sv; bx = [hp, q]; }
+    putP(boxOf(bx, .3), sv); }
+  pan.push(...tubeP(JET, 1.3, GLAZE, { water: () => inflow ? 1 : 0, flow: ph }));
+  putP([[44.2, CY - 1.7, 16.8], [45.8, CY + 1.7, 20]], rod([45.6, CY, 18.4], [44.4, CY, 18.5], 1.6, CERS, toneI, .8) + fill(pd(on(PX(44.35), ellUV(CY, 18.5, .9, .9, 12))), '#2d2a26'));
+  const filled = t => st.siphon ? 1 : t < T_CREST ? (tpAt(t)[2] - 1.2 < b ? 1 : 0) : ((t - T_CREST)/(1 - T_CREST) < st.trap ? 1 : 0);
+  pan.push(...tubeP(TP, 2.4, GLAZE, { L: 2.6, water: filled, flow: st.siphon || st.trap > .05 ? ph*1.6 : 0 }));
+  // bowl water down to the sump
+  { const [cx, ax, ay] = bowlP(b), zs = [b].concat(BKEY.map(q => q[0]).filter(z => z < b));
+    let sv = '';
+    for (let i = 0; i < zs.length - 1; i++) sv += loft(bowlAt(zs[i]), bowlAt(zs[i + 1]), () => WATER);
+    sv = `<g opacity=".5">${sv}</g>` + fill(pd(bowlAt(b)), WATER, 'opacity=".75"') + ink(pd(bowlAt(b)), .7);
+    putP([[cx - ax, CY - ay, 18.5], [cx + ax, CY + ay, b]], sv); }
+  // outlet horn, wax ring, closet flange, closet bolts
+  putP([[27.7, CY - 3.3, 2.2], [34.3, CY + 3.3, 5.2]], cyl(31, CY, 2.2, 5.2, 3.3, matOf(GLAZE), toneI, .9, 20));
+  putP([[26.4, CY - 4.6, .6], [35.6, CY + 4.6, 2.2]], cyl(31, CY, .6, 2.2, 4.6, WAXM, toneI, .9, 22));
+  putP([[20.5, CY - 10.5, 0], [41.5, CY + 10.5, .6]], cyl(31, CY, 0, .6, 10.5, matOf('#d7d2c4'), toneI, 1, 28) + fill(pd(on(PZ(.62), ellUV(31, CY, 4.6, 4.6, 20))), '#3a3632'));
+  for (const sg of [-1, 1]) putP([[31.1, CY + sg*9.8 - .5, .6], [32.9, CY + sg*9.8 + .5, 5.2]], rod([32, CY + sg*9.8, .6], [32, CY + sg*9.8, 5.2], .4, BRASS, toneI, .7) + cyl(32, CY + sg*9.8, 4.4, 5, .8, BRASS, toneI, .6, 6));
+  // paper going round the trap
+  if (st.paper && st.paper.u > .16){ const q = tpAt(Math.min(1, (st.paper.u - .16)/.84)); putP(boxOf([q], 1.6), paperBlob(q, q[2], .55, st.tt*4, 1)); }
+  else { const pp = paperInBowl(st); if (pp) putP(boxOf([pp], 2.5), paperBlob(pp, pp[2], pp[3], st.paper.a, cl01(st.paper.wet))); }
+
+  /* ---- cistern ---- */
+  // flush valve seat, spud nut + gasket under the floor, overflow tube and its branch
+  putT([[FVX - 4.4, CY - 4.4, TFL], [FVX + 4.4, CY + 4.4, 43.1]], cyl(FVX, CY, TFL, 43.1, 4.4, PLAST, toneI, 1, 28) + fill(pd(on(PZ(43.12), ellUV(FVX, CY, 3.2, 3.2, 22))), '#2d2a26'));
+  putT([[FVX - 5.3, CY - 5.3, 37.2], [FVX + 5.3, CY + 5.3, 38.5]], cyl(FVX, CY, 37.2, 38.5, 3.5, PLAST, toneI, .9, 6) + cyl(FVX, CY, 37.8, 38.45, 5.3, RUBBER, toneI, .9, 24));
+  putT([[OVX - 1.3, CY - 1.3, TFL], [OVX + 1.3, CY + 1.3, OVT]], cyl(OVX, CY, TFL, OVT, 1.3, PLAST, toneI, .9, 16) + fill(pd(on(PZ(OVT + .02), ellUV(OVX, CY, .85, .85, 12))), '#2d2a26')
+    + (refill || st.over ? `<path d="${pd([[OVX, CY, OVT - .5], [OVX, CY, 42]], false)}" fill="none" stroke="${WATER}" ${sty(1.2*INK_K)} stroke-dasharray="${f(2*INK_K)} ${f(2*INK_K)}" stroke-dashoffset="${f(-ph)}"/>` : ''));
+  putT([[OVX + 1.3, CY - 1, 41], [FVX - 4.4, CY + 1, 43]], rod([OVX + 1, CY, 42], [FVX - 4.2, CY, 42], .9, PLAST, toneI, .8));
+  // flapper on its hinge pegs, with the chain tab at the front
+  const phi = rad(FLAP_A*st.flap), fc = rotF([FVX, CY, 43.7], phi), nrm = [-Math.sin(phi), 0, Math.cos(phi)];
+  const tab = rotF(TAB0, phi), ears = [-1, 1].map(sg => [rotF([11.2, CY + sg*2.4, 44.1], phi), [PV[0], CY + sg*2.4, PV[2]]]);
+  const flap = rod(addv(fc, nrm.map(v => -.55*v)), addv(fc, nrm.map(v => .55*v)), 4.2, RUBBER, toneI, 1, 4.2, 24)
+    + ears.map(([a, c]) => rod(a, c, .45, RUBBER, toneI, .6)).join('') + rod(rotF([18.5, CY, 44.2], phi), tab, .45, RUBBER, toneI, .6);
+  putT(boxOf([rotF([FVX - 4.4, CY - 4.2, 43.1], phi), rotF([FVX + 4.4, CY + 4.2, 44.3], phi), rotF([FVX - 4.4, CY + 4.2, 44.3], phi), rotF([FVX + 4.4, CY - 4.2, 43.1], phi), PV, tab], .3), flap);
+  putT([[PV[0] - .4, CY - 3, PV[2] - .5], [PV[0] + .4, CY + 3, PV[2] + .5]], rod([PV[0] - .2, CY - 3, PV[2]], [PV[0] - .2, CY + 3, PV[2]], .45, PLAST, toneI, .6));
+  // trip lever on the handle shaft, the handle nut, the chain
+  const ae = armEnd(ARM_A*st.hand), aEnd = armEnd(ARM_A*st.hand, ARM_L), pivot = [ARM_X, HY, HZ];
+  putT(boxOf([pivot, aEnd], .6), rod(pivot, aEnd, .55, METAL, toneI, .8) + [6, 12, HOLE].map(l => { const q = P(...armEnd(ARM_A*st.hand, l)); return `<circle cx="${f(q[0])}" cy="${f(q[1])}" r="${f(.35*INK_K)}" fill="${INK}"/>`; }).join(''));
+  putT([[ARM_X, HY - .6, HZ - .6], [21.1, HY + .6, HZ + .6]], cylX(ARM_X, 21.1, HY, HZ, .6, METAL, toneI, .7, 10));
+  putT([[19.7, HY - 1.8, HZ - 1.8], [20.5, HY + 1.8, HZ + 1.8]], cylX(19.7, 20.5, HY, HZ, 1.8, PLAST2, toneI, .8, 6));
+  { const d = Math.hypot(...sub(ae, tab)), sag = Math.sqrt(Math.max(0, CHL*CHL - d*d))*.45, ch = [];
+    for (let i = 0; i <= 14; i++){ const t = i/14, p = lerp3(ae, tab, t); ch.push([p[0] + sag*.35*Math.sin(Math.PI*t), p[1] - sag*.6*Math.sin(Math.PI*t), p[2]]); }
+    const dd = pd(ch, false);
+    putT(boxOf(ch, .4), `<path d="${dd}" fill="none" stroke="${INK}" ${sty(1.5*INK_K)} stroke-dasharray="${f(1.1*INK_K)} ${f(.5*INK_K)}"/><path d="${dd}" fill="none" stroke="#c6ccce" ${sty(.8*INK_K)} stroke-dasharray="${f(1.1*INK_K)} ${f(.5*INK_K)}"/>`); }
+  // fill valve: tower, head, adjusting screw, float arm + ball, hush tube, refill tube
+  const [fx, fy] = FL;
+  putT([[fx - 1.4, fy - 1.4, TFL], [fx + 1.4, fy + 1.4, 61]], cyl(fx, fy, TFL, 61, 1.4, PLAST2, toneI, .9, 16));
+  putT([[fx - 2.3, fy - 2.3, 61], [fx + 2.3, fy + 2.3, 65]], cyl(fx, fy, 61, 65, 2.3, PLAST, toneI, 1, 20) + rod([fx, fy, 65], [fx, fy, 66.6 + (st.target - WL)*.2], .45, BRASS, toneI, .6));
+  const bz = ballZ(st), th = Math.asin((PIV[2] - bz)/FARM), bc = [fx, PIV[1] - FARM*Math.cos(th), bz];
+  putT(boxOf([PIV, bc], .5), rod(PIV, bc, .4, BRASS, toneI, .7));
+  { const q = P(...bc), R = BALL_R*CAM_K, bm = matOf('#e2483d');
+    putT(boxOf([bc], BALL_R), `<circle cx="${f(q[0])}" cy="${f(q[1])}" r="${f(R)}" fill="${bm.m}"/><circle cx="${f(q[0] + R*.12)}" cy="${f(q[1] - R*.14)}" r="${f(R*.78)}" fill="${bm.l}"/>`
+      + `<ellipse cx="${f(q[0] + R*.35)}" cy="${f(q[1] - R*.42)}" rx="${f(R*.25)}" ry="${f(R*.15)}" fill="#ffffff" opacity=".5"/><circle cx="${f(q[0])}" cy="${f(q[1])}" r="${f(R)}" fill="none" stroke="${INK}" stroke-width="1.1"/>`); }
+  putT([[13.3, fy - .6, 42], [14.5, fy + .6, 61.5]], rod([13.8, fy, 61.5], [13.8, fy, 42], .55, PLAST2, toneI, .7)
+    + (refill ? `<path d="${pd([[13.8, fy, 41.8], [13.8, fy, TFL + .3]], false)}" fill="none" stroke="#e6f6ff" ${sty(1.2*INK_K)} stroke-dasharray="${f(1.4*INK_K)} ${f(1.2*INK_K)}" stroke-dashoffset="${f(-ph)}"/>` : ''));
+  tank.push(...tubeP(REFILL, .45, '#2f3436', { L: 3, water: () => refill ? 1 : 0, flow: ph }));
+  putT([[OVX - 1.6, 25, 62.2], [OVX + 1.6, 27.4, 64]], box(OVX - 1.6, 25.2, 62.4, OVX + 1.6, 27.2, 63.6, PLAST2, toneI, .6));
+  // tank bolts: head + washer inside, nut under the pan deck
+  for (const y of [16, 36]) putT([[14.1, y - 1.5, 33.6], [16.9, y + 1.5, 41.3]], cyl(15.5, y, 33.6, 34.8, 1.5, METAL, toneI, .8, 6) + rod([15.5, y, 34.8], [15.5, y, TFL], .45, METAL, toneI, .6)
+    + cyl(15.5, y, TFL, 40.9, 1.6, RUBBER, toneI, .6, 16) + cyl(15.5, y, 40.9, 41.3, 1.2, METAL, toneI, .7, 14));
+  if (k > .6) tank.push(...supplyParts(st));
+  // the cistern's water: its far walls and surface go first, the parts stand in it
+  const wz = st.water, [x0, x1, y0, y1] = TIN;
+  let tw = '';
+  const F = [[[1,0,0], [[x1,y0,TFL],[x1,y1,TFL],[x1,y1,wz],[x1,y0,wz]]], [[-1,0,0], [[x0,y0,TFL],[x0,y1,TFL],[x0,y1,wz],[x0,y0,wz]]],
+    [[0,1,0], [[x0,y1,TFL],[x1,y1,TFL],[x1,y1,wz],[x0,y1,wz]]], [[0,-1,0], [[x0,y0,TFL],[x1,y0,TFL],[x1,y0,wz],[x0,y0,wz]]]];
+  for (const [n, q] of F) if (!facing(n)) tw += fill(pd(q), mix(WATER, '#ffffff', .2), 'opacity=".4"');
+  tw += fill(pd([[x0,y0,wz],[x1,y0,wz],[x1,y1,wz],[x0,y1,wz]]), WATER, 'opacity=".32"');
+  let twNear = '';
+  for (const [n, q] of F) if (facing(n)) twNear += fill(pd(q), WATER, 'opacity=".16"') + ink(pd([q[2], q[3]], false), .7);
+  const svg = byDepth(pan) + tw + byDepth(tank) + twNear;
+
+  // labels
+  const lit = { hand: st.hand > .08, flap: st.flap > .05, fill: refill, in: inflow, trap: st.siphon || st.trap > .05 };
+  MECH_LABELS = k <= .6 ? "" : cisCallouts([
+    { at: [22.4, HY + 4, HZ - 1], text: 'FLUSH HANDLE', on: lit.hand },
+    { at: [20, HY - .5, HZ + 1.5], text: 'HANDLE NUT', on: false },
+    { at: armEnd(ARM_A*st.hand, 11), text: 'TRIP LEVER', on: lit.hand },
+    { at: lerp3(ae, tab, .45), text: 'LIFT CHAIN', on: lit.hand },
+    { at: addv(fc, [0, -3, .5]), text: 'FLAPPER', on: lit.flap },
+    { at: [FVX + 2, CY - 4, 42], text: 'FLUSH VALVE', on: lit.flap },
+    { at: [OVX, CY - 1.2, 55], text: 'OVERFLOW TUBE', on: refill || st.over },
+    { at: REFILL[Math.floor(REFILL.length*.45)], text: 'REFILL TUBE', on: refill },
+    { at: [fx + 1.2, fy, 52], text: 'FILL VALVE', on: refill },
+    { at: [fx, fy + 1.4, 66.2], text: 'ADJUSTING SCREW', on: false },
+    { at: lerp3(PIV, bc, .5), text: 'FLOAT ARM', on: refill },
+    { at: [bc[0] + 1, bc[1], bc[2] + 1], text: 'FLOAT', on: refill },
+    { at: [13.8, fy, 47], text: 'HUSH TUBE', on: refill },
+    { at: [x1, 8, wz], text: 'WATER LINE', on: false },
+    { at: [15.5, 36, 34.2], text: 'TANK BOLT', on: false },
+    { at: [FVX + 5, CY + 2, 38], text: 'TANK GASKET', on: lit.in },
+    { at: [SUP[0], SUP[1], 5], text: 'SUPPLY PIPE', on: refill },
+    { at: [SUP[0], 48.9, 11.5], text: 'SHUT-OFF VALVE', on: !st.supply },
+    { at: HOSE[Math.floor(HOSE.length*.5)], text: 'SUPPLY HOSE', on: refill },
+    { at: [FL[0] + 1.3, FL[1], 34.5], text: 'COUPLING NUT', on: false },
+    { at: INLET[Math.floor(INLET.length*.6)], text: 'FLUSH INLET', on: lit.in },
+    { at: RIMC[30], text: 'RIM CHANNEL', on: lit.in },
+    { at: [47 + 19.4*Math.cos(.6), CY + 13.4*Math.sin(.6), 34.5], text: 'RIM HOLES', on: lit.in },
+    { at: JET[Math.floor(JET.length*.4)], text: 'JET PASSAGE', on: lit.in },
+    { at: [44.5, CY, 18.5], text: 'SIPHON JET', on: lit.in },
+    { at: tpAt(.2), text: 'TRAPWAY', on: lit.trap },
+    { at: tpAt(T_CREST), text: 'WEIR', on: b > WEIR + .3 },
+    { at: [bowlP(b)[0] + 2, CY + 3, b], text: 'WATER SEAL', on: false },
+    { at: [31, CY + 3.3, 3.6], text: 'OUTLET HORN', on: lit.trap },
+    { at: [31, CY - 4.6, 1.4], text: 'WAX RING', on: false },
+    { at: [31, CY - 10, .3], text: 'CLOSET FLANGE', on: false },
+    { at: [32, CY + 9.8, 3], text: 'CLOSET BOLT', on: false },
+    { at: [24, CY - 11, 40.5], text: 'SEAT HINGE', on: false },
+  ], [2, 72, 0, 52, 0, 85]);
+  return svg;
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0);
+  let s = castShadow([...PANR[0], ...PANR[PANR.length - 1], ...on(PZ(38.5), rrUV(3, 3, 21, 49, 1)), ...on(PZ(75), rrUV(2.4, 2.4, 21.6, 49.6, 1)), ...on(PX(23), LIDP), [11.5, 12, 85]]);
+  const items = [
+    { box: [[12, 8, 0], [71, 44, 38]], svg: panDraw(st, m) },
+    { box: [[25.5, 8.5, 38], [69, 43.5, 40.5]], svg: seatDraw() },
+    { box: [[21.8, CY - 13, 38], [25.3, CY - 9, 42.1]], svg: hingeDraw(CY - 11) },
+    { box: [[21.8, CY + 9, 38], [25.3, CY + 13, 42.1]], svg: hingeDraw(CY + 11) },
+    { box: [[22, 8.5, 42.1], [24.6, 43.5, 84.5]], svg: lidDraw() },
+    { box: [[TX0, 3, 38.5], [TX1, 49, 72.5]], svg: slab(TOUT, TX0, TX1, m) },
+    { box: [[2.4, 2.4, 72.5], [21.6, 49.6, 75]], svg: slab(TLIDP, 2.4, 21.6, m, 2.2) },
+    { box: [[6.3, 6.8, 75], [16.7, 17.2, 85]], svg: rollDraw(st) },
+  ];
+  const handle = { box: [[21, 44.5, 56], [24, 52.5, 64.5]], svg: handleDraw(st) };
+  if (k > 0){
+    s += `<g opacity="${f(1 - .8*k)}">${byDepth([...items, handle, ...supplyParts(st)])}</g>`;
+    s += `<g opacity="${f(k)}">${mech(st, k)}${byDepth([handle])}</g>`;
+    if (k > .6) s += MECH_LABELS;
+    return s;
+  }
+  s += byDepth([...items, handle, ...supplyParts(st)]);
+  s += cisCallouts([
+    ...(facing([1,0,0]) || facing([0,1,0]) ? [{ at: [22.6, HY + 4.5, HZ - 1.2], text: 'FLUSH HANDLE', on: st.hand > .08 }] : []),
+    { at: [12, 49, 66], text: 'CISTERN', on: st.fillQ > .02 },
+    { at: [16, 40, 75], text: 'CISTERN LID', on: false },
+    { at: [11.5, 12 + rollR(st)*.7, 82], text: 'TOILET ROLL', on: false },
+    { at: [24.5, CY + 8, 70], text: 'LID', on: false },
+    { at: [60, CY + 12, 40.5], text: 'SEAT', on: false },
+    { at: [64, CY + 13, 30], text: 'BOWL', on: st.rim > .05 || st.siphon },
+    { at: [32, CY + 9.8, 5.2], text: 'BOLT CAP', on: false },
+    { at: [SUP[0], 48.9, 11.5], text: 'SHUT-OFF VALVE', on: !st.supply },
+    { at: HOSE[Math.floor(HOSE.length*.5)], text: 'SUPPLY HOSE', on: st.fillQ > .02 },
+  ], [2, 72, 0, 52, 0, 85]);
+  return s;
+}
+
+/* ---------- behaviour: one state, one clock ---------- */
+let ui;
+function step(st, dt){
+  st.tt += dt;
+  // handle: held down briefly, then its spring returns it; the chain lifts the flapper, which then floats open
+  if (st.handT > 0){ st.handT -= dt; st.hand = Math.min(1, st.hand + dt/.15); } else st.hand = Math.max(0, st.hand - dt/.3);
+  const lift = .45*st.hand;
+  const floats = st.flap > .33 && st.water > CLOSE_Z;
+  if (floats) st.flap = Math.min(1, Math.max(lift, st.flap + dt/.35));
+  else st.flap = Math.max(lift, st.flap - dt/.3);
+  // cistern out through the flush valve, in through the fill valve
+  let out = 0;
+  if (st.flap > .3 && st.water > TFL + .3) out = Math.min(st.water - TFL - .3, 6*st.flap*dt);
+  st.water -= out;
+  st.fillQ = st.supply ? cl01((st.target - st.water)/.8) : 0;
+  st.water += st.fillQ*2.4*dt;
+  st.over = st.water > OVT; if (st.over) st.water = OVT;
+  st.rim = out > 0 ? Math.min(1, st.rim + dt/.25) : Math.max(0, st.rim - dt/.4);
+  // the pan: inflow raises the bowl; over the weir it spills into the down-leg; a full down-leg siphons the bowl
+  const bin = out/Math.max(dt, 1e-3)*1.6 + st.fillQ*3.4 + (st.over ? .9 : 0);
+  if (!st.siphon){
+    st.bowl += bin*dt;
+    if (st.bowl > WEIR){ const ex = st.bowl - WEIR; st.bowl -= ex*2.5*dt; st.trap = cl01(st.trap + (ex - 2)*1.6*dt); }   // a trickle just spills over; only a rush fills the down-leg
+    else st.trap = Math.max(0, st.trap - .9*dt);
+    if (st.trap >= 1){ st.siphon = true; }
+  } else {
+    st.bowl += (bin - 9)*dt;
+    if (st.bowl <= SUMP_TOP){ st.bowl = SUMP_TOP; st.siphon = false; st.trap = .99; ui.flash('Glug: air gets into the trapway and the siphon breaks', 1800); }
+  }
+  st.bowl = Math.min(WEIR + 3.5, st.bowl);
+  // paper: falls in, gets wet, swirls, and goes with the siphon
+  const p = st.paper;
+  if (p){ p.dz = Math.max(0, p.dz - dt/.45); p.wet = Math.min(1, p.wet + dt/2); p.a += dt*(1 + 4*st.rim);
+    if (st.siphon || p.u > 0) p.u += dt/1.4;
+    if (p.u >= 1) st.paper = null; }
+}
+const busy = st => st.hand > 0 || st.handT > 0 || st.flap > 0 || st.siphon || st.trap > .001 || st.fillQ > .001 || st.rim > .001
+  || st.bowl > WEIR + .01 || (st.paper && (st.paper.dz > 0 || st.paper.u > 0 || st.paper.wet < 1));
+function run(st){
+  if (st.loop) return; st.loop = true;
+  ui.animate(dt => { step(st, dt); if (busy(st)) return true; st.loop = false; return false; });
+}
+function flush(st){
+  if (st.hand > .3 || st.flap > .3) return ui.flash('Already flushing: the flapper is up until the cistern runs down');
+  st.handT = .3; run(st);
+  if (st.water < CLOSE_Z + 1.5) ui.flash(st.supply ? 'The cistern is still refilling: wait for the float to rise' : 'The cistern is empty: turn the water supply back on', 2200);
+}
+function dropPaper(st){
+  if (st.paper) return ui.flash('There is paper in the bowl already: flush it away');
+  const h = Math.hypot(CAM_V[0], CAM_V[1]) || 1;
+  st.paper = { u: 0, dz: 1, wet: 0, a: st.sheets*2.3, fx: -CAM_V[0]/h, fy: -CAM_V[1]/h }; st.sheets++; run(st);
+}
+function setSupply(st, on){
+  st.supply = on; run(st);
+  ui.flash(on ? 'Water on: the fill valve can refill the cistern' : 'Water off: the cistern cannot refill', 1800);
+}
+function setFloat(st, key){
+  st.fl = key; st.target = FLOATS[key].z; run(st);
+  if (key === 'high') ui.flash('Too high: the water reaches the overflow tube and runs into the bowl non-stop', 2600);
+  else if (key === 'low') ui.flash('Low float: the valve shuts early, so each flush uses less water', 2200);
+}
+
+ui = mountFigure({
+  fig:'14', title:'Toilet flush', size:[70, 52, 85], center:[37, 26], palette:'mint', turn:'full',
+  state:{ water:WL, target:WL, fl:'normal', supply:true, hand:0, handT:0, flap:0, bowl:WEIR, trap:0, siphon:false, rim:0,
+    fillQ:0, over:false, tt:0, paper:null, sheets:0 },
+  scene,
+  buttons:[
+    { label:'Drop paper', onClick:(st) => dropPaper(st) },
+    { label:'Flush', onClick:(st) => flush(st) },
+    { label:'Water supply', choices: st => [true, false].map(v => ({ label: v ? 'On' : 'Off', current: st.supply === v, onClick:(st) => setSupply(st, v) })) },
+    { label:'Float height', choices: st => Object.entries(FLOATS).map(([key, o]) => ({ label: o.label, current: st.fl === key, onClick:(st) => setFloat(st, key) })) },
+  ],
+  acts:{ handle:(st) => flush(st), valve:(st) => setSupply(st, !st.supply), roll:(st) => dropPaper(st) },
+  params:(st, q) => {
+    for (const key of ['water', 'bowl', 'flap', 'hand', 'trap', 'rim', 'fillQ']) if (q.has(key)) st[key] = +q.get(key);
+    if (q.get('supply') === '0') st.supply = false;
+    if (FLOATS[q.get('fl')]){ st.fl = q.get('fl'); st.target = FLOATS[st.fl].z; }
+    if (q.get('siphon') === '1') st.siphon = true;
+    if (q.get('paper') === '1') st.paper = { u: +(q.get('pu') || 0), dz: 0, wet: 1, a: 1, fx: -.7, fy: -.7 };
+  },
+});
+if ((ui.st.fillQ > 0 || ui.st.flap > 0 || ui.st.fl === 'high' || ui.st.trap > 0) && !location.search.includes('hold=1')) run(ui.st);   // hold=1 freezes a state for shots
+addEventListener('keydown', e => {
+  if (/input|textarea|button/i.test(e.target.tagName)) return;
+  const kk = e.key.toLowerCase(), st = ui.st;
+  if (kk === ' ' || kk === 'enter') flush(st); else if (kk === 'p') dropPaper(st); else return;
+  e.preventDefault(); ui.render();
+});
+xrMount(() => ui, () => '');
+</script></body></html>
