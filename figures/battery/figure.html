@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>A battery (Daniell cell)</title></head><body>
+<script src="core.js"></script>
+<script>
+/* A Daniell cell on a bench — truth first.
+   How it really works (and where every material is after each step):
+   1. Open circuit. A zinc strip stands in 1 M zinc sulphate, a copper strip in 1 M copper sulphate, each strip bent over its
+      beaker's rim. A glass U-tube full of potassium nitrate set in agar (the salt bridge, cotton-wool plugs in both ends)
+      dips into both solutions; a retort-stand clamp holds it. The voltmeter, wired straight across the two strips, reads
+      the cell's EMF: E = E(Cu2+/Cu) - E(Zn2+/Zn) = 0.34 - (-0.76) = 1.10 V. No current flows, so nothing changes.
+   2. Close the knife switch. Zinc atoms give up two electrons each and leave as Zn2+ ions (Zn -> Zn2+ + 2e-). The electrons
+      run up the zinc strip, through its crocodile clip, the black lead, the switch blade, the lead to the bulb, the bulb's
+      filament (it glows), the red lead and down the copper strip, where Cu2+ ions take them and plate out as copper
+      (Cu2+ + 2e- -> Cu). The voltmeter drops to the terminal voltage E - I r.
+   3. Over hours: the zinc strip thins, the copper strip thickens, the blue of the copper sulphate fades. Faraday:
+      mass = I t M / (2 F).
+   4. Inside the salt bridge, K+ ions drift into the copper beaker (making up for the Cu2+ used) and NO3- ions into the zinc
+      beaker (balancing the new Zn2+), so both solutions stay neutral. Lift the bridge out and that ionic path is broken:
+      no current, the bulb goes out, the voltmeter reads 0.
+   5. Swap the zinc half-cell for magnesium in magnesium sulphate: E = 0.34 - (-2.37) = 2.71 V, more current, brighter bulb.
+
+   Parts (each held by another):
+   BENCH   bench mat
+   CELL    two 250 mL glass beakers with graduations, standing on the mat . 1 M zinc (or magnesium) sulphate . 1 M copper
+           sulphate . zinc / magnesium strip and copper strip, each hooked over its beaker's rim
+   BRIDGE  glass U-tube . potassium nitrate agar gel . two cotton-wool plugs
+   STAND   retort-stand base . rod screwed into it . boss head clamped on the rod, thumbscrew . clamp arm in the boss .
+           clamp head (back plate, two cork-lined fingers) gripping the top of the U-tube
+   LEADS   four crocodile clips (insulating boot + two jaws) on the strips' outer tabs . black lead strip -> switch .
+           lead switch -> bulb . red lead bulb -> copper . voltmeter leads (black to the zinc, red to the copper)
+   SWITCH  slate base . two hinge plates . brass blade on a pivot . two spring jaw plates . neck and bakelite handle .
+           two terminal screws
+   BULB    batten holder base, its two contact strips and terminal screws . brass socket . 1.5 V MES bulb: screw cap,
+           two support wires, coiled tungsten filament, glass envelope
+   METER   case . dial plate, 0-3 V scale, pointer, zero-adjust screw, window . two binding posts . multiplier resistor .
+           internal wires . horseshoe magnet . two pole pieces . soft-iron core . moving coil on its shaft . front and back
+           hairsprings (they carry the current into the coil)
+   UNSEEN  electrons in the metal . Zn2+ (Mg2+) . Cu2+ . sulphate . K+ . NO3-
+   Units: 1 unit = 1 mm. x = depth (front x = BW), y = width (+y viewer-left), z = up. */
+
+/* ---------- layout ---------- */
+const BW = 246, BD = 318, BT = 3;                      // bench mat
+const BR = 34, BZ1 = 98, LIQ = 70;                     // beaker radius, rim height, liquid level
+const ZNC = [80, 240], CUC = [80, 130];                // beaker centres
+const SX0 = 69, SX1 = 91, ST_BOT = 20, T0 = 3;         // strips: width along x, bottom, drawn thickness
+const BRG = { x:80, yA:213, yB:157, yc:185, r:28, z0:45, z1:112, tr:5.5 };   // salt bridge (A in the zinc beaker)
+const BRL = 58, SWL = 86;                              // how far the bridge / a strip lifts out
+const ROD = [24, 185], ROD_TOP = 206;                  // retort stand rod
+const VM = [158, 142, 3, 214, 198, 72];                // voltmeter case
+const VP = [170, 30];                                  // meter pivot (y, z) on the face
+const BUL = [186, 70];                                 // bulb holder centre
+const SWB = [176, 238, 202, 300], SWX = 189, HZ = 16, HY = 292, BLADE = 46;   // knife switch
+const T1 = [SWX, 297.5], T2 = [SWX, 242.5];            // switch terminal screws
+const BA = [194, 78], BB = [178, 62];                  // bulb holder terminal screws
+const K3 = 1.2247;                                     // model -> screen scale of the projection
+
+/* ---------- chemistry ---------- */
+const FARADAY = 96485, RT2F = 0.025693/2, E_CU = 0.34, R_INT = 3, R_BULB = 6, VSOL = .18;
+const FAST = 4;                                        // fast time: hours per second
+const METALS = {
+  zn:{ name:'Zinc', up:'ZINC', ion:'ZN2+', E:-0.76, M:65.38, m0:7.85, col:'#aab4bf', ionCol:'#93a1b5' },
+  mg:{ name:'Magnesium', up:'MAGNESIUM', ion:'MG2+', E:-2.37, M:24.31, m0:1.91, col:'#e3e7ea', ionCol:'#d8c9e8' } };
+const CU_M = 63.55;
+const COLS = { cu:'#2f7fd8', so4:'#f2c230', k:'#9b59d6', no3:'#43b05c', el:'#ffd84a' };
+const GLASS = { l:'#e4f2f4', m:'#cfe6ea', d:'#a9c9cf' }, GEL = { l:'#f7f8ef', m:'#e6eadb', d:'#c4cbbb' };
+const BRASS = matOf('#d8b25a'), COPM = matOf('#e08a5a'), BAKE = matOf('#3e3833'), CORK = matOf('#c9a46a'), IRON = matOf('#5b6670');
+const SLATE = matOf('#6c7a80'), MAGM = matOf('#d64535'), REDM = matOf('#d9443a'), BLKM = matOf('#3a3632');
+
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const f2 = v => (+v).toFixed(2);
+function cellNow(st){
+  const M = METALS[st.metal], nM = st.n[st.metal], nCu = st.n.zn + st.n.mg;
+  const cM = 1 + nM/VSOL, cCu = Math.max(.02, 1 - nCu/VSOL);
+  const E = E_CU - M.E - RT2F*Math.log(cM/cCu);
+  const lost = nM*M.M, rem = 1 - lost/M.m0, gained = nCu*CU_M;
+  const lift = st.lift || 0;
+  const stripIn = ST_BOT + SWL*lift < LIQ - 8, bridgeIn = BRG.z0 + BRL*ease(st.br) < LIQ - 4;
+  const ionic = stripIn && bridgeIn;
+  const spent = rem < .12 || cCu < .06;
+  const closed = st.sw < .04;
+  const I = ionic && closed ? E/(R_INT + R_BULB) : 0;          // fast time stops once a strip is spent; the cell itself would carry on
+  const V = !ionic ? 0 : I > 0 ? E - I*R_INT : E;
+  return { E, I, V, cCu, rem, lost, gained, ionic, closed, spent, bridgeIn, stripIn, M };
+}
+function advance(st, c, hours){ const dn = c.I*hours*3600/(2*FARADAY); st.n[st.metal] += dn; st.hours += hours; }
+
+/* ---------- small helpers ---------- */
+const dcBoxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const grow = (b, r) => [b[0].map(v => v - r), b[1].map(v => v + r)];
+const rodBox = (a, b, r) => { const d = norm(sub(b, a)), e = i => r*Math.sqrt(Math.max(0, 1 - d[i]*d[i])) + .02;
+  return [[0,1,2].map(i => Math.min(a[i], b[i]) - e(i)), [0,1,2].map(i => Math.max(a[i], b[i]) + e(i))]; };
+const addv = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]], scl = (a, k) => a.map(v => v*k);
+const lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+// round each interior corner of a route (a lead bends, it doesn't kink)
+const dcBend = (pts, r = 2) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k]) * d/la), q = c.map((v, k) => b[k] + (v - b[k]) * d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+// a stroked tube in model units (not rescaled by inkScale): ink border, body colour, optional highlight
+const tubeSvg = (pts, r, col, hi = null) => { const d = pd(pts, false), w = 2*r*K3;
+  return `<path d="${d}" fill="none" stroke="${INK}" style="stroke-width:${f2(w + 1.5*INK_K)}" stroke-linejoin="round"/>`
+    + `<path d="${d}" fill="none" stroke="${col}" style="stroke-width:${f2(w)}" stroke-linejoin="round"/>`
+    + (hi ? `<path d="${d}" fill="none" stroke="${hi}" style="stroke-width:${f2(w*.28)}" opacity=".55" stroke-linejoin="round"/>` : ''); };
+const dotAt = (p, r, col, w = .8) => { const [X, Y] = P(...p); return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f2(r*K3)}" fill="${col}" stroke="${INK}" style="stroke-width:${f2(w*INK_K)}"/>`; };
+// a lead cut into short pieces, each with its own box, so byDepth puts it behind or in front of the solids it passes
+function dcWire(pts, col, r = 1.1, Lc = 7, br = 2){
+  const q = dcBend(pts, br), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < Lc){ len += Math.hypot(...q[j].map((v, k) => v - q[j - 1][k])); j++; }
+    if (len < Lc) while (j < q.length - 1) j++;
+    const seg = q.slice(i, j + 1);
+    let svg = tubeSvg(seg, r, col);
+    if (i === 0) svg = dotAt(q[0], r*.95, col, .7) + svg;
+    if (j === q.length - 1) svg += dotAt(q[j], r*.95, col, .7);
+    out.push({ box: grow(dcBoxOf(seg), r), svg }); i = j; }
+  return out;
+}
+// a prism: convex profile in (y, z) swept along x from x0 to x1, both end faces
+function prismX(prof, x0, x1, Mt, w = .8){
+  let s = loft(on(PX(x0), prof), on(PX(x1), prof), n => toneI(n, Mt));
+  for (const [x, n] of [[x0, [-1,0,0]], [x1, [1,0,0]]]) if (vis(n)) s += shape(on(PX(x), prof), toneI(n, Mt), w);
+  return s + hullInk([...on(PX(x0), prof), ...on(PX(x1), prof)], w + .2);
+}
+// a sign on an ion: + or -
+const signMark = (p, plus, rr) => { const [X, Y] = P(...p), a = rr*K3*.55;
+  return `<path d="M${f(X - a)} ${f(Y)}H${f(X + a)}${plus ? `M${f(X)} ${f(Y - a)}V${f(Y + a)}` : ''}" stroke="${INK}" style="stroke-width:${f2(.75*INK_K)}" stroke-linecap="round"/>`; };
+const ionSvg = (p, col, plus, rr = 2.6, op = 1) => `<g opacity="${f2(op)}">${dotAt(p, rr, col, .6)}${signMark(p, plus, rr)}</g>`;
+// fixed pseudo-random points in a beaker's liquid
+function scatter(seed, n, cx, cy, avoid){ let s = seed; const rnd = () => (s = (s*16807) % 2147483647) / 2147483647, out = [];
+  let guard = 0; while (out.length < n && guard++ < 500){ const a = rnd()*Math.PI*2, r = Math.sqrt(rnd())*27, p = [cx + r*Math.cos(a), cy + r*Math.sin(a), 10 + rnd()*52];
+    if (avoid(p) || out.some(q => Math.hypot(q[0]-p[0], q[1]-p[1], q[2]-p[2]) < 9)) continue; out.push(p); }
+  return out; }
+const nearStrip = (p, y0, y1) => p[0] > SX0 - 4 && p[0] < SX1 + 4 && p[1] > y0 - 5 && p[1] < y1 + 5;
+const nearLeg = (p, y) => Math.hypot(p[0] - BRG.x, p[1] - y) < BRG.tr + 5;
+const ZN_BULK = scatter(11, 14, ZNC[0], ZNC[1], p => nearStrip(p, 254, 260) || nearLeg(p, BRG.yA));
+const CU_BULK = scatter(29, 14, CUC[0], CUC[1], p => nearStrip(p, 100, 109) || nearLeg(p, BRG.yB));
+
+/* ---------- geometry that moves ---------- */
+function bridgePath(st){ const dz = BRL*ease(st.br), b = BRG, pts = [];
+  for (let z = b.z0; z < b.z1; z += 7) pts.push([b.x, b.yA, z + dz]);
+  for (let i = 0; i <= 18; i++){ const a = i/18*Math.PI; pts.push([b.x, b.yc + b.r*Math.cos(a), b.z1 + b.r*Math.sin(a) + dz]); }
+  for (let z = b.z1 - 7; z >= b.z0 - .01; z -= 7) pts.push([b.x, b.yB, z + dz]);
+  if (pts[pts.length - 1][2] > b.z0 + dz + .01) pts.push([b.x, b.yB, b.z0 + dz]);
+  return pts; }
+// cut a polyline into runs by height band: 0 = under the liquid, 1 = in the beaker above it, 2 = above the rims
+function bandRuns(pts){ const cuts = [LIQ, BZ1], band = z => z < LIQ ? 0 : z < BZ1 ? 1 : 2, runs = [];
+  let cur = { band: band(pts[0][2]), pts: [pts[0]] };
+  for (let i = 1; i < pts.length; i++){ const a = pts[i - 1], b = pts[i];
+    for (const c of cuts) if ((a[2] - c)*(b[2] - c) < 0){ const t = (c - a[2])/(b[2] - a[2]), m = lerp3(a, b, t); cur.pts.push(m); runs.push(cur); cur = { band: band(c + (b[2] > a[2] ? .01 : -.01)), pts: [m] }; }
+    cur.pts.push(b); }
+  runs.push(cur); return runs.filter(r => r.pts.length > 1); }
+// knife-switch blade: pivot, direction along the blade, its up direction
+function blade(st){ const a = 65*ease(st.sw)*Math.PI/180, d = [0, -Math.cos(a), Math.sin(a)], u = [0, Math.sin(a), Math.cos(a)];
+  const piv = [SWX, HY, HZ], end = addv(piv, scl(d, BLADE)); return { a, d, u, piv, end }; }
+// the strips' outer tab, clip boots and the leads hanging from them, for strip side s = 'zn' | 'cu'
+function stripGeo(st, side){ const dz = side === 'zn' ? SWL*ease(st.lift || 0) : 0;
+  const zn = side === 'zn', tab = zn ? [276, 279] : [91, 94], boot = zn ? 277.5 : 92.5;
+  return { dz, zn, tab, boot, clips: [74, 86].map(x => [x, boot, 70 + dz]) }; }
+
+/* ---------- leads (routes from port to port) ---------- */
+function leads(st){ const zg = stripGeo(st, 'zn'), cg = stripGeo(st, 'cu'), [z1, z2] = zg.clips, [c1, c2] = cg.clips;
+  const hangZ = (c, y1, y2, x1) => [c, [c[0] + .5, y1, Math.max(45, c[2] - 25)], [c[0] + 1, y2, 20], [x1, y2 + (y2 - c[1])*.4, 4.5]];
+  const L1 = [...hangZ(z1, 280, 284, 76), [140, 300, 4.5], [182, 305, 4.5], [SWX, 304, 6.5], [SWX, 302.5, 11.5], [T1[0], T1[1], 11.5]];
+  const L2 = [[T2[0], T2[1], 11.5], [SWX, 236.5, 11.5], [SWX, 235.2, 7], [191, 234, 4.5], [232, 226, 4.5], [232, 98, 4.5], [205, 88.5, 4.5], [202.5, 86.5, 7.5], [200.5, 84.5, 12.5], [BA[0], BA[1], 12.5]];
+  const L3 = [[BB[0], BB[1], 12.5], [172, 56, 12.5], [170.5, 54.5, 8], [169, 53, 4.5], [110, 66, 4.5], ...hangZ(c1, 91, 86, 78).reverse()];
+  const VN = [[166, 190, 76], [156.5, 190, 76], [155, 190, 74.5], [155, 190, 8], [153, 190, 4.5], [140, 212, 4.5], [128, 258, 4.5], [104, 280, 4.5], ...hangZ(z2, 280, 283, 90).reverse()];
+  const VPos = [[166, 150, 76], [156.5, 150, 76], [155, 150, 74.5], [155, 150, 8], [153, 150, 4.5], [130, 118, 4.5], [112, 98, 4.5], ...hangZ(c2, 90, 86, 92).reverse()];
+  return { L1, L2, L3, VN, VPos }; }
+function electronPath(st, ld){ const zg = stripGeo(st, 'zn'), b = blade(st), dz = zg.dz;
+  const zs = [80, 257.5, 30 + dz], cs = [80, 102.5, 30];
+  return [zs, [80, 257.5, 99.2 + dz], [80, 277.5, 99.2 + dz], [80, 277.5, 86 + dz], [74, 277.5, 84 + dz], ...ld.L1,
+    [SWX, T1[1], 11], [SWX, HY, HZ], b.end, [SWX, T2[1] + 2, 11], ...ld.L2,
+    [190, 74, 11], [186, 72.5, 25], [186, 73, 33.5], [186, 67, 33.5], [186, 67.5, 25], [182, 66, 11], ...ld.L3,
+    [74, 92.5, 84], [80, 92.5, 86], [80, 92.5, 99.2], [80, 102.5, 99.2], cs]; }
+function pathAt(pts){ const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(...pts[i].map((v, k) => v - pts[i - 1][k])));
+  const total = cum[cum.length - 1];
+  return { total, at: s => { s = ((s % total) + total) % total; let i = 1; while (i < cum.length - 1 && cum[i] < s) i++;
+    const t = (s - cum[i - 1]) / ((cum[i] - cum[i - 1]) || 1); return lerp3(pts[i - 1], pts[i], t); } }; }
+
+/* ---------- parts ---------- */
+// a strip: the part in the beaker (thinned or plated below the old liquid line), the hook over the rim, the outer tab
+function stripParts(st, side, c, k){ const g = stripGeo(st, side), dz = g.dz, zn = g.zn, out = { low:[], mid:[], top:[] };
+  const M = zn ? METALS[st.metal] : null;
+  const base = zn ? matOf(M.col) : COPM;
+  const worn = zn ? mix(M.col, '#6d747c', .55*(1 - c.rem)) : null;
+  const dep = zn ? 0 : Math.min(4.5, c.gained*.6);
+  const lowM = zn ? matOf(worn) : matOf(mix('#e08a5a', '#a4502c', clamp01(c.gained/3)));
+  const yThin = zn ? [259 - T0*Math.max(.12, c.rem), 259] : [101, 104 + dep];
+  const yFull = zn ? [256, 259] : [101, 104];
+  const segs = [[ST_BOT, LIQ, yThin, lowM], [LIQ, BZ1, yFull, base]];
+  for (const [z0, z1, yy, Mt] of segs){ const a = z0 + dz, b = z1 + dz;
+    for (const [lo, hi, band] of [[-1e9, LIQ, 'low'], [LIQ, BZ1, 'mid'], [BZ1, 1e9, 'top']]){
+      const p0 = Math.max(a, lo), p1 = Math.min(b, hi); if (p1 - p0 < .05) continue;
+      out[band].push({ box: [[SX0, yy[0], p0], [SX1, yy[1], p1]], svg: act('strip', box(SX0, yy[0], p0, SX1, yy[1], p1, Mt, toneI, .8)) }); } }
+  // hook over the rim and the outer tab the clips bite on
+  const hy = zn ? [256, 279] : [91, 104];
+  out.top.push({ box: [[SX0, hy[0], BZ1 + dz], [SX1, hy[1], BZ1 + 2.5 + dz]], svg: act('strip', box(SX0, hy[0], BZ1 + dz, SX1, hy[1], BZ1 + 2.5 + dz, base, toneI, .8)) });
+  out.top.push({ box: [[SX0, g.tab[0], 84 + dz], [SX1, g.tab[1], BZ1 + dz]], svg: box(SX0, g.tab[0], 84 + dz, SX1, g.tab[1], BZ1 + dz, base, toneI, .8) });
+  // crocodile clips: two jaws either side of the tab, the insulating boot under them
+  g.clips.forEach((cp, i) => { const x = cp[0], red = !zn, bootM = red ? REDM : BLKM, jy = zn ? [[274.6, 276], [279, 280.4]] : [[94, 95.4], [89.6, 91]];
+    for (const [y0, y1] of jy) out.top.push({ box: [[x - 2.6, y0, 84 + dz], [x + 2.6, y1, 92 + dz]], svg: box(x - 2.6, y0, 84 + dz, x + 2.6, y1, 92 + dz, METAL, toneI, .6) });
+    out.top.push({ box: rodBox([x, g.boot, 70 + dz], [x, g.boot, 84 + dz], 3), svg: rod([x, g.boot, 70 + dz], [x, g.boot, 84 + dz], 2.4, bootM, toneI, .8, 3, 14) }); });
+  return out;
+}
+// the salt bridge's pieces by band, with its cotton plugs
+function bridgeParts(st){ const pts = bridgePath(st), runs = bandRuns(pts), dz = BRL*ease(st.br), out = { zn:{ low:[], mid:[] }, cu:{ low:[], mid:[] }, top:[] };
+  for (const r of runs){ const svg = tubeSvg(r.pts, BRG.tr, GEL.m, '#ffffff'), b = grow(dcBoxOf(r.pts), BRG.tr);
+    if (r.band === 2) out.top.push({ pts: r.pts, svg }); else { const side = r.pts[0][1] > BRG.yc ? 'zn' : 'cu'; out[side][r.band ? 'mid' : 'low'].push({ box: b, svg: act('bridge', svg) }); } }
+  for (const [y, side] of [[BRG.yA, 'zn'], [BRG.yB, 'cu']]){ const tip = [BRG.x, y, BRG.z0 + dz - 1.5], z = tip[2], c = `<g>${dotAt(tip, 4.4, '#fbfaf3', .7)}${dotAt([BRG.x - 1.2, y + 1.6, z + 1], 2.2, '#ffffff', 0)}</g>`;
+    const band = z < LIQ ? 'low' : z < BZ1 ? 'mid' : null, it = { box: [[BRG.x - 4.5, y - 4.5, z - 4.5], [BRG.x + 4.5, y + 4.5, z + 3]], svg: c };
+    if (band) out[side][band].push(it); else out.top.push({ pts: [tip], svg: c, tip: true }); }
+  return out; }
+
+// a glass beaker with whatever stands in it: far wall, contents under the liquid, the liquid, contents above, near wall
+function beakerSvg(cx, cy, sol, low, mid, k, grad){
+  const n = 40, A = on(PZ(BT), ellUV(cx, cy, BR, BR, n)), B = on(PZ(BZ1), ellUV(cx, cy, BR, BR, n));
+  let s = fill(pd(on(PZ(BT + .4), ellUV(cx, cy, BR - .8, BR - .8, n))), '#d6ebef', 'opacity=".6"') + ink(pd(on(PZ(BT + 2), ellUV(cx, cy, BR - 1.6, BR - 1.6, n))), .5);
+  s += `<g opacity=".42">` + loft(A, B, nr => toneI(nr, GLASS), true) + `</g>`;
+  s += byDepth(low);
+  const LA = on(PZ(BT + 2), ellUV(cx, cy, BR - 1.5, BR - 1.5, n)), LB = on(PZ(LIQ), ellUV(cx, cy, BR - 1.5, BR - 1.5, n));
+  const a = sol.a*(1 - .45*k);
+  s += fill(sp(hull([...LA, ...LB].map(p => P(...p)))), sol.col, `opacity="${f2(a)}"`);
+  s += fill(pd(LB), mix(sol.col, '#ffffff', .4), `opacity="${f2(Math.min(1, a*1.1 + .08))}"`) + ink(pd(LB), .7);
+  s += byDepth(mid);
+  s += `<g opacity=".2">` + loft(A, B, nr => toneI(nr, GLASS)) + `</g>`;
+  // two highlights on the near side, and the printed graduations where they face the viewer
+  for (const [a0, a1, op] of [[-38, -30, .45], [-24, -21, .35]]){ const q = []; for (const [aa, z] of [[a0, 14], [a1, 14], [a1, 90], [a0, 90]]){ const t = (YAW + aa)*Math.PI/180; q.push([cx + BR*Math.cos(t), cy + BR*Math.sin(t), z]); }
+    s += fill(pd(q), '#ffffff', `opacity="${op}"`); }
+  if (Math.cos((YAW - grad)*Math.PI/180) > .35){ let g = ''; const t = grad*Math.PI/180;
+    for (let i = 1; i <= 4; i++){ const z = BT + 20*i, w = i % 2 ? 7 : 11, q = [];
+      for (let d = -w; d <= 0; d += w/3) q.push([cx + (BR + .2)*Math.cos(t + d/BR), cy + (BR + .2)*Math.sin(t + d/BR), z]); g += pd(q, false); }
+    s += `<path d="${g}" fill="none" stroke="#ffffff" style="stroke-width:${f2(1.1*INK_K)}" opacity=".9"/>`; }
+  s += ink(pd(B), 1.2) + ink(pd(on(PZ(BZ1), ellUV(cx, cy, BR - 1.6, BR - 1.6, n))), .6) + hullInk([...A, ...B], 1.9);
+  return s;
+}
+
+/* ---------- voltmeter ---------- */
+const ang = v => (-50 + 100*Math.max(0, Math.min(3.1, v))/3)*Math.PI/180;
+const onFace = (r, a, x = VM[3] + .3) => [x, VP[0] - r*Math.sin(a), VP[1] + r*Math.cos(a)];
+function meterFace(st, k){ const xF = VM[3]; let s = '';
+  s += shape(on(PX(xF + .2), rrUV(145, 19, 195, 67, 3)), mix('#fbf8ee', '#ffffff', .2), .9);
+  // scale: minor ticks every 0.1 V, major and figures every volt
+  let t = '';
+  for (let i = 0; i <= 30; i++){ const a = ang(i/10), r0 = i % 10 ? 25 : 23.5, r1 = 27.5; t += pd([onFace(r0, a), onFace(r1, a)], false); }
+  s += `<path d="${t}" fill="none" stroke="${INK}" style="stroke-width:${f2(.7*INK_K)}"/>`;
+  { const q = []; for (let i = 0; i <= 24; i++) q.push(onFace(27.5, ang(3*i/24))); s += line(q, .8); }
+  for (let v = 0; v <= 3; v++){ const p = onFace(31, ang(v)); s += tx(p[0], p[1], p[2] - 1.4, String(v), 4.2, INK, 800); }
+  s += tx(xF + .3, VP[0], VP[1] + 11, 'V', 7, INK, 800) + tx(xF + .3, VP[0], 22.5, 'DC VOLTS', 2.6, mix(INK, '#ffffff', .25), 700);
+  // pointer and its boss
+  const a = ang(st.needle || 0), tip = onFace(28.5, a, xF + .7), tail = onFace(-5, a, xF + .7);
+  s += `<path d="${pd([tail, tip], false)}" stroke="${INK}" style="stroke-width:${f2(1.3*INK_K)}" stroke-linecap="round"/>` + `<path d="${pd([onFace(20, a, xF + .7), tip], false)}" stroke="#d9443a" style="stroke-width:${f2(.9*INK_K)}" stroke-linecap="round"/>`;
+  s += shape(on(PX(xF + .8), ellUV(VP[0], VP[1], 2.2, 2.2, 14)), '#3a3632', .6);
+  // zero-adjust screw, window glass and its streak, maker's line
+  s += shape(on(PX(xF + .3), ellUV(VP[0], 11, 2.6, 2.6, 14)), '#2f2b28', .6) + line([[xF + .4, VP[0] + 1.8, 11], [xF + .4, VP[0] - 1.8, 11]], .7).replace(INK, '#cfc8b8');
+  s += fill(pd(on(PX(xF + 1), rrUV(145, 19, 195, 67, 3))), '#cfe9f0', `opacity="${f2(.2*(1 - k))}"`)
+    + fill(pd(on(PX(xF + 1.05), [[184, 63], [188, 63], [160, 23], [156, 23]])), '#ffffff', `opacity="${f2(.35*(1 - k))}"`);
+  return s; }
+function meterInside(st){ const parts = [], put = (b, svg) => parts.push({ box: b, svg }), a = ang(st.needle || 0), live = (st.needle || 0) > .02;
+  const bx = (x0, y0, z0, x1, y1, z1, Mt, w = .7) => put([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, Mt, toneI, w));
+  const [y, z] = VP;
+  // horseshoe magnet: two arms joined at the bottom, soft-iron pole pieces on the arms, a fixed iron core between them
+  bx(188, 151, 14, 202, 157, 40, MAGM); bx(188, 183, 14, 202, 189, 40, MAGM); bx(188, 151, 8, 202, 189, 14, MAGM);
+  bx(188, 157, 21, 202, 163, 39, IRON); bx(188, 177, 21, 202, 183, 39, IRON);
+  put([[188, y - 4, z - 4], [202, y + 4, z + 4]], cylX(188, 202, y, z, 4, METAL, toneI, .7, 18));
+  // the moving coil: a copper winding round the core, turning on the shaft with the pointer
+  const e = [0, Math.cos(a), -Math.sin(a)], cr = 5.6, sA = [0, y + cr*e[1], z + cr*e[2]], sB = [0, y - cr*e[1], z - cr*e[2]];
+  const coilM = live ? matOf('#ff9a4a') : matOf('#c77b3c');
+  for (const s0 of [sA, sB]){ const a0 = [186, s0[1], s0[2]], a1 = [204, s0[1], s0[2]]; put(rodBox(a0, a1, .9), rod(a0, a1, .9, coilM, toneI, .6, .9, 8)); }
+  for (const x of [186, 204]){ const a0 = [x, sA[1], sA[2]], a1 = [x, sB[1], sB[2]]; put(rodBox(a0, a1, .9), rod(a0, a1, .9, coilM, toneI, .6, .9, 8)); }
+  // shaft out to the pointer, hairsprings front and back
+  put(rodBox([204, y, z], [VM[3], y, z], .5), rod([204, y, z], [VM[3], y, z], .5, METAL, toneI, .5, .5, 8));
+  put(rodBox([181, y, z], [186, y, z], .5), rod([181, y, z], [186, y, z], .5, METAL, toneI, .5, .5, 8));
+  for (const x of [207, 183.5]){ const q = []; for (let i = 0; i <= 60; i++){ const t = i/60*4.5*Math.PI*2 + a, r = .8 + 3.6*i/60; q.push([x, y + r*Math.cos(t), z + r*Math.sin(t)]); }
+    put([[x - .3, y - 4.6, z - 4.6], [x + .3, y + 4.6, z + 4.6]], `<path d="${pd(q, false)}" fill="none" stroke="${INK}" style="stroke-width:${f2(1.1*INK_K)}"/><path d="${pd(q, false)}" fill="none" stroke="${live ? '#ffcf6a' : '#d8b25a'}" style="stroke-width:${f2(.5*INK_K)}"/>`); }
+  // multiplier resistor under the top, with its colour bands, and the internal wires post -> resistor -> spring -> coil -> spring -> post
+  { const r0 = [170, 152, 60], r1 = [170, 178, 60]; let rs = rod(r0, r1, 2.3, matOf('#d9c49a'), toneI, .7, 2.3, 14);
+    for (const [t, c] of [[.25, '#8a4a2a'], [.4, '#222222'], [.55, '#d9443a'], [.8, '#d8b25a']]){ const p = lerp3(r0, r1, t); rs += ink(pd(on(PY(p[1]), ellUV(170, 60, 2.35, 2.35, 12)), true), .1).replace(INK, c).replace('stroke-width', 'style="stroke-width:1.2" data-x'); }
+    put(rodBox(r0, r1, 2.3), rs); }
+  const wc = live ? '#ffb347' : '#8a3a24';
+  parts.push(...dcWire([[166, 150, 72], [168, 150, 66], [170, 150, 60]], wc, .4, 7, 1));
+  parts.push(...dcWire([[170, 180, 60], [196, 181, 52], [207, y + 4.5, z + 1]], wc, .4, 7, 1));
+  parts.push(...dcWire([[166, 190, 72], [176, 190, 50], [183.5, y + 4.5, z]], wc, .4, 7, 1));
+  return byDepth(parts); }
+
+/* ---------- scene ---------- */
+const LBL_B = [4, 234, 50, 306, 0, ROD_TOP];      // label columns measure their room from what stands on the mat: a pill may cover a bare corner of it
+const solName = M => M.up.length > 4 ? M.ion.slice(0, 2) + 'SO4 SOLUTION' : M.up + ' SULPHATE';
+function scene(st, m){
+  const k = ease(st.xr || 0), c = cellNow(st);
+  if (st.needle == null) st.needle = c.V;
+  if (c.I > 0 && k > 0) kick();
+  const live = c.I > 0, glow = st.glow || 0, ld = leads(st), b = blade(st), dzB = BRL*ease(st.br), hz = BRG.z1 + BRG.r + dzB;
+  let s = `<defs><radialGradient id="dcGlow"><stop offset="0" stop-color="#fff6c0" stop-opacity=".95"/><stop offset=".45" stop-color="#ffd860" stop-opacity=".55"/><stop offset="1" stop-color="#ffc040" stop-opacity="0"/></radialGradient></defs>`;
+  s += board(0, 0, BW, BD, BT, 8, BOARD);
+
+  // ---- shadows, all on the mat
+  const ring = (x, y, r, z, n = 16) => on(PZ(z), ellUV(x, y, r, r, n));
+  const bx8 = (x0, y0, z0, x1, y1, z1) => { const o = []; for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) o.push([x, y, z]); return o; };
+  let sh = '';
+  sh += castShadow(bx8(...VM), BT) + castShadow([...ring(BUL[0], BUL[1], 13, BT), ...ring(BUL[0], BUL[1], 10, 44)], BT);
+  sh += castShadow(bx8(SWB[0], SWB[1], BT, SWB[2], SWB[3], 9), BT) + castShadow([...bx8(SWX - 3, b.piv[1] - 3, 9, SWX + 3, b.piv[1] + 3, 21), addv(b.end, scl(b.u, 18))], BT);
+  sh += castShadow(bx8(4, 160, BT, 44, 210, 9), BT) + castShadow([...ring(ROD[0], ROD[1], 3, BT, 8), ...ring(ROD[0], ROD[1], 3, ROD_TOP, 8)], BT);
+  sh += castShadow([[ROD[0], ROD[1] - 6, hz], [ROD[0], ROD[1] + 6, hz], [86, 183, hz], [86, 187, hz]], BT);
+  let shG = '';
+  for (const [cx, cy] of [ZNC, CUC]) shG += castShadow([...ring(cx, cy, BR, BT, 24), ...ring(cx, cy, BR, BZ1, 24)], BT);
+  shG += castShadow([[BRG.x, BRG.yA, BRG.z0 + dzB], [BRG.x, BRG.yB, BRG.z0 + dzB], [BRG.x, BRG.yA, hz], [BRG.x, BRG.yB, hz]], BT);
+  s += clipTo(boardTop(0, 0, BW, BD, BT, 8), sh + `<g opacity=".45">${shG}</g>`);
+
+  const items = [], put = (bb, svg) => items.push({ box: bb, svg });
+  const sp = stripParts(st, 'zn', c, k), cp = stripParts(st, 'cu', c, k), bp = bridgeParts(st);
+  // ions in the liquids (see-through): the bulk, Zn2+ leaving the zinc, Cu2+ arriving at the copper
+  const ionsZn = [], ionsCu = [];
+  if (k > 0){ const ph = st.ph || 0, M = c.M, more = Math.round(6*clamp01(st.n[st.metal]*M.M/M.m0*1.5));
+    ZN_BULK.forEach((p, i) => { const plus = i % 2 === 0 || i >= 14 - more; ionsZn.push({ at: p, box: [[p[0] - 3, p[1] - 3, p[2] - 3], [p[0] + 3, p[1] + 3, p[2] + 3]], svg: ionSvg(p, plus ? M.ionCol : COLS.so4, plus) }); });
+    CU_BULK.forEach((p, i) => { if (i % 2 === 0 && i/14 > c.cCu) return; const plus = i % 2 === 0; ionsCu.push({ at: p, box: [[p[0] - 3, p[1] - 3, p[2] - 3], [p[0] + 3, p[1] + 3, p[2] + 3]], svg: ionSvg(p, plus ? COLS.cu : COLS.so4, plus) }); });
+    if (c.stripIn) for (let i = 0; i < 5; i++){ const t = ((ph*.35 + i/5) % 1), x = 72 + 16*((i*.37) % 1), z = 26 + 38*((i*.61) % 1) + SWL*ease(st.lift || 0);
+      if (z > LIQ - 3) continue;
+      const yF = 259 - T0*Math.max(.12, c.rem), p = [x, yF - 2.8 - 20*t, z], op = live ? Math.min(1, t/.15, (1 - t)/.15) : (i === 2 ? 1 : 0);
+      if (op > .02) ionsZn.push({ at: p, box: [[x - 3, p[1] - 3, z - 3], [x + 3, p[1] + 3, z + 3]], svg: ionSvg(p, M.ionCol, true, 2.6, op) }); }
+    for (let i = 0; i < 5; i++){ const t = ((ph*.35 + i/5 + .1) % 1), x = 72 + 16*((i*.53) % 1), z = 24 + 40*((i*.29) % 1), yF = 104 + Math.min(4.5, c.gained*.6);
+      const p = [x, yF + 2.8 + 22*(1 - t), z], op = live ? Math.min(1, t/.15, (1 - t)/.12) : (i === 1 ? 1 : 0);
+      if (op > .02) ionsCu.push({ at: p, box: [[x - 3, p[1] - 3, z - 3], [x + 3, p[1] + 3, z + 3]], svg: ionSvg(p, COLS.cu, true, 2.6, op*k) }); } }
+  const znSol = { col:'#e3eef0', a:.42 }, cuSol = { col: mix('#d9eef5', '#2f86d8', clamp01(c.cCu)), a: .32 + .38*c.cCu };
+  put([[ZNC[0] - BR, ZNC[1] - BR, BT], [ZNC[0] + BR, ZNC[1] + BR, BZ1]], beakerSvg(ZNC[0], ZNC[1], znSol, [...sp.low, ...bp.zn.low, ...ionsZn.map(o => ({ ...o, svg: `<g opacity="${f2(k)}">${o.svg}</g>` }))], [...sp.mid, ...bp.zn.mid], k, 0));
+  put([[CUC[0] - BR, CUC[1] - BR, BT], [CUC[0] + BR, CUC[1] + BR, BZ1]], beakerSvg(CUC[0], CUC[1], cuSol, [...cp.low, ...bp.cu.low, ...ionsCu.map(o => ({ ...o, svg: `<g opacity="${f2(k)}">${o.svg}</g>` }))], [...cp.mid, ...bp.cu.mid], k, 0));
+  items.push(...sp.top, ...cp.top);
+
+  // ---- salt bridge above the rims, held by the clamp head (fingers above and below the tube, back plate behind)
+  { const runs = bp.top.filter(r => !r.tip), tips = bp.top.filter(r => r.tip), allPts = [...runs.flatMap(r => r.pts), [69, 182, hz - 9], [87, 188, hz + 9]];
+    const plate = box(69, 182, hz - 9, 72, 188, hz + 9, IRON, toneI, .7);
+    const fingerLo = box(72, 183, hz - BRG.tr - 3, 87, 187, hz - BRG.tr, IRON, toneI, .7) + box(74, 183, hz - BRG.tr - .8, 86, 187, hz - BRG.tr, CORK, toneI, .4);
+    const fingerHi = box(74, 183, hz + BRG.tr, 86, 187, hz + BRG.tr + .8, CORK, toneI, .4) + box(72, 183, hz + BRG.tr + .8, 87, 187, hz + BRG.tr + 3.8, IRON, toneI, .7);
+    const front = facing([1, 0, 0]);
+    put(grow(dcBoxOf(allPts), BRG.tr), (front ? plate : '') + fingerLo + act('bridge', runs.map(r => r.svg).join('') + tips.map(t => t.svg).join('')) + fingerHi + (front ? '' : plate)); }
+
+  // ---- retort stand: base, rod in two pieces either side of the boss head, boss, thumbscrew, clamp arm
+  put([[4, 160, BT], [44, 210, 9]], box(4, 160, BT, 44, 210, 9, IRON, tone, 1.2));
+  put([[ROD[0] - 3, ROD[1] - 3, 9], [ROD[0] + 3, ROD[1] + 3, hz - 7]], rod([ROD[0], ROD[1], 9], [ROD[0], ROD[1], hz - 7], 3, METAL, toneI, 1));
+  put([[ROD[0] - 3, ROD[1] - 3, hz + 7], [ROD[0] + 3, ROD[1] + 3, ROD_TOP]], rod([ROD[0], ROD[1], hz + 7], [ROD[0], ROD[1], ROD_TOP], 3, METAL, toneI, 1));
+  put([[ROD[0] - 6, ROD[1] - 6, hz - 7], [ROD[0] + 6, ROD[1] + 6, hz + 7]], box(ROD[0] - 6, ROD[1] - 6, hz - 7, ROD[0] + 6, ROD[1] + 6, hz + 7, matOf('#7b858c'), toneI, 1));
+  put(rodBox([ROD[0], ROD[1] - 6, hz + 2], [ROD[0], ROD[1] - 15, hz + 2], 3.6), rod([ROD[0], ROD[1] - 6, hz + 2], [ROD[0], ROD[1] - 12, hz + 2], 1.2, METAL, toneI, .7) + rod([ROD[0], ROD[1] - 12, hz + 2], [ROD[0], ROD[1] - 15, hz + 2], 3.6, BAKE, toneI, .9));
+  put(rodBox([ROD[0] + 6, ROD[1], hz], [69, ROD[1], hz], 2.2), rod([ROD[0] + 6, ROD[1], hz], [69, ROD[1], hz], 2.2, METAL, toneI, .9));
+
+  // ---- knife switch
+  put([[SWB[0], SWB[1], BT], [SWB[2], SWB[3], 9]], box(SWB[0], SWB[1], BT, SWB[2], SWB[3], 9, SLATE, tone, 1.1));
+  for (const [x0, x1] of [[185.5, 187.5], [190.5, 192.5]]){
+    put([[x0, 289, 9], [x1, 295, 21]], box(x0, 289, 9, x1, 295, 21, BRASS, toneI, .7));
+    put([[x0 + .1, 248, 9], [x1 - .1, 254, 21]], box(x0 + .1, 248, 9, x1 - .1, 254, 21, BRASS, toneI, .7)); }
+  { const bl = [[3.5, -2], [3.5, BLADE + .5], [-3.5, BLADE + .5], [-3.5, -2]].map(([uu, dd]) => addv(b.piv, addv(scl(b.u, uu), scl(b.d, dd))));
+    const prof = bl.map(p => [p[1], p[2]]), nk0 = addv(b.end, scl(b.u, 3.5)), nk1 = addv(b.end, scl(b.u, 6)), h1 = addv(b.end, scl(b.u, 18));
+    put(grow(dcBoxOf(bl.map(p => [SWX, p[1], p[2]])), 1), act('switch', prismX(prof, SWX - 1, SWX + 1, live ? matOf('#ffbf5a') : COPM, .7)));
+    put(rodBox(nk0, nk1, .9), act('switch', rod(nk0, nk1, .9, METAL, toneI, .6)));
+    put(rodBox(nk1, h1, 2.8), act('switch', rod(nk1, h1, 2.8, BAKE, toneI, 1, 2.4, 16)));
+    put(rodBox(addv(b.piv, [-4, 0, 0]), addv(b.piv, [4, 0, 0]), 1), rod(addv(b.piv, [-3.6, 0, 0]), addv(b.piv, [3.6, 0, 0]), 1, METAL, toneI, .6)); }
+  for (const t of [T1, T2]) put([[t[0] - 2.4, t[1] - 2.4, 9], [t[0] + 2.4, t[1] + 2.4, 12]], cyl(t[0], t[1], 9, 10.6, 2.4, BRASS, toneI, .7, 14) + cyl(t[0], t[1], 10.6, 12, 1.6, BRASS, toneI, .6, 12));
+
+  // ---- bulb on its batten holder
+  { let base = cyl(BUL[0], BUL[1], BT, 11, 13, BAKE, toneI, 1.1, 32);
+    if (k > 0){ const inner = box(BA[0] - 1.5, BA[1] - 1.5, 9.6, BUL[0] + 1, BUL[1] + 1, 10.4, BRASS, toneI, .4) + box(BUL[0] - 6, BB[1] - 1.2, 9.6, BB[0] + 1.5, BUL[1] - 4, 10.4, BRASS, toneI, .4);
+      base = `<g opacity="${f2(k)}">${inner}</g><g opacity="${f2(1 - .75*k)}">${base}</g>`; }
+    put([[BUL[0] - 13, BUL[1] - 13, BT], [BUL[0] + 13, BUL[1] + 13, 11]], base);
+    for (const t of [BA, BB]) put([[t[0] - 2.2, t[1] - 2.2, 11], [t[0] + 2.2, t[1] + 2.2, 13]], cyl(t[0], t[1], 11, 12, 2.2, BRASS, toneI, .7, 12) + cyl(t[0], t[1], 12, 13, 1.4, BRASS, toneI, .5, 10));
+    const [x, y] = BUL, gc = [x, y, 33.5];
+    let bl = cyl(x, y, 11, 20, 5.5, BRASS, toneI, .9, 20);
+    let cap = cyl(x, y, 20, 25.5, 4.5, matOf('#e6e8e8'), toneI, .8, 18);
+    for (const z of [21.5, 23, 24.5]){ const q = on(PZ(z), ellUV(x, y, 4.55, 4.55, 18)).filter(p => vis(norm([p[0] - x, p[1] - y, 0]))); if (q.length > 1) cap += line(q, .4); }
+    const sup = `<path d="${pd([[x, y + 1.6, 25.5], [x, y + 3.2, 33.5]], false)}M${pd([[x, y - 1.6, 25.5], [x, y - 3.2, 33.5]], false).slice(1)}" fill="none" stroke="#8d8a84" style="stroke-width:${f2(.5*INK_K)}"/>`;
+    const fq = []; for (let i = 0; i <= 28; i++){ const t = i/28, a = t*Math.PI*2*7; fq.push([x + .9*Math.cos(a), y + 3.2 - 6.4*t, 33.5 + .9*Math.sin(a)]); }
+    const fil = `<path d="${pd(fq, false)}" fill="none" stroke="${glow > .05 ? mix('#c06a30', '#fff2a0', glow) : '#5b5048'}" style="stroke-width:${f2(.55*INK_K)}"/>`;
+    const [gx, gy] = P(...gc), gr = 9.5*K3;
+    const glass = `<circle cx="${f(gx)}" cy="${f(gy)}" r="${f(gr)}" fill="${glow > .05 ? mix('#f4f6ef', '#fff3b0', glow) : '#eef4f2'}" fill-opacity="${f2(.4 + .3*glow)}" stroke="${INK}" stroke-width="1"/>`
+      + `<circle cx="${f(gx - gr*.38)}" cy="${f(gy - gr*.38)}" r="${f(gr*.2)}" fill="#ffffff" opacity=".75"/>`;
+    const halo = glow > .02 ? `<circle cx="${f(gx)}" cy="${f(gy)}" r="${f(gr*(1.7 + 1.6*glow))}" fill="url(#dcGlow)" opacity="${f2(Math.min(1, glow*1.1))}" pointer-events="none"/>` : '';
+    put([[x - 9.5, y - 9.5, 11], [x + 9.5, y + 9.5, 43]], bl + cap + sup + fil + glass + halo); }
+
+  // ---- voltmeter: case (a ghost in see-through, its works inside), dial on the front, binding posts on top
+  { const front = facing([1, 0, 0]); let body = box(...VM, m, tone, 1.2) + hullInk(bx8(...VM), 2.6);
+    if (front) body += meterFace(st, 0);
+    let svg = body;
+    if (k > 0){ const far = `<g opacity="${f2(.45*k)}">` + [[0,-1,0],[-1,0,0],[0,1,0],[1,0,0]].filter(n => !vis(n)).map(n => { const [x0, y0, z0, x1, y1, z1] = VM;
+        const q = n[0] ? [[n[0] > 0 ? x1 : x0, y0, z0], [n[0] > 0 ? x1 : x0, y1, z0], [n[0] > 0 ? x1 : x0, y1, z1], [n[0] > 0 ? x1 : x0, y0, z1]] : [[x0, n[1] > 0 ? y1 : y0, z0], [x1, n[1] > 0 ? y1 : y0, z0], [x1, n[1] > 0 ? y1 : y0, z1], [x0, n[1] > 0 ? y1 : y0, z1]];
+        return fill(pd(q), mix(m.d, '#f2efe7', .5)); }).join('') + `</g>`;
+      svg = far + `<g opacity="${f2(k)}">${meterInside(st)}</g><g opacity="${f2(1 - .8*k)}">${box(...VM, m, tone, 1.2)}</g><g opacity="${f2(.6*k)}">${hullInk(bx8(...VM), 2.6)}</g>` + (front ? meterFace(st, k) : ''); }
+    put([[VM[0], VM[1], VM[2]], [VM[3] + 1.2, VM[4], VM[5]]], svg);
+    for (const [y, Mt] of [[150, REDM], [190, BLKM]]) put([[163, y - 3.4, VM[5]], [169, y + 3.4, 83]], cyl(166, y, VM[5], 74.5, 3.4, BRASS, toneI, .7, 16) + cyl(166, y, 77.5, 83, 3, Mt, toneI, .9, 16)); }
+
+  // ---- leads
+  const lit = c => live ? mix(c, '#ffb347', .35) : c;
+  items.push(...dcWire(ld.L1, lit('#2e2a27')), ...dcWire(ld.L2, lit('#2e2a27')), ...dcWire(ld.L3, lit('#d9443a')), ...dcWire(ld.VN, '#2e2a27', 1), ...dcWire(ld.VPos, '#d9443a', 1));
+
+  s += byDepth(items);
+
+  // ---- see-through overlays: electrons round the wire, K+ and NO3- through the bridge
+  if (k > 0){ const ph = st.ph || 0, ep = pathAt(electronPath(st, ld)), gap = 15, n = Math.floor(ep.total/gap); let e = '';
+    const swLen = BLADE, closed = c.closed;
+    for (let i = 0; i < n; i++){ const p = ep.at(i*gap + ph*26); if (!closed && p[1] < HY + 1 && p[1] > T2[1] && Math.abs(p[0] - SWX) < 2 && p[2] > 12) continue; e += ionSvg(p, COLS.el, false, 1.9); }
+    const bpath = pathAt([[BRG.x, BRG.yA, BRG.z0 - 8 + dzB], ...bridgePath(st), [BRG.x, BRG.yB, BRG.z0 - 8 + dzB]]);
+    let br = '';
+    for (let i = 0; i < 6; i++){ const t = (i/6 + (c.I > 0 ? ph*.06 : 0)) % 1;
+      br += ionSvg(bpath.at(t*bpath.total), COLS.k, true, 2.4);
+      br += ionSvg(bpath.at((1 - ((i/6 + .08 + (c.I > 0 ? ph*.06 : 0)) % 1))*bpath.total), COLS.no3, false, 2.4); }
+    s += `<g opacity="${f2(k)}">${br}${e}</g>`; }
+
+  // ---- labels
+  const M = c.M, zg = stripGeo(st, 'zn'), dzS = zg.dz, eAt = pathAt(ld.L2).at(60);
+  if (k > .6) s += xrCallouts([
+    { at:[SX0, 258, 40 + dzS], text: `${M.up} ANODE`, on: live },
+    { at:[SX1, 104, 40], text:'COPPER CATHODE', on: live },
+    { at:[SX0 + 4, 105 + Math.min(4.5, c.gained*.6), 30], text:'COPPER DEPOSIT', on: live },
+    { at:[ZNC[0] + 26, ZNC[1] - 10, 20], text: solName(M), on: false },
+    { at:[CUC[0] + 26, CUC[1] + 10, 22], text:'COPPER SULPHATE', on: live },
+    { at:[ZNC[0] + BR*.7, ZNC[1] + BR*.7, BZ1], text:'GLASS BEAKER', on: false },
+    { at:[BRG.x, BRG.yc + 16, BRG.z1 + 23 + dzB], text:'SALT BRIDGE', on: live },
+    { at:[BRG.x, BRG.yB, BRG.z1 - 10 + dzB], text:'KNO3 AGAR GEL', on: false },
+    { at:[BRG.x, BRG.yB, BRG.z0 - 3 + dzB], text:'COTTON PLUG', on: false },
+    { at: ZN_BULK[0], text: `${M.ion} IONS`, on: live },
+    { at: CU_BULK[0], text:'CU2+ IONS', on: live },
+    { at: ZN_BULK[1], text:'SULPHATE IONS', on: false },
+    { at:[BRG.x, BRG.yA - 6, BRG.z1 + 20 + dzB], text:'K+ IONS', on: live },
+    { at:[BRG.x, BRG.yB + 6, BRG.z1 + 20 + dzB], text:'NO3- IONS', on: live },
+    { at: eAt, text:'ELECTRONS', on: live },
+    { at: zg.clips[0], text:'CROCODILE CLIP', on: false },
+    { at:[120, 299, 4.5], text:'BLACK LEAD', on: live },
+    { at:[130, 63, 4.5], text:'RED LEAD', on: live },
+    { at: lerp3(b.piv, b.end, .55), text:'SWITCH BLADE', on: c.closed },
+    { at:[SWX, 251, 21], text:'SPRING JAW', on: c.closed },
+    { at:[BUL[0] - 9, BUL[1] - 9, 8], text:'BULB HOLDER', on: false },
+    { at:[BUL[0], BUL[1], 33.5], text:'FILAMENT', on: glow > .05 },
+    { at:[195, 176, 30], text:'MOVING COIL', on: (st.needle || 0) > .02 },
+    { at:[195, 151, 30], text:'MAGNET', on: false },
+    { at:[207, 170, 34], text:'HAIRSPRING', on: (st.needle || 0) > .02 },
+    { at:[VM[3] + .7, ...onFace(22, ang(st.needle || 0)).slice(1)], text:'POINTER', on: (st.needle || 0) > .02 },
+    { at:[170, 172, 62], text:'MULTIPLIER', on: (st.needle || 0) > .02 },
+    { at:[166, 150, 83], text:'BINDING POST', on: false },
+    { at:[86, 185, hz + 8], text:'CLAMP', on: false },
+    { at:[ROD[0], ROD[1], 40], text:'RETORT STAND', on: false } ], LBL_B);
+  else s += xrCallouts([
+    { at:[SX1, 259, 85 + dzS], text: `${M.up} STRIP`, on: live },
+    { at:[SX1, 104, 85], text:'COPPER STRIP', on: live },
+    { at:[ZNC[0] + 30, ZNC[1] - 8, 40], text: solName(M), on: false },
+    { at:[CUC[0] + 30, CUC[1] + 8, 40], text:'COPPER SULPHATE', on: false },
+    { at:[BRG.x, BRG.yc, BRG.z1 + BRG.r + dzB], text:'SALT BRIDGE', on: c.bridgeIn },
+    { at:[SWX, b.end[1], b.end[2] + 12], text:'KNIFE SWITCH', on: c.closed },
+    { at:[BUL[0], BUL[1], 43], text:'BULB', on: glow > .05 },
+    { at:[VM[3], VP[0], 55], text:'VOLTMETER', on: c.V > 0 },
+    { at:[ROD[0], ROD[1], 150], text:'RETORT STAND', on: false } ], LBL_B);
+  return s;
+}
+
+/* ---------- behaviour: one state object, one frame step ---------- */
+let ui, dcLoop = false;
+const approach = (v, t, d) => v < t ? Math.min(t, v + d) : Math.max(t, v - d);
+function step(dt){
+  const st = ui.st;
+  st.sw = approach(st.sw, st.swT, dt/.35);
+  st.br = approach(st.br, st.brT, dt/1.3);
+  if (st.swap){ const w = st.swap; w.t += dt;
+    st.lift = w.t < .7 ? w.t/.7 : w.t < .9 ? 1 : Math.max(0, 1 - (w.t - .9)/.7);
+    if (w.t >= .8 && st.metal !== w.to) st.metal = w.to;
+    if (w.t >= 1.6){ st.swap = null; st.lift = 0; } }
+  const c = cellNow(st);
+  st.needle += (c.V - st.needle)*Math.min(1, dt*6); if (Math.abs(st.needle - c.V) < .002) st.needle = c.V;
+  const gT = Math.min(1, Math.pow(c.I*c.I*R_BULB/.5, .6)); st.glow = approach(st.glow, gT, dt/.25);
+  if (c.I > 0) st.ph = (st.ph || 0) + dt*(.4 + c.I*3);
+  const moving = st.sw !== st.swT || st.br !== st.brT || !!st.swap;
+  if (st.fast){ if (c.I > 0 && !c.spent) advance(st, c, dt*FAST);
+    else if (!moving){ st.fast = false; if (c.spent) ui.flash(c.rem < .12 ? `The ${c.M.name.toLowerCase()} is nearly eaten away: fresh strips` : 'The copper sulphate is nearly used up: fresh strips', 2600); } }
+  const busy = moving || st.fast || st.needle !== c.V || st.glow !== gT || (c.I > 0 && (st.xr || 0) > 0);
+  if (!busy) dcLoop = false;
+  return busy;
+}
+function kick(){ if (dcLoop || !ui) return; dcLoop = true; ui.animate(step); }
+function toggleSwitch(st){ st.swT = st.swT ? 0 : 1; kick(); }
+function fastTime(st){
+  if (st.fast){ st.fast = false; return; }
+  const c = cellNow(st);
+  if (!c.bridgeIn && st.brT) return ui.flash('Put the salt bridge back first: no ions, no current');
+  if (c.spent) return ui.flash('This strip is spent: press Fresh strips');
+  if (st.swT) st.swT = 0;                                       // close the switch: no current, no reaction
+  st.fast = true; kick(); }
+function swapTo(st, to){ if (st.swap) return; st.swap = { to, t: 0 }; kick(); }
+function toggleBridge(st){ st.brT = st.brT ? 0 : 1; kick(); }
+function fresh(st){ st.n = { zn: 0, mg: 0 }; st.hours = 0; st.fast = false; kick(); }
+
+ui = mountFigure({
+  fig:'B1', title:'A battery (Daniell cell)', turn:'full',
+  size:[BW, BD, 270], palette:'cobalt',            // extra headroom: frames the low, wide bench smaller so the labels fit both sides
+  state:{ metal:'zn', sw:1, swT:1, br:0, brT:0, lift:0, swap:null, n:{ zn:0, mg:0 }, hours:0, fast:false, needle:null, glow:0, ph:0 },
+  scene,
+  stats: st => { const c = cellNow(st);
+    return [ { label:'Voltmeter', value: c.V.toFixed(2) + ' V' },
+             { label:'Current', value: Math.round(c.I*1000) + ' mA', small:true },
+             { label: `${c.M.name} lost / copper gained in ${st.hours.toFixed(1)} h`, value: `${c.lost.toFixed(2)} / ${c.gained.toFixed(2)} g`, small:true } ]; },
+  buttons:[
+    { label:'Switch on / off', onClick: st => toggleSwitch(st) },
+    { label:'Fast time', onClick: st => fastTime(st) },
+    { label:'Swap metal', choices: st => Object.keys(METALS).map(key => ({ label: METALS[key].name, current: st.metal === key && !st.swap,
+        disabled: !!st.swap, why:'wait: the strip is being swapped', onClick: st2 => swapTo(st2, key) })) },
+    { label:'Lift / replace bridge', onClick: st => toggleBridge(st) },
+    { label:'Fresh strips', onClick: st => fresh(st) },
+  ],
+  acts:{ switch: st => toggleSwitch(st), bridge: st => toggleBridge(st), strip: st => swapTo(st, st.metal === 'zn' ? 'mg' : 'zn') },
+  params:(st, q) => {
+    if (q.get('on') === '1') st.sw = st.swT = 0;
+    if (q.get('bridge') === '0') st.br = st.brT = 1;
+    if (METALS[q.get('metal')]) st.metal = q.get('metal');
+    if (q.has('h')){ const h = Math.max(0, +q.get('h') || 0), sw = st.sw; st.sw = 0; for (let t = 0; t < h; t += .05){ const c = cellNow(st); if (!c.I || c.spent) break; advance(st, c, Math.min(.05, h - t)); } st.sw = sw; }
+    const c = cellNow(st); st.needle = c.V; st.glow = Math.min(1, Math.pow(c.I*c.I*R_BULB/.5, .6));
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
