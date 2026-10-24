@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Microscope</title></head><body>
+<script src="core.js"></script>
+<script>
+/* ---------- truth first: a school light microscope (LED, stage focusing, monocular 45° head) ----------
+   Light: an LED on a heat sink in the base, run by a driver board through a power switch and a dimmer wheel. A collector
+   lens over the LED gathers its light into a beam that leaves the base through the field lens. The condenser, hung under
+   the stage, squeezes the beam onto the specimen; its iris diaphragm (set by a lever) trims the cone. The light goes
+   through the slide, the cells and the cover slip, into the objective under the slide. The objective makes a magnified
+   image, a prism in the head turns the light 45° into the eyepiece tube, and the eyepiece magnifies that image again
+   (10×), so the eye sees 4× · 10× = 40×, 100× or 400×. The field of view is the eyepiece's field number (18 mm) over
+   the objective's power.
+   Focus: the stage sits on a bracket screwed to a carriage that rides up and down in a dovetail guide in the arm. A rack
+   on the carriage meshes with a pinion on the knob shaft, so turning the coarse knob lifts the stage (2π·7 mm per turn);
+   the fine knob drives the same shaft through reduction gears. A focus stop limits how high the stage can go; a tension
+   collar sets how stiff the knob is. The objectives are parfocal: each focuses 46 mm below the nosepiece, so a slide that
+   is sharp at 4× stays nearly sharp at 40×, whose front lens then sits a few mm above the cover slip (it is on a spring
+   mount, so it gives way rather than crack the slide). The nosepiece turns on a centre bolt and clicks into place over
+   each objective with a sprung click stop.
+   Parts:
+   BASE   base casting · four rubber feet · LED lamp · heat sink · collector lens · field lens and its collar · LED driver
+          board · dimmer wheel and potentiometer · power switch · power cord and its grommet · wires
+   STAGE  stage plate and aperture · two stage clips · stage bracket · condenser · two condenser lenses · iris diaphragm ·
+          iris lever · filter holder · slide · cover slip · specimen (onion skin cells)
+   FOCUS  arm · coarse focus knobs · fine focus knobs · tension collar · knob shaft · pinion · reduction gears · rack ·
+          carriage · two dovetail guides · focus stop
+   OPTICS head · nosepiece · centre bolt · click stop · 4×, 10×, 40× objectives (lens elements, 40× spring mount) · prism ·
+          eyepiece tube · eyepiece (field stop, field lens, eye lens) · eyecup */
+
+/* ---------- geometry (x = depth, y = width, z = up; 1 unit = 1 cm) ---------- */
+const MB_W = 36, MB_D = 42, MB_H = 2;                  // bench board
+const MB_TOP = boardTop(0, 0, MB_W, MB_D, MB_H, 5);
+const OAX = 23, OAY = 15;                               // optical axis
+const BZ0 = MB_H + .4, BZ = MB_H + 4.4;                 // base underside (on its feet), base top
+const BASE_UV = [7.5, 7.5, 30, 22.5];
+const NPZ = 24.6, PF = 4.6, FZ = NPZ - PF;              // nosepiece underside, parfocal distance, focal plane
+const SLD = { hl:3.8, hw:1.3, t:.12, cs:.03 };          // slide half length / half width / thickness, cover slip
+const SZF = FZ - SLD.t - SLD.cs, DROP = 2.5;            // stage top when sharp; how far it is racked down at focus 0
+const NX = OAX - 2.2, NR = 2.2;                         // nosepiece axis x, radius of the objective circle
+const OBJ = [ { m:4, len:2.6, r:.78, band:'#d8453a', na:.10 }, { m:10, len:3.4, r:.84, band:'#e8c234', na:.25 }, { m:40, len:4.25, r:.9, band:'#4aa3dc', na:.65 } ];
+const EYE = 10, FN = 18;                                // eyepiece power, field number (mm)
+const ED = [Math.SQRT1_2, 0, Math.SQRT1_2];             // eyepiece axis: up and toward the viewer at 45°
+const PRZ = 28.6;                                       // prism centre
+const KN = [12, 11];                                    // focus knob axis (x, z); it runs along y
+const ARMY = [OAY - 2.6, OAY + 2.6];
+const PIN_R = .7;
+const ARM_PRO = [[8, BZ], [14.6, BZ], [14.6, 13], [15.2, 20], [16.6, 26.4], [10.8, 26.4], [9.4, 20], [8, 13]];
+const SLIDE_HOME = [OAX, 34, MB_H];
+const GLASS = { l:'#e6f4f8', m:'#cfe9f0', d:'#a9cfd9' }, RUB = DARK, PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' };
+const BRASS = matOf('#d8b25a'), ALU = matOf('#d4d8da'), BOXM = matOf('#8fb3c9');
+const LIT = '#fff1a8';
+
+const rad = a => a*Math.PI/180;
+const add3 = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]], mul3 = (a, k) => a.map(v => v*k);
+const lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const boxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const ringA = (c, d, r, n = 12) => { const u = norm(cross(d, Math.abs(d[2]) < .9 ? [0,0,1] : [1,0,0])), v = cross(d, u);
+  return Array.from({length:n}, (_, i) => { const t = i/n*2*Math.PI; return add3(c, add3(mul3(u, r*Math.cos(t)), mul3(v, r*Math.sin(t)))); }); };
+const stageZ = st => SZF - DROP*(1 - st.fc);
+const target = st => -120*st.obj;
+const settled = st => Math.abs(st.rot - target(st)) < 4;
+function offs(st){ const e = ease(st.ex), hd = [0, 0, 12.4*e];
+  return { base:[0,0,0], field:[0,0,1.6*e], cond:[0,0,3.2*e], stage:[0,0,5*e], slide:[0,0,6.6*e], arm:[-6*e,0,0],
+    knp:[-6*e,3*e,0], knn:[-6*e,-3*e,0], obj:[0,0,9*e], nose:[0,0,10.6*e], head:hd, eye:add3(hd, mul3(ED, 3*e)) }; }
+const slidePos = st => { const t = ease(st.sl), home = SLIDE_HOME, dest = add3([OAX, OAY, stageZ(st)], offs(st).slide);
+  return add3(lerp3(home, dest, t), [0, 0, 9*Math.sin(Math.PI*t)]); };
+const objAt = (st, i) => { const a = rad(st.rot + 120*i); return [NX + NR*Math.cos(a), OAY + NR*Math.sin(a)]; };
+const eyeAt = (t, o) => add3([OAX + t*ED[0], OAY, PRZ + t*ED[2]], o);
+
+/* ---------- part collector: every part gets a box; the current group's offset (explode) and opacity (see-through) ---------- */
+let PL, OFF = [0,0,0], GH = 1;
+const T = p => add3(p, OFF);
+const addP = (b, svg) => PL.push({ box: b, svg: GH < .999 ? `<g opacity="${f(GH)}">${svg}</g>` : svg });
+const mBox = (x0, y0, z0, x1, y1, z1, M, w = .9, extra = '') => { const a = T([x0,y0,z0]), b = T([x1,y1,z1]); addP([a, b], box(...a, ...b, M, toneI, w) + extra); };
+const mCyl = (x, y, z0, z1, r, M, w = 1, n = 24, extra = '') => { const a = T([x, y, z0]);
+  addP([[a[0]-r, a[1]-r, a[2]], [a[0]+r, a[1]+r, a[2] + z1 - z0]], cyl(a[0], a[1], a[2], a[2] + z1 - z0, r, M, toneI, w, n) + extra); };
+const rodBox = (a, b, r) => { const d = norm(sub(b, a)), e = d.map(v => r*Math.sqrt(Math.max(0, 1 - v*v)) + .02);
+  return [[0,1,2].map(i => Math.min(a[i], b[i]) - e[i]), [0,1,2].map(i => Math.max(a[i], b[i]) + e[i])]; };
+const mRod = (p, q, r, M, w = 1, r1 = r, n = 16, extra = '') => { const a = T(p), b = T(q); addP(rodBox(a, b, Math.max(r, r1)), rod(a, b, r, M, toneI, w, r1, n) + extra); };
+const discZ = (x, y, z, r, c, w = .5, n = 16) => { const d = pd(on(PZ(z), ellUV(x, y, r, r, n)).map(T)); return fill(d, c) + (w ? ink(d, w) : ''); };
+// a spur gear on a shaft along y
+function gearY(cx, cz, y0, y1, r, nT, ang, M){
+  const pts = []; for (let i = 0; i < nT*4; i++){ const a = ang + i/(nT*4)*2*Math.PI, rr = i % 4 < 2 ? r : r*.8; pts.push([cx + rr*Math.cos(a), cz + rr*Math.sin(a)]); }
+  const A = on(PY(y0), pts).map(T), B = on(PY(y1), pts).map(T), cap = facing([0,1,0]) ? B : A;
+  addP(boxOf([...A, ...B]), loft(A, B, n => toneI(n, M)) + fill(pd(cap), M.l) + ink(pd(cap), .5) + hullInk([...A, ...B], .8));
+}
+// a knob on a shaft along y, from y0 (at the arm) to y1 (outer face); ridges and face marks turn with it
+function knobY(x, z, y0, y1, r, ang, M){
+  const a = T([x, y0, z]), b = T([x, y1, z]), out = norm(sub(b, a));
+  let s = rod(a, b, r, M, toneI, 1.1, r, 28);
+  for (let i = 0; i < 12; i++){ const t = ang + i*Math.PI/6, n = [Math.cos(t), 0, Math.sin(t)];
+    if (facing(n)) s += line([add3(a, mul3(n, r)), add3(b, mul3(n, r))], .45); }
+  if (facing(out)) for (let i = 0; i < 3; i++){ const t = ang + i*2*Math.PI/3; s += line([add3(b, [r*.35*Math.cos(t), 0, r*.35*Math.sin(t)]), add3(b, [r*.85*Math.cos(t), 0, r*.85*Math.sin(t)])], .6); }
+  addP(rodBox(a, b, r), act('knob', s));
+}
+// a wire cut into short pieces, each with its own box, so it sorts behind or in front of what it passes
+function msWire(pts, col, w = .25, L = 3){
+  for (let k = 0; k < 2; k++){ const o = [pts[0]];
+    for (let i = 0; i < pts.length - 1; i++){ const a = pts[i], b = pts[i+1]; o.push(lerp3(a, b, .25), lerp3(a, b, .75)); }
+    o.push(pts[pts.length - 1]); pts = o; }
+  const q = pts.map(T);
+  for (let i = 0; i < q.length - 1; ){ let j = i + 1, len = 0;
+    while (j < q.length - 1 && len < L){ len += Math.hypot(...sub(q[j], q[j-1])); j++; }
+    const seg = q.slice(i, j + 1), d = pd(seg, false);
+    addP(boxOf(seg), `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w + .9)}" stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linecap="round" stroke-linejoin="round"/>`); i = j; }
+}
+// the beam: a soft yellow tube between two stations
+const beam = (a, ra, b, rb, op) => { const d = norm(sub(b, a));
+  return fill(sp(hull([...ringA(a, d, ra), ...ringA(b, d, rb)].map(p => P(...p)))), '#ffe27a', `opacity="${f(op)}" pointer-events="none"`)
+    + `<path d="${pd([a, b], false)}" stroke="#fff6c8" stroke-width="${f(Math.min(ra, rb)*1.2 + .3)}" opacity="${f(op)}" fill="none" stroke-linecap="round"/>`; };
+
+/* ---------- the light path: stations up the axis, then out along the eyepiece ---------- */
+function stations(st){
+  const o = offs(st), sz = stageZ(st), ob = OBJ[st.obj], hd = o.head;
+  const S = [
+    [[OAX, OAY, BZ0 + 1.25], .2, 'in'], [[OAX, OAY, BZ0 + 2.2], 1.25, 'in'], [add3([OAX, OAY, BZ + .75], o.field), 1.1, 'air'],
+    [add3([OAX, OAY, sz - 3.6], o.cond), 1.05, 'in'], [add3([OAX, OAY, sz - .9], o.cond), .8, 'in'], [add3([OAX, OAY, sz + SLD.t], o.slide), .25, 'air'] ];
+  if (!settled(st) || st.sl < 1) return S;
+  S.push([add3([OAX, OAY, NPZ - ob.len], o.obj), .3, 'in'], [add3([OAX, OAY, NPZ], o.obj), .65, 'in'], [add3([OAX, OAY, PRZ], hd), .55, 'in'],
+    [eyeAt(6.4, o.eye), .65, 'in'], [eyeAt(10, o.eye), .45, 'air'], [eyeAt(11.2, o.eye), .1, 'air'], [eyeAt(13, o.eye), .7, 'end']);
+  return S;
+}
+
+// a glass slide whose underside centre is c: frosted label end, stained onion skin, cover slip
+function slideSvg(c, lit){ const [x, y, z] = c, t = SLD.t;
+  let s = box(x - SLD.hw, y - SLD.hl, z, x + SLD.hw, y + SLD.hl, z + t, GLASS, toneI, .7);
+  if (facing([0,0,1])) s += shape(on(PZ(z + t), rectUV(x - SLD.hw, y + SLD.hl - 1.5, x + SLD.hw, y + SLD.hl)), '#f4f1ea', .4)
+    + fill(pd(on(PZ(z + t + .005), ellUV(x, y, .75, .85, 18))), lit ? '#f6b6d4' : '#de9cbd')
+    + shape(on(PZ(z + t + SLD.cs), rectUV(x - 1.1, y - 1.1, x + 1.1, y + 1.1)), 'rgba(230,244,248,.45)', .4)
+    + line([[x - .9, y - 2.8, z + t + .01], [x + .4, y - 2, z + t + .01]], .3).replace(INK, '#ffffff');
+  return act('slide', s); }
+
+/* ---------- the microscope ---------- */
+function build(st, m, kx){
+  PL = []; const out = PL, inn = [], o = offs(st), sz = stageZ(st), lit = st.glow > .5, shellOp = 1 - .66*kx, top = facing([0,0,1]);
+  // ---- base: casting on four rubber feet, field lens collar, power switch and dimmer wheel on the side, cord
+  OFF = o.base; GH = 1;
+  for (const [x, y] of [[10, 10], [27.5, 10], [10, 20], [27.5, 20]]) mCyl(x, y, MB_H, BZ0, .9, RUB, .6, 12);
+  GH = shellOp;
+  { const A = on(PZ(BZ0), rrUV(...BASE_UV, 4)).map(T), B = on(PZ(BZ), rrUV(BASE_UV[0] + .7, BASE_UV[1] + .6, BASE_UV[2] - .6, BASE_UV[3] - .6, 3.6)).map(T);
+    addP([[BASE_UV[0], BASE_UV[1], BZ0], [BASE_UV[2], BASE_UV[3], BZ]], loft(A, B, n => tone(n, m)) + fill(pd(B), tone([0,0,1], m)) + ink(pd(B), 1.1) + hullInk([...A, ...B], 2.6)); }
+  GH = 1;
+  mRod([11, 21.9, 4.4], [11, 22.9, 4.4], 1.3, DARK, .8, 1.3, 20);   // dimmer wheel through a slot in the side
+  { const b = [[25.2, 22.5, 3.5], [27.2, 23, 5.3]], onS = st.on;
+    const face = facing([0,1,0]) ? shape(on(PY(23.02), rectUV(25.45, onS ? 3.75 : 4.45, 26.95, onS ? 4.4 : 5.05)), onS ? '#e2483d' : '#8d877a', .4) : '';
+    addP(b, act('switch', box(...b[0], ...b[1], DARK, toneI, .8) + face)); }
+  OFF = o.field;
+  mCyl(OAX, OAY, BZ, BZ + .7, 2.3, METAL, .9, 28, top ? discZ(OAX, OAY, BZ + .72, 1.6, lit ? LIT : GLASS.m, .5) + (lit ? discZ(OAX, OAY, BZ + .73, .9, '#ffffff', 0) : '') : '');
+  OFF = o.base;
+  addP([[6.6, 18.5, 3.05], [7.6, 19.5, 4.15]], rod([6.6, 19, 3.6], [7.6, 19, 3.6], .55, RUB, toneI, .7));   // cord grommet
+  msWire([[6.6, 19, 3.6], [5.2, 19.1, 3.3], [4.6, 19.5, MB_H + .45], [3, 21.5, MB_H + .45], [1.2, 26, MB_H + .45], [.2, 30, MB_H + .45]], DARK.l, .45);
+  // ---- arm (casting) with the focus knobs on both sides
+  OFF = o.arm; GH = shellOp;
+  { const A = on(PY(ARMY[0]), ARM_PRO).map(T), B = on(PY(ARMY[1]), ARM_PRO).map(T);
+    let s = loft(A, B, n => tone(n, m));
+    for (const [cap, n] of [[A, [0,-1,0]], [B, [0,1,0]]]) if (facing(n)) s += fill(pd(cap), tone(n, m)) + ink(pd(cap), 1);
+    addP([T([8, ARMY[0], BZ]), T([16.6, ARMY[1], 26.4])], s + hullInk([...A, ...B], 2.4)); }
+  GH = 1;
+  const kang = st.fc*DROP/PIN_R;
+  for (const sd of [1, -1]){ OFF = sd > 0 ? o.knp : o.knn; const y0 = sd > 0 ? ARMY[1] : ARMY[0];
+    mRod([KN[0], y0, KN[1]], [KN[0], y0 + .45*sd, KN[1]], 1.75, METAL, .8, 1.75, 24);              // tension collar
+    knobY(KN[0], KN[1], y0 + .45*sd, y0 + 2.1*sd, 2.3, kang*sd, DARK);                              // coarse knob
+    knobY(KN[0], KN[1], y0 + 2.1*sd, y0 + 3.2*sd, 1.35, kang*sd*8, METAL); }                        // fine knob
+  // ---- stage group: bracket, stage plate with aperture, clips
+  OFF = o.stage;
+  mBox(14.6, OAY - 2.2, sz - 4, 18.6, OAY + 2.2, sz - .8, m, 1);
+  // stage plate, then the slide lying on it, then the clips over the slide: one part, drawn bottom up (the camera looks down)
+  { const hole = top ? discZ(OAX, OAY, sz + .01, 1.1, lit ? LIT : '#1b1815', .6) : '', a = T([16.7, OAY - 6.5, sz - .8]), b = T([29.5, OAY + 6.5, sz]);
+    let sv = box(...a, ...b, DARK, toneI, 1.1) + hole, zTop = b[2] + .6;
+    if (st.sl > .999){ const sl = slideSvg(add3([OAX, OAY, sz], o.slide), lit); sv += sl; zTop = Math.max(zTop, sz + o.slide[2] + .2); }
+    for (const sd of [-1, 1]){ const yp = OAY + 5.2*sd, ye = OAY + 2.9*sd, zt = sz + SLD.t + .05, c = T([OAX, yp, sz]);
+      sv += cyl(c[0], c[1], c[2], c[2] + .55, .42, METAL, toneI, .7, 12);
+      sv += shape([[OAX - .45, yp, sz + .5], [OAX + .45, yp, sz + .5], [OAX + .45, ye, zt], [OAX - .45, ye, zt]].map(T), METAL.l, .7); }
+    addP([a, [b[0], b[1], zTop]], sv); }
+  // ---- condenser under the stage, with its iris lever
+  OFF = o.cond; GH = shellOp;
+  mCyl(OAX, OAY, sz - 3.6, sz - .9, 1.9, DARK, 1, 28);
+  GH = 1;
+  { const a = rad(30), p0 = [OAX + 1.9*Math.cos(a), OAY + 1.9*Math.sin(a), sz - 2.3], p1 = [OAX + 3.4*Math.cos(a), OAY + 3.4*Math.sin(a), sz - 2.3];
+    mRod(p0, p1, .16, METAL, .6, .16, 8); mCyl(p1[0], p1[1], sz - 2.55, sz - 2.05, .32, DARK, .6, 10); }
+  // ---- nosepiece and objectives
+  OFF = o.nose; GH = shellOp;
+  { const A = on(PZ(NPZ), ellUV(NX, OAY, 3.2, 3.2, 36)).map(T), B = on(PZ(NPZ + 1.2), ellUV(NX, OAY, 2.5, 2.5, 36)).map(T);
+    let s = loft(A, B, n => toneI(n, METAL)) + fill(pd(B), METAL.l) + ink(pd(B), .8) + hullInk([...A, ...B], 1.4);
+    for (let i = 0; i < 18; i++){ const t = rad(st.rot + i*20), n = [Math.cos(t), Math.sin(t), .6];
+      if (facing(n)) s += line([T([NX + 3.2*Math.cos(t), OAY + 3.2*Math.sin(t), NPZ]), T([NX + 2.5*Math.cos(t), OAY + 2.5*Math.sin(t), NPZ + 1.2])], .4); }
+    addP([T([NX - 3.2, OAY - 3.2, NPZ]), T([NX + 3.2, OAY + 3.2, NPZ + 1.2])], act('nose', s)); }
+  mCyl(NX, OAY, NPZ + 1.2, 26.4, 1.8, METAL, .8, 24);
+  OFF = o.obj;
+  OBJ.forEach((ob, i) => { const [x, y] = objAt(st, i), r = ob.r, z0 = NPZ - ob.len, zb = NPZ - ob.len*.72;
+    const ta = T([x, y, z0]), tb = T([x, y, zb]), tc = T([x, y, NPZ - .25]);
+    let s = rod(ta, tb, .45, METAL, toneI, .8, r*.9, 16);
+    s += cyl(tb[0], tb[1], tb[2], tc[2], r, METAL, toneI, .9, 20);
+    s += cyl(tb[0], tb[1], tc[2] - .55, tc[2] - .3, r + .03, matOf(ob.band), toneI, .5, 20);
+    s += cyl(tb[0], tb[1], tc[2], tc[2] + .25, r + .12, ALU, toneI, .7, 20);
+    addP([[ta[0] - r - .12, ta[1] - r - .12, ta[2]], [ta[0] + r + .12, ta[1] + r + .12, tc[2] + .25]], `<g opacity="${f(GH)}">${s}</g>`); });
+  // ---- head and eyepiece tube, eyepiece
+  OFF = o.head; GH = shellOp;
+  { const A = on(PZ(26.4), rrUV(10.6, OAY - 2.8, 27.2, OAY + 2.8, 1.8)).map(T), B = on(PZ(30.6), rrUV(11.2, OAY - 2.5, 26.6, OAY + 2.5, 1.5)).map(T);
+    addP([T([10.6, OAY - 2.8, 26.4]), T([27.2, OAY + 2.8, 30.6])], loft(A, B, n => tone(n, m)) + fill(pd(B), tone([0,0,1], m)) + ink(pd(B), 1) + hullInk([...A, ...B], 2.2)); }
+  { const a = eyeAt(2.4, [0,0,0]), b = eyeAt(6.8, [0,0,0]); mRod(a, b, 1.4, m, 1.1, 1.4, 24); }
+  OFF = o.eye;
+  mRod(eyeAt(6.2, [0,0,0]), eyeAt(9.3, [0,0,0]), 1.05, METAL, 1, 1.05, 22);
+  mRod(eyeAt(9.3, [0,0,0]), eyeAt(10, [0,0,0]), 1.22, RUB, .9, 1.25, 22);
+  GH = 1; OFF = [0,0,0];
+  // ---- the slide on its way between the bench and the stage (at rest it is drawn with the stage, or with the props)
+  if (st.sl > .001 && st.sl < .999){ const [x, y, z] = slidePos(st); addP([[x - SLD.hw, y - SLD.hl, z], [x + SLD.hw, y + SLD.hl, z + SLD.t + SLD.cs]], slideSvg([x, y, z], false)); }
+  // ---- open-air light between the parts
+  if (st.glow > .01){ const S = stations(st);
+    for (let i = 0; i < S.length - 1; i++) if (S[i][2] === 'air'){ const a = S[i][0], b = S[i+1][0];
+      PL.push({ box: rodBox(a, b, Math.max(S[i][1], S[i+1][1])), svg: beam(a, S[i][1], b, S[i+1][1], .5*st.glow) }); } }
+
+  if (kx < .01) return { out, inn };
+  // ---------- inside parts (see-through) ----------
+  PL = inn; GH = 1;
+  // base: heat sink, LED, collector lens, driver board, potentiometer, switch body, wires
+  OFF = o.base;
+  { let fins = ''; if (top) for (let i = -2; i <= 2; i++) fins += line([[OAX - 1.2, OAY + i*.45, BZ0 + 1.01], [OAX + 1.2, OAY + i*.45, BZ0 + 1.01]].map(T), .35);
+    mBox(OAX - 1.25, OAY - 1.25, BZ0 + .2, OAX + 1.25, OAY + 1.25, BZ0 + 1, ALU, .7, fins); }
+  mBox(OAX - .4, OAY - .4, BZ0 + 1, OAX + .4, OAY + .4, BZ0 + 1.25, lit ? matOf('#fff3b0') : matOf('#f2f0e8'), .5);
+  mCyl(OAX, OAY, BZ0 + 2.05, BZ0 + 2.4, 1.45, GLASS, .6, 24, top ? discZ(OAX - .45, OAY - .45, BZ0 + 2.42, .35, '#ffffff', 0) : '');
+  mCyl(OAX, OAY, BZ - .3, BZ + .02, 1.6, GLASS, .5, 24);
+  for (const [x, y] of [[10.6, 16.6], [15.4, 16.6], [10.6, 20.6], [15.4, 20.6]]) mCyl(x, y, BZ0, BZ0 + .5, .22, METAL, .4, 8);
+  mBox(10, 16, BZ0 + .5, 16, 21.2, BZ0 + .65, PCBM, .6);
+  mBox(12.6, 16.6, BZ0 + .65, 13.8, 17.8, BZ0 + .95, DARK, .5);
+  mCyl(14.9, 19.6, BZ0 + .65, BZ0 + 1.9, .5, matOf('#3f7fc0'), .6, 14);
+  mBox(10.4, 20.2, BZ0 + .65, 11.6, 21.5, BZ0 + 2.6, matOf('#3f7fc0'), .6);
+  mBox(25.2, 20.9, 3.4, 27.2, 22.5, 5.4, DARK, .6);
+  msWire([[7.6, 19, 3.6], [8.8, 18.9, 3.4], [10.4, 18.6, BZ0 + .7]], '#9a5a2c', .2);
+  msWire([[16, 20.6, BZ0 + .7], [20, 21.3, 3.4], [25.2, 21.6, 4]], lit ? '#ffb347' : '#3a3632', .18);
+  msWire([[16, 17.4, BZ0 + .7], [19, 16.4, 3.2], [OAX - 1.25, OAY + .2, BZ0 + .6]], lit ? '#ffb347' : '#3a3632', .18);
+  // focus: shaft, pinion, reduction gears, dovetail guides, focus stop (in the arm); carriage and rack (on the stage)
+  OFF = o.arm;
+  mRod([KN[0], ARMY[0], KN[1]], [KN[0], ARMY[1], KN[1]], .22, METAL, .5, .22, 10);
+  gearY(KN[0], KN[1], OAY - .45, OAY + .45, PIN_R, 9, -kang, BRASS);
+  gearY(KN[0], KN[1], OAY - 1.9, OAY - 1.5, 1.2, 14, -kang, BRASS);
+  gearY(KN[0] - 1.65, KN[1], OAY - 1.9, OAY - 1.5, .45, 6, kang*1.2/.45, BRASS);
+  for (const sd of [-1, 1]) mBox(13.5, OAY + 1.65*sd - .3, 9, 14.4, OAY + 1.65*sd + .3, 21, ALU, .5);
+  mBox(13.4, OAY - .5, SZF - 2.3, 14.4, OAY + .5, SZF - 1.8, DARK, .5);
+  OFF = o.stage;
+  mBox(13.4, OAY - 1.3, sz - 9.5, 14.6, OAY + 1.3, sz - 2.6, ALU, .6);
+  { let teeth = ''; const yf = facing([0,1,0]) ? OAY + .45 : OAY - .45;
+    for (let zz = sz - 9.4; zz < sz - 3.3; zz += .35) teeth += line([[12.7, yf, zz], [12.5, yf, zz + .17], [12.7, yf, zz + .35]].map(T), .4);
+    mBox(12.7, OAY - .45, sz - 9.5, 13.4, OAY + .45, sz - 3.2, BRASS, .5, teeth); }
+  // condenser: filter holder, iris diaphragm, two lenses
+  OFF = o.cond;
+  mCyl(OAX, OAY, sz - 3.55, sz - 3.35, 1.75, ALU, .5, 24, top ? discZ(OAX, OAY, sz - 3.34, 1.2, '#b9d3f0', .4) : '');
+  { const zi = sz - 2.4, ring = top ? (() => { const A = on(PZ(zi), ellUV(OAX, OAY, 1.7, 1.7, 24)).map(T), B = on(PZ(zi), ellUV(OAX, OAY, .6 + .2*st.obj, .6 + .2*st.obj, 16)).map(T);
+      let s = `<path d="${pd(A)}${pd(B.slice().reverse())}" fill="#4b4640" fill-rule="evenodd"/>` + ink(pd(A), .5) + ink(pd(B), .5);
+      for (let i = 0; i < 8; i++){ const a = i*Math.PI/4; s += line([[OAX + (.6 + .2*st.obj)*Math.cos(a), OAY + (.6 + .2*st.obj)*Math.sin(a), zi], [OAX + 1.7*Math.cos(a + .6), OAY + 1.7*Math.sin(a + .6), zi]].map(T), .3).replace(INK, '#8a8379'); }
+      return s; })() : '';
+    addP([T([OAX - 1.7, OAY - 1.7, zi - .05]), T([OAX + 1.7, OAY + 1.7, zi + .05])], ring); }
+  mCyl(OAX, OAY, sz - 1.8, sz - 1.5, 1.5, GLASS, .5, 24);
+  mCyl(OAX, OAY, sz - 1.25, sz - .95, 1.15, GLASS, .5, 24);
+  // nosepiece: centre bolt, click stop spring and ball
+  OFF = o.nose;
+  mCyl(NX, OAY, NPZ + .2, NPZ + 1.5, .45, METAL, .5, 12);
+  mRod([NX - 2.9, OAY, NPZ + .6], [NX - 1.2, OAY, NPZ + .6], .22, METAL, .5, .22, 8);
+  mCyl(NX - 3, OAY, NPZ + .25, NPZ + .55, .25, METAL, .4, 10);
+  // objectives: lens elements inside each barrel, the 40× front lens on its spring mount
+  OFF = o.obj;
+  OBJ.forEach((ob, i) => { const [x, y] = objAt(st, i), z0 = NPZ - ob.len;
+    mCyl(x, y, z0 + .02, z0 + .18, .3, GLASS, .4, 12);
+    mCyl(x, y, NPZ - ob.len*.6, NPZ - ob.len*.6 + .25, ob.r*.7, GLASS, .4, 16);
+    mCyl(x, y, NPZ - 1.1, NPZ - .9, ob.r*.75, GLASS, .4, 16);
+    if (ob.m === 40){ const c = []; for (let k = 0; k <= 64; k++){ const t = k/64, a = t*2*Math.PI*6; c.push(T([x + .55*Math.cos(a), y + .55*Math.sin(a), NPZ - 1.5 - t*1.2])); }
+      PL.push({ box: boxOf(c), svg: `<path d="${pd(c, false)}" fill="none" stroke="${INK}" stroke-width="1.1"/><path d="${pd(c, false)}" fill="none" stroke="${METAL.l}" stroke-width=".45"/>` }); } });
+  // head: the prism that turns the light into the eyepiece tube
+  OFF = o.head;
+  { const tri = [[OAX - 1.1, PRZ - 1], [OAX + 1.1, PRZ - 1], [OAX - 1.1, PRZ + 1.2]], A = on(PY(OAY - 1), tri).map(T), B = on(PY(OAY + 1), tri).map(T);
+    let s = loft(A, B, n => toneI(n, GLASS)); for (const [cap, n] of [[A, [0,-1,0]], [B, [0,1,0]]]) if (facing(n)) s += fill(pd(cap), GLASS.l) + ink(pd(cap), .6);
+    addP(boxOf([...A, ...B]), s + hullInk([...A, ...B], 1)); }
+  // eyepiece: field stop, field lens, eye lens
+  OFF = o.eye;
+  for (const [t, r, M] of [[6.5, .95, DARK], [7, .85, GLASS], [9.6, .8, GLASS]]){ const a = eyeAt(t, [0,0,0]), b = eyeAt(t + .2, [0,0,0]); mRod(a, b, r, M, .5, r, 18); }
+  OFF = [0,0,0];
+  return { out, inn };
+}
+
+/* ---------- bench props: a box of prepared slides ---------- */
+function props(st){
+  PL = []; OFF = [0,0,0]; GH = 1;
+  if (st.sl <= .001){ const [x, y, z] = SLIDE_HOME; addP([[x - SLD.hw, y - SLD.hl, z], [x + SLD.hw, y + SLD.hl, z + SLD.t + SLD.cs]], slideSvg(SLIDE_HOME, false)); }
+  let tops = '';
+  for (let i = 0; i < 6; i++){ const y = 31.6 + i*1.3; tops += box(27.6, y, 5.2, 34.4, y + .12, 5.8, GLASS, toneI, .45); }
+  addP([[27, 30, MB_H], [35, 40, 5.2]], box(27, 30, MB_H, 35, 40, 5.2, BOXM, toneI, 1) + (facing([0,0,1]) ? shape(on(PZ(5.21), rectUV(27.5, 30.5, 34.5, 39.5)), '#5d7d92', .5) : ''));
+  addP([[27.6, 31.6, 5.2], [34.4, 38.3, 5.8]], tops);
+  return PL;
+}
+function shadows(st){
+  const o = offs(st), sz = stageZ(st), ring = (x, y, z, r) => on(PZ(z), ellUV(x, y, r, r, 12));
+  const parts = [ [...on(PZ(BZ0), rrUV(...BASE_UV, 4)), ...on(PZ(BZ), rrUV(...BASE_UV, 4))],
+    [...on(PY(OAY), ARM_PRO).map(p => add3(p, o.arm))], [...on(PZ(sz), rectUV(16.7, OAY - 6.5, 29.5, OAY + 6.5)).map(p => add3(p, o.stage)), [18.6, OAY, sz - 4]],
+    [...on(PZ(26.4), rectUV(10.6, OAY - 2.8, 27.2, OAY + 2.8)).map(p => add3(p, o.head)), eyeAt(10, o.eye)],
+    [...ring(OAX, OAY, sz - 3.6, 1.9), ...ring(NX, OAY, NPZ - 4.2, 3)].map(p => p),
+    [[27, 30, 5.2], [35, 30, 5.2], [35, 40, 5.2], [27, 40, 5.2]] ];
+  return clipTo(MB_TOP, parts.map(p => castShadow(p, MB_H)).join(''));
+}
+
+/* ---------- what you see in the eyepiece: onion skin cells, blurred until the stage reaches the focal plane ---------- */
+let msCells = null;
+function cellsMM(){
+  if (msCells) return msCells; const c = []; let sd = 7;
+  const rnd = () => (sd = (sd*16807) % 2147483647) / 2147483647;
+  for (let r = -40; r <= 40; r++) for (let k = -10; k <= 10; k++){ const w = .072, l = .3, x = k*l + (r % 2 ? l/2 : 0) + (rnd() - .5)*.04, y = r*w;
+    c.push([x - l/2, y - w/2, l - .006, w - .004, x + (rnd() - .5)*.12, y + (rnd() - .5)*.02]); }
+  return msCells = c;
+}
+function eyeView(st){
+  const vb = document.getElementById('fig').viewBox.baseVal, k = INK_K, R = 52*k, cx = vb.x + R + 12*k, cy = vb.y + vb.height - R - 22*k;
+  const ob = OBJ[st.obj], half = FN/ob.m/2, sc = R/half, g = st.glow;
+  let s = `<defs><clipPath id="msvc"><circle cx="${f(cx)}" cy="${f(cy)}" r="${f(R)}"/></clipPath>`
+    + `<filter id="msbl" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="${(R*.09*(1 - st.fc)).toFixed(2)}"/></filter></defs>`;
+  let inner = `<rect x="${f(cx - R)}" y="${f(cy - R)}" width="${f(2*R)}" height="${f(2*R)}" fill="${mix('#2e2a26', '#fff8e4', g)}"/>`;
+  if (st.sl > .999 && g > .01 && settled(st)){ let walls = '', nuc = '';
+    for (const [x, y, w, h, nx, ny] of cellsMM()){ if (Math.abs(x) > half + .4 || Math.abs(y) > half + .1) continue;
+      walls += `M${f(cx + x*sc)} ${f(cy + y*sc)}h${f(w*sc)}v${f(h*sc)}h${f(-w*sc)}Z`;
+      const nr = Math.max(.6*k, .014*sc); nuc += `M${f(cx + nx*sc - nr)} ${f(cy + ny*sc)}a${f(nr)} ${f(nr)} 0 1 0 ${f(2*nr)} 0a${f(nr)} ${f(nr)} 0 1 0 ${f(-2*nr)} 0`; }
+    inner += `<g filter="url(#msbl)" opacity="${f(g)}"><path d="${walls}" fill="#f6c9db" stroke="#a8456e" stroke-width="${f(Math.max(.3, Math.min(1.6, .006*sc)))}"/><path d="${nuc}" fill="#8e2f5e"/></g>`; }
+  s += `<g clip-path="url(#msvc)">${inner}</g><circle cx="${f(cx)}" cy="${f(cy)}" r="${f(R)}" fill="none" stroke="${INK}" stroke-width="${f(2.2*k)}"/>`;
+  const msg = g < .01 ? 'dark: the light is off' : st.sl < .999 ? 'no slide on the stage' : !settled(st) ? 'turning the nosepiece' : st.fc > .97 ? `onion cells, ${EYE*ob.m}×` : 'blurred: turn the focus knob';
+  s += `<text x="${f(cx)}" y="${f(cy + R + 13*k)}" font-size="${f(8*k)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="700" fill="${INK}">${msg}</text>`;
+  return s;
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const kx = ease(st.xr || 0), { out, inn } = build(st, m, kx);
+  let s = board(0, 0, MB_W, MB_D, MB_H, 5, WOOD) + shadows(st) + byDepth([...out, ...props(st)]);
+  if (kx > .01){ s += `<g opacity="${f(kx)}">${byDepth(inn)}</g>`;
+    if (st.glow > .01){ const S = stations(st); let b = '';
+      for (let i = 0; i < S.length - 1; i++) if (S[i][2] === 'in') b += beam(S[i][0], S[i][1], S[i+1][0], S[i+1][1], .55*st.glow);
+      s += `<g opacity="${f(kx)}">${b}</g>`; } }
+  return s + eyeView(st);
+}
+
+/* ---------- behaviour ---------- */
+const RATE = { glow:3, sl:.7, fc:.42, ex:.8, rot:170 };
+function tween(st, ui, key, goal){ st.goal[key] = goal; if (st.run[key]) return; st.run[key] = true;
+  ui.animate(dt => { const d = st.goal[key] - st[key]; st[key] += Math.sign(d)*Math.min(Math.abs(d), dt*RATE[key]);
+    if (st[key] === st.goal[key]){ st.run[key] = false; return false; } return true; }); }
+function light(st, ui){ st.on = !st.on; tween(st, ui, 'glow', st.on ? 1 : 0); }
+function slide(st, ui){ const g = st.goal.sl > .5 ? 0 : 1; tween(st, ui, 'sl', g); if (!g) ui.flash('slide back on the bench'); }
+function focus(st, ui){ const g = st.goal.fc > .99 ? 0 : 1; tween(st, ui, 'fc', g);
+  if (!g) return ui.flash('stage racked down');
+  if (st.goal.sl < .5) ui.flash('no slide yet: the stage rises, but there is nothing to see');
+  else if (!st.on) ui.flash('the light is off: dark in the eyepiece'); }
+function pickObj(st, ui, i){ st.obj = i; tween(st, ui, 'rot', target(st)); ui.flash(`${OBJ[i].m}× clicks into place: ${EYE*OBJ[i].m}×`); }
+function explode(st, ui){ tween(st, ui, 'ex', st.goal.ex > .5 ? 0 : 1); }
+
+/* ---------- see-through labels ---------- */
+const XR_OPTS = { getSt: () => { try { return ui.st; } catch (e) { return {}; } }, B: [6.5, 31, 9, 23.7, 0, 36], inline: true, mech: () => '',
+  inside: st => { if (st.fc == null) return []; const o = offs(st), sz = stageZ(st), lit = st.glow > .5, mv = !!st.run.fc, ob = (i, z) => add3([...objAt(st, i), z], o.obj);
+    const A = (p, g) => add3(p, o[g]);
+    return [
+      { at: A([OAX + .4, OAY, BZ0 + 1.2], 'base'), text:'LED LAMP', on: lit },
+      { at: A([OAX + 1.25, OAY - 1, BZ0 + .6], 'base'), text:'HEAT SINK', on: lit },
+      { at: A([OAX + 1.45, OAY, BZ0 + 2.2], 'base'), text:'COLLECTOR LENS', on: lit },
+      { at: A([OAX + 1.6, OAY, BZ + .5], 'field'), text:'FIELD LENS', on: lit },
+      { at: A([12, 18.5, BZ0 + .65], 'base'), text:'LED DRIVER', on: lit },
+      { at: A([11, 22.9, 4.4], 'base'), text:'DIMMER WHEEL', on: lit },
+      { at: A([25.2, 23, 4.4], 'base'), text:'POWER SWITCH', on: lit },
+      { at: [3, 21.5, MB_H + .45], text:'POWER CORD', on: lit },
+      { at: A([OAX + 1.15, OAY, sz - 1.1], 'cond'), text:'CONDENSER LENS', on: lit },
+      { at: A([OAX + 1.7, OAY, sz - 2.4], 'cond'), text:'IRIS DIAPHRAGM', on: lit },
+      { at: A(st.sl > .999 ? [17.5, OAY + 6, sz] : [29, OAY - 6, sz], 'stage'), text:'STAGE', on: mv },
+      { at: A([OAX, OAY - 5.4, sz + .5], 'stage'), text:'STAGE CLIP', on: false },
+      { at: st.sl > .999 ? A([OAX + .6, OAY + 3, sz + SLD.t], 'slide') : add3(slidePos(st), [1.3, -2.6, SLD.t]), text:'SLIDE', on: false },
+      { at: st.sl > .999 ? A([OAX + .5, OAY - .5, sz + SLD.t], 'slide') : add3(slidePos(st), [.5, -.5, SLD.t]), text:'ONION CELLS', on: lit && st.sl > .999 },
+      { at: A([18.6, OAY - 1, sz - 2.4], 'stage'), text:'STAGE BRACKET', on: mv },
+      { at: A([12.7, OAY, sz - 5], 'stage'), text:'FOCUS RACK', on: mv },
+      { at: A([KN[0], OAY, KN[1] + PIN_R], 'arm'), text:'PINION', on: mv },
+      { at: A([KN[0] - 1.65, OAY - 1.9, KN[1] + .45], 'arm'), text:'REDUCTION GEARS', on: mv },
+      { at: A([14.4, OAY + 1.65, 19], 'arm'), text:'DOVETAIL GUIDE', on: mv },
+      { at: A([KN[0], ARMY[1] + 1.3, KN[1] + 2.3], 'knp'), text:'COARSE FOCUS KNOB', on: mv },
+      { at: A([KN[0], ARMY[1] + 3.2, KN[1]], 'knp'), text:'FINE FOCUS KNOB', on: mv },
+      { at: A([NX, OAY + 3.2, NPZ], 'nose'), text:'NOSEPIECE', on: !settled(st) },
+      { at: A([NX - 3, OAY + .6, NPZ + .55], 'nose'), text:'CLICK STOP', on: !settled(st) },
+      ...OBJ.map((b, i) => ({ at: ob(i, NPZ - b.len*.5), text:`${b.m}× OBJECTIVE`, on: st.obj === i && lit })),
+      { at: A([OAX, OAY + 1, PRZ], 'head'), text:'PRISM', on: lit },
+      { at: eyeAt(6.6, o.eye), text:'FIELD STOP', on: lit },
+      { at: eyeAt(9.7, o.eye), text:'EYE LENS', on: lit },
+      { at: A([10, OAY + 2.6, 17], 'arm'), text:'ARM', on: false } ]; },
+  surface: st => { if (st.fc == null) return []; const o = offs(st), sz = stageZ(st), A = (p, g) => add3(p, o[g]);
+    return [ { at: eyeAt(9, o.eye), text:'EYEPIECE', on: false }, { at: A([NX, OAY + 3, NPZ + .6], 'nose'), text:'NOSEPIECE', on: false },
+      { at: add3([...objAt(st, st.obj), NPZ - 2], o.obj), text:'OBJECTIVE', on: st.glow > .5 }, { at: A([29, OAY + 6, sz], 'stage'), text:'STAGE', on: false },
+      { at: A([OAX, OAY + 1.9, sz - 2.4], 'cond'), text:'CONDENSER', on: st.glow > .5 }, { at: A([KN[0], ARMY[1] + 1.3, KN[1] + 2.3], 'knp'), text:'FOCUS KNOB', on: !!st.run.fc },
+      { at: A([OAX, OAY + 1.6, BZ + .7], 'field'), text:'LAMP', on: st.glow > .5 }, { at: A([12, OAY + 2.6, 20], 'arm'), text:'ARM', on: false },
+      { at: A([20, 22.5, 4], 'base'), text:'BASE', on: false } ]; } };
+const XR_CAPTION = st => {
+  if (st.ex > .5) return 'Taken apart along the light path: lamp and field lens in the base, the condenser, the stage with its rack, the slide, the objectives, the nosepiece, the head with its prism, and the eyepiece. The arm holds the knobs, the pinion and the dovetail guides the rack rides in.';
+  if (st.glow > .5 && st.sl > .999) return `The LED's light is gathered by the collector lens, leaves through the field lens, and the condenser focuses it on the cells. The ${OBJ[st.obj].m}× objective magnifies them, the prism turns the light into the eyepiece tube, and the 10× eyepiece magnifies again: ${EYE*OBJ[st.obj].m}× in all.`;
+  return 'Turning the coarse knob turns the pinion on its shaft; the pinion drives the rack on the carriage, which slides up the dovetail guides and lifts the stage. The fine knob drives the same shaft through reduction gears; the focus stop keeps the slide off the 40× lens.';
+};
+
+scene = xrWrap(scene, XR_OPTS);
+const ui = mountFigure({
+  fig:'', title:'Microscope', hint:'switch on the light, place the slide, then focus',
+  size:[MB_W, MB_D, 36], palette:'mint', turn:'full',
+  state:{ on:false, glow:0, sl:0, fc:0, obj:0, rot:0, ex:0, goal:{}, run:{} },
+  scene,
+  readout: st => `${st.on ? 'light on' : 'light off'} · ${st.sl > .999 ? 'slide on the stage' : 'no slide'} · ${OBJ[st.obj].m}× objective · field of view ${(FN/OBJ[st.obj].m).toFixed(2)} mm`,
+  stats: st => { const ob = OBJ[st.obj], mm = DROP*(1 - st.fc)*10;
+    return [ { label:`Magnification · ${mm < .05 ? 'in focus' : `focus ${mm.toFixed(1)} mm off`}`, value: `${EYE*ob.m}×` } ]; },   // one stat: the label column on the right needs the room
+  buttonsLabel:'Microscope',
+  buttons:[
+    { label:'Light on / off', onClick: light },
+    { label:'Place slide', onClick: slide },
+    { label:'Turn focus knob', onClick: focus },
+    { label:'Objective', choices: st => OBJ.map((b, i) => ({ label:`${b.m}×`, current: st.obj === i, onClick: (s, u) => pickObj(s, u, i) })) },
+    { label:'Explode', onClick: explode },
+  ],
+  acts:{ switch: (st, el, u) => light(st, u), slide: (st, el, u) => slide(st, u), knob: (st, el, u) => focus(st, u), nose: (st, el, u) => pickObj(st, u, (st.obj + 1) % 3) },
+  params:(st, q) => {
+    if (q.get('light') === '1'){ st.on = true; st.glow = 1; }
+    if (q.get('slide') === '1') st.sl = 1;
+    if (q.get('focus') === '1') st.fc = 1;
+    const i = OBJ.findIndex(b => String(b.m) === q.get('obj')); if (i >= 0){ st.obj = i; st.rot = target(st); }
+    if (q.get('explode') === '1') st.ex = 1;
+    Object.assign(st.goal, { glow: st.glow, sl: st.sl, fc: st.fc, rot: st.rot, ex: st.ex });
+  },
+});
+xrMount(() => ui, XR_CAPTION);
+</script></body></html>
