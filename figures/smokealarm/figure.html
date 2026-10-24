@@ -38,18 +38,19 @@
 const AO = [95, 95], ZF = 51, CEIL_W = 190, CEIL_H = 10;
 const RINGS = [[13,59],[14.5,61.5],[16.5,62],[37,62],[41,61.2],[44.5,59.2],[47.5,56],[49.6,52],[ZF,46.5]];
 const TB = [96, 113], TBR = 11;                    // test button
-const LEDW = [88, 95];                             // red LED / light pipe / window
+const LEDW = [103, 93.5];                             // red LED / light pipe / window
 const TH = [124, 108], THR = 13.5;                 // horn cavity
 const CH = [70, 120], CHR = 21, CHZ0 = 21.6, CHZ1 = 36, CAPZ = 37.4;   // optical chamber
 const TH_L = 200, TH_P = 310, TH_T = 20;           // IR LED, photodiode, light trap angles round the chamber
 const TR = { x0:67.5, x1:122.5, y0:60, y1:89.5, z0:30, z1:ZF };       // battery box (outer)
 const BSEAT = [72.5, 61.5, 31.5];                  // battery's terminal end, seated
 const PCBZ = [20, 21.6];
-const PCB_CUT = norm([.67, -.74]), PCB_CUTD = 20;  // the board is a disc with one flat side, clear of the mounting screw
+const PCB_CUT = norm([.67, -.74]), PCB_CUTD = 38;  // the board is a disc with one flat side, clear of the mounting screw
 const STANDS = [[60, 64], [138, 118], [100, 146]];
 const MSCREWS = [[128, 66], [62, 124]];
 const LUGS = [-48, 72, 192];
 const CANY = 58, CANZ = 40, CANX = 172;            // smoke-test can: nozzle tip, can lies along +x
+const CAN_OFF = 40, BAT_OFF = 45;                  // how far the can and the old battery slide off (fading) before they vanish
 
 const CEILM = { l:'#ece7dc', m:'#d6cfc0', d:'#b0a897' };
 const BODYM = { l:'#fbfaf4', m:'#e5e2d7', d:'#bcb7a8' };
@@ -251,8 +252,8 @@ function saMech(st){
   for (const [x, y] of STANDS) vc(x, y, 14.5, PCBZ[0], 2.6, PLATEM, .6, 14);
   { const tz = PCBZ[1] + .03, tr = [
       [[112, 122], [112, 116], [104, 116], [98.4, 113]], [[115.5, 126], [124, 126]], [[108.5, 132], [104, 134]], [[108.5, 138], [104, 140]],
-      [[96, 134], [88, 128], [88, 99]], [[120, 132], [120, 128]], [[112, 141.5], [112, 146], [66, 146], [62, 140]],
-      [[109, 104], [109, 112]], [[109, 112], [110, 118], [112, 122]], [[63, 66.5], [63, 92], [84, 92], [88, 95]], [[63, 83.5], [56, 90], [52, 106]],
+      [[96, 134], [100, 128], [103, 97]], [[120, 132], [120, 128]], [[112, 141.5], [112, 146], [66, 146], [62, 140]],
+      [[109, 104], [109, 112]], [[109, 112], [110, 118], [112, 122]], [[63, 66.5], [63, 92], [99, 92], [103, 93.5]], [[63, 83.5], [56, 90], [52, 106]],
       [[60, 112], [52, 106]], [[81, 108], [86, 104], [108, 104], [109, 104]] ];
     let top = up ? `<path d="${tr.map(t => pd(t.map(([x, y]) => [x, y, tz]), false)).join('')}" fill="none" stroke="#d8a24a" stroke-width=".8" stroke-linecap="round" stroke-linejoin="round"/>` : '';
     for (const [x, y] of STANDS) if (up) top += shape(ringAt([x, y], tz + .02, 2.2, 14), METAL.l, .5) + line([[x - 1.4, y, tz + .04], [x + 1.4, y, tz + .04]], .5);
@@ -305,58 +306,71 @@ function saMech(st){
     parts.push(...saWire([[TH[0] - 5, TH[1] + dy, 42.8], [109, TH[1] + dy, 41.5], [109, TH[1] + dy, PCBZ[1] + .05]], horn ? '#ff6a3a' : col, .4));
   // ---- the optical chamber
   parts.push(...chamberParts(st));
-  return byDepth(parts); }
+  // everything at or under the board is stacked in z (we always look down on it): draw it first, in order
+  const under = parts.filter(p => p.box[1][2] <= PCBZ[1] + 1e-6), over = parts.filter(p => p.box[1][2] > PCBZ[1] + 1e-6);
+  return under.map(p => p.svg).join('') + byDepth(over); }
 
 /* ---------- labels ---------- */
+// the one of several points furthest to the viewer's right
+// labels that may sit anywhere along their part (cands) go to whichever column has room, so neither overflows from any yaw
+const nearArc = (c, r, z, n = 7) => Array.from({length: n}, (_, i) => [...pol2(c, r, YAW - 75 + 150*i/(n - 1)), z]);
+function saBalance(items){
+  const B = lblB(), xs = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) xs.push(P(x, y, z)[0]);
+  const cx = (Math.min(...xs) + Math.max(...xs))/2, X = q => P(...q)[0], CAP_L = 12, CAP_R = 20;   // rows each column holds
+  let nL = 0, nR = 0;
+  for (const it of items){ if (it.cands){ const c = it.cands.slice().sort((a, b) => X(a) - X(b));
+      if (X(c[0]) < cx && X(c[c.length - 1]) >= cx){ it.c = c; continue; }   // straddles the middle: decide below
+      it.at = c[c.length >> 1]; }
+    X(it.at) < cx ? nL++ : nR++; }
+  for (const it of items) if (it.c){ if (nL/CAP_L < nR/CAP_R){ it.at = it.c[0]; nL++; } else { it.at = it.c[it.c.length - 1]; nR++; } }
+  return items; }
 function insideLabels(st){
   const horn = hornOn(st), pulse = pulseOn(st), bp = batPos(st), y = YAW;
-  const vane = pol2(CH, 18, 125 + 11), m2 = (() => { const Lt = pol2(CH, 11.5, TH_L), Pt = pol2(CH, 12.5, TH_P); return [(Lt[0] + Pt[0])/2, (Lt[1] + Pt[1])/2]; })();
-  return [
-    { at: [...pol2(AO, 62, y + 28), 27], text: 'SMOKE VENTS', on: st.dout > .3 },
-    { at: [...pol2(AO, 54, y - 20), 47.5], text: 'COVER', on: false },
-    { at: [...pol2(CH, 21, y + 70), CAPZ], text: 'CHAMBER CAP', on: false },
-    { at: [...pol2(CH, 22, y + 20), 31], text: 'INSECT MESH', on: st.dout > .3 },
-    { at: [...vane, CHZ1], text: 'LABYRINTH VANES', on: st.cham > .3 },
-    { at: [...pol2(CH, 21, y - 40), 22.5], text: 'OPTICAL CHAMBER', on: st.cham > .8 },
+  const m2 = (() => { const Lt = pol2(CH, 11.5, TH_L), Pt = pol2(CH, 12.5, TH_P); return [(Lt[0] + Pt[0])/2, (Lt[1] + Pt[1])/2]; })();
+  return saBalance([
+    { cands: nearArc(AO, 62, 27), text: 'SMOKE VENTS', on: st.dout > .3 },
+    { cands: nearArc(CH, 22, 31), text: 'INSECT MESH', on: st.dout > .3 },
+    { cands: [65, 95, 125, 155, 245, 275, 335].map(a => [...pol2(CH, 18, a + 11), CHZ1]), text: 'LABYRINTH VANES', on: st.cham > .3 },
+    { cands: nearArc(CH, 21, 22.5), text: 'OPTICAL CHAMBER', on: st.cham > .8 },
     { at: [...pol2(CH, 11.5, TH_L), 30], text: 'IR LED', on: pulse },
     { at: [...pol2(CH, 12.5, TH_P), 30], text: 'PHOTODIODE', on: pulse && st.cham > .6 },
     { at: [...m2, 34], text: 'SHIELD BAFFLE', on: false },
     { at: [...pol2(CH, 17, TH_T), 34], text: 'LIGHT TRAP', on: pulse },
-    { at: [112, 136, 24.6], text: 'ALARM CHIP', on: st.batIn && (horn || pulse) },
+    { cands: [[110, 124, 24.6], [114, 124, 24.6], [110, 139, 24.6], [114, 139, 24.6]], text: 'ALARM CHIP', on: st.batIn && (horn || pulse) },
     { at: [124, 126, 31.6], text: 'CAPACITOR', on: horn },
-    { at: [100, 140, 24.7], text: 'RESISTORS', on: false },
-    { at: [120, 135, 24.5], text: 'DIODE', on: false },
+    { cands: [[98, 134, 24.7], [103, 134, 24.7], [98, 140, 24.7], [103, 140, 24.7]], text: 'RESISTORS', on: false },
     { at: [98.4, 110.6, 24], text: 'TACT SWITCH', on: st.btn > .5 },
     { at: [TB[0], TB[1], 38], text: 'PLUNGER', on: st.btn > .5 },
-    { at: [TB[0], TB[1] + 6, ZF + 3 - 2*st.btn], text: 'TEST / HUSH BUTTON', on: st.btn > .5 },
+    { cands: nearArc(TB, TBR - 2, ZF + 3 - 2*st.btn), text: 'TEST BUTTON', on: st.btn > .5 },
     { at: [LEDW[0], LEDW[1], 24.5], text: 'RED LED', on: ledOn(st) },
     { at: [LEDW[0], LEDW[1], 44], text: 'LIGHT PIPE', on: ledOn(st) },
-    { at: [TH[0] + 6, TH[1] - 6, 44], text: 'PIEZO DISC', on: horn },
-    { at: [...pol2(TH, THR, y), 47], text: 'HORN CAVITY', on: horn },
-    { at: [TH[0] + 4.6, TH[1], ZF + .1], text: 'SOUNDER GRILLE', on: horn },
+    { cands: nearArc(TH, 10.5, 44), text: 'PIEZO DISC', on: horn },
+    { cands: nearArc(TH, THR, 47), text: 'HORN CAVITY', on: horn },
+    { cands: grilleHoles().map(p => [...p, ZF + .1]), text: 'SOUNDER GRILLE', on: horn },
     { at: [109, TH[1], 30], text: 'HORN LEADS', on: horn },
-    { at: [bp[0] + 30, bp[1] + 20, bp[2] + 17.5], text: '9V BATTERY', on: !!st.seq },
-    { at: [70.5, 75, 47], text: 'BATTERY TERMINALS', on: st.batIn },
-    { at: [63, 66.5, 30], text: 'BATTERY LEADS', on: st.batIn && horn },
-    { at: [TR.x1, 80, 38], text: 'BATTERY BOX', on: false },
-    { at: st.door > .01 ? avg(doorCorners(st.door*108)) : [95, 66, ZF], text: 'BATTERY DOOR', on: st.door > .01 },
-    { at: [...pol2(AO, 52, y + 62), PCBZ[1]], text: 'CIRCUIT BOARD', on: st.batIn },
-    { at: [138, 118, 17], text: 'STANDOFF', on: false },
+    { cands: [[bp[0] + 12, bp[1] + 4, bp[2] + 17.5], [bp[0] + 44, bp[1] + 4, bp[2] + 17.5], [bp[0] + 12, bp[1] + 22, bp[2] + 17.5], [bp[0] + 44, bp[1] + 22, bp[2] + 17.5]], text: '9V BATTERY', on: !!st.seq },
+    { cands: [[73.6, 67.5, 43.3], [73.6, 80.2, 43.7]], text: 'BATTERY CLIPS', on: st.batIn },
+    { cands: [[63, 66.5, 30], [63, 83.5, 30], [65.5, 67, 39], [65.5, 81.5, 39]], text: 'BATTERY LEADS', on: st.batIn && horn },
+    { cands: [[TR.x1, TR.y0, 40], [TR.x1, TR.y1, 40], [TR.x0, TR.y0, 40], [TR.x0, TR.y1, 40]], text: 'BATTERY BOX', on: false },
+    { cands: st.door > .01 ? [avg(doorCorners(st.door*108))] : [[72, 64, ZF], [118, 64, ZF], [72, 86, ZF], [118, 86, ZF]], text: 'BATTERY DOOR', on: st.door > .01 },
+    { cands: PCB_POLY.filter((p, i) => i % 4 === 0).map(p => [p[0], p[1], PCBZ[1]]), text: 'CIRCUIT BOARD', on: st.batIn },
+    { cands: STANDS.map(p => [...p, 17]), text: 'STANDOFF', on: false },
     { at: [...pol2(AO, 47, -60), 13], text: 'MOUNTING PLATE', on: false },
     { at: [MSCREWS[0][0], MSCREWS[0][1], 13], text: 'MOUNTING SCREW', on: false },
-    { at: [...pol2(AO, 54, LUGS[0]), 13], text: 'TWIST-LOCK TAB', on: false } ]; }
+    { cands: LUGS.map(a => [...pol2(AO, 54, a), 13]), text: 'TWIST-LOCK TAB', on: false } ]); }
 function surfaceLabels(st){
-  return [ { at: [TB[0], TB[1], ZF + 3 - 2*st.btn], text: 'TEST / HUSH BUTTON', on: st.btn > .5 },
+  return [ { at: [TB[0], TB[1], ZF + 3 - 2*st.btn], text: 'TEST BUTTON', on: st.btn > .5 },
     { at: [LEDW[0], LEDW[1], ZF], text: 'LED WINDOW', on: ledOn(st) },
     { at: [TH[0], TH[1], ZF], text: 'SOUNDER GRILLE', on: hornOn(st) },
     { at: [95, 75, ZF], text: 'BATTERY DOOR', on: st.door > .01 },
     { at: [...pol2(AO, 62, YAW + 28), 27], text: 'SMOKE VENTS', on: st.dout > .3 },
     ...(st.can ? [{ at: [CANX + st.canDX + 40, CANY, CANZ + 20], text: 'SMOKE TESTER', on: st.can === 'spray' }] : []) ]; }
-const LBL_B = [AO[0] - 62, AO[0] + 62, AO[1] - 62, AO[1] + 62, CEIL_H, ZF + 4];
+// callout bounds: a square whose outline on screen is about as wide as the round case, from any yaw
+const lblB = () => { const h = 62/(Math.abs(Math.cos(saRad(YAW))) + Math.abs(Math.sin(saRad(YAW)))); return [AO[0] - h, AO[0] + h, AO[1] - h, AO[1] + h, CEIL_H, ZF + 4]; };
 
 /* ---------- the smoke-test can (comes in for the puff) and the smoke ---------- */
 function canItems(st){
-  if (st.canDX >= 219) return [];
+  if (st.canDX >= CAN_OFF - .5) return [];
   const x0 = CANX + st.canDX, y = CANY, z = CANZ, spray = st.can === 'spray';
   const items = [
     { box: [[x0, y - 4, z - 4], [x0 + 4, y + 4, z + 4]], svg: cylX(x0, x0 + 4, y, z, 4, spray ? matOf('#f4b829') : DARK, toneI, .8, 16) + (facing([-1,0,0]) ? fill(pd(ringAt([y, z], 0, 1, 8).map(([a, b]) => [x0 - .05, a, b])), INK) : '') },
@@ -364,7 +378,8 @@ function canItems(st){
     { box: [[x0 + 14, y - 20, z - 20], [x0 + 22, y + 20, z + 20]], svg: rod([x0 + 14, y, z], [x0 + 22, y, z], 13, METAL, toneI, 1, 20, 28) },
     { box: [[x0 + 22, y - 20, z - 20], [x0 + 95, y + 20, z + 20]], svg: cylX(x0 + 22, x0 + 95, y, z, 20, CANM, toneI, 1.4, 32)
       + cylX(x0 + 40, x0 + 72, y, z, 20.2, CERAMIC, toneI, .8, 32) } ];
-  return items; }
+  const a = 1 - st.canDX/CAN_OFF;
+  return a > .99 ? items : items.map(it => ({ ...it, svg: `<g opacity="${f(a)}">${it.svg}</g>` })); }
 function puffItems(st){
   return st.puffs.map(p => { const [X, Y] = P(p.x, p.y, p.z), a = Math.max(0, Math.min(1, p.life - p.age)) * Math.min(1, p.age*4), r = p.r*CAM_K;
     return { box: [[p.x - p.r, p.y - p.r, p.z - p.r], [p.x + p.r, p.y + p.r, p.z + p.r]],
@@ -389,7 +404,7 @@ function scene(st, m){
   s += line([[0, 150, CEIL_H + .02], [CEIL_W, 150, CEIL_H + .02]], .5).replace('stroke-width="0.5"', 'stroke-width="0.5" opacity=".35"');
   const shadowPts = [...ringAt(AO, 13, 59, 24), ...ringAt(AO, 37, 62, 24), ...ringAt(AO, ZF, 46.5, 24)];
   let sh = castShadow(shadowPts, CEIL_H, BTOP);
-  if (st.canDX < 219) sh += castShadow([[CANX + st.canDX, CANY - 20, CANZ - 20], [CANX + st.canDX + 95, CANY + 20, CANZ + 20], [CANX + st.canDX, CANY + 20, CANZ + 20], [CANX + st.canDX + 95, CANY - 20, CANZ - 20],
+  if (st.canDX < CAN_OFF - .5) sh += castShadow([[CANX + st.canDX, CANY - 20, CANZ - 20], [CANX + st.canDX + 95, CANY + 20, CANZ + 20], [CANX + st.canDX, CANY + 20, CANZ + 20], [CANX + st.canDX + 95, CANY - 20, CANZ - 20],
     [CANX + st.canDX + 95, CANY + 20, CANZ - 20], [CANX + st.canDX, CANY - 20, CANZ + 20]], CEIL_H, BTOP);
   s += sh;
   // the mounting plate peeks out under the case
@@ -410,13 +425,13 @@ function scene(st, m){
     items.push({ box: aabb(dc), svg: act('door', saHexa(dc, BODYM, tone, 1)) }); }
   // the battery above the face (lifted out, carried away, brought in)
   { const bp = batPos(st);
-    if (bp[2] + 17.5 > ZF + .05 && !(st.batDX > 200)){ const zc = bp[2] < ZF ? ZF + .05 : -1e9;
-      items.push({ box: [[bp[0], bp[1], Math.max(bp[2], ZF)], [bp[0] + 48.5, bp[1] + 26.5, bp[2] + 17.5]], svg: saBattery(...bp, st.batNew, zc) }); } }
+    if (bp[2] + 17.5 > ZF + .05 && st.batDX < BAT_OFF - .5){ const zc = bp[2] < ZF ? ZF + .05 : -1e9;
+      items.push({ box: [[bp[0], bp[1], Math.max(bp[2], ZF)], [bp[0] + 48.5, bp[1] + 26.5, bp[2] + 17.5]], svg: `<g opacity="${f(1 - st.batDX/BAT_OFF)}">${saBattery(...bp, st.batNew, zc)}</g>` }); } }
   items.push(...canItems(st), ...puffItems(st));
   s += byDepth(items);
   s += soundRings(st);
-  if (k > .6) s += xrCallouts(insideLabels(st), LBL_B);
-  else s += xrCallouts(surfaceLabels(st), LBL_B);
+  if (k > .6) s += xrCallouts(insideLabels(st), lblB());
+  else s += xrCallouts(surfaceLabels(st), lblB());
   return s; }
 
 /* ---------- behaviour: one state object, one clock ---------- */
@@ -427,12 +442,12 @@ function step(st, dt){
   st.clock += dt;
   // the can: in, spray, out
   if (st.can){ st.canT += dt;
-    if (st.can === 'in'){ st.canDX = 220*(1 - ease(Math.min(1, st.canT/.5))); if (st.canT >= .5){ st.can = 'spray'; st.canT = 0; st.emit = 0; } }
+    if (st.can === 'in'){ st.canDX = CAN_OFF*(1 - ease(Math.min(1, st.canT/.5))); if (st.canT >= .5){ st.can = 'spray'; st.canT = 0; st.emit = 0; } }
     else if (st.can === 'spray'){ st.canDX = 0; st.dout += 4.6*dt; st.emit += dt*22;
       while (st.emit >= 1){ st.emit--; const a = (Math.random() - .5)*.7, v = 70 + Math.random()*40;
         st.puffs.push({ x: CANX - 2, y: CANY + (Math.random() - .5)*4, z: CANZ + (Math.random() - .5)*4, vx: -v*Math.cos(a), vy: v*Math.sin(a), vz: -8 - Math.random()*10, r: 3, age: 0, life: 3.2 + Math.random()*2 }); }
       if (st.canT >= 1.2){ st.can = 'out'; st.canT = 0; } }
-    else if (st.can === 'out'){ st.canDX = 220*ease(Math.min(1, st.canT/.6)); if (st.canT >= .6){ st.can = null; st.canDX = 220; } } }
+    else if (st.can === 'out'){ st.canDX = CAN_OFF*ease(Math.min(1, st.canT/.6)); if (st.canT >= .6){ st.can = null; st.canDX = CAN_OFF; } } }
   // smoke puffs: slow down, spread, rise to the ceiling (-z here), slide round the case
   for (const p of st.puffs){ p.age += dt; const dr = Math.exp(-dt*1.5);
     p.vx *= dr; p.vy *= dr; p.vz = p.vz*dr - 5*dt;
@@ -456,14 +471,14 @@ function step(st, dt){
   if (st.seq){ st.seqT += dt; const T = st.seqT, sq = st.seq, e = d => ease(Math.min(1, T/d));
     if (sq === 'open'){ st.door = e(.5); if (T >= .5) next('lift'); }
     else if (sq === 'lift'){ st.batIn = false; st.alarm = false; st.batZ = 42*e(.6); if (T >= .6) next('away'); }
-    else if (sq === 'away'){ st.batDX = 230*e(.5); if (T >= .5){ st.batNew = true; st.bat = 9.5; st.lowHush = false; next('come'); } }
-    else if (sq === 'come'){ st.batDX = 230*(1 - e(.5)); if (T >= .5) next('drop'); }
+    else if (sq === 'away'){ st.batDX = BAT_OFF*e(.5); if (T >= .5){ st.batNew = true; st.bat = 9.5; st.lowHush = false; next('come'); } }
+    else if (sq === 'come'){ st.batDX = BAT_OFF*(1 - e(.5)); if (T >= .5) next('drop'); }
     else if (sq === 'drop'){ st.batZ = 42*(1 - e(.6)); if (T >= .6){ st.batIn = true; st.power = .2; next('close'); } }
     else if (sq === 'close'){ st.door = 1 - e(.5); if (T >= .5){ st.door = 0; st.seq = null; } } }
   function next(p){ st.seq = p; st.seqT = 0; }
 }
 function runLoop(){
-  if (loopOn || !ui) return; loopOn = true;
+  if (loopOn || !ui || ui.st.still) return; loopOn = true;
   ui.animate(dt => { const st = ui.st; step(st, dt); if (!active(st)){ loopOn = false; return false; } return true; });
 }
 const noBattery = st => !st.batIn ? (ui.flash(st.seq ? 'Wait — the battery is being changed' : 'No battery — the alarm is dead'), true) : false;
@@ -497,13 +512,9 @@ ui = mountFigure({
   fig: '07', title: 'Smoke alarm', turn: 'full',
   size: [CEIL_W, CEIL_W, 92], center: [CEIL_W/2, CEIL_W/2], palette: 'tomato',
   state: { bat: 7.4, batIn: true, batZ: 0, batDX: 0, batNew: false, door: 0, seq: null, seqT: 0, dout: 0, cham: 0, alarm: false, alarmT: 0,
-    hush: 0, testT: -1, btn: 0, chirp: 0, blink: 0, power: 0, lowHush: false, can: null, canT: 0, canDX: 220, emit: 0, puffs: [], clock: 0 },
+    hush: 0, testT: -1, btn: 0, chirp: 0, blink: 0, power: 0, lowHush: false, can: null, canT: 0, canDX: CAN_OFF, emit: 0, puffs: [], clock: 0 },
   scene,
   readout: st => sounding(st) ? 'alarm' : st.hush > 0 ? 'hushed' : 'standby',
-  stats: st => [
-    { label: 'Battery', value: st.batIn ? `${st.bat.toFixed(1)} V` : 'out' },
-    { label: 'Smoke', value: `${st.cham.toFixed(1)} %/ft`, small: true },
-    { label: 'Mode', value: !st.batIn ? 'off' : sounding(st) ? 'ALARM' : st.hush > 0 ? 'hush' : st.testT >= 0 ? 'test' : st.bat < 7.8 && !st.lowHush ? 'low bat' : 'ready', small: true } ],
   buttons: [
     { label: 'Press test', onClick: st => test(st) },
     { label: 'Blow smoke', onClick: st => blowSmoke(st) },
@@ -521,9 +532,15 @@ ui = mountFigure({
     if (q.get('can') === '1'){ st.can = 'spray'; st.canDX = 0; st.canT = 0; }
   },
 });
-if (active(ui.st)) runLoop();
+// screenshots: ?run=smoke,test,hush,battery&at=seconds plays those buttons on a simulated clock and holds that frame
+{ const q = new URLSearchParams(location.search);
+  if (q.has('run')){ const st = ui.st, A = { smoke: blowSmoke, test, hush: st => hush(st, false), battery: replaceBattery }; st.still = true;
+    const at = (q.get('at') || '0').split(',').map(Number);
+    q.get('run').split(',').forEach((n, i) => { const t = at[i] || 0; while (st.clock < t - 1e-6) step(st, 1/30); A[n](st); });
+    const tEnd = at[at.length - 1] + +(q.get('hold') || 0); while (st.clock < tEnd - 1e-6) step(st, 1/30); ui.render(); }
+  else if (active(ui.st)) runLoop(); }
 // standby: the LED blinks now and then; a tired battery chirps
-setInterval(() => { const st = ui.st; if (!st.batIn || st.seq) return;
+setInterval(() => { const st = ui.st; if (!st.batIn || st.seq || st.still) return;
   st.blink = .15; if (st.bat < 7.8 && !st.lowHush && !st.alarm && st.testT < 0) st.chirp = .12; runLoop(); }, 6500);
 xrMount(() => ui, () => '');
 </script></body></html>

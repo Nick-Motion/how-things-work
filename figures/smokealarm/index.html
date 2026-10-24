@@ -1,0 +1,1287 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Smoke alarm</title><style>.mcap{display:none!important}@media (max-width:560px){.stat .v{font-size:20px!important}.stats{align-items:flex-end}}@media (min-width:561px){.vset{top:4px!important}#stats{top:var(--vset-h,44px)!important}}</style><style>@media (max-width:560px){body > header{display:none}}</style><script>window.FIG_A = () => innerWidth <= 560 ? 1.1 : .75;</script><script>window.LBL_U = () => { if (innerWidth > 560) return 0; const s = document.getElementById("fig"); return s && s.clientWidth && s.viewBox.baseVal.width ? s.viewBox.baseVal.width / s.clientWidth : 0; };</script></head><body>
+<script>
+/* ============================================================
+   Colorfigures core: projection, shapes, shading, ink, labels, page shell.
+   A figure page includes this file (scripts/build.py inlines it), then calls mountFigure({...}).
+   See SKILL.md for the drawing contract and conventions.
+   One fixed view (front-left-top) and one fixed light (from above, behind the viewer's right shoulder: the front is lit,
+   the left side is in shade, and cast shadows fall toward the lower left of the screen).
+   ============================================================ */
+
+/* ---------- palettes ---------- */
+const PALS = {
+  mustard: { l:'#f4b829', m:'#d49c1f', d:'#4e4a18' },
+  tomato:  { l:'#ef6a4c', m:'#cf5038', d:'#4a2219' },
+  mint:    { l:'#93d3b0', m:'#71b693', d:'#1f4034' },
+  cobalt:  { l:'#76a0e2', m:'#5a82c6', d:'#1c2948' },
+  blush:   { l:'#f3a6bb', m:'#d8869c', d:'#4b2430' },
+};
+const METAL   = { l:'#eef0f0', m:'#c6ccce', d:'#8f989b' };
+const CLEAR   = { l:'#e4f2f4', m:'#c4dfe4', d:'#97b9c0' };
+const CERAMIC = { l:'#fbfaf3', m:'#e3e0d2', d:'#bdb8a6' };
+const DARK    = { l:'#55504a', m:'#3d3935', d:'#272421' };
+const INK = '#231e16';
+const SHADOW = '#41538f';
+
+/* ---------- projection (x = depth toward viewer-right, y = toward viewer-left, z = up) ---------- */
+const C = Math.cos(Math.PI/6), S = Math.sin(Math.PI/6);
+let OX = 0, OY = 0;
+/* Free orthographic camera (internal names start with CAM_ / cam so they never clash with a figure's own names). YAW turns the viewer around the vertical axis (45° = the classic front-left view),
+   PITCH is how far it looks down (35.26° = true isometric). At the defaults P() is exactly the old isometric
+   projection, so every figure drawn for it still lines up. Drag the figure to orbit; double-click to reset.
+   rotV(n) maps a world direction into the default view's frame, so vis / tone / any "sum of rotV > 0" test keep
+   working at every angle: the viewer is always (1,1,1) and the light stays put relative to the viewer. */
+let VIEW = 0, RC = [0, 0], RCZ = 0;
+const VIEW_NAMES = ['front', 'left side', 'back', 'right side'];
+const TURNS = [0, 2];
+const YAW0 = 45, PITCH0 = Math.atan(1/Math.SQRT2) * 180/Math.PI, CAM_K = Math.sqrt(1.5);
+let YAW = YAW0, PITCH = PITCH0, CAM_R, CAM_U, CAM_V, CAM_D;                       // right, up, toward viewer, screen-down
+const camBasis = (yaw, pitch) => { const t = yaw*Math.PI/180, p = pitch*Math.PI/180, ct = Math.cos(t), st = Math.sin(t), cp = Math.cos(p), sp2 = Math.sin(p);
+  return { R:[st,-ct,0], U:[-sp2*ct,-sp2*st,cp], V:[cp*ct,cp*st,sp2] }; };
+const CAM_B0 = camBasis(YAW0, PITCH0);
+// CAM_LIM: how far (deg) the camera may turn either side of the front view; null = all the way round (set per figure)
+let CAM_LIM = null;
+function setCam(yaw, pitch){ YAW = CAM_LIM == null ? yaw : Math.max(YAW0 - CAM_LIM, Math.min(YAW0 + CAM_LIM, yaw));
+  PITCH = CAM_LIM == null ? Math.max(6, Math.min(78, pitch)) : Math.max(15, Math.min(62, pitch)); const b = camBasis(YAW, PITCH); CAM_R = b.R; CAM_U = b.U; CAM_V = b.V; CAM_D = CAM_U.map(v => -v); }
+setCam(YAW0, PITCH0);
+const camDot = (a,b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const rotV = n => { const r = camDot(n,CAM_R), u = camDot(n,CAM_U), v = camDot(n,CAM_V); return [0,1,2].map(i => CAM_B0.R[i]*r + CAM_B0.U[i]*u + CAM_B0.V[i]*v); };
+// the light's ground direction turns with the viewer's yaw only (shadows always fall toward the lower left of the screen)
+const yawTurn = ([x,y]) => { const t = (YAW - YAW0)*Math.PI/180, c = Math.cos(t), s = Math.sin(t); return [x*c - y*s, x*s + y*c]; };
+const rotXY = (x,y) => [x, y];                                                // kept for old callers
+const P0 = (x,y,z) => [(x-y)*C + OX, (x+y)*S - z + OY];                       // raw iso
+const P  = (x,y,z) => { const q = [x-RC[0], y-RC[1], z-RCZ];
+  return [CAM_K*camDot(q,CAM_R) + (RC[0]-RC[1])*C + OX, CAM_K*camDot(q,CAM_D) + (RC[0]+RC[1])*S - RCZ + OY]; };
+const Dv = (x,y,z) => [CAM_K*camDot([x,y,z],CAM_R), CAM_K*camDot([x,y,z],CAM_D)];
+// distance toward the viewer: draw parts with smaller depth first
+const depthOf = p => camDot(p, CAM_V);
+// sort [{at:[x,y,z], svg}] back-to-front for the current camera. A part may also give box:[[x0,y0,z0],[x1,y1,z1]]:
+// when two boxes are separated along x, y or z, the one on the viewer's side goes last (a centre point alone gets long
+// or wrapping parts wrong: a pole beside a row of keys, a spout reaching past a cup).
+const boxMid = b => [0,1,2].map(k => (b[0][k] + b[1][k]) / 2);
+const sepOrder = (p, q) => { if (!p.box || !q.box) return 0;
+  for (let k = 0; k < 3; k++){ if (p.box[1][k] <= q.box[0][k] + 1e-6) return CAM_V[k] >= 0 ? -1 : 1; if (q.box[1][k] <= p.box[0][k] + 1e-6) return CAM_V[k] >= 0 ? 1 : -1; }
+  return 0; };
+const byDepth = parts => parts.filter(Boolean).sort((p,q) => sepOrder(p,q) || (depthOf(p.at || boxMid(p.box)) - depthOf(q.at || boxMid(q.box)))).map(p => p.svg).join('');
+// the half of a vertical ring that faces the viewer / is turned away, as [from, to] angles in degrees (0 = +x, 90 = +y)
+const nearHalf = () => [YAW - 90, YAW + 90], farHalf = () => [YAW + 90, YAW + 270];
+// an open container (cup, bin, cone, drum) between two rings: far inner wall, then its contents, then the near outer wall
+const openShell = (A, B, colour, contents = '') => loft(A, B, colour, true) + contents + loft(A, B, colour);
+const f  = v => v.toFixed(1);
+const pd = (pts, close=true) => 'M' + pts.map(p => { const q = P(p[0],p[1],p[2]); return f(q[0])+' '+f(q[1]); }).join('L') + (close ? 'Z' : '');
+const sp = pts => 'M' + pts.map(q => f(q[0])+' '+f(q[1])).join('L') + 'Z';
+
+/* ---------- 2D shapes in a plane's (u,v) coords (v up), mapped to 3D by a plane ---------- */
+const arcUV  = (cu,cv,r,a0,a1,n=7) => { const o=[]; for (let i=0;i<=n;i++){ const a=(a0+(a1-a0)*i/n)*Math.PI/180; o.push([cu+r*Math.cos(a), cv+r*Math.sin(a)]); } return o; };
+const rrUV   = (u0,v0,u1,v1,r,n=7) => r <= 0 ? rectUV(u0,v0,u1,v1) : [...arcUV(u1-r,v0+r,r,-90,0,n), ...arcUV(u1-r,v1-r,r,0,90,n), ...arcUV(u0+r,v1-r,r,90,180,n), ...arcUV(u0+r,v0+r,r,180,270,n)];
+const rectUV = (u0,v0,u1,v1) => [[u0,v0],[u1,v0],[u1,v1],[u0,v1]];
+const ellUV  = (cu,cv,ru,rv,n=24) => Array.from({length:n}, (_,i) => { const a=i/n*2*Math.PI; return [cu+ru*Math.cos(a), cv+rv*Math.sin(a)]; });
+const PX = x => ([u,v]) => [x,u,v];      // front-facing plane x = const   (u = y, v = z)
+const PY = y => ([u,v]) => [u,y,v];      // side plane y = const           (u = x, v = z)
+const PZ = z => ([u,v]) => [u,v,z];      // horizontal plane z = const     (u = x, v = y)
+const on = (plane, uv) => uv.map(plane);
+
+/* ---------- vectors + shading ---------- */
+const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]], dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const norm=a=>{ const l=Math.hypot(...a)||1; return a.map(v=>v/l); };
+const avg=ps=>ps.reduce((s,p)=>[s[0]+p[0]/ps.length,s[1]+p[1]/ps.length,s[2]+p[2]/ps.length],[0,0,0]);
+const vis = n => { const r = rotV(n); return r[0]+r[1]+r[2] > 1e-6; };   // viewer looks from (+1,+1,+1) after the turn
+const facing = vis;                                                       // readable alias: is this face toward the viewer?
+const SHADOW_K = 0.85, AZ_MIN = 20, AZ_MAX = 160;
+// cast shadows are drawn shorter than the shading light implies (0.45 × height instead of 0.85 ×): long shadows of tall
+// parts on thin supports (a lamp shade, a fan head) land far from the object and read as separate blobs
+const SHADOW_LEN = 0.45;
+let L = [0,0,1], SH = [0,0];
+function setLight(deg){ const a=deg*Math.PI/180; SH=[SHADOW_K*Math.cos(a), SHADOW_K*Math.sin(a)]; L=norm([-SH[0],-SH[1],1]); }
+const LIN = norm([.6,.2,1]);                       // fixed light for interiors / small props
+// Three flat tones, but blended across a narrow band at each step, so a face that turns past a threshold while the
+// figure rotates fades between tones instead of snapping (at rest almost every face still sits on a pure tone).
+const SOFT = .18;
+const step3 = (d, hi, lo, m) => { const ss = (a, b, x) => { const k = Math.min(1, Math.max(0, (x - a)/(b - a))); return k*k*(3 - 2*k); };
+  const a = ss(hi - SOFT, hi + SOFT, d), b = ss(lo - SOFT, lo + SOFT, d);
+  return a >= 1 ? m.l : b <= 0 ? m.d : a > 0 ? mix(m.m, m.l, a) : b < 1 ? mix(m.d, m.m, b) : m.m; };
+const tone  = (n,m) => step3(dot(rotV(n),L),   -.15, -.45, m);   // exterior, follows the sun
+const toneI = (n,m) => step3(dot(rotV(n),LIN),  .6,   .05, m);   // interior / props
+const mix = (a,b,t) => '#' + [1,3,5].map(i => Math.round(parseInt(a.substr(i,2),16)*(1-t) + parseInt(b.substr(i,2),16)*t).toString(16).padStart(2,'0')).join('');
+const matOf = hex => ({ l:hex, m:mix(hex,'#000000',.16), d:mix(hex,'#000000',.42) });
+const ease = t => t<.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2;
+
+/* ---------- drawing primitives (all return SVG strings) ---------- */
+const ink   = (d,w=1.0) => `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${w}" stroke-linejoin="round" stroke-linecap="round"/>`;
+const fill  = (d,c,extra='') => `<path d="${d}" fill="${c}" ${extra}/>`;
+const face  = (d,c) => `<path d="${d}" fill="${c}" stroke="${c}" stroke-width=".7" stroke-linejoin="round"/>`;
+const shape = (pts,c,w=.9) => fill(pd(pts),c) + (w ? ink(pd(pts),w) : '');
+const line  = (pts,w=.9) => ink(pd(pts,false),w);
+// Loft between two rings of equal length (closed). colour(n) picks each strip's fill; flip = seen from inside.
+function loft(A, B, colour, flip=false){
+  const n=A.length, cen=avg(A.concat(B)); let s='';
+  for (let i=0;i<n;i++){
+    const a0=A[i], a1=A[(i+1)%n], b1=B[(i+1)%n], b0=B[i];
+    let nr = norm(cross(sub(a1,a0), sub(b0,a0)));
+    if (!isFinite(nr[0])) continue;
+    if (dot(nr, sub(avg([a0,a1,b1,b0]), cen)) < 0) nr = nr.map(v=>-v);
+    if (flip) nr = nr.map(v=>-v);
+    if (vis(nr)) s += face(pd([a0,a1,b1,b0]), colour(nr));
+  }
+  return s;
+}
+function hull(pts){
+  pts = pts.slice().sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+  const cr=(o,a,b)=>(a[0]-o[0])*(b[1]-o[1])-(a[1]-o[1])*(b[0]-o[0]); const lo=[], up=[];
+  for (const p of pts){ while(lo.length>=2 && cr(lo[lo.length-2],lo[lo.length-1],p)<=0) lo.pop(); lo.push(p); }
+  for (const p of pts.reverse()){ while(up.length>=2 && cr(up[up.length-2],up[up.length-1],p)<=0) up.pop(); up.push(p); }
+  lo.pop(); up.pop(); return lo.concat(up);
+}
+// Silhouette ink, weighted by how thick the part is on screen (like a hand inker): the w you pass is the most it gets.
+// Thickness = 2 × area / perimeter of the outline (a rod's diameter, about half a box's width), as a share of the
+// frame width. A long thin rod, a handle or a knob stays light (~1–1.5); a grinder, kettle or machine body gets the
+// heavy ~2.4–2.8. Thin parts stay thin and parts keep air between them.
+const hullInk = (pts3, w=1.4) => { const h = hull(pts3.map(p=>P(...p))); let a = 0, per = 0;
+  for (let i = 0; i < h.length; i++){ const p = h[i], q = h[(i+1) % h.length]; a += p[0]*q[1] - q[0]*p[1]; per += Math.hypot(q[0]-p[0], q[1]-p[1]); }
+  const thick = per ? Math.abs(a) / per / (INK_K * INK_REF_VB) : 0;
+  return ink(sp(h), Math.min(w, .9 + 20*thick)); };
+// Axis-aligned box: three visible faces, shaded, each outlined. shade = tone (sunlit) or toneI (interior).
+function box(x0,y0,z0,x1,y1,z1,m,shade=toneI,w=.9){
+  // all six faces, drawn only when they face the viewer (sides first, then top) — correct in every VIEW
+  const F = [
+    [[0,1,0],  [[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]]],
+    [[1,0,0],  [[x1,y0,z0],[x1,y1,z0],[x1,y1,z1],[x1,y0,z1]]],
+    [[0,-1,0], [[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1]]],
+    [[-1,0,0], [[x0,y0,z0],[x0,y1,z0],[x0,y1,z1],[x0,y0,z1]]],
+    [[0,0,1],  [[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]]] ];
+  return F.filter(([n]) => vis(n)).map(([n,q]) => shape(q, shade(n,m), w)).join('');
+}
+// Rounded-profile extrusion: profile (u=y, v=z) swept along x from x0 to x1. Body of most machines.
+function extrude(profileUV, x0, x1, m, shade=tone){ return loft(on(PX(x0),profileUV), on(PX(x1),profileUV), n=>shade(n,m)); }
+// Vertical cylinder (axis z) centred (x,y), radius r from z0 to z1, with top cap.
+function cyl(x,y,z0,z1,r,m,shade=toneI,w=1.2,n=24){
+  const A=on(PZ(z0),ellUV(x,y,r,r,n)), B=on(PZ(z1),ellUV(x,y,r,r,n));
+  return loft(A,B,nr=>shade(nr,m)) + fill(pd(B),shade([0,0,1],m)) + hullInk([...A,...B],w) + ink(pd(B),w*.8);
+}
+// Cylinder lying along x (e.g. a knob or dial sticking out of a front face): centred (y,z), from x0 to x1.
+function cylX(x0,x1,y,z,r,m,shade=toneI,w=1.1,n=20){
+  const A=on(PX(x0),ellUV(y,z,r,r,n)), B=on(PX(x1),ellUV(y,z,r,r,n));
+  // cap on whichever end faces the viewer (the +x end in VIEW 0)
+  const capB = vis([1,0,0]), cap = capB ? B : A, cn = capB ? [1,0,0] : [-1,0,0];
+  return loft(A,B,nr=>shade(nr,m)) + (vis(cn) ? fill(pd(cap),shade(cn,m)) : '') + hullInk([...A,...B],w) + (vis(cn) ? ink(pd(cap),w*.8) : '');
+}
+// Cylinder between any two 3D points a and b (a lamp arm, a rod, a pipe at an angle, a handle bar), radius r.
+// The end facing the viewer gets a cap. For a tapered part (a cone, a lamp shade) pass r1 for the radius at b.
+function rod(a, b, r, m, shade=toneI, w=1, r1=r, n=16){
+  const d = norm(sub(b, a)), u = norm(cross(d, Math.abs(d[2]) < .9 ? [0,0,1] : [1,0,0])), v = cross(d, u);
+  const ring = (p, rr) => Array.from({length:n}, (_,i) => { const t = i/n*2*Math.PI, c = Math.cos(t)*rr, s2 = Math.sin(t)*rr;
+    return [p[0] + u[0]*c + v[0]*s2, p[1] + u[1]*c + v[1]*s2, p[2] + u[2]*c + v[2]*s2]; });
+  const A = ring(a, r), B = ring(b, r1), capB = vis(d), cap = capB ? B : A, cn = capB ? d : d.map(x => -x);
+  return loft(A, B, nr => shade(nr, m)) + (Math.max(r, r1) > 0 ? fill(pd(cap), shade(cn, m)) + ink(pd(cap), w*.8) : '') + hullInk([...A, ...B], w);
+}
+// Text lying flat on a front plane x = const, centred at (y,z) baseline; reads left-to-right on screen.
+// text sits on a face: if its reading direction comes out mirrored (or edge-on), that face is turned away, so the text is hidden
+const txM = (o, U, V) => (U[0]*V[1] - U[1]*V[0]) <= .02 * Math.hypot(...U) * Math.hypot(...V) ? `matrix(0 0 0 0 ${f(o[0])} ${f(o[1])})` : `matrix(${U[0].toFixed(4)} ${U[1].toFixed(4)} ${V[0].toFixed(4)} ${V[1].toFixed(4)} ${f(o[0])} ${f(o[1])})`;
+const tx = (x,y,z,str,size,col=INK,weight=700) => { const o=P(x,y,z);
+  return `<text transform="${txM(o, Dv(0,-1,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`; };
+// Text on a side plane y = const, centred at (x,z).
+const txY = (x,y,z,str,size,col=INK,weight=700) => { const o=P(x,y,z);
+  return `<text transform="${txM(o, Dv(1,0,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`; };
+// Cast shadow of a set of 3D points (any outline of the object), pushed along the light onto z = 0.
+// the light stays put relative to the viewer, so the shadow is cast in turned coordinates
+// z0: the surface it falls on (a board, a counter); clip it to that surface with clipTo(...) if it could spill off.
+// clip: the 3D outline of the surface it falls on (e.g. boardTop(...)), so it can't spill over the edge.
+const castShadow = (pts3, z0=0, clip=null) => { const k = SHADOW_LEN / SHADOW_K, [sx, sy] = yawTurn(SH);
+  const s = fill(sp(hull(pts3.map(([x,y,z]) => P(x+(z-z0)*sx*k, y+(z-z0)*sy*k, z0)))), SHADOW);
+  return clip ? clipTo(clip, s) : s; };
+// A board for the object to stand on (a tray, a desk top, a counter): a rounded slab from (x0,y0) to (x1,y1), h thick.
+// Draw it first; then castShadow(points, h, boardTop(x0,y0,x1,y1,h,r)) so shadows lie on it and stop at its edge.
+const BOARD = { l:'#e6e1d4', m:'#cfc8b8', d:'#aaa293' }, WOOD = { l:'#d9a86c', m:'#bf8a4f', d:'#8e6236' };
+const boardTop = (x0,y0,x1,y1,h=3,r=5) => on(PZ(h), rrUV(x0,y0,x1,y1,r));
+function board(x0,y0,x1,y1,h=3,r=5,m=BOARD){
+  const A = on(PZ(0), rrUV(x0,y0,x1,y1,r)), B = boardTop(x0,y0,x1,y1,h,r);
+  return loft(A, B, n => toneI(n, m)) + fill(pd(B), m.l) + ink(pd(B), 1) + hullInk([...A, ...B], 1.8);
+}
+// Group helpers: clickable target, clip to an opening.
+const act  = (name, inner, data='') => `<g data-act="${name}" ${data}>${inner}</g>`;
+let _clipN = 0;
+// Part label (for "how does it work" figures): a cream pill with a leader line to a 3D point on the part.
+// dx, dy = where the pill sits, in screen units at the reference zoom (they scale with the figure like stroke widths).
+// on = that part is working right now (the pill turns the accent colour). Labels can be hidden with the Labels switch.
+function tag(p3, dx, dy, text, on=false){
+  // on a phone (LBL_U = drawing units per screen px) the pill is a numbered badge and the names go in a legend under the figure
+  const u = window.LBL_U ? LBL_U() : 0, n = ((window.__ln || (window.__ln = {}))[text] || (__ln[text] = Object.keys(__ln).length + 1));
+  const k = INK_K, [X,Y] = P(...p3), fs = u ? 10*u : 8.6*k, h = u ? 17*u : fs*1.8, w = u ? h*(n > 9 ? 1.3 : 1) : text.length*fs*.62 + fs*1.5, cx = X + dx*k, cy = Y + dy*k;
+  return `<g class="tag${on ? ' on' : ''}" data-n="${n}" data-t="${text}"><path d="M${f(X)} ${f(Y)}L${f(cx)} ${f(cy)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+    + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(1.3*k)}" fill="${INK}"/>`
+    + `<rect x="${f(cx-w/2)}" y="${f(cy-h/2)}" width="${f(w)}" height="${f(h)}" rx="${f(h/2)}" fill="${on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+    + `<text x="${f(cx)}" y="${f(cy+fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? n : text}</text></g>`;
+}
+const clipTo = (pts3, inner) => { const id = 'k' + (++_clipN); return `<clipPath id="${id}"><path d="${pd(pts3)}"/></clipPath><g clip-path="url(#${id})">${inner}</g>`; };
+
+/* ---------- constant on-screen line weight ----------
+   Stroke widths are written in model units, and each figure is zoomed to fill the frame, so a small
+   object would get fat lines. INK_K rescales every stroke-width (and the wobble/grain filter) so all
+   figures match the reference zoom of the booth / vending machine (viewBox ≈ 585 units wide). */
+const INK_REF_VB = 585;
+let INK_K = 1;
+const inkScale = svg => INK_K === 1 ? svg : svg.replace(/stroke-width="([\d.]+)"/g, (_, w) => `stroke-width="${(+w * INK_K).toFixed(2)}"`);
+
+/* ---------- page shell ---------- */
+const CORE_CSS = `
+  :root{--paper:#f2efe7;--ink:#231e16;--muted:#857d6e;--rule:#ddd6c8}
+  *{box-sizing:border-box} html,body{margin:0;height:100%}
+  body{background-color:var(--paper);
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='320' height='320'><filter id='p'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .42  0 0 0 0 .39  0 0 0 0 .33  .16 0 0 0 0'/></filter><rect width='100%' height='100%' filter='url(%23p)'/></svg>");
+    overflow-x:hidden;color:var(--ink);font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;display:flex;flex-direction:column;align-items:center;padding:24px 16px 32px}
+  header{width:100%;max-width:760px;display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+  header h1{font-size:13px;font-weight:600;margin:0;letter-spacing:.02em} header span{color:var(--muted)}
+  #fig{width:100%;max-width:760px;height:auto;display:block;margin:4px 0 8px;user-select:none;overflow:visible}
+  #fig{cursor:grab;touch-action:pan-y} #fig.drag{cursor:grabbing} #fig [data-act]{cursor:pointer}
+  #readout, .idea{display:none}   /* status line + big idea are off: the buttons and motion tell the story */
+  .idea{width:100%;max-width:760px;margin:-6px 0 16px;font-size:12.5px;line-height:1.5;text-align:center;color:var(--ink)}
+  .idea strong{letter-spacing:.12em;text-transform:uppercase;font-size:11px;margin-right:8px}
+  #readout{position:relative;min-height:1.4em;letter-spacing:.08em;text-transform:uppercase;margin-bottom:14px;text-align:center;text-shadow:0 0 3px var(--paper),0 0 6px var(--paper),0 0 10px var(--paper)}
+  .stage{position:relative;width:100%;max-width:760px}
+  .actions{position:absolute;top:4px;left:0;display:flex;flex-direction:column;align-items:flex-start;gap:8px;z-index:2;max-width:220px}
+  .actions .cap{color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin:0 0 2px}
+  html.nolabels #fig .tag{display:none}
+  .ctl[hidden]{display:none}
+  /* ui.flash(text): a short note under the buttons ("the can is empty — refill it"); the status line itself stays hidden */
+  .toast{position:absolute;left:0;z-index:3;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;background:var(--paper);
+    border:1.5px solid var(--ink);border-radius:8px;padding:4px 9px;box-shadow:2px 2px 0 var(--ink);opacity:0;transition:opacity .2s;pointer-events:none;max-width:240px}
+  .toast.show{opacity:1}
+  .made-with{width:100%;max-width:760px;margin-top:18px;text-align:right;font-size:11px;letter-spacing:.1em;text-transform:uppercase}
+  .made-with a{color:var(--muted);text-decoration:none} .made-with a:hover{color:var(--ink)}
+  .stats{position:absolute;top:4px;right:0;display:flex;flex-direction:column;align-items:flex-end;gap:10px;z-index:2;text-align:right}
+  .stat .k{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .stat .v{font-size:34px;font-weight:800;line-height:1.05;letter-spacing:-.01em;font-variant-numeric:tabular-nums;color:var(--ink)}
+  .stat.small .v{font-size:20px}
+  .stat .v.bump{animation:bump .35s ease-out}
+  @keyframes bump{0%{transform:scale(1.18)}100%{transform:none}}
+  .stepwrap{position:relative;display:flex;align-items:center;gap:8px}
+  .act{font:inherit;color:var(--ink);background:var(--paper);border:1.5px solid var(--ink);border-radius:999px;padding:5px 14px;cursor:pointer;white-space:nowrap}
+  .act:hover{background:color-mix(in srgb,var(--paper) 92%,var(--ink))}
+  .act .car{margin-left:6px;font-size:10px}
+  .act:focus-visible{outline:2px solid var(--ink);outline-offset:3px}
+  .chips{display:none;flex-wrap:wrap;gap:6px;background:var(--paper);border:2px solid var(--ink);border-radius:12px;box-shadow:3px 3px 0 var(--ink);
+    padding:8px;width:max-content;max-width:min(300px,62vw);position:absolute;left:calc(100% + 10px);top:-4px;z-index:3}
+  .stepwrap.open .chips{display:flex}
+  .chip{white-space:nowrap;font:inherit;font-size:11.5px;font-weight:700;color:var(--ink);background:var(--paper);border:1.5px solid var(--ink);border-radius:8px;padding:4px 8px;cursor:pointer;box-shadow:2px 2px 0 var(--ink)}
+  .chip:hover{background:var(--accent,#f4b829);transform:translate(-1px,-1px)}
+  .chip.current{background:var(--ink);color:var(--paper)} .chip.current:hover{background:var(--ink);transform:none}
+  .chip.off{opacity:.45} .chip.off:hover{transform:none;background:var(--paper)}
+  
+  @media (max-width:560px){body{padding:14px 12px 24px}header span,.actions .cap{display:none}.actions{flex-direction:row;flex-wrap:wrap;gap:6px}.act{font-size:12px;padding:4px 11px}.stats{position:static;flex-direction:row;justify-content:flex-end;gap:18px;margin-bottom:4px}.actions{position:static;max-width:none;margin:6px 0 4px}.chips{left:0;top:calc(100% + 8px)}}
+  .controls{width:100%;max-width:760px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px 28px;border-top:1px solid var(--rule);padding-top:16px}
+  .ctl{display:flex;flex-direction:column;gap:6px}
+  .ctl label{color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+  input[type=range]{width:100%;accent-color:var(--ink)}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  button{font:inherit;color:var(--ink);background:transparent;border:1.5px solid var(--ink);border-radius:999px;padding:5px 14px;cursor:pointer}
+  button:hover{background:#0000000d}
+  button[aria-pressed=true]:not(.sw){background:var(--ink);color:var(--paper)}
+  .sw{width:26px;height:26px;padding:0;border-radius:50%} .sw[aria-pressed=true]{outline:2px solid var(--ink);outline-offset:2px}`;
+
+const filterFor = k => `<filter id="hand" x="-3%" y="-3%" width="106%" height="106%" color-interpolation-filters="sRGB">
+  <feTurbulence type="fractalNoise" baseFrequency="${(0.045/k).toFixed(4)}" numOctaves="2" seed="4" result="warp"/>
+  <feDisplacementMap id="wob" in="SourceGraphic" in2="warp" scale="${(2.4*k).toFixed(2)}" xChannelSelector="R" yChannelSelector="G" result="wob"/>
+  <feTurbulence type="fractalNoise" baseFrequency="${(0.9/k).toFixed(4)}" numOctaves="3" seed="11" result="n1"/>
+  <feColorMatrix in="n1" type="matrix" values=".3 0 0 0 .84  .3 0 0 0 .84  .3 0 0 0 .84  0 0 0 0 1" result="grain"/>
+  <feTurbulence type="fractalNoise" baseFrequency="${(0.012/k).toFixed(4)}" numOctaves="2" seed="7" result="n2"/>
+  <feColorMatrix in="n2" type="matrix" values=".3 0 0 0 .85  .3 0 0 0 .85  .3 0 0 0 .85  0 0 0 0 1" result="blot"/>
+  <feBlend in="wob" in2="grain" mode="multiply" result="g1"/><feBlend in="g1" in2="blot" mode="multiply" result="g2"/>
+  <feComposite in="g2" in2="wob" operator="in"/></filter>`;
+
+/* mountFigure({
+     fig:'03', title:'Photo booth', hint:'click the curtain…',
+     size:[W,D,H],                 // bounding box, used to frame the view (shadow range included)
+     palette:'mustard',            // default PALS key
+     state:{...},                  // figure state (st.pal is built in)
+     scene: (st, m) => svgString,  // m = current palette {l,m,d}
+     readout: st => 'text',        // status line under the figure
+     buttons: [{label, onClick(st, ui)}      // listed in the order the user should do them
+               | {label, choices: st => [{label, onClick(st,ui), current?, disabled?, why?}]}],   // opens a picker
+     stats: st => [{label, value, small?}],   // optional: big numbers top-right (credit, change, score)
+     credit: false,                // optional: hide the small "Made with Colorfigures" link
+     acts: { name(st, el, ui){} },  // clicks on act(name, …) groups; el has dataset
+     params(st, q){}               // optional: read URLSearchParams for screenshot states
+   })  -> ui = { st, render, animate(stepFn), flash(text,ms) }
+   animate(step): calls step(dt seconds) every frame and re-renders until step returns false. */
+addEventListener('error', e => { document.documentElement.dataset.errors = (document.documentElement.dataset.errors || '') + ' ' + e.message + ';'; });
+/* The hand-drawn filter's noise never changes, but browsers recompute every feTurbulence each time the drawing changes
+   (on phones SVG filters run on the CPU, so this is most of the cost of a frame). bakeNoise renders each noise layer once
+   into an image and swaps it in: coarse layers as one small image over the whole view (they are smooth, so scaling up
+   is invisible), fine grain as a seamless tile. If anything fails (an old browser), the live filter simply stays. */
+function bakeNoise(svg){
+  const fl = document.getElementById('hand'); if (!fl || typeof Image === 'undefined') return;
+  const NS = 'http://www.w3.org/2000/svg', vb = svg.viewBox.baseVal;
+  const x0 = vb.x - vb.width*.35, y0 = vb.y - vb.height*.35, w0 = vb.width*1.7, h0 = vb.height*1.7;
+  for (const t of [...fl.querySelectorAll('feTurbulence')]){
+    const fq = parseFloat(t.getAttribute('baseFrequency')), oct = +(t.getAttribute('numOctaves') || 1);
+    if (!(fq > 0)) continue;
+    const fine = fq * Math.max(w0, h0) > 80;
+    if (fine) continue;   // fine grain stays live: a repeated tile leaves faint seams on some GPUs
+    const rx = fine ? 0 : x0, ry = fine ? 0 : y0, rw = fine ? 48 / fq : w0, rh = fine ? 48 / fq : h0;
+    const ppu = fq * (fine ? 7 : 5) * Math.pow(2, Math.max(0, oct - 1) * .5), PW = Math.ceil(rw * ppu), PH = Math.ceil(rh * ppu);
+    if (PW * PH > 1200 * 1200) continue;
+    const tb = t.cloneNode(); tb.removeAttribute('result'); if (fine) tb.setAttribute('stitchTiles', 'stitch');
+    const src = `<svg xmlns="${NS}" width="${PW}" height="${PH}" viewBox="${rx} ${ry} ${rw} ${rh}"><filter id="n" filterUnits="userSpaceOnUse" x="${rx}" y="${ry}" width="${rw}" height="${rh}" color-interpolation-filters="sRGB">${tb.outerHTML}</filter><rect x="${rx}" y="${ry}" width="${rw}" height="${rh}" filter="url(#n)"/></svg>`;
+    const img = new Image();
+    img.onload = () => { try {
+      const c = document.createElement('canvas'); c.width = PW; c.height = PH; const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+      // store the noise's colour values fully opaque: the filter reads its colour channels, and an image with
+      // see-through pixels would be read premultiplied (darker) by some browsers
+      const px = g.getImageData(0, 0, PW, PH); for (let i = 3; i < px.data.length; i += 4) px.data[i] = 255; g.putImageData(px, 0, 0);
+      const url = c.toDataURL('image/png'), res = t.getAttribute('result');
+      const im = document.createElementNS(NS, 'feImage');
+      // a tile must sit inside the filter's region (the drawing's box) or it gets clipped: anchor it at the drawing's
+      // centre, snapped to whole tiles so the grain keeps the same phase as the live noise would
+      let ox = rx, oy = ry;
+      if (fine){ const bb = svg.getElementById ? document.getElementById('art').getBBox() : { x: 0, y: 0, width: 0, height: 0 };
+        ox = Math.floor((bb.x + bb.width/2) / rw) * rw; oy = Math.floor((bb.y + bb.height/2) / rh) * rh; }
+      for (const [k, v] of [['x', ox], ['y', oy], ['width', rw], ['height', rh], ['preserveAspectRatio', 'none']]) im.setAttribute(k, v);
+      im.setAttribute('href', url); im.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', url);
+      if (!t.isConnected) return;
+      if (fine){ im.setAttribute('result', res + '_tile'); const tl = document.createElementNS(NS, 'feTile'); tl.setAttribute('in', res + '_tile'); tl.setAttribute('result', res); t.replaceWith(im, tl); }
+      else { im.setAttribute('result', res); t.replaceWith(im); }
+    } catch (e) {} };
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(src);
+  }
+}
+function mountFigure(cfg){
+  document.title = cfg.title;
+  const style = document.createElement('style'); style.textContent = CORE_CSS; document.head.appendChild(style);
+  document.body.innerHTML = `
+    <header><h1>Fig. ${cfg.fig} — ${cfg.title}</h1></header>
+    <div class="stage">
+      ${cfg.buttons && cfg.buttons.length ? `<div class="actions" id="btns"></div>` : ''}
+      ${cfg.stats ? '<div class="stats" id="stats"></div>' : ''}
+      <div class="toast" id="toast" role="status"></div>
+      <svg id="fig" role="img" aria-label="${cfg.title}"><defs id="fdefs"></defs><g id="art" filter="url(#hand)"></g></svg>
+    </div>
+    <div id="readout"></div>
+    ${cfg.idea ? `<p class="idea"><strong>The big idea</strong>${cfg.idea}</p>` : ''}
+    <div class="controls">
+      <div class="ctl"><label for="wb">Hand-drawn wobble</label><input id="wb" type="range" min="0" max="7" step="0.1" value="2.4"></div>
+      <div class="ctl"><label>Colour</label><div class="row" id="pals"></div></div>
+      <div class="ctl"><label>View</label><div class="row"><button id="vreset">Front view</button><button id="vspin" aria-pressed="false">Turntable</button></div></div>
+      <div class="ctl" id="lblctl" hidden><label>Labels</label><div class="row"><button id="lbl" aria-pressed="true">On</button></div></div>
+    </div>
+    ${cfg.credit === false ? '' : '<footer class="made-with"><a href="https://april-zhu.com/colorfigures" target="_blank" rel="noopener">Made with Colorfigures ↗</a></footer>'}`;
+  const st = cfg.state || {};            // kept as the same object, so a figure may hold on to it
+  if (!st.pal) st.pal = cfg.palette || 'mustard';
+  if (st.az == null) st.az = 105;
+  const q = new URLSearchParams(location.search);
+  // a figure turns all the way round only once it has been checked from every side (turn:'full'); otherwise it turns
+  // +-60 deg around the front, where it was drawn. ?free=1 unlocks it for testing.
+  CAM_LIM = cfg.turn === 'full' || q.get('free') === '1' ? null : 60;
+  if (PALS[q.get('pal')]) st.pal = q.get('pal');
+  if (cfg.params) cfg.params(st, q);
+
+  // frame on the object itself: centred, filling ~60% of the width / ~78% of the height of a 4:3 view.
+  // The cast shadow is allowed to spill outside the frame (svg overflow is visible).
+  const [W,D,H] = cfg.size, pts = [];
+  OX = OY = 0; RC = cfg.center || [W/2, D/2]; RCZ = H/2;
+  VIEW = 0; setCam(YAW0, PITCH0);
+  for (const x of [0,W]) for (const y of [0,D]) for (const z of [0,H]) pts.push(P(x,y,z));
+  const xs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]);
+  const bw = Math.max(...xs)-Math.min(...xs), bh = Math.max(...ys)-Math.min(...ys);
+  // the object fills ~74% of the width / ~88% of the height, nudged right of centre so the buttons (top left) stay clear
+  // on a phone (FIG_A, from the gallery) the frame grows taller than 4:3, as far as the object needs, so tall machines fill it;
+  // the spare height goes mostly below; the object stays centred (its shadow may run off the edge, by the owner's call)
+  const PA = window.FIG_A ? FIG_A() : .75, A = PA === .75 ? .75 : Math.min(PA, Math.max(.75, bh/.88/(bw/.74)*1.08)), vbW = Math.max(bw/.74, bh/.88/A), vbH = vbW*A;
+  OX = (vbW-bw)/2 + (PA === .75 ? vbW*.06 : 0) - Math.min(...xs); OY = (PA === .75 ? vbH*.04 : (vbH - bh)*.3) - Math.min(...ys);   // sit a little high: shadows fall downward
+  const svg = document.getElementById('fig');
+  svg.setAttribute('viewBox', `0 0 ${f(vbW)} ${f(vbH)}`);
+  INK_K = vbW / INK_REF_VB;
+  document.getElementById('fdefs').innerHTML = filterFor(INK_K);
+  bakeNoise(svg);
+
+  const art = document.getElementById('art'), readout = document.getElementById('readout');
+  const ui = { st };
+  ui.render = () => { _clipN = 0; document.documentElement.style.setProperty('--accent', PALS[st.pal].l); art.innerHTML = inkScale(cfg.scene(st, PALS[st.pal])); if (!ui._flash) readout.textContent = cfg.readout ? cfg.readout(st) : ''; if (ui.drawStats) ui.drawStats(); };
+  // big numbers in the top-right corner (credit, change, score…); a value that changes gets a little bump
+  const statsEl = document.getElementById('stats'), prevStats = {};
+  ui.drawStats = () => { if (!statsEl) return;
+    const list = cfg.stats(st).filter(Boolean), html = list.map(x => `<div class="stat${x.small ? ' small' : ''}"><div class="k">${x.label}</div><div class="v" data-k="${x.label}">${x.value}</div></div>`).join('');
+    if (statsEl._html !== html){ statsEl._html = html; statsEl.innerHTML = html;
+      statsEl.querySelectorAll('.v').forEach(v => { if (prevStats[v.dataset.k] != null && prevStats[v.dataset.k] !== v.textContent) v.classList.add('bump'); prevStats[v.dataset.k] = v.textContent; }); } };
+  let flashT = 0;
+  const toast = document.getElementById('toast');
+  ui.flash = (text, ms=1600) => { ui._flash = true; readout.textContent = text; toast.textContent = text;
+    toast.style.top = ((document.getElementById('btns') ? document.getElementById('btns').offsetTop + document.getElementById('btns').offsetHeight : 0) + 8) + 'px'; toast.classList.add('show');
+    clearTimeout(flashT); flashT = setTimeout(() => { ui._flash = false; toast.classList.remove('show'); ui.render(); }, ms); };
+  // One frame driver for every running animation: each frame runs all the steps, then draws once (two animations at
+  // the same time no longer draw twice). It follows the screen's frames, with a timer fallback for when frames don't
+  // come (headless shots, a hidden tab). ui.invalidate() asks for one redraw on the next frame (used while dragging).
+  const steps = new Set(); let driving = false, lastT = 0, fbT = 0;
+  const frame = () => { if (!driving) return; driving = false; clearTimeout(fbT);
+    const now = performance.now(), dt = Math.max(0, Math.min(.05, (now - lastT) / 1000)); lastT = now;
+    for (const s of [...steps]) if (s(dt) === false) steps.delete(s);
+    ui.render(); if (steps.size) drive(); };
+  const drive = () => { if (driving) return; driving = true; requestAnimationFrame(frame); fbT = setTimeout(frame, 60); };
+  ui.animate = step => { if (!steps.size && !driving) lastT = performance.now(); steps.add(step); drive(); };
+  ui.invalidate = () => drive();
+
+  // clickable parts react on press, not on click: while something animates, the scene is redrawn every frame, so the
+  // element under the pointer is replaced between press and release and a 'click' would never fire
+  svg.addEventListener('pointerdown', e => { if (e.button) return; const a = e.target.closest('[data-act]'); if (!a || !cfg.acts || !cfg.acts[a.dataset.act]) return;
+    e.preventDefault(); cfg.acts[a.dataset.act](st, a, ui); ui.render(); });
+  // orbit: drag anywhere that is not a clickable part (the machine turns the way the finger moves); arrow keys nudge; double-click eases back to the front view
+  let drag = null, spin = false, camAnim = 0;
+  const camTo = (y, p, ms=700) => { const y0 = YAW, p0 = PITCH, dy = ((y - y0 + 540) % 360) - 180, id = ++camAnim; let t = 0;
+    ui.animate(dt => { if (id !== camAnim) return false; t += dt*1000; const k = Math.min(1, t / ms), e = ease(k); setCam(y0 + dy*e, p0 + (p - p0)*e); return k < 1; }); };
+  ui.camTo = camTo;
+  svg.addEventListener('pointerdown', e => { if (e.button || e.target.closest('[data-act]')) return;
+    camAnim++; drag = { x:e.clientX, y:e.clientY, yaw:YAW, pitch:PITCH }; svg.classList.add("drag"); try { svg.setPointerCapture(e.pointerId); } catch {} });
+  svg.addEventListener('pointermove', e => { if (!drag) return; const k = 300 / svg.getBoundingClientRect().width;
+    setCam(drag.yaw + (e.clientX - drag.x)*.55*k, drag.pitch + (e.clientY - drag.y)*.35*k); ui.invalidate(); });
+  const endDrag = () => { drag = null; svg.classList.remove('drag'); };
+  svg.addEventListener('pointerup', endDrag); svg.addEventListener('pointercancel', endDrag);
+  svg.addEventListener('dblclick', e => { if (!e.target.closest('[data-act]')) camTo(YAW0, PITCH0); });
+  addEventListener('keydown', e => { const k = { ArrowLeft:[-15,0], ArrowRight:[15,0], ArrowUp:[0,8], ArrowDown:[0,-8] }[e.key];
+    if (!k || window.GAME_KEYS || /input|textarea/i.test(e.target.tagName)) return; e.preventDefault(); camTo(YAW + k[0], PITCH + k[1], 260); });   // a game figure keeps the arrows for play
+  document.getElementById('vreset').onclick = () => { spin = false; vsp.setAttribute('aria-pressed', false); camTo(YAW0, PITCH0); };
+  const vsp = document.getElementById('vspin');
+  vsp.onclick = () => { spin = !spin; vsp.setAttribute('aria-pressed', spin); camAnim++;
+    let dir = 1;   // with a turning limit, the turntable swings back and forth inside it
+    if (spin) ui.animate(dt => { if (!spin) return false; if (!drag){ let y = YAW + dir*dt*18;
+      if (CAM_LIM != null && Math.abs(y - YAW0) >= CAM_LIM - .5){ dir = -dir; y = YAW + dir*dt*18; } setCam(y, PITCH); } return true; }); };
+  if (q.has('yaw') || q.has('pitch')) setCam(+(q.get('yaw') ?? YAW0), +(q.get('pitch') ?? PITCH0));
+  const btns = document.getElementById('btns');
+  const stepEls = [];
+  if (btns) cfg.buttons.forEach((b, i) => {
+    const wrap = document.createElement('div'); wrap.className = 'stepwrap';
+    const el = document.createElement('button'); el.className = 'act';
+    el.innerHTML = `${b.label}${b.choices ? '<span class="car">▾</span>' : ''}`;
+    wrap.appendChild(el); btns.appendChild(wrap); stepEls.push(el);
+    if (!b.choices){ el.onclick = () => { closeChips(); b.onClick(st, ui); ui.render(); }; return; }
+    const chips = document.createElement('div'); chips.className = 'chips'; wrap.appendChild(chips);
+    el.onclick = e => { e.stopPropagation(); const open = !wrap.classList.contains('open'); closeChips();
+      if (!open) return;
+      chips.innerHTML = '';
+      // every choice stays clickable, so nothing silently ignores a press:
+      //   current:true  = the one in use (shown selected); a press just says so
+      //   disabled:true = not possible right now (shown faded); a press says why (c.why, or a generic note)
+      for (const c of b.choices(st)){ const ch = document.createElement('button'); ch.className = 'chip' + (c.current ? ' current' : c.disabled ? ' off' : ''); ch.textContent = c.label;
+        if (c.current) ch.setAttribute('aria-pressed', 'true');
+        ch.onclick = ev => { ev.stopPropagation(); closeChips();
+          if (c.current) return ui.flash(`${c.label} — already set`);
+          if (c.disabled) return ui.flash(c.why || `${c.label} isn't possible right now`);
+          c.onClick(st, ui); ui.render(); }; chips.appendChild(ch); }
+      wrap.classList.add('open'); };
+  });
+  function closeChips(){ document.querySelectorAll('.stepwrap.open').forEach(w => w.classList.remove('open')); }
+  document.addEventListener('click', closeChips);
+
+  document.getElementById('wb').oninput = e => document.getElementById('wob').setAttribute('scale', (e.target.value * INK_K).toFixed(2));
+  const pals = document.getElementById('pals');
+  for (const [k,p] of Object.entries(PALS)){
+    const b = document.createElement('button'); b.className='sw'; b.title=k; b.style.background=p.l; b.setAttribute('aria-pressed', k===st.pal);
+    b.onclick = () => { st.pal=k; [...pals.children].forEach(c=>c.setAttribute('aria-pressed', c===b)); ui.render(); };
+    pals.appendChild(b);
+  }
+  // labels: the switch appears when the figure draws any tag(); ?labels=0 starts with them hidden
+  const lblctl = document.getElementById('lblctl'), lbl = document.getElementById('lbl');
+  const setLabels = on => { document.documentElement.classList.toggle('nolabels', !on); lbl.textContent = on ? 'On' : 'Off'; lbl.setAttribute('aria-pressed', on); };
+  lbl.onclick = () => setLabels(document.documentElement.classList.contains('nolabels'));
+  if (q.get('labels') === '0') setLabels(false);
+  // testing: ?press=Label@ms,Label@ms clicks the buttons whose text starts with Label at those times after load
+  // (any order, repeats allowed); Label>Choice picks a choice from a picker button (?press=Speed>3@300).
+  // Script errors and unknown labels are recorded on <html data-errors="…">
+  window.__st = st;
+  const noteErr = m => { document.documentElement.dataset.errors = (document.documentElement.dataset.errors || '') + ' ' + m + ';'; };
+  const starts = (el, t) => el.textContent.trim().toLowerCase().startsWith(t.trim().toLowerCase());
+  if (q.has('press')) q.get('press').split(',').forEach(item => { const [what, ms] = item.split('@'), [label, choice] = what.split('>');
+    setTimeout(() => { const b = [...document.querySelectorAll('.act')].find(b => starts(b, label));
+      if (!b) return noteErr(`no button "${label}"`);
+      b.click(); if (choice == null) return;
+      const c = [...b.parentElement.querySelectorAll('.chip')].find(c => starts(c, choice));
+      if (c && !c.disabled) c.click(); else noteErr(`no choice "${choice}" in "${label}"`); }, +ms || 0); });
+  setLight(st.az); ui.render();
+  if (art.querySelector('.tag')) lblctl.hidden = false;
+  return ui;
+}
+
+/* ---------- see-through + labels kit (shared; the figure supplies its own working parts) ----------
+   xrCallouts(items, B): pills in two columns either side of the object, sorted top to bottom so leaders never cross.
+     items: [{ at:[x,y,z], text, on }], B: the object's bounds [x0, x1, y0, y1, z0, z1].
+   xrGhost(body, mech, k, OUTp, x0, x1, m): far walls faintly, the working parts, then the case as a ghost over them.
+   xrMount(getUI, caption): the See-through / Labels switches (top right), the caption under the figure, label hiding. */
+function xrCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0])), cx = (xmin + xmax)/2;
+  // on a phone (LBL_U = drawing units per screen px) each label is a numbered badge and the names go in a legend under the figure
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 3*k);
+  const L = [], R = [];
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, btn = document.getElementById('btns');
+  const wMax = u ? hgt*1.3 + 12*k : Math.max(...items.map(it => it.text.length))*fs*.62 + fs*1.5 + 12*k;
+  const roomL = xmin - vb.x >= wMax, roomR = vb.x + vb.width - xmax >= wMax;
+  for (const it of items){ const [X, Y] = P(...it.at); ((X < cx && roomL) || !roomR ? L : R).push({ ...it, X, Y }); }
+  let s = '';
+  let top = { [-1]: fs, [1]: fs + 30*k };
+  if (btn && svgEl.getScreenCTM()){ const r = btn.getBoundingClientRect(), q = new DOMPoint(r.right, r.bottom + 50).matrixTransform(svgEl.getScreenCTM().inverse());
+    if (q.y > 0) top[-1] = q.y + hgt; }
+  for (const [col, side] of [[L, -1], [R, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    const shift = col.length ? Math.max(0, col.reduce((a, c) => a + c.py - c.Y, 0) / col.length) : 0;
+    const room = col.length ? col[0].py - top[side] : 0; for (const c of col) c.py -= Math.min(shift, room);
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+function xrGhost(body, mech, k, OUTp, x0, x1, m){
+  const fF = facing([1,0,0]), fB = facing([-1,0,0]);
+  const far = `<g opacity="${f(.5*k)}">` + loft(on(PX(x0), OUTp), on(PX(x1), OUTp), n => mix(toneI(n.map(v => -v), m), '#f2efe7', .55), true)
+    + (fF ? fill(pd(on(PX(x0), OUTp)), mix(m.d, '#f2efe7', .5)) : '') + (fB ? fill(pd(on(PX(x1), OUTp)), mix(m.d, '#f2efe7', .5)) : '') + `</g>`;
+  return far + mech + `<g opacity="${f(1 - .8*k)}">${body}</g>` + `<g opacity="${f(.6*k)}">` + hullInk([...on(PX(x0), OUTp), ...on(PX(x1), OUTp)], 2.8) + `</g>`;
+}
+function xrMount(getUI, caption, opt = {}){   // opt.labelsOnly: only the Labels switch (the insides are on show already)
+  const ui = getUI(), q = new URLSearchParams(location.search), html = document.documentElement;
+  if (q.get('labels') !== '1') html.classList.add('nolabels');
+  if (ui.st.xr == null){ ui.st.xr = 0; ui.st.xrT = 0; }
+  if (q.get('xr') === '1') ui.st.xr = ui.st.xrT = 1;
+  const old = document.getElementById('lblctl'); if (old) old.style.display = 'none';
+  const vset = document.createElement('div'); vset.className = 'vset';
+  vset.innerHTML = '<div class="vrow">' + (opt.labelsOnly ? '' : '<button class="act" id="xrb" aria-pressed="false">See-through</button>') + '<button class="act" id="lblb" aria-pressed="false">Labels</button></div>';
+  document.querySelector('.stage').appendChild(vset);
+  // pages with a stats panel in the top right: the switches go just under it
+  const place = () => { const sp = document.getElementById('stats'); vset.style.top = sp ? (sp.offsetTop + sp.offsetHeight + 10) + 'px' : ''; };
+  place(); new ResizeObserver(place).observe(document.getElementById('stats') || vset);
+  const xrb = document.getElementById('xrb'), lblb = document.getElementById('lblb');
+  const sync = () => { if (xrb) xrb.setAttribute('aria-pressed', !!getUI().st.xrT); lblb.setAttribute('aria-pressed', !html.classList.contains('nolabels')); };
+  if (xrb) xrb.onclick = () => { const u = getUI(), st = u.st; st.xr = st.xr || 0; st.xrT = st.xrT ? 0 : 1; sync();
+    u.animate(dt => { const g = Math.sign(st.xrT - st.xr); st.xr = Math.min(1, Math.max(0, st.xr + g*dt/.7)); return st.xr !== st.xrT; }); };
+  lblb.onclick = () => { html.classList.toggle('nolabels'); sync(); };
+  sync();
+  const cap = document.createElement('p'); cap.className = 'mcap'; document.querySelector('.stage').after(cap);
+  const css = document.createElement('style');
+  css.textContent = '.vset{position:absolute;top:4px;right:0;z-index:2}.vrow{display:flex;gap:6px}.vset .act[aria-pressed=true]{background:var(--ink);color:var(--paper)}'
+    + 'html.nolabels #fig .tag{display:none}.mcap{width:100%;max-width:760px;min-height:3em;margin:0 0 14px;font-size:12.5px;line-height:1.5;text-align:center;transition:opacity .3s}'
+    + '@media (max-width:560px){.vset{position:static;margin:4px 0}}';
+  document.head.appendChild(css);
+  const r0 = ui.render; ui.render = () => { r0(); const st = getUI().st; cap.style.opacity = st.xr > .5 ? 1 : 0; cap.textContent = caption(st); };
+  ui.render();
+}
+// same, for a body lofted between two horizontal rings A (bottom) and B (top)
+function xrGhostRings(body, mech, k, A, B, m){
+  const far = `<g opacity="${f(.5*k)}">` + loft(A, B, n => mix(toneI(n.map(v => -v), m), '#f2efe7', .55), true) + fill(pd(A), mix(m.d, '#f2efe7', .5)) + `</g>`;
+  return far + mech + `<g opacity="${f(1 - .8*k)}">${body}</g>` + `<g opacity="${f(.6*k)}">` + hullInk([...A, ...B], 2.8) + `</g>`;
+}
+// generic see-through for any figure: the whole drawing fades back and the inside parts show over it.
+//   opts: { mech(st, k) -> svg, inside(st) -> label items, surface(st) -> label items (optional), B: bounds, getSt() }
+// washer-style ghost for an object without a single box case: its inside parts first, then the object pale over them
+const xrUnder = (svg, mech, k) => `<g opacity="${f(k)}">${mech}</g><g opacity="${f(1 - .62*k)}">${svg}</g>`;
+function xrWrap(sceneFn, opts){
+  return function(){
+    let s = sceneFn.apply(this, arguments);
+    const st = opts.getSt(), k = ease(st.xr || 0);
+    if (k > 0 && opts.under) s = xrUnder(s, opts.mech(st, k), k);   // the whole drawing is the object
+    else if (k > 0 && !opts.inline) s = `<g opacity="${f(1 - .5*k)}">${s}</g><g opacity="${f(k)}">${opts.mech(st, k)}</g>`;   // inline: the figure ghosts its own case
+    const items = k > .6 ? opts.inside(st) : opts.surface ? opts.surface(st) : [];
+    return s + (items.length ? xrCallouts(items, opts.B) : '');
+  };
+}
+
+/* ---------- game keypad: mountKeypad({ rows, hub:[col,row], action:'DROP', keys:[{ key:'ArrowLeft', glyph:'\u25c0', name, at:[col,row] }] })
+   An inked pad under the buttons that sends the same keyboard events as the arrows and space (set window.GAME_KEYS = true
+   so the arrows play instead of turning the camera). ---------- */
+function mountKeypad(spec){
+  const host = document.getElementById('btns'); if (!host) return;
+  const css = document.createElement('style');
+  css.textContent = `.kpad{display:flex;align-items:center;gap:16px;margin-top:6px;padding:10px 12px;border:1.5px solid var(--ink);border-radius:14px;
+      background:var(--paper);box-shadow:0 3px 0 var(--ink);touch-action:none;user-select:none;-webkit-user-select:none}
+    .kpad .dp{display:grid;grid-template-columns:repeat(3,34px);grid-template-rows:repeat(var(--rows),34px);gap:3px}
+    .kpad .k{all:unset;box-sizing:border-box;display:flex;align-items:center;justify-content:center;width:34px;height:34px;cursor:pointer;
+      background:#fbf7ea;border:1.5px solid var(--ink);border-radius:7px;box-shadow:0 3px 0 var(--ink);color:var(--ink);font:700 13px ui-monospace,Menlo,monospace;
+      transition:transform .05s,box-shadow .05s,background .05s}
+    .kpad .hub{width:34px;height:34px;display:flex;align-items:center;justify-content:center}
+    .kpad .hub i{width:12px;height:12px;border-radius:50%;border:1.5px solid var(--ink);background:#e6e0d1}
+    .kpad .go{all:unset;box-sizing:border-box;width:62px;height:62px;border-radius:50%;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;
+      background:#e2483d;border:1.5px solid var(--ink);box-shadow:0 4px 0 var(--ink),inset 0 -5px 0 rgba(0,0,0,.18);color:#fff;font:800 12px ui-monospace,Menlo,monospace;letter-spacing:.06em;
+      transition:transform .05s,box-shadow .05s}
+    .kpad .go small{font:700 8px ui-monospace,Menlo,monospace;opacity:.85;letter-spacing:.08em;margin-top:2px}
+    .kpad .down{transform:translateY(2px);box-shadow:0 1px 0 var(--ink)}
+    .kpad .k.down{background:var(--accent,#f4b829)}
+    .kpad .go.down{transform:translateY(3px);box-shadow:0 1px 0 var(--ink),inset 0 -3px 0 rgba(0,0,0,.18)}
+    @media (max-width:560px){.kpad{gap:22px;padding:10px 16px}.kpad .dp{grid-template-columns:repeat(3,44px);grid-template-rows:repeat(var(--rows),44px)}
+      .kpad .k,.kpad .hub{width:44px;height:44px;font-size:15px}.kpad .go{width:74px;height:74px}}`;
+  document.head.appendChild(css);
+  const pad = document.createElement('div'); pad.className = 'kpad'; pad.setAttribute('role', 'group'); pad.setAttribute('aria-label', 'Keypad');
+  const dp = document.createElement('div'); dp.className = 'dp'; dp.style.setProperty('--rows', spec.rows);
+  const els = {};
+  for (const k of spec.keys){
+    const b = document.createElement('button'); b.className = 'k'; b.textContent = k.glyph; b.setAttribute('aria-label', k.name);
+    b.style.gridColumn = k.at[0] + 1; b.style.gridRow = k.at[1] + 1; dp.appendChild(b); els[k.key] = b; }
+  if (spec.hub){ const h = document.createElement('div'); h.className = 'hub'; h.innerHTML = '<i></i>'; h.style.gridColumn = spec.hub[0] + 1; h.style.gridRow = spec.hub[1] + 1; dp.appendChild(h); }
+  const go = document.createElement('button'); go.className = 'go'; go.innerHTML = `${spec.action}<small>SPACE</small>`; go.setAttribute('aria-label', spec.action);
+  els[' '] = go;
+  pad.append(dp, go); host.appendChild(pad);
+  const send = (type, key) => dispatchEvent(new KeyboardEvent(type, { key, bubbles: true }));
+  for (const [key, el] of Object.entries(els)){
+    let held = null;
+    el.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); if (held != null) return; held = e.pointerId;
+      try { el.setPointerCapture(e.pointerId); } catch (_) {} send('keydown', key); });
+    const release = e => { if (held == null || (e && e.pointerId !== held)) return; held = null; send('keyup', key); };
+    el.addEventListener('pointerup', release); el.addEventListener('pointercancel', release); el.addEventListener('lostpointercapture', release);
+    el.addEventListener('click', e => e.preventDefault());
+    el.addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); send('keydown', key); setTimeout(() => send('keyup', key), 120); } });
+  }
+  // space belongs to the game: a button that still has the focus from a click must not be pressed by it too
+  addEventListener('keydown', e => { if (e.key === ' ' && e.target && e.target.closest && e.target.closest('button')) e.preventDefault(); }, true);
+  addEventListener('keyup', e => { if (e.key === ' ' && e.target && e.target.closest && e.target.closest('button')) e.preventDefault(); }, true);
+  // light the keys for real key presses too (and for the pad's own, which arrive the same way)
+  addEventListener('keydown', e => { const el = els[e.key]; if (el) el.classList.add('down'); });
+  addEventListener('keyup', e => { const el = els[e.key]; if (el) el.classList.remove('down'); });
+  addEventListener('blur', () => Object.values(els).forEach(el => el.classList.remove('down')));
+}
+
+</script>
+<script>
+/* Smoke alarm — a battery photoelectric alarm on a patch of ceiling. We look up at the ceiling, so the ceiling is the
+   board (z = 0..10) and the alarm's face points at the viewer (+z, down into the room). 1 unit = 1 mm.
+   x = depth (toward viewer-right), y = width (toward viewer-left), z = away from the ceiling.
+
+   How it really works (where everything is after each step):
+   STANDBY  9 V battery in the front compartment -> terminal block -> battery leads -> circuit board -> alarm chip.
+            Every few seconds the chip pulses the IR LED in the black optical chamber. Its beam crosses the chamber
+            and dies in the light trap; the shield baffle keeps it off the photodiode. Every 40 s or so the red LED
+            blinks (light pipe up to the window in the face). A tired battery makes the chip chirp.
+   TEST     push the test button -> plunger -> tact switch on the board -> the chip drives the piezo disc in its horn
+            cavity behind the sounder grille in the 3-beep pattern (T3), the red LED flashes.
+   SMOKE    smoke drifts in through the vents round the cover, through the insect mesh and the labyrinth vanes (which
+            let smoke in but keep room light out) into the chamber. Particles in the beam scatter some IR round the
+            baffle onto the photodiode. The chip samples faster, and above ~2.5 %/ft it sounds T3 until the smoke clears.
+   HUSH     the same button pressed during an alarm: the chip lowers its sensitivity for a while (LED blinks fast);
+            if the smoke gets much thicker it sounds anyway. Pressed when the battery chirps it silences the chirp.
+   BATTERY  open the battery door (hinged on its outer edge), lift the old 9 V off the terminals, drop a new one in,
+            close the door; the chip gives one short power-up beep.
+
+   Parts (each held by another):
+   CEILING  plaster patch . mounting plate screwed to it (two mounting screws) . twist-lock tabs on the cover's back
+   CASE     cover with 24 smoke vents round its side band . face . test / hush button . LED window . sounder grille .
+            battery door and its hinge edge . back wall
+   BOARD    three standoffs on the back wall . circuit board (D-shaped, it clears the mounting screw) . board screws .
+            copper traces . alarm chip . capacitor . two resistors . reverse-polarity diode . tact switch . red LED
+   SENSOR   optical chamber base . labyrinth vanes . insect mesh . chamber cap . IR LED in its holder . photodiode in
+            its holder . shield baffle . light trap
+   SOUNDER  horn cavity hanging from the face . piezo disc (brass + ceramic) . three horn leads down to the board
+   POWER    battery box hanging from the face . terminal block with two contacts . 9 V battery (snaps, metal end, label) .
+            red and black battery leads down the box's end wall to the board
+   TESTER   an aerosol smoke-test can, brought in for the puff and taken away again */
+
+const AO = [95, 95], ZF = 51, CEIL_W = 190, CEIL_H = 10;
+const RINGS = [[13,59],[14.5,61.5],[16.5,62],[37,62],[41,61.2],[44.5,59.2],[47.5,56],[49.6,52],[ZF,46.5]];
+const TB = [96, 113], TBR = 11;                    // test button
+const LEDW = [103, 93.5];                             // red LED / light pipe / window
+const TH = [124, 108], THR = 13.5;                 // horn cavity
+const CH = [70, 120], CHR = 21, CHZ0 = 21.6, CHZ1 = 36, CAPZ = 37.4;   // optical chamber
+const TH_L = 200, TH_P = 310, TH_T = 20;           // IR LED, photodiode, light trap angles round the chamber
+const TR = { x0:67.5, x1:122.5, y0:60, y1:89.5, z0:30, z1:ZF };       // battery box (outer)
+const BSEAT = [72.5, 61.5, 31.5];                  // battery's terminal end, seated
+const PCBZ = [20, 21.6];
+const PCB_CUT = norm([.67, -.74]), PCB_CUTD = 38;  // the board is a disc with one flat side, clear of the mounting screw
+const STANDS = [[60, 64], [138, 118], [100, 146]];
+const MSCREWS = [[128, 66], [62, 124]];
+const LUGS = [-48, 72, 192];
+const CANY = 58, CANZ = 40, CANX = 172;            // smoke-test can: nozzle tip, can lies along +x
+const CAN_OFF = 40, BAT_OFF = 45;                  // how far the can and the old battery slide off (fading) before they vanish
+
+const CEILM = { l:'#ece7dc', m:'#d6cfc0', d:'#b0a897' };
+const BODYM = { l:'#fbfaf4', m:'#e5e2d7', d:'#bcb7a8' };
+const CHM = { l:'#57524d', m:'#3b3734', d:'#24211f' };
+const PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' };
+const PLATEM = matOf('#e9e5da'), BATM = { l:'#4c5462', m:'#363c47', d:'#22262d' }, TERMM = matOf('#5b5f66');
+const BRASS = matOf('#d8b25a'), CERAM = matOf('#f1ece0'), CAPM = matOf('#3f6fb4'), RESM = matOf('#d9c49a');
+const CANM = matOf('#d94a3a'), RUBM = matOf('#45403c');
+const saRad = a => a * Math.PI / 180;
+const pol2 = (c, r, a) => [c[0] + r*Math.cos(saRad(a)), c[1] + r*Math.sin(saRad(a))];
+const ringAt = (c, z, r, n = 48) => on(PZ(z), ellUV(c[0], c[1], r, r, n));
+const aabb = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+// text lying on a horizontal face (z = const), reading along -y, its top toward -x
+const txZ = (x, y, z, str, size, col = INK, weight = 700) => `<text transform="${txM(P(x,y,z), Dv(0,-1,0), Dv(1,0,0))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+const mw = w => `style="stroke-width:${f(w)}"`;
+
+/* ---------- small solids ---------- */
+// a hexahedron from 8 corners (bottom four, then the top four in the same order): every face that faces the viewer
+function saHexa(c, M, shade = toneI, w = .7){
+  const F = [[0,1,2,3],[4,5,6,7],[0,1,5,4],[1,2,6,5],[2,3,7,6],[3,0,4,7]], cen = avg(c); let s = '';
+  for (const fi of F){ const q = fi.map(i => c[i]); let n = norm(cross(sub(q[2], q[0]), sub(q[3], q[1])));
+    if (!isFinite(n[0])) continue; if (dot(n, sub(avg(q), cen)) < 0) n = n.map(v => -v);
+    if (vis(n)) s += shape(q, shade(n, M), w); }
+  return s; }
+const saPrism = (base, z0, z1, M, w = .6) => saHexa([...base.map(p => [p[0], p[1], z0]), ...base.map(p => [p[0], p[1], z1])], M, toneI, w);
+// a thin wall from p to q (plan view), t thick
+const saWall = (p, q, t) => { const d = norm([q[0]-p[0], q[1]-p[1], 0]), n = [-d[1]*t/2, d[0]*t/2];
+  return [[p[0]+n[0], p[1]+n[1]], [q[0]+n[0], q[1]+n[1]], [q[0]-n[0], q[1]-n[1]], [p[0]-n[0], p[1]-n[1]]]; };
+// a slab over a convex outline (the circuit board)
+function saSlab(poly, z0, z1, M, w = .9, top = ''){
+  const A = poly.map(p => [p[0], p[1], z0]), B = poly.map(p => [p[0], p[1], z1]);
+  return loft(A, B, n => toneI(n, M)) + fill(pd(B), toneI([0,0,1], M)) + top + ink(pd(B), w*.7) + hullInk([...A, ...B], w); }
+const PCB_POLY = ellUV(AO[0], AO[1], 54, 54, 64).map(p => { const e = (p[0]-AO[0])*PCB_CUT[0] + (p[1]-AO[1])*PCB_CUT[1] - PCB_CUTD;
+  return e > 0 ? [p[0] - e*PCB_CUT[0], p[1] - e*PCB_CUT[1]] : p; });
+// cables: corners rounded, cut into short pieces that sort on their own
+const saBend = (pts, r = 1.5) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i-1], pts[i], pts[i+1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k])*d/la), q = c.map((v, k) => b[k] + (v - b[k])*d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+const saWire = (pts, col, w = .45, Lseg = 4) => { const q = saBend(pts), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < Lseg){ len += Math.hypot(...q[j].map((v, k) => v - q[j-1][k])); j++; }
+    if (len < Lseg) while (j < q.length - 1) j++;
+    const seg = q.slice(i, j + 1), d = pd(seg, false);
+    let svg = `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w + .9)}" stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    if (j === q.length - 1){ const [X, Y] = P(...q[j]); svg += `<circle cx="${f(X)}" cy="${f(Y)}" r=".9" fill="${INK}"/>`; }
+    out.push({ box: aabb(seg), svg }); i = j; }
+  return out; };
+
+/* ---------- the 9 V battery: terminal end at x0, 48.5 long along +x, 26.5 wide, 17.5 tall ---------- */
+function saBattery(x0, y0, z0, fresh, zc = -1e9){
+  const z1 = z0 + 17.5, zb = Math.max(z0, zc), parts = [];
+  if (zb >= z1) return '';
+  const zs = z0 + 8.75;
+  if (zs - 3.6 >= zc){
+    parts.push({ box: [[x0, y0 + 4.2, zs - 2.7], [x0 + 3, y0 + 9.6, zs + 2.7]], svg: cylX(x0, x0 + 3, y0 + 6.9, zs, 2.6, METAL, toneI, .6, 16) });
+    parts.push({ box: [[x0, y0 + 15.9, zs - 3.7], [x0 + 3, y0 + 23.3, zs + 3.7]], svg: cylX(x0, x0 + 3, y0 + 19.6, zs, 3.6, METAL, toneI, .6, 6) }); }
+  parts.push({ box: [[x0 + 3, y0, zb], [x0 + 5.5, y0 + 26.5, z1]], svg: box(x0 + 3, y0, zb, x0 + 5.5, y0 + 26.5, z1, METAL, toneI, .7) });
+  const lab = on(PZ(z1 + .04), rectUV(x0 + 13, y0 + 2, x0 + 41, y0 + 24.5));
+  parts.push({ box: [[x0 + 5.5, y0, zb], [x0 + 48.5, y0 + 26.5, z1]], svg: box(x0 + 5.5, y0, zb, x0 + 48.5, y0 + 26.5, z1, BATM, toneI, .8)
+    + (facing([0,0,1]) ? shape(lab, fresh ? '#efb93c' : '#b0925a', .5) + txZ(x0 + 29.5, y0 + 13.25, z1 + .06, '9V', 7.5, INK, 800)
+      + txZ(x0 + 37, y0 + 13.25, z1 + .06, fresh ? 'ALKALINE' : 'USED', 2.6, INK, 800) : '') });
+  return byDepth(parts); }
+const batPos = st => [BSEAT[0] + st.batDX, BSEAT[1], BSEAT[2] + st.batZ];
+
+/* ---------- the battery door: 1.5 thick, hinged along its outer edge (y = TR.y0, z = ZF) ---------- */
+function doorCorners(a){
+  const ca = Math.cos(saRad(a)), sa = Math.sin(saRad(a)), R = (x, v, w) => [x, TR.y0 + v*ca - w*sa, ZF + v*sa + w*ca], V = TR.y1 - TR.y0;
+  return [R(TR.x0, 0, -1.5), R(TR.x1, 0, -1.5), R(TR.x1, V, -1.5), R(TR.x0, V, -1.5), R(TR.x0, 0, 0), R(TR.x1, 0, 0), R(TR.x1, V, 0), R(TR.x0, V, 0)]; }
+
+/* ---------- the closed case ---------- */
+const saVents = () => { let s = '';
+  for (let i = 0; i < 24; i++){ const a0 = i*15 + 4, a1 = a0 + 7, am = (a0 + a1)/2;
+    if (!facing([Math.cos(saRad(am)), Math.sin(saRad(am)), .05])) continue;
+    const arc = (z, rev) => { const o = [0, 1, 2].map(j => [...pol2(AO, 62.05, a0 + (a1 - a0)*j/2), z]); return rev ? o.reverse() : o; };
+    s += shape([...arc(19), ...arc(34, true)], '#3a3530', .7); }
+  return s; };
+function grilleHoles(){ const pts = [[0, 0]]; for (let i = 0; i < 6; i++) pts.push([4.6*Math.cos(saRad(i*60)), 4.6*Math.sin(saRad(i*60))]);
+  for (let i = 0; i < 12; i++) pts.push([9*Math.cos(saRad(i*30 + 15)), 9*Math.sin(saRad(i*30 + 15))]);
+  return pts.map(([u, v]) => [TH[0] + u, TH[1] + v]); }
+function saBody(st, M){
+  let s = loft(ringAt(AO, ...RINGS[0]), ringAt(AO, ...RINGS[1]), n => tone(n, BODYM));
+  for (let i = 1; i < RINGS.length - 1; i++) s += loft(ringAt(AO, ...RINGS[i]), ringAt(AO, ...RINGS[i+1]), n => tone(n, BODYM));
+  s += saVents();
+  const faceRing = ringAt(AO, ZF, RINGS[RINGS.length - 1][1], 64);
+  s += fill(pd(faceRing), tone([0,0,1], BODYM));
+  const zt = ZF + .05;
+  // seam where the side band meets the shoulder (the near half)
+  const [h0, h1] = nearHalf(), seam = Array.from({length: 25}, (_, i) => [...pol2(AO, 62.02, h0 + (h1 - h0)*i/24), 37]);
+  s += line(seam, .8);
+  // the face: button bezel, LED window, sounder grille, words, battery door
+  s += shape(ringAt(TB, zt, TBR + 1.6, 40), mix(BODYM.m, '#000000', .08), .9);
+  s += shape(ringAt(LEDW, zt, 2.4, 18), ledOn(st) ? '#ff3b2f' : '#7a2c25', .7);
+  if (ledOn(st)) s += fill(pd(ringAt(LEDW, zt + .02, 5, 18)), '#ff6a4a', 'opacity=".35"');
+  s += grilleHoles().map(p => fill(pd(ringAt(p, zt, 1.15, 10)), '#2b2623')).join('');
+  s += txZ(58, AO[1], zt, 'SMOKE ALARM', 5.4, mix(INK, BODYM.m, .1), 800);
+  s += txZ(64, AO[1], zt, 'PHOTOELECTRIC', 2.8, mix(INK, BODYM.m, .35), 700);
+  s += txZ(82, TB[1], zt, 'PUSH TO TEST', 2.9, mix(INK, BODYM.m, .25), 800);
+  s += txZ(TH[0] + 15.5, TH[1], zt, 'HORN', 2.6, mix(INK, BODYM.m, .35), 700);
+  const doorPoly = on(PZ(zt), rectUV(TR.x0, TR.y0, TR.x1, TR.y1));
+  if (st.door <= .001){
+    s += act('door', ink(pd(doorPoly), 1.1) + shape(on(PZ(zt + .01), rrUV(103, 85.5, 113, 89.2, 1.6)), mix(BODYM.d, '#000000', .1), .6)
+      + txZ(92, 75, zt + .01, '9V BATTERY', 3.6, mix(INK, BODYM.m, .3), 800) + txZ(99, 75, zt + .01, 'LIFT HERE', 2.4, mix(INK, BODYM.m, .45), 700));
+  } else {
+    // the open battery box seen through its opening: floor, the far walls, the terminals, the battery
+    const hole = on(PZ(zt + .02), rectUV(TR.x0 + 1, TR.y0 + 1, TR.x1 - 1, TR.y1 - 1));
+    let inn = fill(pd(hole), '#2a2522');
+    inn += fill(pd(on(PZ(TR.z0 + 1.5), rectUV(TR.x0 + 1, TR.y0 + 1, TR.x1 - 1, TR.y1 - 1))), mix(BODYM.d, '#2a2522', .45));
+    const X0 = TR.x0 + 1, X1 = TR.x1 - 1, Y0 = TR.y0 + 1, Y1 = TR.y1 - 1, Z0 = TR.z0 + 1.5;
+    for (const [n, q] of [[[1,0,0], [[X0,Y0,Z0],[X0,Y1,Z0],[X0,Y1,ZF],[X0,Y0,ZF]]], [[-1,0,0], [[X1,Y0,Z0],[X1,Y1,Z0],[X1,Y1,ZF],[X1,Y0,ZF]]],
+      [[0,1,0], [[X0,Y0,Z0],[X1,Y0,Z0],[X1,Y0,ZF],[X0,Y0,ZF]]], [[0,-1,0], [[X0,Y1,Z0],[X1,Y1,Z0],[X1,Y1,ZF],[X0,Y1,ZF]]]])
+      if (facing(n)) inn += shape(q, mix(toneI(n, BODYM), '#2a2522', .35), .5);
+    const bp = batPos(st);
+    inn += byDepth([{ box: [[68.5, 63, 34], [72.5, 86.5, 47]], svg: terminalBlock() },
+      st.batDX < 60 && bp[2] < ZF ? { box: [[bp[0], bp[1], bp[2]], [bp[0] + 48.5, bp[1] + 26.5, bp[2] + 17.5]], svg: saBattery(...bp, st.batNew) } : null]);
+    s += clipTo(hole, inn) + ink(pd(hole), 1.1) + ink(pd(doorPoly), .8);
+  }
+  s += ink(pd(faceRing), 1.2);
+  s += hullInk(RINGS.flatMap(([z, r]) => ringAt(AO, z, r, 32)), 2.6);
+  return s; }
+function terminalBlock(){
+  return byDepth([{ box: [[68.5, 63, 34], [72.5, 86.5, 47]], svg: box(68.5, 63, 34, 72.5, 86.5, 47, TERMM, toneI, .7) },
+    { box: [[72.5, 66, 38.2], [73.6, 69, 43.3]], svg: box(72.5, 66, 38.2, 73.6, 69, 43.3, METAL, toneI, .5) },
+    { box: [[72.5, 78.2, 37.8], [73.6, 82.2, 43.7]], svg: box(72.5, 78.2, 37.8, 73.6, 82.2, 43.7, METAL, toneI, .5) }]); }
+
+/* ---------- state helpers ---------- */
+const t3 = t => { const q = t % 4; return q < .5 || (q >= 1 && q < 1.5) || (q >= 2 && q < 2.5); };   // three beeps, then a pause
+const sounding = st => st.batIn && st.alarm && !(st.hush > 0);
+const hornOn = st => st.batIn && ((st.testT >= 0 && st.testT < 2.5 && t3(st.testT)) || (sounding(st) && t3(st.alarmT)) || st.chirp > 0 || st.power > 0);
+const ledOn = st => st.batIn && (hornOn(st) || st.blink > 0 || (st.hush > 0 && st.clock % 1 < .15));
+const pulseOn = st => st.batIn && st.clock % (st.cham > .8 || st.alarm ? .5 : 1.6) < .16;
+
+/* ---------- see-through: the working parts ---------- */
+function chamberParts(st){
+  const out = [], base = cyl(CH[0], CH[1], CHZ0, 23, CHR, CHM, toneI, .8, 40);
+  const mesh = { far: '', near: '' };
+  for (let i = 0; i < 24; i++){ const a0 = i*15, am = a0 + 7.5;
+    const pts = [0, 1, 2, 3].map(j => pol2(CH, 22, a0 + 5*j));
+    const quad = [...pts.map(p => [p[0], p[1], 23]), ...pts.slice().reverse().map(p => [p[0], p[1], CHZ1])];
+    let sv = fill(pd(quad), '#9aa3a6', 'opacity=".3"');
+    let h = ''; for (let j = 0; j <= 5; j++){ const p = pol2(CH, 22, a0 + 3*j); h += pd([[p[0], p[1], 23], [p[0], p[1], CHZ1]], false); }
+    for (const z of [26, 29.5, 33]) h += pd(pts.map(p => [p[0], p[1], z]), false);
+    sv += `<path d="${h}" fill="none" stroke="#5d6669" stroke-width=".35"/>` + line(pts.map(p => [p[0], p[1], CHZ1]), .5) + line(pts.map(p => [p[0], p[1], 23]), .5);
+    mesh[facing([Math.cos(saRad(am)), Math.sin(saRad(am)), 0]) ? 'near' : 'far'] += sv; }
+  // inside: vanes, LED + holder, photodiode + holder, light trap, shield baffle
+  const inner = [], putP = (poly, z0, z1, M, w = .6) => inner.push({ box: aabb(poly.map(p => [p[0], p[1], z0]).concat(poly.map(p => [p[0], p[1], z1]))), svg: saPrism(poly, z0, z1, M, w) });
+  const VANEM = mix(CHM.m, '#000000', 0) && { l:'#4a4541', m:'#332f2c', d:'#1e1b19' };
+  for (const a of [65, 95, 125, 155, 245, 275, 335]){
+    putP(saWall(pol2(CH, 14.5, a), pol2(CH, 20.6, a + 22), 1.2), 23, CHZ1 - .3, VANEM);
+    putP(saWall(pol2(CH, 14.5, a), pol2(CH, 12.8, a + 13), 1.1), 23, CHZ1 - .3, VANEM); }
+  const holder = a => { const d = pol2([0, 0], 1, a), p = [-d[1], d[0]], c0 = pol2(CH, 15, a), c1 = pol2(CH, 20.6, a);
+    return [[c0[0] - 3*p[0], c0[1] - 3*p[1]], [c1[0] - 3*p[0], c1[1] - 3*p[1]], [c1[0] + 3*p[0], c1[1] + 3*p[1]], [c0[0] + 3*p[0], c0[1] + 3*p[1]]]; };
+  putP(holder(TH_L), 23, 33, CHM); putP(holder(TH_P), 23, 33, CHM);
+  const pulse = pulseOn(st), IRM = pulse ? matOf('#ffb0b8') : matOf('#9fb2d6');
+  const Lt = [...pol2(CH, 11.5, TH_L), 29], Pt = [...pol2(CH, 12.5, TH_P), 29];
+  inner.push({ box: aabb([[...pol2(CH, 15, TH_L), 27], [...pol2(CH, 11, TH_L), 31]]), svg: rod([...pol2(CH, 15, TH_L), 29], Lt, 1.7, IRM, toneI, .7, 1.7, 14)
+    + `<circle cx="${f(P(...Lt)[0])}" cy="${f(P(...Lt)[1])}" r="${f(1.9)}" fill="${IRM.l}" stroke="${INK}" stroke-width=".6"/>` });
+  inner.push({ box: aabb([[...pol2(CH, 15, TH_P), 26.8], [...pol2(CH, 12.3, TH_P), 31.2]]), svg: rod([...pol2(CH, 15, TH_P), 29], Pt, 2, matOf(pulse && st.cham > .6 ? '#6a5fd0' : '#2d2d3a'), toneI, .7, 2, 12) });
+  for (const s2 of [-1, 1]) putP(saWall(pol2(CH, 21, TH_T + 10*s2), pol2(CH, 15.6, TH_T), 1.4), 23, 34, VANEM);
+  { const m2 = [(Lt[0] + Pt[0])/2, (Lt[1] + Pt[1])/2], d = norm([Pt[0] - Lt[0], Pt[1] - Lt[1], 0]), p = [d[1], -d[0]];
+    putP(saWall([m2[0] - 3.4*p[0], m2[1] - 3.4*p[1]], [m2[0] + 3.4*p[0], m2[1] + 3.4*p[1]], 1.3), 23, 34, CHM); }
+  // the beam, smoke in the chamber, the light it scatters onto the photodiode
+  let fx = '';
+  const Te = [...pol2(CH, 16, TH_T), 29];
+  if (st.batIn){ const bd = pd([Lt, Te], false);
+    fx += `<path d="${bd}" stroke="#e2483d" ${mw(.6)} stroke-dasharray="1.6 1.4" opacity=".45" fill="none"/>`;
+    if (pulse) fx += `<path d="${bd}" stroke="#ff8a8a" ${mw(2.6)} opacity=".35" fill="none" stroke-linecap="round"/><path d="${bd}" stroke="#e2483d" ${mw(1)} fill="none" stroke-linecap="round"/>`; }
+  const nDots = Math.min(28, Math.round(st.cham*5)), dots = [];
+  for (let i = 0; i < nDots; i++){ const a = i*137.5 + st.clock*(i % 2 ? 24 : -18), r = 3 + (i*7.3) % 12.5, p = pol2(CH, r, a), z = 25.5 + (i*3.7) % 7;
+    dots.push([p[0], p[1], z]); const [X, Y] = P(p[0], p[1], z);
+    fx += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(1.1 + (i % 3)*.35)}" fill="#c4bdb1" stroke="${INK}" stroke-width=".3"/>`; }
+  if (pulse && st.batIn){ const ld = norm(sub(Te, Lt)); let nR = 0;
+    for (const p of dots){ const w = sub(p, Lt), along = dot(w, ld), off = Math.hypot(...sub(w, ld.map(v => v*along)));
+      if (off < 4 && along > 3 && nR < 5){ nR++; fx += `<path d="${pd([[p[0], p[1], 29], Pt], false)}" stroke="#ff9a3a" ${mw(.7)} stroke-dasharray="1.2 1" fill="none"/>`; } } }
+  const cap = ringAt(CH, CAPZ, 22.5, 40), capB = ringAt(CH, CHZ1, 22.5, 40);
+  const capSvg = `<g opacity=".3">${loft(capB, cap, n => toneI(n, CHM))}${fill(pd(cap), CHM.m)}</g>` + ink(pd(cap), .9) + hullInk([...capB, ...cap], .9);
+  out.push({ box: [[CH[0] - 22.6, CH[1] - 22.6, CHZ0], [CH[0] + 22.6, CH[1] + 22.6, CAPZ]], svg: base + mesh.far + byDepth(inner) + fx + mesh.near + capSvg });
+  return out; }
+
+function saMech(st){
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg });
+  const bx = (x0, y0, z0, x1, y1, z1, M, w = .7, extra = '') => put([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, M, toneI, w) + extra);
+  const vc = (x, y, z0, z1, r, M, w = .7, n = 20, extra = '') => put([[x - r, y - r, z0], [x + r, y + r, z1]], cyl(x, y, z0, z1, r, M, toneI, w, n) + extra);
+  const horn = hornOn(st), led = ledOn(st), pulse = pulseOn(st), up = facing([0,0,1]);
+  const LIVE = matOf('#ff9a3a');
+  // ---- ceiling: the mounting plate (with a wire hole and the screws), twist-lock tabs gripping the case's back
+  { let top = up ? shape(ringAt(AO, 13.02, 9, 24), '#cfc9bb', .6) : '';
+    for (const [x, y] of MSCREWS) if (up) top += shape(ringAt([x, y], 13.04, 3.4, 16), METAL.m, .6) + line([[x - 2.4, y - 2.4, 13.06], [x + 2.4, y + 2.4, 13.06]], .6) + line([[x - 2.4, y + 2.4, 13.06], [x + 2.4, y - 2.4, 13.06]], .6);
+    put([[AO[0] - 48, AO[1] - 48, CEIL_H], [AO[0] + 48, AO[1] + 48, 13]], cyl(AO[0], AO[1], CEIL_H, 13, 48, PLATEM, toneI, .9, 48) + top); }
+  for (const a of LUGS){ const q = [pol2(AO, 47, a - 7), pol2(AO, 55, a - 6), pol2(AO, 55, a + 6), pol2(AO, 47, a + 7)];
+    put(aabb(q.map(p => [p[0], p[1], 11]).concat(q.map(p => [p[0], p[1], 14.5]))), saPrism(q, 11, 13, BODYM, .6)); }
+  // the case's back wall (part of the cover, shown pale so the plate shows through it)
+  put([[AO[0] - 58, AO[1] - 58, 13.1], [AO[0] + 58, AO[1] + 58, 14.5]], `<g opacity=".35">${cyl(AO[0], AO[1], 13.1, 14.5, 58, BODYM, toneI, .8, 48)}</g>`);
+  // ---- standoffs and the circuit board, its traces and screws
+  for (const [x, y] of STANDS) vc(x, y, 14.5, PCBZ[0], 2.6, PLATEM, .6, 14);
+  { const tz = PCBZ[1] + .03, tr = [
+      [[112, 122], [112, 116], [104, 116], [98.4, 113]], [[115.5, 126], [124, 126]], [[108.5, 132], [104, 134]], [[108.5, 138], [104, 140]],
+      [[96, 134], [100, 128], [103, 97]], [[120, 132], [120, 128]], [[112, 141.5], [112, 146], [66, 146], [62, 140]],
+      [[109, 104], [109, 112]], [[109, 112], [110, 118], [112, 122]], [[63, 66.5], [63, 92], [99, 92], [103, 93.5]], [[63, 83.5], [56, 90], [52, 106]],
+      [[60, 112], [52, 106]], [[81, 108], [86, 104], [108, 104], [109, 104]] ];
+    let top = up ? `<path d="${tr.map(t => pd(t.map(([x, y]) => [x, y, tz]), false)).join('')}" fill="none" stroke="#d8a24a" stroke-width=".8" stroke-linecap="round" stroke-linejoin="round"/>` : '';
+    for (const [x, y] of STANDS) if (up) top += shape(ringAt([x, y], tz + .02, 2.2, 14), METAL.l, .5) + line([[x - 1.4, y, tz + .04], [x + 1.4, y, tz + .04]], .5);
+    put([[AO[0] - 54, AO[1] - 54, PCBZ[0]], [AO[0] + 54, AO[1] + 54, PCBZ[1]]], saSlab(PCB_POLY, PCBZ[0], PCBZ[1], PCBM, .9, top)); }
+  // alarm chip (16 pins), capacitor, resistors, diode, tact switch, red LED
+  { const chip = [{ box: [[108.5, 122, PCBZ[1]], [115.5, 141, 24.6]], svg: box(108.5, 122, PCBZ[1], 115.5, 141, 24.6, matOf('#2a2a2e'), toneI, .7)
+      + (up ? fill(pd(ringAt([110, 124.2], 24.64, .7, 10)), '#77706a') + txZ(112, 131.5, 24.66, 'ASIC', 2.2, '#cfc9bb', 700) : '') }];
+    for (let i = 0; i < 8; i++){ const y = 123.4 + i*2.3;
+      chip.push({ box: [[107.3, y - .4, PCBZ[1]], [108.5, y + .4, 23.4]], svg: box(107.3, y - .4, PCBZ[1], 108.5, y + .4, 23.4, METAL, toneI, .35) });
+      chip.push({ box: [[115.5, y - .4, PCBZ[1]], [116.7, y + .4, 23.4]], svg: box(115.5, y - .4, PCBZ[1], 116.7, y + .4, 23.4, METAL, toneI, .35) }); }
+    put([[107.3, 122, PCBZ[1]], [116.7, 141, 24.6]], byDepth(chip)); }
+  vc(124, 126, PCBZ[1], 31.6, 4, horn ? LIVE : CAPM, .7, 20, up ? line([[122, 126, 31.65], [126, 126, 31.65]], .5) + line([[124, 124, 31.65], [124, 128, 31.65]], .5) : '');
+  for (const y of [134, 140]){ const seg = [], cols = [RESM, matOf('#8a4a2a'), RESM, matOf('#2a2a2e'), RESM, matOf('#d0412f'), RESM];
+    const xs = [97.5, 98.6, 99.3, 100.3, 101, 102, 102.7, 103.5];
+    for (let i = 0; i < cols.length; i++) seg.push({ box: [[xs[i], y - 1.25, 22.3], [xs[i+1], y + 1.25, 24.8]], svg: rod([xs[i], y, 23.5], [xs[i+1], y, 23.5], 1.2, cols[i], toneI, .5, 1.2, 12) });
+    put([[95.5, y - 1.3, PCBZ[1]], [105.5, y + 1.3, 24.8]], line([[96, y, PCBZ[1]], [96, y, 23.5], [97.5, y, 23.5]], .55) + line([[103.5, y, 23.5], [105, y, 23.5], [105, y, PCBZ[1]]], .55) + byDepth(seg)); }
+  put([[118.6, 131.5, PCBZ[1]], [121.4, 140.5, 24.5]], line([[120, 131.6, PCBZ[1]], [120, 131.6, 23.2], [120, 133, 23.2]], .5) + line([[120, 139, 23.2], [120, 140.4, 23.2], [120, 140.4, PCBZ[1]]], .5)
+    + byDepth([{ box: [[118.7, 133, 21.9], [121.3, 137.6, 24.5]], svg: rod([120, 133, 23.2], [120, 137.6, 23.2], 1.3, matOf('#2a2a2e'), toneI, .5, 1.3, 12) },
+      { box: [[118.7, 137.6, 21.9], [121.3, 139, 24.5]], svg: rod([120, 137.6, 23.2], [120, 139, 23.2], 1.3, METAL, toneI, .5, 1.3, 12) }]));
+  const pressed = st.btn;
+  bx(93.6, 110.6, PCBZ[1], 98.4, 115.4, 24, METAL, .6);
+  vc(TB[0], TB[1], 24, 25.4 - .6*pressed, 1.5, pressed > .5 ? LIVE : matOf('#2a2a2e'), .5, 14);
+  vc(LEDW[0], LEDW[1], PCBZ[1], 25.2, 1.6, led ? matOf('#ff3b2f') : matOf('#a0473f'), .55, 14);
+  // plunger from the button down to the switch; light pipe from the LED up to the window
+  const btnZ = ZF + 3 - 2*pressed;
+  put([[TB[0] - 2.1, TB[1] - 2.1, 25.5 - .6*pressed], [TB[0] + 2.1, TB[1] + 2.1, ZF]], rod([TB[0], TB[1], 25.5 - .6*pressed], [TB[0], TB[1], ZF - .05], 2, PLATEM, toneI, .6, 2, 14));
+  put([[LEDW[0] - 1.7, LEDW[1] - 1.7, 25.6], [LEDW[0] + 1.7, LEDW[1] + 1.7, ZF]], rod([LEDW[0], LEDW[1], 25.6], [LEDW[0], LEDW[1], ZF - .05], 1.5, led ? matOf('#ffb4a8') : CLEAR, toneI, .55, 1.5, 12));
+  // ---- the battery box hanging from the face, with the terminals and the battery (or none)
+  { const bp = batPos(st), batIn = st.batDX < 1 && bp[2] < ZF;
+    const walls = [[[1,0,0], [TR.x1 - 1, TR.y0, TR.z0, TR.x1, TR.y1, ZF]], [[-1,0,0], [TR.x0, TR.y0, TR.z0, TR.x0 + 1, TR.y1, ZF]],
+      [[0,1,0], [TR.x0, TR.y1 - 1, TR.z0, TR.x1, TR.y1, ZF]], [[0,-1,0], [TR.x0, TR.y0, TR.z0, TR.x1, TR.y0 + 1, ZF]]];
+    const WM = matOf('#ece9df'); let s = box(TR.x0, TR.y0, TR.z0, TR.x1, TR.y1, TR.z0 + 1.5, WM, toneI, .6);
+    const far = walls.filter(([n]) => !facing(n)), near = walls.filter(([n]) => facing(n));
+    s += far.map(([, b]) => box(...b, WM, toneI, .5)).join('');
+    s += byDepth([{ box: [[68.5, 63, 34], [73.6, 86.5, 47]], svg: terminalBlock() },
+      batIn ? { box: [[bp[0], bp[1], bp[2]], [bp[0] + 48.5, bp[1] + 26.5, bp[2] + 17.5]], svg: saBattery(...bp, st.batNew) } : null]);
+    s += near.map(([, b]) => box(...b, WM, toneI, .5)).join('');
+    put([[TR.x0, TR.y0, TR.z0], [TR.x1, TR.y1, ZF]], s); }
+  // battery leads: through the box's end wall, down to the board
+  const live = st.batIn ? (horn ? '#ff6a3a' : null) : null;
+  parts.push(...saWire([[67.4, 67.5, 40.7], [63, 66.5, 37], [63, 66.5, PCBZ[1] + .05]], live || '#d0412f', .5));
+  parts.push(...saWire([[67.4, 80.2, 40.7], [63, 83.5, 37], [63, 83.5, PCBZ[1] + .05]], live || '#2a2724', .5));
+  // ---- the horn: a short tube under the grille, the piezo disc (ceramic under brass) on its ledge, three leads
+  { const A = ringAt(TH, 42.4, THR, 32), B = ringAt(TH, ZF, THR, 32), wob = horn ? .35*Math.sin(st.clock*90) : 0;
+    const disc = cyl(TH[0], TH[1], 43 + wob, 43.6 + wob, 8, horn ? LIVE : CERAM, toneI, .6, 28) + cyl(TH[0], TH[1], 43.6 + wob, 44 + wob, 12, BRASS, toneI, .7, 32)
+      + (up ? shape(ringAt([TH[0] - 4, TH[1]], 44.05 + wob, 1.2, 10), METAL.l, .4) : '');
+    const HM = matOf('#e4e0d4');
+    put([[TH[0] - THR, TH[1] - THR, 42.4], [TH[0] + THR, TH[1] + THR, ZF]], openShell(A, B, n => toneI(n, HM), disc) + ink(pd(B), .8) + hullInk([...A, ...B], .9)); }
+  for (const [dy, col] of [[-4, '#d0412f'], [0, '#2a2724'], [4, '#3c6fb4']])
+    parts.push(...saWire([[TH[0] - 5, TH[1] + dy, 42.8], [109, TH[1] + dy, 41.5], [109, TH[1] + dy, PCBZ[1] + .05]], horn ? '#ff6a3a' : col, .4));
+  // ---- the optical chamber
+  parts.push(...chamberParts(st));
+  // everything at or under the board is stacked in z (we always look down on it): draw it first, in order
+  const under = parts.filter(p => p.box[1][2] <= PCBZ[1] + 1e-6), over = parts.filter(p => p.box[1][2] > PCBZ[1] + 1e-6);
+  return under.map(p => p.svg).join('') + byDepth(over); }
+
+/* ---------- labels ---------- */
+// the one of several points furthest to the viewer's right
+// labels that may sit anywhere along their part (cands) go to whichever column has room, so neither overflows from any yaw
+const nearArc = (c, r, z, n = 7) => Array.from({length: n}, (_, i) => [...pol2(c, r, YAW - 75 + 150*i/(n - 1)), z]);
+function saBalance(items){
+  const B = lblB(), xs = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) xs.push(P(x, y, z)[0]);
+  const cx = (Math.min(...xs) + Math.max(...xs))/2, X = q => P(...q)[0], CAP_L = 12, CAP_R = 20;   // rows each column holds
+  let nL = 0, nR = 0;
+  for (const it of items){ if (it.cands){ const c = it.cands.slice().sort((a, b) => X(a) - X(b));
+      if (X(c[0]) < cx && X(c[c.length - 1]) >= cx){ it.c = c; continue; }   // straddles the middle: decide below
+      it.at = c[c.length >> 1]; }
+    X(it.at) < cx ? nL++ : nR++; }
+  for (const it of items) if (it.c){ if (nL/CAP_L < nR/CAP_R){ it.at = it.c[0]; nL++; } else { it.at = it.c[it.c.length - 1]; nR++; } }
+  return items; }
+function insideLabels(st){
+  const horn = hornOn(st), pulse = pulseOn(st), bp = batPos(st), y = YAW;
+  const m2 = (() => { const Lt = pol2(CH, 11.5, TH_L), Pt = pol2(CH, 12.5, TH_P); return [(Lt[0] + Pt[0])/2, (Lt[1] + Pt[1])/2]; })();
+  return saBalance([
+    { cands: nearArc(AO, 62, 27), text: 'SMOKE VENTS', on: st.dout > .3 },
+    { cands: nearArc(CH, 22, 31), text: 'INSECT MESH', on: st.dout > .3 },
+    { cands: [65, 95, 125, 155, 245, 275, 335].map(a => [...pol2(CH, 18, a + 11), CHZ1]), text: 'LABYRINTH VANES', on: st.cham > .3 },
+    { cands: nearArc(CH, 21, 22.5), text: 'OPTICAL CHAMBER', on: st.cham > .8 },
+    { at: [...pol2(CH, 11.5, TH_L), 30], text: 'IR LED', on: pulse },
+    { at: [...pol2(CH, 12.5, TH_P), 30], text: 'PHOTODIODE', on: pulse && st.cham > .6 },
+    { at: [...m2, 34], text: 'SHIELD BAFFLE', on: false },
+    { at: [...pol2(CH, 17, TH_T), 34], text: 'LIGHT TRAP', on: pulse },
+    { cands: [[110, 124, 24.6], [114, 124, 24.6], [110, 139, 24.6], [114, 139, 24.6]], text: 'ALARM CHIP', on: st.batIn && (horn || pulse) },
+    { at: [124, 126, 31.6], text: 'CAPACITOR', on: horn },
+    { cands: [[98, 134, 24.7], [103, 134, 24.7], [98, 140, 24.7], [103, 140, 24.7]], text: 'RESISTORS', on: false },
+    { at: [98.4, 110.6, 24], text: 'TACT SWITCH', on: st.btn > .5 },
+    { at: [TB[0], TB[1], 38], text: 'PLUNGER', on: st.btn > .5 },
+    { cands: nearArc(TB, TBR - 2, ZF + 3 - 2*st.btn), text: 'TEST BUTTON', on: st.btn > .5 },
+    { at: [LEDW[0], LEDW[1], 24.5], text: 'RED LED', on: ledOn(st) },
+    { at: [LEDW[0], LEDW[1], 44], text: 'LIGHT PIPE', on: ledOn(st) },
+    { cands: nearArc(TH, 10.5, 44), text: 'PIEZO DISC', on: horn },
+    { cands: nearArc(TH, THR, 47), text: 'HORN CAVITY', on: horn },
+    { cands: grilleHoles().map(p => [...p, ZF + .1]), text: 'SOUNDER GRILLE', on: horn },
+    { at: [109, TH[1], 30], text: 'HORN LEADS', on: horn },
+    { cands: [[bp[0] + 12, bp[1] + 4, bp[2] + 17.5], [bp[0] + 44, bp[1] + 4, bp[2] + 17.5], [bp[0] + 12, bp[1] + 22, bp[2] + 17.5], [bp[0] + 44, bp[1] + 22, bp[2] + 17.5]], text: '9V BATTERY', on: !!st.seq },
+    { cands: [[73.6, 67.5, 43.3], [73.6, 80.2, 43.7]], text: 'BATTERY CLIPS', on: st.batIn },
+    { cands: [[63, 66.5, 30], [63, 83.5, 30], [65.5, 67, 39], [65.5, 81.5, 39]], text: 'BATTERY LEADS', on: st.batIn && horn },
+    { cands: [[TR.x1, TR.y0, 40], [TR.x1, TR.y1, 40], [TR.x0, TR.y0, 40], [TR.x0, TR.y1, 40]], text: 'BATTERY BOX', on: false },
+    { cands: st.door > .01 ? [avg(doorCorners(st.door*108))] : [[72, 64, ZF], [118, 64, ZF], [72, 86, ZF], [118, 86, ZF]], text: 'BATTERY DOOR', on: st.door > .01 },
+    { cands: PCB_POLY.filter((p, i) => i % 4 === 0).map(p => [p[0], p[1], PCBZ[1]]), text: 'CIRCUIT BOARD', on: st.batIn },
+    { cands: STANDS.map(p => [...p, 17]), text: 'STANDOFF', on: false },
+    { at: [...pol2(AO, 47, -60), 13], text: 'MOUNTING PLATE', on: false },
+    { at: [MSCREWS[0][0], MSCREWS[0][1], 13], text: 'MOUNTING SCREW', on: false },
+    { cands: LUGS.map(a => [...pol2(AO, 54, a), 13]), text: 'TWIST-LOCK TAB', on: false } ]); }
+function surfaceLabels(st){
+  return [ { at: [TB[0], TB[1], ZF + 3 - 2*st.btn], text: 'TEST BUTTON', on: st.btn > .5 },
+    { at: [LEDW[0], LEDW[1], ZF], text: 'LED WINDOW', on: ledOn(st) },
+    { at: [TH[0], TH[1], ZF], text: 'SOUNDER GRILLE', on: hornOn(st) },
+    { at: [95, 75, ZF], text: 'BATTERY DOOR', on: st.door > .01 },
+    { at: [...pol2(AO, 62, YAW + 28), 27], text: 'SMOKE VENTS', on: st.dout > .3 },
+    ...(st.can ? [{ at: [CANX + st.canDX + 40, CANY, CANZ + 20], text: 'SMOKE TESTER', on: st.can === 'spray' }] : []) ]; }
+// callout bounds: a square whose outline on screen is about as wide as the round case, from any yaw
+const lblB = () => { const h = 62/(Math.abs(Math.cos(saRad(YAW))) + Math.abs(Math.sin(saRad(YAW)))); return [AO[0] - h, AO[0] + h, AO[1] - h, AO[1] + h, CEIL_H, ZF + 4]; };
+
+/* ---------- the smoke-test can (comes in for the puff) and the smoke ---------- */
+function canItems(st){
+  if (st.canDX >= CAN_OFF - .5) return [];
+  const x0 = CANX + st.canDX, y = CANY, z = CANZ, spray = st.can === 'spray';
+  const items = [
+    { box: [[x0, y - 4, z - 4], [x0 + 4, y + 4, z + 4]], svg: cylX(x0, x0 + 4, y, z, 4, spray ? matOf('#f4b829') : DARK, toneI, .8, 16) + (facing([-1,0,0]) ? fill(pd(ringAt([y, z], 0, 1, 8).map(([a, b]) => [x0 - .05, a, b])), INK) : '') },
+    { box: [[x0 + 4, y - 13, z - 13], [x0 + 14, y + 13, z + 13]], svg: cylX(x0 + 4, x0 + 14, y, z, 13, CERAMIC, toneI, 1, 28) },
+    { box: [[x0 + 14, y - 20, z - 20], [x0 + 22, y + 20, z + 20]], svg: rod([x0 + 14, y, z], [x0 + 22, y, z], 13, METAL, toneI, 1, 20, 28) },
+    { box: [[x0 + 22, y - 20, z - 20], [x0 + 95, y + 20, z + 20]], svg: cylX(x0 + 22, x0 + 95, y, z, 20, CANM, toneI, 1.4, 32)
+      + cylX(x0 + 40, x0 + 72, y, z, 20.2, CERAMIC, toneI, .8, 32) } ];
+  const a = 1 - st.canDX/CAN_OFF;
+  return a > .99 ? items : items.map(it => ({ ...it, svg: `<g opacity="${f(a)}">${it.svg}</g>` })); }
+function puffItems(st){
+  return st.puffs.map(p => { const [X, Y] = P(p.x, p.y, p.z), a = Math.max(0, Math.min(1, p.life - p.age)) * Math.min(1, p.age*4), r = p.r*CAM_K;
+    return { box: [[p.x - p.r, p.y - p.r, p.z - p.r], [p.x + p.r, p.y + p.r, p.z + p.r]],
+      svg: `<g opacity="${f(.75*a)}"><circle cx="${f(X)}" cy="${f(Y)}" r="${f(r)}" fill="#c9c3b8"/><circle cx="${f(X - r*.3)}" cy="${f(Y - r*.3)}" r="${f(r*.55)}" fill="#ddd8ce"/>`
+        + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r)}" fill="none" stroke="${INK}" stroke-width=".6" opacity=".5"/></g>` }; }); }
+// sound: rings rising off the grille while the horn is on
+function soundRings(st){
+  if (!hornOn(st)) return '';
+  let s = '';
+  for (let i = 0; i < 3; i++){ const t = (st.clock*2.2 + i/3) % 1, r = 15 + 28*t, z = ZF + 2 + 10*t;
+    const [h0, h1] = [YAW - 120, YAW + 120];
+    const arc = Array.from({length: 25}, (_, j) => [...pol2(TH, r, h0 + (h1 - h0)*j/24), z]);
+    s += `<path d="${pd(arc, false)}" fill="none" stroke="${INK}" ${mw(1.4)} stroke-linecap="round" opacity="${f(1 - t)}"/>`; }
+  return s; }
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0);
+  const BTOP = boardTop(0, 0, CEIL_W, CEIL_W, CEIL_H, 6);
+  let s = board(0, 0, CEIL_W, CEIL_W, CEIL_H, 6, CEILM);
+  // faint plaster joint across the ceiling patch
+  s += line([[0, 150, CEIL_H + .02], [CEIL_W, 150, CEIL_H + .02]], .5).replace('stroke-width="0.5"', 'stroke-width="0.5" opacity=".35"');
+  const shadowPts = [...ringAt(AO, 13, 59, 24), ...ringAt(AO, 37, 62, 24), ...ringAt(AO, ZF, 46.5, 24)];
+  let sh = castShadow(shadowPts, CEIL_H, BTOP);
+  if (st.canDX < CAN_OFF - .5) sh += castShadow([[CANX + st.canDX, CANY - 20, CANZ - 20], [CANX + st.canDX + 95, CANY + 20, CANZ + 20], [CANX + st.canDX, CANY + 20, CANZ + 20], [CANX + st.canDX + 95, CANY - 20, CANZ - 20],
+    [CANX + st.canDX + 95, CANY + 20, CANZ - 20], [CANX + st.canDX, CANY - 20, CANZ + 20]], CEIL_H, BTOP);
+  s += sh;
+  // the mounting plate peeks out under the case
+  s += cyl(AO[0], AO[1], CEIL_H, 13, 48, PLATEM, toneI, .9, 48);
+  let mid = saBody(st, m);
+  if (k > 0){
+    const R0 = ringAt(AO, 13, 59), far = `<g opacity="${f(.5*k)}">` + RINGS.slice(0, -1).map((r, i) => loft(ringAt(AO, ...r), ringAt(AO, ...RINGS[i+1]), n => mix(toneI(n.map(v => -v), BODYM), '#f2efe7', .55), true)).join('')
+      + fill(pd(R0), mix(BODYM.d, '#f2efe7', .5)) + `</g>`;
+    mid = far + `<g opacity="${f(k)}">${saMech(st)}</g>` + `<g opacity="${f(1 - .8*k)}">${mid}</g>` + `<g opacity="${f(.6*k)}">${hullInk(RINGS.flatMap(([z, r]) => ringAt(AO, z, r, 32)), 2.6)}</g>`;
+  }
+  const items = [{ box: [[AO[0] - 62, AO[1] - 62, 13], [AO[0] + 62, AO[1] + 62, ZF]], svg: mid }];
+  // the raised test / hush button (drawn over the case and over the see-through)
+  const bz = ZF + 3 - 2*st.btn;
+  items.push({ box: [[TB[0] - TBR, TB[1] - TBR, ZF], [TB[0] + TBR, TB[1] + TBR, bz]], svg: act('test', cyl(TB[0], TB[1], ZF, bz, TBR, m, toneI, 1.1, 36)
+    + (facing([0,0,1]) ? txZ(TB[0] - 1, TB[1], bz + .05, 'TEST', 3.6, INK, 800) + txZ(TB[0] + 4.2, TB[1], bz + .05, 'HUSH', 3.6, INK, 800) : '')) });
+  // the open battery door
+  if (st.door > .001){ const dc = doorCorners(st.door*108);
+    items.push({ box: aabb(dc), svg: act('door', saHexa(dc, BODYM, tone, 1)) }); }
+  // the battery above the face (lifted out, carried away, brought in)
+  { const bp = batPos(st);
+    if (bp[2] + 17.5 > ZF + .05 && st.batDX < BAT_OFF - .5){ const zc = bp[2] < ZF ? ZF + .05 : -1e9;
+      items.push({ box: [[bp[0], bp[1], Math.max(bp[2], ZF)], [bp[0] + 48.5, bp[1] + 26.5, bp[2] + 17.5]], svg: `<g opacity="${f(1 - st.batDX/BAT_OFF)}">${saBattery(...bp, st.batNew, zc)}</g>` }); } }
+  items.push(...canItems(st), ...puffItems(st));
+  s += byDepth(items);
+  s += soundRings(st);
+  if (k > .6) s += xrCallouts(insideLabels(st), lblB());
+  else s += xrCallouts(surfaceLabels(st), lblB());
+  return s; }
+
+/* ---------- behaviour: one state object, one clock ---------- */
+let ui = null, loopOn = false;
+const active = st => !!(st.can || st.puffs.length || st.dout > .02 || st.cham > .02 || st.alarm || st.hush > 0 || st.testT >= 0 || st.btn > 0
+  || st.chirp > 0 || st.blink > 0 || st.power > 0 || st.seq);
+function step(st, dt){
+  st.clock += dt;
+  // the can: in, spray, out
+  if (st.can){ st.canT += dt;
+    if (st.can === 'in'){ st.canDX = CAN_OFF*(1 - ease(Math.min(1, st.canT/.5))); if (st.canT >= .5){ st.can = 'spray'; st.canT = 0; st.emit = 0; } }
+    else if (st.can === 'spray'){ st.canDX = 0; st.dout += 4.6*dt; st.emit += dt*22;
+      while (st.emit >= 1){ st.emit--; const a = (Math.random() - .5)*.7, v = 70 + Math.random()*40;
+        st.puffs.push({ x: CANX - 2, y: CANY + (Math.random() - .5)*4, z: CANZ + (Math.random() - .5)*4, vx: -v*Math.cos(a), vy: v*Math.sin(a), vz: -8 - Math.random()*10, r: 3, age: 0, life: 3.2 + Math.random()*2 }); }
+      if (st.canT >= 1.2){ st.can = 'out'; st.canT = 0; } }
+    else if (st.can === 'out'){ st.canDX = CAN_OFF*ease(Math.min(1, st.canT/.6)); if (st.canT >= .6){ st.can = null; st.canDX = CAN_OFF; } } }
+  // smoke puffs: slow down, spread, rise to the ceiling (-z here), slide round the case
+  for (const p of st.puffs){ p.age += dt; const dr = Math.exp(-dt*1.5);
+    p.vx *= dr; p.vy *= dr; p.vz = p.vz*dr - 5*dt;
+    p.x += p.vx*dt; p.y += p.vy*dt; p.z += p.vz*dt; p.r = 3 + 11*Math.min(1, p.age/2.2);
+    p.z = Math.max(CEIL_H + 2 + p.r*.4, p.z);
+    const rx = p.x - AO[0], ry = p.y - AO[1], rr = Math.hypot(rx, ry), lim = 62 + p.r*.6;
+    if (rr < lim && p.z < ZF + 4){ p.x = AO[0] + rx/rr*lim; p.y = AO[1] + ry/rr*lim; const vn = (p.vx*rx + p.vy*ry)/rr; if (vn < 0){ p.vx -= vn*rx/rr; p.vy -= vn*ry/rr; } } }
+  st.puffs = st.puffs.filter(p => p.age < p.life);
+  // smoke near the vents, and in the chamber behind the mesh and labyrinth (a lag)
+  st.dout *= Math.exp(-dt/5); st.cham += (st.dout - st.cham)*Math.min(1, dt/1.1);
+  if (st.dout < .02 && st.cham < .02 && !st.can){ st.dout = 0; st.cham = 0; }
+  if (st.hush > 0){ st.hush = Math.max(0, st.hush - dt); if (st.cham >= 6) st.hush = 0; }
+  if (st.batIn){ const was = sounding(st);
+    if (!st.alarm && st.cham >= (st.hush > 0 ? 6 : 2.5)) st.alarm = true;
+    if (st.alarm && st.cham < 1.5){ st.alarm = false; st.hush = Math.min(st.hush, 0); }
+    if (sounding(st) && !was) st.alarmT = 0; else st.alarmT += dt; }
+  if (st.testT >= 0){ st.testT += dt; st.btn = 1; if (st.testT > 2.7){ st.testT = -1; } }
+  else st.btn = Math.max(0, st.btn - dt/.3);
+  st.chirp = Math.max(0, st.chirp - dt); st.blink = Math.max(0, st.blink - dt); st.power = Math.max(0, st.power - dt);
+  // battery swap
+  if (st.seq){ st.seqT += dt; const T = st.seqT, sq = st.seq, e = d => ease(Math.min(1, T/d));
+    if (sq === 'open'){ st.door = e(.5); if (T >= .5) next('lift'); }
+    else if (sq === 'lift'){ st.batIn = false; st.alarm = false; st.batZ = 42*e(.6); if (T >= .6) next('away'); }
+    else if (sq === 'away'){ st.batDX = BAT_OFF*e(.5); if (T >= .5){ st.batNew = true; st.bat = 9.5; st.lowHush = false; next('come'); } }
+    else if (sq === 'come'){ st.batDX = BAT_OFF*(1 - e(.5)); if (T >= .5) next('drop'); }
+    else if (sq === 'drop'){ st.batZ = 42*(1 - e(.6)); if (T >= .6){ st.batIn = true; st.power = .2; next('close'); } }
+    else if (sq === 'close'){ st.door = 1 - e(.5); if (T >= .5){ st.door = 0; st.seq = null; } } }
+  function next(p){ st.seq = p; st.seqT = 0; }
+}
+function runLoop(){
+  if (loopOn || !ui || ui.st.still) return; loopOn = true;
+  ui.animate(dt => { const st = ui.st; step(st, dt); if (!active(st)){ loopOn = false; return false; } return true; });
+}
+const noBattery = st => !st.batIn ? (ui.flash(st.seq ? 'Wait — the battery is being changed' : 'No battery — the alarm is dead'), true) : false;
+function test(st){
+  if (st.seq) return ui.flash('Wait — the battery is being changed');
+  if (noBattery(st)) return;
+  if (sounding(st)) return hush(st, true);
+  st.testT = 0; st.btn = 1; runLoop();
+}
+function hush(st, fromTest){
+  if (st.seq) return ui.flash('Wait — the battery is being changed');
+  if (noBattery(st)) return;
+  st.btn = 1;
+  if (sounding(st)){
+    if (st.cham >= 6){ ui.flash('Too much smoke to hush — it keeps sounding'); runLoop(); return; }
+    st.hush = 12; if (fromTest) ui.flash('Same button: during an alarm it hushes'); runLoop(); return; }
+  if (st.alarm && st.hush > 0){ ui.flash('Already hushed'); runLoop(); return; }
+  if (st.bat < 7.8 && !st.lowHush){ st.lowHush = true; ui.flash('Low-battery chirp hushed — replace the battery soon'); runLoop(); return; }
+  ui.flash('Nothing to hush — the press runs a test'); st.testT = 0; runLoop();
+}
+function blowSmoke(st){
+  if (st.can) return ui.flash('One puff at a time');
+  st.can = 'in'; st.canT = 0; runLoop();
+}
+function replaceBattery(st){
+  if (st.seq) return ui.flash('Already changing the battery');
+  st.seq = 'open'; st.seqT = 0; st.testT = -1; runLoop();
+}
+
+ui = mountFigure({
+  fig: '07', title: 'Smoke alarm', turn: 'full',
+  size: [CEIL_W, CEIL_W, 92], center: [CEIL_W/2, CEIL_W/2], palette: 'tomato',
+  state: { bat: 7.4, batIn: true, batZ: 0, batDX: 0, batNew: false, door: 0, seq: null, seqT: 0, dout: 0, cham: 0, alarm: false, alarmT: 0,
+    hush: 0, testT: -1, btn: 0, chirp: 0, blink: 0, power: 0, lowHush: false, can: null, canT: 0, canDX: CAN_OFF, emit: 0, puffs: [], clock: 0 },
+  scene,
+  readout: st => sounding(st) ? 'alarm' : st.hush > 0 ? 'hushed' : 'standby',
+  buttons: [
+    { label: 'Press test', onClick: st => test(st) },
+    { label: 'Blow smoke', onClick: st => blowSmoke(st) },
+    { label: 'Hush', onClick: st => hush(st, false) },
+    { label: 'Replace battery', onClick: st => replaceBattery(st) } ],
+  acts: { test: st => test(st), door: st => replaceBattery(st) },
+  params: (st, q) => {
+    if (q.has('smoke')){ st.dout = st.cham = +q.get('smoke'); st.alarm = st.cham >= 2.5; st.alarmT = .2; }
+    if (q.get('hush') === '1') st.hush = 12;
+    if (q.get('test') === '1'){ st.testT = .2; st.btn = 1; }
+    if (q.has('door')) st.door = +q.get('door');
+    if (q.has('lift')){ st.batZ = +q.get('lift'); st.batIn = false; }
+    if (q.has('clock')) st.clock = +q.get('clock');
+    if (q.get('fresh') === '1'){ st.bat = 9.5; st.batNew = true; }
+    if (q.get('can') === '1'){ st.can = 'spray'; st.canDX = 0; st.canT = 0; }
+  },
+});
+// screenshots: ?run=smoke,test,hush,battery&at=seconds plays those buttons on a simulated clock and holds that frame
+{ const q = new URLSearchParams(location.search);
+  if (q.has('run')){ const st = ui.st, A = { smoke: blowSmoke, test, hush: st => hush(st, false), battery: replaceBattery }; st.still = true;
+    const at = (q.get('at') || '0').split(',').map(Number);
+    q.get('run').split(',').forEach((n, i) => { const t = at[i] || 0; while (st.clock < t - 1e-6) step(st, 1/30); A[n](st); });
+    const tEnd = at[at.length - 1] + +(q.get('hold') || 0); while (st.clock < tEnd - 1e-6) step(st, 1/30); ui.render(); }
+  else if (active(ui.st)) runLoop(); }
+// standby: the LED blinks now and then; a tired battery chirps
+setInterval(() => { const st = ui.st; if (!st.batIn || st.seq || st.still) return;
+  st.blink = .15; if (st.bat < 7.8 && !st.lowHush && !st.alarm && st.testT < 0) st.chirp = .12; runLoop(); }, 6500);
+xrMount(() => ui, () => '');
+</script><style>@media (max-width:560px),(pointer:coarse){#art{filter:none!important}.ctl:has(#wb){display:none!important}}</style><style>@media (max-width:560px){html body .kpad{width:100%;box-sizing:border-box;justify-content:space-between;gap:10px;margin:10px 0 0;padding:0;border:0;background:none;box-shadow:none}
+html body .kpad .dp{display:flex;gap:8px}html body .kpad .hub{display:none}
+html body .kpad .k{width:46px;height:42px;font-size:14px;border-radius:9px}
+html body .kpad .go{width:auto;height:42px;padding:0 26px;border-radius:999px;flex-direction:row;font-size:13px;box-shadow:0 3px 0 var(--ink),inset 0 -4px 0 rgba(0,0,0,.18)}
+html body .kpad .go small{display:none}html body .kpad .go.down{transform:translateY(2px);box-shadow:0 1px 0 var(--ink),inset 0 -2px 0 rgba(0,0,0,.18)}}</style>
+<script>requestAnimationFrame(() => { const o = { "◀": 0, "▲": 1, "▼": 2, "▶": 3 }; for (const k of document.querySelectorAll(".kpad .k")) k.style.order = o[k.textContent] ?? 0; });</script><style>@media (max-width:560px){.vset{margin:8px 0 2px!important}}</style><script>requestAnimationFrame(() => { const v = document.querySelector(".vset"), s = document.getElementById("stats"), z = document.querySelector(".zwrap"); if (!v) return; if (z && z.parentNode === v.parentNode){ const kp = document.querySelector(".kpad"); if (kp && innerWidth <= 560){ z.after(kp); kp.after(v); } else z.after(v); } else if (s && s.parentNode) s.parentNode.insertBefore(v, s); });</script><script>(() => { const fit = () => { const fig = document.getElementById("fig"); if (!fig) return;
+  fig.style.maxHeight = ""; if (innerWidth <= 560) return;
+  const extra = document.documentElement.scrollHeight - fig.clientHeight, room = innerHeight - extra - 12;
+  if (room < fig.clientHeight) fig.style.maxHeight = Math.max(320, room) + "px"; };
+  addEventListener("load", () => requestAnimationFrame(fit)); addEventListener("resize", fit); setTimeout(fit, 400); })();</script><style>.zwrap{position:relative}.zwrap.on{overflow:hidden}@media (min-width:561px){.zwrap.on{overflow:visible}html.zoomed,html.zoomed body{overflow:hidden}}.zwrap #fig{transform-origin:0 0}
+.zchip{position:absolute;right:2px;bottom:6px;display:flex;align-items:center;gap:2px;font:600 11px ui-monospace,Menlo,monospace;
+ background:rgba(242,239,231,.88);border:1px solid rgba(35,30,22,.25);border-radius:999px;padding:2px;z-index:3;user-select:none}
+.zchip button{all:unset;cursor:pointer;min-width:22px;height:22px;line-height:22px;text-align:center;border-radius:999px;color:#231e16}
+.zchip button:hover{background:rgba(35,30,22,.08)}.zchip .zp{min-width:44px}</style>
+<script>(() => { const fig = document.getElementById("fig"); if (!fig) return;
+  const wrap = document.createElement("div"); wrap.className = "zwrap"; fig.parentNode.insertBefore(wrap, fig); wrap.appendChild(fig);
+  const chip = document.createElement("div"); chip.className = "zchip";
+  chip.innerHTML = '<button class="zm" aria-label="Zoom out">−</button><button class="zp" aria-label="Reset zoom">100%</button><button class="zi" aria-label="Zoom in">+</button>';
+  wrap.appendChild(chip);
+  let s = 1, tx = 0, ty = 0;
+  const box = () => ({ w: fig.clientWidth, h: fig.clientHeight });
+  const apply = () => { const { w, h } = box(); s = Math.min(5, Math.max(1, s));
+    if (s <= 1.001){ s = 1; tx = ty = 0; } else { tx = Math.min(0, Math.max(w - w*s, tx)); ty = Math.min(0, Math.max(h - h*s, ty)); }
+    fig.style.transform = s === 1 ? "" : `translate(${tx}px,${ty}px) scale(${s})`; wrap.classList.toggle("on", s > 1); document.documentElement.classList.toggle("zoomed", s > 1);   /* desktop: nothing is cut off, the page just does not scroll while zoomed */
+    chip.querySelector(".zp").textContent = Math.round(s*100) + "%"; grain(); };
+  // the paper grain is noise in drawing units: zoomed, it would blow up into blotches, so its frequency rises with the
+  // zoom and it stays the same fine grain on screen (the filter is rebuilt on resize, so this re-applies then too)
+  const grain = () => { const fl = document.getElementById("hand"); if (!fl) return;
+    const ts = [...fl.querySelectorAll("feTurbulence")]; if (!ts.length) return;
+    const g = ts.find(t => t.getAttribute("result") === "n1") || ts.reduce((a, b) => parseFloat(b.getAttribute("baseFrequency")) > parseFloat(a.getAttribute("baseFrequency")) ? b : a);
+    if (!g.dataset.f0) g.dataset.f0 = g.getAttribute("baseFrequency");
+    const v = (parseFloat(g.dataset.f0) * s).toFixed(4); if (g.getAttribute("baseFrequency") !== v) g.setAttribute("baseFrequency", v); };
+  const fd = document.getElementById("fdefs"); if (fd) new MutationObserver(() => grain()).observe(fd, { childList: true, subtree: true });
+  const zoomAt = (k, px, py) => { const s2 = Math.min(5, Math.max(1, s*k)); tx = px - (px - tx)*s2/s; ty = py - (py - ty)*s2/s; s = s2; apply(); };
+  const local = e => { const r = wrap.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  wrap.addEventListener("wheel", e => {
+    if (e.ctrlKey || e.metaKey){ e.preventDefault(); const [x, y] = local(e); zoomAt(Math.exp(-Math.max(-50, Math.min(50, e.deltaY))*.006), x, y);   /* a wheel notch ~1.35x, a pinch stays smooth */ }
+    else if (s > 1){ e.preventDefault(); tx -= e.deltaX; ty -= e.deltaY; apply(); } }, { passive: false });
+  const center = () => { const { w, h } = box(); return [w/2, h/2]; };
+  chip.querySelector(".zi").onclick = () => zoomAt(1.5, ...center());
+  chip.querySelector(".zm").onclick = () => zoomAt(1/1.5, ...center());
+  chip.querySelector(".zp").onclick = () => { s = 1; apply(); };
+  chip.addEventListener("pointerdown", e => e.stopPropagation());
+  // two fingers: pinch to zoom and move to pan; the figure's own one-finger turn waits while they are down
+  const pts = new Map(); let pinch = null;
+  const two = () => { const [a, b] = [...pts.values()]; return { d: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x)/2, y: (a.y + b.y)/2 }; };
+  wrap.addEventListener("pointerdown", e => { if (e.pointerType !== "touch") return; pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 2){ pinch = two(); e.stopPropagation(); } }, true);
+  wrap.addEventListener("pointermove", e => { if (!pts.has(e.pointerId)) return; pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && pts.size === 2){ e.stopPropagation(); e.preventDefault(); const n = two(), r = wrap.getBoundingClientRect();
+      tx += n.x - pinch.x; ty += n.y - pinch.y; zoomAt(n.d / pinch.d, n.x - r.left, n.y - r.top); pinch = n; } }, true);
+  const up = e => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; };
+  wrap.addEventListener("pointerup", up, true); wrap.addEventListener("pointercancel", up, true);
+  addEventListener("resize", apply);
+})();</script><style>.toast{position:absolute!important;left:50%!important;right:auto!important;top:6%!important;bottom:auto!important;z-index:4!important;
+  transform:translate(-50%,8px)!important;opacity:0!important;pointer-events:none!important;display:flex!important;align-items:center;gap:8px;
+  width:max-content;max-width:min(86%,440px);white-space:normal!important;font:600 12.5px/1.35 ui-monospace,Menlo,monospace!important;
+  letter-spacing:.01em!important;text-transform:none!important;color:#231e16!important;background:#fff1bf!important;
+  border:1px solid rgba(35,30,22,.28)!important;border-radius:8px!important;box-shadow:0 8px 22px rgba(35,30,22,.16)!important;
+  padding:7px 13px 7px 9px!important;transition:opacity .18s ease,transform .18s ease!important}
+.toast::before{content:"!";flex:none;width:17px;height:17px;border-radius:50%;background:#231e16;color:#fff1bf;font:800 11px/17px ui-monospace,Menlo,monospace;text-align:center}
+.toast.show{opacity:1!important;transform:translate(-50%,0)!important}</style>
+<script>(() => { const cap = () => { const t = document.getElementById("toast"); if (!t) return; const s = t.textContent;
+  if (s && s[0] !== s[0].toUpperCase()) t.textContent = s[0].toUpperCase() + s.slice(1); };
+  let seen = null; const watch = () => { const t = document.getElementById("toast"); if (!t || t === seen) return; seen = t;
+    const zw = document.querySelector(".zwrap"); if (zw && t.parentNode !== zw) zw.appendChild(t);   // sits on the figure itself
+    new MutationObserver(cap).observe(t, { childList: true, characterData: true, subtree: true }); cap(); };
+  watch(); const st = document.querySelector(".stage"); if (st) new MutationObserver(watch).observe(st, { childList: true }); })();</script><script>(() => { const fix = () => { const art = document.getElementById('art'); if (!art) return;
+    for (const el of art.querySelectorAll('[fill="#41538f" i]')){ let top = null, a = el.parentElement;
+      while (a && a !== art){ const o = a.getAttribute('opacity'); if (o !== null && +o < 1) top = a; a = a.parentElement; }
+      if (top) top.parentNode.insertBefore(el, top); } };
+  const go = () => { const art = document.getElementById('art'); if (!art) return setTimeout(go, 50); fix(); new MutationObserver(fix).observe(art, { childList: true }); };
+  if (document.readyState === 'loading') addEventListener('DOMContentLoaded', go); else go(); })();</script><style>.lgd{display:none}@media (max-width:560px){html:not(.nolabels) .lgd.has{display:grid}}
+.lgd{grid-template-columns:1fr 1fr;gap:2px 8px;margin:4px 0 12px;font:700 10.5px/1.25 ui-monospace,Menlo,monospace;letter-spacing:.03em;color:#231e16}
+.lgd button{all:unset;display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px;border-radius:7px;-webkit-tap-highlight-color:transparent}
+.lgd b{flex:none;min-width:17px;height:17px;padding:0 3px;box-sizing:border-box;border-radius:999px;border:1.2px solid #231e16;background:#fff4d6;text-align:center;font:800 10px/15px ui-monospace,Menlo,monospace}
+.lgd .on b{background:var(--accent,#f4b829)}.lgd .sel{background:rgba(35,30,22,.09)}.lgd .sel b{background:#231e16;color:#fff4d6}</style>
+<script>(() => { const fig = document.getElementById("fig"); if (!fig) return;
+  const lg = document.createElement("div"); lg.className = "lgd"; const at = document.querySelector(".zwrap") || fig; at.parentNode.insertBefore(lg, at.nextSibling);
+  const hs = document.createElement("style"); document.head.appendChild(hs);
+  let sig = "", sel = 0, q = 0, names = "", num = new Map();
+  // the figure's own numbers count every label it has ever drawn; here they are reset to 1, 2, 3... down the left
+  // column then the right, each time the set of labels changes (so they hold still while the figure turns)
+  const renum = () => { if (innerWidth > 560) return; const gs = [...fig.querySelectorAll(".tag[data-t]")];
+    const key = gs.map(g => g.dataset.t).sort().join("|");
+    if (key !== names){ names = key; num = new Map(); const vb = fig.viewBox.baseVal, cx = vb.x + vb.width/2;
+      const at = g => { const r = g.querySelector("rect"); return r ? [+r.getAttribute("x") + r.getAttribute("width")/2, +r.getAttribute("y")] : [0, 0]; };
+      gs.map(g => [g.dataset.t, ...at(g)]).sort((a, b) => ((a[1] > cx) - (b[1] > cx)) || a[2] - b[2]).forEach(([t]) => { if (!num.has(t)) num.set(t, num.size + 1); }); }
+    for (const g of gs){ const n = String(num.get(g.dataset.t)); if (g.dataset.n !== n){ g.dataset.n = n; const t = g.querySelector("text"); if (t) t.textContent = n; } } };
+  const mark = () => { hs.textContent = sel ? `#fig .tag[data-n="${sel}"] rect{fill:#231e16!important}#fig .tag[data-n="${sel}"] text{fill:#fff4d6}#fig .tag[data-n="${sel}"] path{stroke-width:2.4}` : "";
+    for (const x of lg.children) x.classList.toggle("sel", +x.dataset.n === sel); };
+  const upd = () => { q = 0; const m = new Map();
+    if (innerWidth <= 560) for (const g of fig.querySelectorAll(".tag[data-n]")){ const n = +g.dataset.n; if (!m.has(n)) m.set(n, [g.dataset.t, g.classList.contains("on")]); }
+    const a = [...m].sort((x, y) => x[0] - y[0]), s = JSON.stringify(a); if (s === sig) return; sig = s;
+    lg.classList.toggle("has", a.length > 0);
+    lg.innerHTML = a.map(([n, [t, on]]) => `<button data-n="${n}" class="${on ? "on" : ""}"><b>${n}</b><span>${t}</span></button>`).join(""); mark(); };
+  lg.addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; sel = sel === +b.dataset.n ? 0 : +b.dataset.n; mark(); });
+  new MutationObserver(() => { renum(); if (!q) q = requestAnimationFrame(upd); }).observe(fig, { childList: true, subtree: true }); renum();
+  addEventListener("resize", () => { if (!q) q = requestAnimationFrame(upd); }); upd(); })();</script></body></html>
