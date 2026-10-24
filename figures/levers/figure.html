@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Levers</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. This is an explicit bench teaching adaptation of the 2016 Levers chapter, printed pages 18-21.
+   A vertical effort on a rigid beam rotates it on a transverse pin. The hanging load stays below its attachment.
+   Class 1 has effort, fulcrum, load. Class 2 has fulcrum, load, effort. Class 3 has fulcrum, effort, load.
+   At slow equilibrium E*dE = W*dL, where d is the horizontal distance to a vertical force line.
+   Lift prescribes a slow 12 degree stroke while an external operator supplies the indicated effort.
+   Lower reverses that stroke. Moving the fulcrum and changing class are unloaded teaching reconfiguration actions.
+   The operator supports the unchanged 100 N load, releases and refits the pins, then resumes the experiment.
+   They are not powered adjustments. No hidden drive is modelled. The empty beam's weight and bearing friction
+   are neglected in the ideal values, as are acceleration and the attachment masses. Arrows are schematic overlays.
+   The drawn pin, cheek plates, rail and screw fixings are representative teaching hardware, not book artwork.
+   PASCO ME-9502 manual experiments 6 and 12 support perpendicular arms, external effort and a pivoted balance arm.
+   PASCO ME-7034 supports a horizontal pivot shaft; ME-8949 supports movable loads on a teaching balance arm.
+   1988 is inaccessible and unverified. 1998 has not been individually checked. No edition union is claimed.
+   Parts, each held by another.
+   Structure. Bench board holds guide rail. Fulcrum shoe clamps the rail with four fixing screws.
+   Mechanism. Two cheek plates bolt to the shoe and hold the pivot pin. A plain sleeve in the selected beam hole
+   turns on the pin. The rigid beam has eleven transverse attachment holes. A retaining nut secures the pin.
+   Load. A cross pin in a beam hole carries a wire hanger and the 100 N mass. These are teaching load fixtures.
+   Effort. A cross pin through another hole carries a green grip for the external operator.
+   Force arrows, moment arm brackets and travel traces are overlays, excluded from the anatomy inventory. */
+const lvLayouts = [
+  {name:'FIRST CLASS', order:'E - F - L', pivots:[58,78], effort:8, load:108},
+  {name:'SECOND CLASS', order:'F - L - E', pivots:[8,28], effort:108, load:58},
+  {name:'THIRD CLASS', order:'F - E - L', pivots:[8,28], effort:58, load:108}
+];
+const lvWeight = 100, lvY = 26, lvZ = 43, lvStroke = 12*Math.PI/180;
+const lvBounds = pts => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i])))];
+function lvGeometry(st){
+  const layout=lvLayouts[st.kind], pivot=layout.pivots[st.setting], angle=lvStroke*st.lift;
+  const point=(u,y=lvY,w=0)=>[pivot+(u-pivot)*Math.cos(angle)-w*Math.sin(angle),y,lvZ+(u-pivot)*Math.sin(angle)+w*Math.cos(angle)];
+  const armE=Math.abs(layout.effort-pivot)*Math.cos(angle)/100, armL=Math.abs(layout.load-pivot)*Math.cos(angle)/100;
+  const effort=lvWeight*armL/armE;
+  return {layout,pivot,point,angle,armE,armL,effort,torque:lvWeight*armL,
+    travelE:Math.abs(layout.effort-pivot)*Math.sin(angle),travelL:Math.abs(layout.load-pivot)*Math.sin(angle)};
+}
+function lvBeamSegment(g,u0,u1,m){
+  const profile=rectUV(u0,-2,u1,2), a=profile.map(([u,w])=>g.point(u,24,w)), b=profile.map(([u,w])=>g.point(u,28,w));
+  let svg=loft(a,b,n=>tone(n,m));
+  const hole=(y)=>ellUV((u0+u1)/2,0,1.4,1.4,20).map(([u,w])=>g.point(u,y,w));
+  svg+=loft(hole(24),hole(28),n=>toneI(n,METAL),true);
+  const y=vis([0,1,0])?28:24, rim=y===28?b:a;
+  svg+=`<path d="${pd(rim)}${pd(hole(y))}" fill="${tone([0,Math.sign(y-26),0],m)}" fill-rule="evenodd"/>`;
+  svg+=ink(pd(hole(y)),.8)+line([g.point(u0,y,-2),g.point(u1,y,-2)],1)+line([g.point(u0,y,2),g.point(u1,y,2)],1);
+  if(u0===3)svg+=line([g.point(u0,y,-2),g.point(u0,y,2)],1);
+  if(u1===113)svg+=line([g.point(u1,y,-2),g.point(u1,y,2)],1);
+  return {box:lvBounds([...a,...b]),svg};
+}
+function lvSleeve(g){
+  const ring=(y,r)=>ellUV(g.pivot,0,r,r,20).map(([u,w])=>g.point(u,y,w));
+  const mat=matOf('#b89659'),near=vis([0,1,0])?28:24,outer=ring(near,1.35),inner=ring(near,1.02);
+  return loft(ring(24,1.35),ring(28,1.35),n=>toneI(n,mat))+
+    loft(ring(24,1.02),ring(28,1.02),n=>toneI(n,mat),true)+
+    `<path d="${pd(outer)}${pd(inner)}" fill="${mat.l}" fill-rule="evenodd"/>`+ink(pd(outer),.7)+ink(pd(inner),.5);
+}
+function lvArrow(a,b,col){
+  const [x0,y0]=P(...a),[x1,y1]=P(...b),d=Math.hypot(x1-x0,y1-y0),ux=(x1-x0)/d,uy=(y1-y0)/d,h=3;
+  return `<path d="M${f(x0)} ${f(y0)}L${f(x1)} ${f(y1)}" stroke="${col}" stroke-width="2" fill="none"/>`+
+    `<path d="M${f(x1)} ${f(y1)}L${f(x1-h*ux+h*.5*uy)} ${f(y1-h*uy-h*.5*ux)}L${f(x1-h*ux-h*.5*uy)} ${f(y1-h*uy+h*.5*ux)}Z" fill="${col}"/>`;
+}
+function lvText(at,text,col=INK){const [x,y]=P(...at);return `<text x="${f(x)}" y="${f(y)}" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="700" font-size="${f(8*INK_K)}" fill="${col}">${text}</text>`;}
+function lvOverlays(g){
+  const ep=g.point(g.layout.effort),lp=g.point(g.layout.load),down=g.layout.effort<g.pivot;
+  let svg=lvArrow([ep[0],38,ep[2]+(down?14:-14)],[ep[0],38,ep[2]],'#28765c')+
+    lvArrow([lp[0],38,lp[2]],[lp[0],38,lp[2]-14],'#c34835')+
+    lvText([ep[0],38,ep[2]+(down?17:-17)],'E '+g.effort.toFixed(1)+' N','#28765c')+
+    lvText([lp[0],38,lp[2]-17],'L 100 N','#c34835');
+  for(const [p,arm,z,key,col] of [[ep,g.armE,65,'dE','#28765c'],[lp,g.armL,59,'dL','#c34835']]){
+    svg+=`<path d="${pd([[p[0],38,p[2]],[p[0],38,z+3]],false)}" fill="none" stroke="${col}" stroke-width=".7" stroke-dasharray="2 1.5"/>`;
+    svg+=line([[g.pivot,38,z-1.5],[g.pivot,38,z+1.5]],.8)+line([[p[0],38,z-1.5],[p[0],38,z+1.5]],.8)+
+      line([[g.pivot,38,z],[p[0],38,z]],1).replace(INK,col)+
+      line([[p[0]-Math.sign(p[0]-g.pivot)*2,38,z],[p[0]-Math.sign(p[0]-g.pivot)*2,38,z+2],[p[0],38,z+2]],.7)+
+      lvText([(g.pivot+p[0])/2,38,z+2.5],key+' '+(arm*100).toFixed(1)+' cm',col);
+  }
+  for(const [u,travel,key] of [[g.layout.effort,g.travelE,'E'],[g.layout.load,g.travelL,'L']]){
+    const p=g.point(u);
+    svg+=`<path d="${pd([[p[0],44,lvZ],[p[0],44,p[2]]],false)}" stroke="#6e6394" stroke-dasharray="1.5 1.5" stroke-width="1" fill="none"/>`+
+      lvText([p[0],44,Math.min(lvZ,p[2])-5],key+' travel '+travel.toFixed(1)+' cm','#6e6394');
+  }
+  return `<g data-overlay="forces-arms-travel">${svg}</g>`;
+}
+function lvScene(st,m){
+  const g=lvGeometry(st),k=ease(st.xr||0),parts=[],labels=[];
+  const put=(bounds,svg,ghost=false)=>parts.push({box:bounds,svg:ghost?`<g opacity="${1-.78*k}">${svg}</g>`:svg});
+  const bx=(a,b,mat,ghost=false)=>put([a,b],box(...a,...b,mat,toneI,1),ghost);
+  const axle=(u,y0,y1,r,mat)=>{const a=g.point(u,y0),b=g.point(u,y1);put(lvBounds([[a[0]-r,y0,a[2]-r],[b[0]+r,y1,b[2]+r]]),rod(a,b,r,mat,toneI,1));};
+  let svg=board(0,0,120,58,3,4,WOOD);
+  svg+=castShadow([[3,24,43],[113,28,43],[g.pivot,18,3],[g.pivot,34,43]],3,boardTop(0,0,120,58,3,4));
+  bx([2,17,3],[118,35,5],matOf('#748ba0'));
+  bx([g.pivot-7,16,5],[g.pivot+7,36,8],PALS.cobalt,true);
+  for(const y of [18,32]){
+    bx([g.pivot-4,y,8],[g.pivot+4,y+2,46],m,true);
+    for(const u of [g.pivot-5,g.pivot+5])put([[u-.7,y-.7,8],[u+.7,y+.7,9]],cyl(u,y,8,9,.7,METAL,toneI,.7,6));
+  }
+  for(let i=0;i<11;i++){const p=lvBeamSegment(g,3+i*10,13+i*10,m);put(p.box,p.svg,true);}
+  axle(g.pivot,18,34,1,METAL);
+  put([[g.pivot-1.35,24,lvZ-1.35],[g.pivot+1.35,28,lvZ+1.35]],lvSleeve(g));
+  axle(g.pivot,34,35.5,1.8,DARK);
+  axle(g.layout.load,23,32,.9,METAL);
+  axle(g.layout.effort,23,34,.9,METAL);
+  axle(g.layout.effort,29,34,1.8,PALS.mint);
+  const lp=g.point(g.layout.load,30),ez=g.point(g.layout.effort,34);
+  for(const dy of [-1.5,1.5]){
+    const a=[lp[0],lp[1]+dy,lp[2]],b=[lp[0],lp[1]+dy,lp[2]-13];
+    put(lvBounds([[a[0]-.4,a[1]-.4,b[2]],[a[0]+.4,a[1]+.4,a[2]]]),rod(a,b,.3,METAL,toneI,.7));
+  }
+  put([[lp[0]-4,lp[1]-4,lp[2]-22],[lp[0]+4,lp[1]+4,lp[2]-13]],cyl(lp[0],lp[1],lp[2]-22,lp[2]-13,4,DARK,toneI,1.5));
+  svg+=byDepth(parts);
+  svg+=lvOverlays(g);
+  if(k>.6){
+    labels.push(
+      {at:[20,4,3],text:'BENCH BOARD'},
+      {at:[45,18,5],text:'GUIDE RAIL'},
+      {at:[g.pivot-6,17,7],text:'FULCRUM SHOE'},
+      {at:[g.pivot,19,28],text:'SUPPORT CHEEKS'},
+      {at:[g.pivot-5,18,9],text:'FIXING SCREWS'},
+      {at:g.point(83,28,2),text:'RIGID BEAM',on:st.moving},
+      {at:g.point(48,28),text:'ATTACHMENT HOLES'},
+      {at:g.point(g.pivot,21),text:'PIVOT PIN',on:st.moving},
+      {at:g.point(g.pivot,28),text:'PIVOT SLEEVE',on:st.moving},
+      {at:g.point(g.pivot,35),text:'RETAINING NUT'},
+      {at:g.point(g.layout.load,31),text:'LOAD CROSS PIN',on:st.moving},
+      {at:[lp[0],31.5,lp[2]-8],text:'LOAD HANGER',on:st.moving},
+      {at:g.point(g.layout.effort,23),text:'EFFORT CROSS PIN',on:st.moving},
+      {at:ez,text:'EFFORT GRIP',on:st.moving});
+    svg+=xrCallouts(labels,[20,100,18,34,5,46]);
+  }
+  return svg;
+}
+function lvMove(st,ui,target){
+  if(st.moving)return ui.flash('The lever is moving.');
+  if(st.lift===target)return ui.flash(target?'The load is raised. Lower it to reset.':'The load is already lowered.');
+  const start=st.lift;let elapsed=0;st.moving=true;
+  ui.animate(dt=>{elapsed=Math.min(1,elapsed+dt/1.8);st.lift=start+(target-start)*ease(elapsed);
+    if(elapsed===1){st.lift=target;st.moving=false;return false;}return true;});
+}
+function lvReconfigure(st,ui,change){
+  if(st.moving||st.lift>0)return ui.flash('Lower the load before refitting the pins.');
+  if(change){st.kind=(st.kind+1)%3;st.setting=0;}else st.setting=1-st.setting;
+  ui.flash('Teaching setup. Support the load and refit the pins.');
+}
+const ui=mountFigure({fig:'10',title:'Levers',turn:'full',size:[120,58,76],palette:'mustard',
+  state:{kind:0,setting:0,lift:0,moving:false},scene:lvScene,
+  stats:st=>{const g=lvGeometry(st);return [
+    {label:g.layout.name+' / '+g.layout.order,value:g.effort.toFixed(1)+' N / 100 N',small:true},
+    {label:'IDEAL E x dE = L x dL',value:g.torque.toFixed(2)+' = '+g.torque.toFixed(2)+' Nm',small:true},
+    {label:'VERTICAL TRAVEL E / L',value:g.travelE.toFixed(1)+' / '+g.travelL.toFixed(1)+' cm',small:true}];},
+  buttons:[{label:'Lift',onClick:(st,u)=>lvMove(st,u,1)},{label:'Lower',onClick:(st,u)=>lvMove(st,u,0)},
+    {label:'Move fulcrum',onClick:(st,u)=>lvReconfigure(st,u,false)},{label:'Change class',onClick:(st,u)=>lvReconfigure(st,u,true)}],
+  params:(st,q)=>{const n=Number(q.get('class'));if(Number.isInteger(n)&&n>=1&&n<=3)st.kind=n-1;
+    if(q.get('near')==='1')st.setting=1;if(q.get('lift')==='1')st.lift=1;}
+});
+xrMount(()=>ui,()=> '');
+const lvStyle=document.createElement('style');lvStyle.textContent='.stat.small .v{font-size:16px}.stat .k{font-size:9px}.stats{gap:7px}@media(max-width:560px){.stats{flex-wrap:wrap;gap:8px 16px}.stat.small .v{font-size:14px!important}.stat .k{font-size:8px}}';document.head.appendChild(lvStyle);
+</script></body></html>
