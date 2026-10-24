@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Galileo's drop</title></head><body>
+<script src="core.js"></script>
+<script>
+/* ---------- Truth first: a feather-and-ball vacuum tube on a bench stand ----------
+   1. A thick glass tube (1 m, 10 cm across) stands upright between two wooden posts, held at its middle by a steel
+      collar whose two stub axles (trunnions) sit in bearings on the posts, so the whole tube can be turned over.
+      The bottom is closed by a steel end cap with a foam cushion on it (a piezo disc under the foam hears each hit).
+      The top is a thick clear acrylic head. Inside the head a hinged trap flap carries a steel ball (2 cm, 33 g) and a
+      small feather (6 cm, 0.05 g). A spring bolt (the latch) holds the flap shut.
+   2. Release: the red button on top of the head pushes a rod through an O-ring gland; the rod's wedge pulls the latch
+      bolt back, the flap's torsion spring snaps it down out of the way faster than anything falls, and both objects
+      start falling at the same instant. A microswitch on the latch starts the stopwatch; the piezo stops it, once for
+      each hit (ball first, then feather).
+   3. In air both feel the same pull of gravity per kilogram (g = 9.81 m/s^2), but drag F = 1/2 rho Cd A v^2 is a big
+      share of the feather's tiny weight: it reaches its terminal speed (about 1 m/s) within a few centimetres, rocks
+      and drifts, and takes about 1 s to fall the 92.3 cm. The ball's terminal speed is about 60 m/s, so it falls
+      almost freely: 0.434 s.
+   4. Pumping: the hose runs from the pump manifold to the left bearing; the left trunnion is hollow and a glass side
+      arm from the tube runs into it, sealed by an O-ring that lets it turn. The pump is a hand piston pump: on the up
+      stroke the piston's leather cup seals, the space below grows, the inlet flap valve lifts and tube air expands
+      into the cylinder; on the down stroke the inlet valve shuts, the valve in the piston opens and that air is pushed
+      out above the piston and through the vents. Each stroke leaves V_tube / (V_tube + V_stroke) = 5.2 / 6.12 = 0.85
+      of the gas, so about 47 strokes take it from 101.3 kPa to the pump's limit near 0.2 kPa (the air left in the dead
+      space under the piston sets that limit). The Bourdon gauge on the manifold reads the absolute pressure.
+   5. Density goes with pressure, so the terminal speed goes as root(p0 / p): at 0.2 kPa the feather's is about 22 m/s.
+      Now both cover the 92.3 cm in 0.434 s and land within a few milliseconds of each other. With no air there is no
+      torque either: the feather falls flat, without rocking.
+   6. Reloading: with the flap open the tube is turned over on its trunnions; the objects fall to the head, the flap
+      lever (on a shaft through an O-ring in the head wall) is turned to close the flap and the latch springs over it,
+      then the tube is turned back and they settle on the flap. It works in vacuum too: the seals never open.
+   7. Slow motion: the replay at 1/8 speed marks where the ball is every 0.1 s: 4.9, 19.6, 44.1, 78.5 cm below the
+      release: 1, 4, 9, 16 times the first step (distance = 1/2 g t^2, Galileo's squares; the gaps go 1, 3, 5, 7).
+   Parts (each is held by another):
+   STAND   base board . two wooden posts on feet, screwed to the base . metre rule on the right post (0 at the flap) .
+           a bearing block on each post (left one with the hose barb and a rotary O-ring seal, right one with the cord)
+   TUBE    glass tube . steel collar and its two clamp lugs . hollow left trunnion with the glass side arm inside .
+           right trunnion . bottom end cap, its gasket, the foam cushion, the piezo disc under it, the cable gland .
+           acrylic head, its gasket . trap flap, hinge shaft through the head wall, torsion spring, flap lever outside
+           . latch bolt and its spring . release button, push rod, O-ring gland . microswitch . cables along the tube
+   PUMP    foot on the base . brass cylinder . cylinder cap with vents and rod gland . piston, leather cup seal, piston
+           flap valve . inlet flap valve in the floor . piston rod . T-handle . bracket to the left post
+   LINE    manifold block . pipe to the pump foot . hose barb . red vacuum hose up to the left bearing . Bourdon gauge
+           (C-tube, link, pinion, needle, dial) . bleed valve with its knob
+   TIMER   stopwatch case . LCD . board, microcontroller, crystal, battery . START and RESET keys . cord from the right
+           bearing down the post to its back
+   OVERLAYS air molecules in the tube (as many as the pressure says) . weight and air-drag arrows on each falling
+           object . the slow-motion marks every 0.1 s with their 1, 4, 9, 16 */
+
+/* ---------- geometry (x = depth, y = width, z = up; 1 unit = 1 cm) ---------- */
+const BW = 44, BD = 80, BH = 3, XC = 22, YC = 40, ZA = 62, TOPZ = 122;
+const P_ATM = 101.3, P_MIN = .2, GRAV = 9.81;
+const V_TUBE = 5.2, V_STROKE = Math.PI*3.5*3.5*24/1000, KEEP = V_TUBE/(V_TUBE + V_STROKE);
+const VT_BALL = 60, VT_FEATHER = 1.0;                 // terminal speeds in air, m/s
+const R_GL = 5, R_HD = 5.8, LZ_JOIN = 38, LZ_TOP = 56, LZ_ROOF = 53, HINGE = [-3.7, 44.15];
+const BALL_R = 1, BALL_TOP = [1.2, 0, 45.3], FEATH_TOP = [-1.6, 0, 44.4];
+const BALL_BOT = [1.2, 0, -47], FEATH_BOT = [-1.6, 0, -47.9], BALL_ROOF = [1.2, 0, 52], FEATH_ROOF = [-1.6, 0, 52.9];
+const DROP = (44.3 + 48)/100;                         // flap top to cushion top, m
+const Z0 = ZA + 44.3;                                 // the release height: 0 on the rule
+const SLOW = 8, MARKS = [.1, .2, .3, .4];
+const UPL = [19.5, 50, 24.5, 54], UPR = [19.5, 26, 24.5, 30];
+const PUMP = [20, 66], STROKE_T = .12;
+const TP = [[30,3],[44,3],[44,7],[33,12],[30,12]], TY = [6, 24], SLEN = Math.hypot(11, 5), SLN = [5/SLEN, 0, 11/SLEN];
+const FRAMEM = { l:'#efc98f', m:'#d3a263', d:'#9c6e3a' }, BRASSM = matOf('#d8b25a'), STEELM = { l:'#dfe3e4', m:'#b4bcbf', d:'#7d878b' };
+const BALLM = { l:'#d9dfe2', m:'#7f8a90', d:'#3b4348' }, PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, HOSE = '#b5482f', FOAM = matOf('#f2d36b'), LEATHER = matOf('#9a6438');
+const COL = { grav:'#7b4bd1', drag:'#e2483d', air:'#4f86d8', mark:'#41538f' };
+
+/* ---------- small helpers ---------- */
+const ffLerp = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const ffAdd = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], ffScl = (a, s) => a.map(v => v*s);
+const ffClamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const ffBoxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const ffBx = (x0, y0, z0, x1, y1, z1, M, w = .8) => box(x0, y0, z0, x1, y1, z1, M, toneI, w);
+const ffStroke = (pts, col, w, close = false) => { const d = pd(pts, close);
+  return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(w + .9)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(w)}" stroke-linecap="round" stroke-linejoin="round"/>`; };
+// the tube turns on its trunnions (an axis along y through (XC, ZA)); local (lx, ly, lz): lz up the tube
+let ffPhi = 0;
+const ffT = p => { const c = Math.cos(ffPhi), s = Math.sin(ffPhi); return [XC + p[0]*c + p[2]*s, YC + p[1], ZA - p[0]*s + p[2]*c]; };
+const ffAxis = () => [Math.sin(ffPhi), 0, Math.cos(ffPhi)], ffLX = () => [Math.cos(ffPhi), 0, -Math.sin(ffPhi)];
+const ffRing = (lz, r, n = 20, cx = 0, cy = 0) => Array.from({length:n}, (_, i) => { const t = i/n*2*Math.PI; return ffT([cx + r*Math.cos(t), cy + r*Math.sin(t), lz]); });
+const ffRodL = (a, b, r, M, w = .8, n = 16) => rod(ffT(a), ffT(b), r, M, toneI, w, r, n);
+// an open band round the tube (a gasket, a bore): side wall only, no end disc
+const ffBand = (lz0, lz1, r, M, w = .6) => { const A = ffRing(lz0, r, 24), B = ffRing(lz1, r, 24); return loft(A, B, n => toneI(n, M)) + hullInk([...A, ...B], w); };
+// a prism: a convex profile in (x, z) swept along y, every visible face inked
+function ffPrismY(prof, y0, y1, M, w = .9){
+  const A = on(PY(y0), prof), B = on(PY(y1), prof), cen = avg(A.concat(B)); let s = '';
+  for (let i = 0; i < prof.length; i++){ const j = (i + 1) % prof.length, q = [A[i], A[j], B[j], B[i]];
+    let nr = norm(cross(sub(q[1], q[0]), sub(q[3], q[0]))); if (dot(nr, sub(avg(q), cen)) < 0) nr = nr.map(v => -v);
+    if (vis(nr)) s += shape(q, toneI(nr, M), w); }
+  if (vis([0,1,0])) s += shape(B, toneI([0,1,0], M), w);
+  if (vis([0,-1,0])) s += shape(A, toneI([0,-1,0], M), w);
+  return s + hullInk([...A, ...B], 1.8); }
+// a ball, seen as a circle: dark rim, mid body, lit cap, a glint
+function ffBall(c, r, M, op = 1){ const [X, Y] = P(...c), R = r*CAM_K;
+  const circ = (dx, dy, rr, col, ex = '') => `<circle cx="${f(X + dx*R)}" cy="${f(Y + dy*R)}" r="${f(rr*R)}" fill="${col}" ${ex}/>`;
+  return `<g opacity="${op}">` + circ(0, 0, 1, M.d) + circ(.08, -.08, .88, M.m) + circ(.24, -.27, .55, M.l) + circ(.36, -.42, .14, '#ffffff', 'opacity=".8"')
+    + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="none" stroke="${INK}" stroke-width="1.1"/></g>`; }
+// a hose or cable cut into short boxed pieces, so it sorts with the solids it passes
+function ffWire(pts, col, w = .7, seg = 3){
+  const q = [pts[0]];
+  for (let i = 1; i < pts.length; i++){ const a = pts[i-1], b = pts[i], n = Math.max(1, Math.ceil(Math.hypot(...sub(b, a)) / seg));
+    for (let j = 1; j <= n; j++) q.push(ffLerp(a, b, j/n)); }
+  const out = [];
+  for (let i = 0; i < q.length - 1; i++) out.push({ box: ffBoxOf([q[i], q[i+1]], .3), svg: ffStroke([q[i], q[i+1]], col, w) });
+  return out; }
+// text on the stopwatch's sloped face
+const ffSlope = (y, s, off = .05) => [44 - 11*s/SLEN + SLN[0]*off, y, 7 + 5*s/SLEN + SLN[2]*off];
+const ffTxS = (y, s, str, size, col = INK, weight = 700) => `<text transform="${txM(P(...ffSlope(y, s, .08)), Dv(0,-1,0), Dv(11/SLEN, 0, -5/SLEN))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+function ffArrow(a, b, col){
+  const A = P(...a), B = P(...b), dx = B[0] - A[0], dy = B[1] - A[1], len = Math.hypot(dx, dy);
+  if (len < 1.5) return '';
+  const ux = dx/len, uy = dy/len, hl = Math.min(len*.5, 3.6), hw = hl*.5, E = [B[0] - ux*hl*.85, B[1] - uy*hl*.85];
+  const head = `M${f(B[0])} ${f(B[1])}L${f(B[0] - ux*hl - uy*hw)} ${f(B[1] - uy*hl + ux*hw)}L${f(B[0] - ux*hl + uy*hw)} ${f(B[1] - uy*hl - ux*hw)}Z`;
+  const ln = `M${f(A[0])} ${f(A[1])}L${f(E[0])} ${f(E[1])}`;
+  return `<path d="${ln}" fill="none" stroke="${INK}" stroke-width="3.6" stroke-linecap="round"/><path d="${ln}" fill="none" stroke="${col}" stroke-width="2.1" stroke-linecap="round"/>`
+    + `<path d="${head}" fill="${col}" stroke="${INK}" stroke-width="1" stroke-linejoin="round"/>`; }
+// a pill of text flat on the screen, left edge at screen point (x, y)
+const ffPill = (x, y, str, fs, bg = '#fff4d6') => { const w = str.length*fs*.62 + fs*1.2, h = fs*1.6;
+  return `<rect x="${f(x)}" y="${f(y - h/2)}" width="${f(w)}" height="${f(h)}" rx="${f(h/2)}" fill="${bg}" stroke="${INK}" stroke-width=".9"/>`
+    + `<text x="${f(x + w/2)}" y="${f(y + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">${str}</text>`; };
+
+// byDepth's pair rule is not transitive, so every separated, overlapping pair becomes an edge; parts go out farthest-first
+function ffSort(items){
+  items = items.filter(Boolean); const n = items.length, out = Array.from({length:n}, () => []), deg = new Array(n).fill(0);
+  const dep = items.map(p => depthOf(p.at || boxMid(p.box))), done = new Array(n).fill(false);
+  const R = items.map(p => { if (!p.box) return null; const xs = [], ys = [];
+    for (const x of [0, 1]) for (const y of [0, 1]) for (const z of [0, 1]){ const q = P(p.box[x][0], p.box[y][1], p.box[z][2]); xs.push(q[0]); ys.push(q[1]); }
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; });
+  const hit = (a, b) => a && b && a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++){ const o = hit(R[i], R[j]) ? sepOrder(items[i], items[j]) : 0;
+    if (o < 0){ out[i].push(j); deg[j]++; } else if (o > 0){ out[j].push(i); deg[i]++; } }
+  let svg = '';
+  for (let c = 0; c < n; c++){ let best = -1;
+    for (let i = 0; i < n; i++) if (!done[i] && (best < 0 || (deg[i] === 0) > (deg[best] === 0) || ((deg[i] === 0) === (deg[best] === 0) && dep[i] < dep[best]))) best = i;
+    done[best] = true; svg += items[best].svg; for (const j of out[best]) deg[j]--; }
+  return svg; }
+
+/* ---------- physics: falling with quadratic drag, x(t) = vt^2/g ln cosh(g t / vt) ---------- */
+const ffVt = (v0, p) => v0*Math.sqrt(P_ATM/Math.max(p, P_MIN));
+function ffFallX(t, vt){ if (t <= 0) return 0; const u = GRAV*t/vt;
+  if (u < 1e-4) return .5*GRAV*t*t;
+  return vt*vt/GRAV*(u > 15 ? u - Math.LN2 : Math.log(Math.cosh(u))); }
+function ffFallT(x, vt){ const e = x*GRAV/(vt*vt);
+  if (e < 1e-7) return Math.sqrt(2*x/GRAV);
+  return vt/GRAV*(e > 30 ? e + Math.LN2 : Math.acosh(Math.exp(e))); }
+const ffVel = (t, vt) => t <= 0 ? 0 : vt*Math.tanh(GRAV*t/vt);
+function ffDropOf(p){ const vb = ffVt(VT_BALL, p), vf = ffVt(VT_FEATHER, p);
+  return { p, vb, vf, tb: ffFallT(DROP, vb), tf: ffFallT(DROP, vf) }; }
+
+// where the ball and feather are (local frame), with the feather's sway; t = time since release in a drop of record d
+function ffFalling(d, t){
+  const xb = Math.min(DROP, ffFallX(t, d.vb))*100, xf = Math.min(DROP, ffFallX(t, d.vf))*100;
+  const ball = [BALL_TOP[0], 0, BALL_TOP[2] - xb];
+  // drag makes the feather rock and drift; the more drag (the lower its terminal speed), the more; none in vacuum
+  const amp = ffClamp(1 - d.vf/14, 0, 1)*(1 - Math.exp(-t/.12))*ffClamp((DROP*100 - xf)/10, 0, 1);
+  const fc = [FEATH_TOP[0] + 1.5*amp*Math.sin(4.6*t), 1.4*amp*Math.sin(3.1*t + 1), FEATH_TOP[2] - xf];
+  return { ball, fc, psi: .7*amp*Math.sin(2.3*t), th: .55*amp*Math.sin(8.5*t + .4),
+    vb: t < d.tb ? ffVel(t, d.vb) : 0, vf: t < d.tf ? ffVel(t, d.vf) : 0, d }; }
+function ffObjects(st){
+  const rest = top => ({ ball: top ? BALL_TOP : BALL_BOT, fc: top ? FEATH_TOP : FEATH_BOT, psi: 0, th: 0, vb: 0, vf: 0 });
+  if (st.phase === 'fall') return ffFalling(st.drop, Math.max(0, st.tt));
+  if (st.phase === 'replay') return ffFalling(st.last, Math.max(0, st.rt));
+  if (st.phase === 'flip'){
+    const d = ffDropOf(st.p);
+    if (st.fs === 'over'){ const t = st.ft - .7;   // they start to slide once the tube is past level
+      return { ball: [BALL_BOT[0], 0, Math.min(BALL_ROOF[2], BALL_BOT[2] + ffFallX(t, d.vb)*100)],
+        fc: [FEATH_BOT[0], 0, Math.min(FEATH_ROOF[2], FEATH_BOT[2] + ffFallX(t, d.vf)*100)], psi: 0, th: 0, vb: 0, vf: 0 }; }
+    if (st.fs === 'close') return { ball: BALL_ROOF, fc: FEATH_ROOF, psi: 0, th: 0, vb: 0, vf: 0 };
+    const u = ease(ffClamp((st.ft - .75)/.15, 0, 1));
+    return { ball: ffLerp(BALL_ROOF, BALL_TOP, u), fc: ffLerp(FEATH_ROOF, FEATH_TOP, u), psi: 0, th: 0, vb: 0, vf: 0 };
+  }
+  return rest(st.where === 'top');
+}
+
+/* ---------- actions ---------- */
+let ui, ffLoopOn = false;
+const ffBusy = st => st.phase !== 'idle';
+function ffRun(){ if (ffLoopOn) return; ffLoopOn = true;
+  ui.animate(dt => { const st = ui.st; st.clk += dt; ffStep(st, dt); if (st.phase === 'idle'){ ffLoopOn = false; return false; } return true; }); }
+function ffStep(st, dt){
+  if (st.phase === 'fall'){ st.tt += dt;
+    st.press = st.tt < -.05 ? ease(ffClamp((st.tt + .15)/.1, 0, 1)) : st.tt < .2 ? 1 : Math.max(0, 1 - (st.tt - .2)/.1);
+    st.flap = st.tt < 0 ? 0 : ease(ffClamp(st.tt/.045, 0, 1));
+    if (st.tt >= Math.max(st.drop.tb, st.drop.tf) + .35){ st.phase = 'idle'; st.where = 'bottom'; st.press = 0; st.last = st.drop; } }
+  else if (st.phase === 'replay'){ st.rt += dt/SLOW;
+    if (st.rt >= Math.max(st.last.tb, st.last.tf) + .06){ st.phase = 'idle'; st.rt = 9; } }
+  else if (st.phase === 'flip'){ st.ft += dt;
+    if (st.fs === 'over'){ const d = ffDropOf(st.p); st.phi = Math.PI*ease(ffClamp(st.ft/1.4, 0, 1));
+      if (st.ft >= Math.max(1.4, .7 + Math.max(ffFallT(.99, d.vb), ffFallT(.998, d.vf))) + .15){ st.fs = 'close'; st.ft = 0; } }
+    else if (st.fs === 'close'){ st.flap = 1 - ease(ffClamp(st.ft/.45, 0, 1)); if (st.ft >= .55){ st.flap = 0; st.fs = 'back'; st.ft = 0; } }
+    else { st.phi = Math.PI*(1 - ease(ffClamp(st.ft/1.4, 0, 1)));
+      if (st.ft >= 1.5){ st.phi = 0; st.where = 'top'; st.phase = 'idle'; if (st.next){ const nx = st.next; st.next = null; nx(st); } } } }
+  else if (st.phase === 'pump'){ st.ps += dt/STROKE_T;
+    if (st.ps >= 1){ st.ps -= 1; st.strokes++; st.pStart = st.p = P_MIN + (st.pStart - P_MIN)*KEEP;
+      if (st.p < P_MIN + .03){ st.p = P_MIN + .0; st.ps = 0; st.phase = 'idle'; return; } }
+    // up stroke: the gas below the piston grows from the tube's volume to the tube's plus the stroke's
+    if (st.ps < .5) st.p = P_MIN + (st.pStart - P_MIN)*V_TUBE/(V_TUBE + V_STROKE*ease(st.ps/.5)); }
+  else if (st.phase === 'vent'){ st.vt += dt;
+    st.bleed = ease(ffClamp(st.vt/.3, 0, 1));
+    if (st.vt > .3) st.p += (P_ATM - st.p)*(1 - Math.exp(-dt/.45));
+    if (P_ATM - st.p < .05){ st.p = P_ATM; st.bleed = Math.max(0, st.bleed - dt/.3); if (st.vt > 1){ st.bleed = 0; st.phase = 'idle'; } } }
+}
+function ffRelease(st){ st.phase = 'fall'; st.tt = -.15; st.drop = ffDropOf(st.p); st.strobe = false; ffRun(); }
+function ffDrop(st){
+  if (ffBusy(st)) return ui.flash('One moment');
+  st.strobe = false;
+  if (st.where === 'top') return ffRelease(st);
+  ui.flash('Turning the tube over to reload', 1800);
+  st.phase = 'flip'; st.fs = 'over'; st.ft = 0; st.next = ffRelease; ffRun(); }
+function ffPump(st){
+  if (ffBusy(st)) return ui.flash('One moment');
+  if (st.p <= P_MIN + .05) return ui.flash('Already pumped down as far as this pump goes');
+  st.phase = 'pump'; st.ps = 0; st.pStart = st.p; st.strokes = 0; st.strobe = false; ui.flash('Pumping (strokes sped up)', 1600); ffRun(); }
+function ffVent(st){
+  if (ffBusy(st)) return ui.flash('One moment');
+  if (st.p >= P_ATM - .05) return ui.flash('It is already full of air');
+  st.phase = 'vent'; st.vt = 0; st.strobe = false; ffRun(); }
+function ffReplay(st){
+  if (ffBusy(st)) return ui.flash('One moment');
+  if (!st.last) return ui.flash('Drop them first, then replay');
+  st.phase = 'replay'; st.rt = -.04; st.strobe = true; ffRun(); }
+
+/* ---------- the tube (one sorted part: it turns as a whole) ---------- */
+function ffFeather(c, psi, th, op = 1){
+  const ax = ffAxis(), lx = ffLX(), ly = [0, 1, 0];
+  const e1 = ffAdd(ffScl(ly, Math.cos(psi)), ffScl(lx, -Math.sin(psi)));
+  let e2 = ffAdd(ffScl(lx, Math.cos(psi)), ffScl(ly, Math.sin(psi))); e2 = ffAdd(ffScl(e2, Math.cos(th)), ffScl(ax, Math.sin(th)));
+  const W = ffT(c), at = (s, w) => ffAdd(W, ffAdd(ffScl(e1, s), ffScl(e2, w)));
+  const pts = [];
+  for (let i = 0; i <= 12; i++){ const s = -2.6 + 5.6*i/12; pts.push(at(s, 1.6*Math.pow(Math.sin(Math.PI*(s + 2.6)/5.8), .7) + .02)); }
+  for (let i = 12; i >= 0; i--){ const s = -2.6 + 5.6*i/12; pts.push(at(s, -1.3*Math.pow(Math.sin(Math.PI*(s + 2.6)/5.8), .7) - .02)); }
+  let sv = shape(pts, '#e6d2a8', .8);
+  let bar = '';
+  for (let i = 1; i <= 6; i++){ const s = -2.2 + i*.75; bar += pd([at(s, 0), at(s + .6, 1.4*Math.sin(Math.PI*(s + 3)/5.8))], false) + pd([at(s, 0), at(s + .55, -1.1*Math.sin(Math.PI*(s + 3)/5.8))], false); }
+  sv += `<path d="${bar}" fill="none" stroke="#a89470" stroke-width=".45"/>`;
+  sv += shape([at(1.5, 1.2), at(2.4, .95), at(2.95, .25), at(2.95, -.25), at(2.4, -.8), at(1.5, -1)], '#7a6046', .4);
+  sv += ffStroke([at(-3.1, 0), at(3, 0)], '#f7f1e2', .35);
+  for (const w of [-.5, -.2, .2, .5]) sv += `<path d="${pd([at(-2.6, 0), at(-3, w)], false)}" fill="none" stroke="#d8cdb8" stroke-width=".5"/>`;
+  return `<g opacity="${op}">${sv}</g>`; }
+
+function ffTube(st, k, ob){
+  const T = ffT, ax = ffAxis(), up = vis(ax), near = depthOf(T([0,0,-53])) > depthOf(T([0,0,47]));   // is the bottom cap the nearer end?
+  const hullFill = (pts, col, op) => fill(sp(hull(pts.map(p => P(...p)))), col, `opacity="${op}"`);
+  const streaks = (lz0, lz1, r, op) => { const a = P(...T([0, 0, lz0])), b = P(...T([0, 0, lz1])), dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
+    if (len < 4) return ''; let nx = -dy/len, ny = dx/len; if (nx > 0){ nx = -nx; ny = -ny; }
+    const R = r*CAM_K, q = (t, o) => [a[0] + dx*t + nx*o*R, a[1] + dy*t + ny*o*R];
+    return [[-.66, -.5], [-.34, -.27]].map(([o0, o1]) => fill(sp([q(.04, o0), q(.96, o0), q(.96, o1), q(.04, o1)]), '#ffffff', `opacity="${op}"`)).join(''); };
+  const gh = (svg, ins) => k > 0 && ins ? `<g opacity="${f(1 - .8*k)}">${svg}</g><g opacity="${f(k)}">${ins}</g>` : svg;
+  const GA = ffRing(-50, R_GL, 24), GB = ffRing(LZ_JOIN + 2.5, R_GL, 24), HA = ffRing(LZ_JOIN, R_HD, 24), HB = ffRing(LZ_TOP, R_HD, 24);
+
+  // bottom end cap, its gasket and the cable gland (the piezo disc and its lead inside)
+  const capIns = ffRodL([0,0,-50.3], [0,0,-50.05], 3.2, matOf('#d8b25a'), .5, 18) + ffRodL([0,0,-50.25], [0,0,-50.02], 2.2, matOf('#e9e4d8'), .4, 16)
+    + ffStroke([T([0,-2.4,-50.4]), T([0,-4.6,-52]), T([0,-6.6,-53])], '#2e2b28', .45) + ffStroke([T([0,-1.6,-50.4]), T([0,-4.4,-52.6]), T([0,-6.6,-53.2])], '#e2483d', .35);
+  const cap = gh(ffRodL([0,0,-56], [0,0,-50], R_HD, METAL, 1.4, 28) + ffBand(-50, -49.6, 5.1, DARK)
+    + ffRodL([0,-5.6,-53], [0,-7,-53], .6, DARK, .6, 10), capIns);
+
+  // the acrylic head: far wall tint, then (after the contents) near wall, streaks, rim inks
+  const headBack = hullFill([...HA, ...HB], '#bfe0e6', .32) + ffBand(LZ_JOIN - .4, LZ_JOIN, 5.95, DARK);
+  let headFront = hullFill([...HA, ...HB], '#e8f6f8', .08) + streaks(LZ_JOIN + .5, LZ_TOP - .5, R_HD, .32) + hullInk([...HA, ...HB], 1.6);
+  headFront += `<path d="${pd(ffRing(LZ_ROOF, R_HD - .3, 24))}" fill="none" stroke="${INK}" stroke-width=".5" opacity=".45"/>`;
+  if (up) headFront += fill(pd(HB), '#e6f4f6', 'opacity=".35"') + ink(pd(HB), .9);
+  else headFront += ink(pd(HA), .8);
+  // the release button and its gland on top; the flap lever outside the +y wall; the switch's feedthrough on the -y wall
+  const button = ffRodL([3.2,0,LZ_TOP], [3.2,0,LZ_TOP + .6], 1.25, STEELM, .6, 14) + act('button', ffRodL([3.2,0,LZ_TOP + .6], [3.2,0,LZ_TOP + 2 - .7*st.press], .85, matOf('#e2483d'), .8, 14));
+  const la = st.flap*Math.PI/2, lever = ffRodL([HINGE[0], 4.4, HINGE[1]], [HINGE[0], 6.9, HINGE[1]], .55, STEELM, .6, 12)
+    + ffRodL([HINGE[0], 6.4, HINGE[1]], [HINGE[0] + 3.4*Math.cos(la), 6.4, HINGE[1] - 3.4*Math.sin(la)], .4, STEELM, .7, 10)
+    + ffRodL([HINGE[0] + 3.4*Math.cos(la), 6.1, HINGE[1] - 3.4*Math.sin(la)], [HINGE[0] + 3.4*Math.cos(la), 7.8, HINGE[1] - 3.4*Math.sin(la)], .75, DARK, .7, 12);
+  const feed = ffRodL([0,-5.6,47], [0,-6.6,47], .55, DARK, .5, 10);
+  // the cables down the tube's -y side, to the collar (they turn with it)
+  const cables = ffStroke([T([0,-6.6,47]), T([0,-6.7,45]), T([0,-6.3,40]), T([0,-5.5,36]), T([0,-5.5,3]), T([0,-6.4,1.6])], '#2e2b28', .5)
+    + ffStroke([T([0,-7,-53]), T([0,-6,-49]), T([0,-5.5,-46]), T([0,-5.5,-3]), T([0,-6.4,-1.6])], '#2e2b28', .5);
+
+  // the glass
+  const glassBack = hullFill([...GA, ...GB], '#a9cfd6', .2);
+  const glassFront = hullFill([...GA, ...GB], '#eef8fa', .12) + streaks(-49, LZ_JOIN + 1, R_GL, .3) + hullInk([...GA, ...GB], 1.3);
+
+  // the collar, its clamp lugs, the trunnions (the left one hollow, the glass side arm inside it)
+  const lug = sx => ffRodL([sx*6, 0, 0], [sx*7.6, 0, 0], 1.1, METAL, .7, 12) + ffRodL([sx*7.6, 0, 0], [sx*8.1, 0, 0], .6, DARK, .5, 8);
+  const tr = (y0, y1) => rod([XC, y0, ZA], [XC, y1, ZA], 1.4, STEELM, toneI, .8, 1.4, 16);
+  const collarIns = ffRodL([0, 4.6, 0], [0, 10, 0], .9, matOf('#d6eef2'), .6, 12) + rod([XC, YC + 6, ZA], [XC, YC + 10, ZA], 1.4, matOf('#cfd5d7'), toneI, .5, 1.4, 16)
+    + ffBand(-1.6, 1.6, 5.05, DARK, .4);
+  const collar = (vis([0,-1,0]) ? tr(YC - 6, YC - 10) : '') + (vis([0,1,0]) ? '' : tr(YC + 6, YC + 10))
+    + gh(ffRodL([0,0,-1.6], [0,0,1.6], 6.1, METAL, 1.2, 28) + lug(1) + lug(-1), collarIns)
+    + (vis([0,-1,0]) ? '' : tr(YC - 6, YC - 10)) + (vis([0,1,0]) ? gh(tr(YC + 6, YC + 10), collarIns) : '');
+
+  // ---- what is inside: air, cushion, piezo, flap and hinge, latch, rod, switch, the ball and the feather
+  const parts = [];
+  const nAir = Math.round(60*st.p/P_ATM);
+  if (nAir > 0){ let ds = '';
+    const hz = (i, s) => { const v = Math.sin(i*12.9898 + s*78.233)*43758.5453; return v - Math.floor(v); };
+    for (let i = 0; i < nAir; i++){ const a = hz(i, 1)*2*Math.PI, r = 4.1*Math.sqrt(hz(i, 2)*.92 + .08), lz = -47 + hz(i, 3)*99;
+      const j = .5*Math.sin(st.clk*9 + i*1.7), q = P(...T([r*Math.cos(a) + j, r*Math.sin(a) + .5*Math.cos(st.clk*7 + i), lz + .6*Math.sin(st.clk*8 + i*2.3)]));
+      ds += `<circle cx="${f(q[0])}" cy="${f(q[1])}" r="${f(.42*CAM_K)}"/>`; }
+    parts.push({ at: T([0, 0, -60]), svg: `<g fill="${COL.air}" stroke="${INK}" stroke-width=".4" opacity="${f(.55 + .45*k)}">${ds}</g>` }); }
+  parts.push({ at: T([0, 0, -49]), svg: ffRodL([0,0,-49.95], [0,0,-48], 4.5, FOAM, .8, 22) });
+  // the flap turns down about its hinge (along ly); shut it lies level, open it hangs against the wall
+  const fa = st.flap*Math.PI/2, fp = (u, v, off) => [HINGE[0] + u*Math.cos(fa) - off*Math.sin(fa), v, HINGE[1] - u*Math.sin(fa) - off*Math.cos(fa) + .15];
+  { const out = Array.from({length:18}, (_, i) => { const t = i/18*2*Math.PI; return [3.7 + 3.7*Math.cos(t), 3.55*Math.sin(t)]; });
+    const A = out.map(([u, v]) => T(fp(u, v, 0))), B = out.map(([u, v]) => T(fp(u, v, -.3)));
+    let sv = loft(A, B, n => toneI(n, STEELM)) + shape(vis(sub(B[0], A[0])) ? B : A, '#c9d0d2', .8);
+    sv += ffRodL([HINGE[0], -3.4, HINGE[1]], [HINGE[0], 4.6, HINGE[1]], .35, STEELM, .5, 10);
+    if (k > 0){ let sp_ = []; for (let i = 0; i <= 40; i++){ const t = i/40*6*2*Math.PI; sp_.push(T([HINGE[0] + .75*Math.cos(t), -1.4 + 2.8*i/40, HINGE[1] + .75*Math.sin(t)])); }
+      sv += `<g opacity="${f(k)}">${ffStroke(sp_, '#8a949a', .3)}</g>`; }
+    parts.push({ at: T(fp(3.7, 0, 0)), svg: act('flap', sv) }); }
+  // the latch bolt (held out under the flap's edge until the push rod's wedge draws it back), its spring box, the switch
+  { const bx = 3.3 + .9*Math.min(1, st.press*1.3);
+    let sv = ffRodL([4.6, 0, 43.9], [bx, 0, 43.9], .32, BRASSM, .5, 10) + ffRodL([4.7, -.9, 43.4], [4.7, .9, 43.4], .75, DARK, .6, 10);
+    sv += ffRodL([3.2, 0, LZ_ROOF], [3.2, 0, 45.6 - .7*st.press], .22, STEELM, .4, 8) + ffRodL([3.2, 0, 45.6 - .7*st.press], [3.6, 0, 44.4 - .7*st.press], .2, STEELM, .4, 8);
+    sv += ffRodL([3.2, 0, LZ_ROOF], [3.2, 0, LZ_ROOF + .3], .5, DARK, .4, 10);
+    sv += ffRodL([4.1, -1.6, 44.6], [4.1, -.7, 44.6], .55, matOf('#3f4a8a'), .5, 10) + ffStroke([T([4.3, -1.6, 44.8]), T([4.6, -3.5, 45.6]), T([4, -5.4, 47])], '#2e2b28', .3);
+    parts.push({ at: T([4, 0, 44]), svg: sv }); }
+  // the feather and the ball
+  parts.push({ at: T(ob.fc), svg: ffFeather(ob.fc, ob.psi, ob.th) });
+  parts.push({ at: T(ob.ball), svg: act('ball', ffBall(T(ob.ball), BALL_R, BALLM)) });
+  parts.sort((a, b) => depthOf(a.at) - depthOf(b.at));
+  const inside = parts.map(p => p.svg).join('');
+
+  const lvNear = vis([0,1,0]), cbNear = vis([0,-1,0]);
+  let s = '';
+  if (!near) s += cap;
+  if (!up) s += button;
+  if (!lvNear) s += lever;
+  if (!cbNear) s += cables + feed;
+  s += headBack + glassBack + inside + glassFront + collar + headFront;
+  if (up) s += button;
+  if (lvNear) s += lever;
+  if (cbNear) s += cables + feed;
+  if (near) s += cap;
+  const corners = []; for (const x of [-8.2, 8.2]) for (const y of [-10, 10]) for (const z of [-56, LZ_TOP + 2]) corners.push(T([x, y, z]));
+  return { svg: s, box: ffBoxOf(corners) }; }
+
+/* ---------- the pump, the line, the gauge ---------- */
+function ffPiston(st){ if (st.phase !== 'pump') return 10; const s = st.ps;
+  return s < .5 ? 10 + 24*ease(s/.5) : 34 - 24*ease((s - .5)/.5); }
+function ffPumpParts(st, k, put){
+  const [px, py] = PUMP, zp = ffPiston(st), upS = st.phase === 'pump' && st.ps < .5, dnS = st.phase === 'pump' && st.ps >= .5;
+  put([[15, 61, BH], [25, 71, 7]], ffBx(15, 61, BH, 25, 71, 7, DARK, 1),
+    ffStroke([[25, py, 5.5], [px, py, 5.5], [px, py, 7.1]], '#6d7478', .7));
+  let ins = cyl(px, py, 7.2, 38, 3.5, matOf('#efe6cf'), toneI, .5, 22);
+  ins += cyl(px, py, zp - 2.8, zp - 2.2, 3.5, LEATHER, toneI, .6, 22) + cyl(px, py, zp - 2.2, zp, 3.45, STEELM, toneI, .7, 22);
+  const pv = dnS ? 1 : 0, iv = upS ? 1 : 0;
+  ins += rod([px - 1.1, py, zp + .1], [px + 1.1, py, zp + .1 + 1.4*pv], .28, matOf('#5b3a22'), toneI, .4, .28, 8);
+  ins += rod([px - 1.1, py, 7.4], [px + 1.1, py, 7.4 + 1.4*iv], .28, matOf('#5b3a22'), toneI, .4, .28, 8);
+  ins += cyl(px, py, zp, 38, .55, STEELM, toneI, .5, 10);
+  if (upS) ins += ffArrow([px, py, 4.8], [px, py, 11], COL.air);
+  if (dnS) ins += ffArrow([px, py, zp - 1], [px, py, zp + 4], COL.air) + ffArrow([px + 2, py, 37], [px + 2, py, 43], COL.air);
+  put([[px - 3.9, py - 3.9, 7], [px + 3.9, py + 3.9, 38]], act('pump', cyl(px, py, 7, 38, 3.9, BRASSM, toneI, 1.4, 26)), ins);
+  { let sv = cyl(px, py, 38, 39.6, 4.3, BRASSM, toneI, 1, 26) + cyl(px, py, 39.6, 40.6, 1.1, STEELM, toneI, .7, 12);
+    if (vis([0,0,1])) for (const a of [40, 130, 220, 310]){ const t = a*Math.PI/180; sv += shape(on(PZ(39.62), ellUV(px + 2.7*Math.cos(t), py + 2.7*Math.sin(t), .4, .4, 8)), '#2b2523', .4); }
+    put([[px - 4.3, py - 4.3, 38], [px + 4.3, py + 4.3, 40.6]], sv); }
+  const zh = zp + 30.6;
+  put([[px - 1, 60.5, 40.6], [px + 1, 71.5, zh + 1]], act('pump', cyl(px, py, 40.6, zh, .55, STEELM, toneI, .7, 10)
+    + rod([px, 62.2, zh], [px, 69.8, zh], .7, STEELM, toneI, .7, .7, 12) + rod([px, 60.5, zh], [px, 63, zh], 1, matOf('#7a4a2a'), toneI, .8, 1, 14)
+    + rod([px, 69, zh], [px, 71.5, zh], 1, matOf('#7a4a2a'), toneI, .8, 1, 14)));
+  put([[19.2, 54, 34], [20.8, 62.2, 37]], ffBx(19.2, 54, 34, 20.8, 62.2, 37, STEELM, .8));
+  // manifold, pipe to the pump foot, hose barb, bleed valve, gauge on its stem
+  put([[25, 65.4, 4.8], [27, 66.6, 6.2]], cylX(25, 27, py, 5.5, .6, STEELM, toneI, .7, 12));
+  put([[27, 62, BH], [35, 71, 9]], ffBx(27, 62, BH, 35, 71, 9, BRASSM, 1),
+    ffStroke([[28.2, 63.4, 9], [28.2, 63.4, 6], [31, 66.5, 6], [31, 66.5, 9]], '#6d7478', .6) + ffStroke([[31, 66.5, 6], [31, 71, 6]], '#6d7478', .6) + ffStroke([[31, 66.5, 6], [27, 66, 5.5]], '#6d7478', .6)
+    + rod([31, 69.4, 6], [31, 70.6 - .9*st.bleed, 6], .45, STEELM, toneI, .4, .1, 8));
+  put([[27.6, 62.8, 9], [28.8, 64, 11.5]], cyl(28.2, 63.4, 9, 11.5, .55, STEELM, toneI, .6, 10));
+  { const ba = st.bleed*1.6, w = [Math.cos(ba)*1.4, Math.sin(ba)*1.4];
+    put([[29.5, 71, 4.5], [32.5, 75.3, 7.5]], act('bleed', rod([31, 71, 6], [31, 73.4, 6], .45, STEELM, toneI, .6, .45, 10) + rod([31, 73.4, 6], [31, 74.6, 6], 1, DARK, toneI, .7, 1, 14)
+      + rod([31 - w[0], 74.9, 6 - w[1]], [31 + w[0], 74.9, 6 + w[1]], .35, DARK, toneI, .6, .35, 8))); }
+  put([[30.4, 65.9, 9], [31.6, 67.1, 12.2]], cyl(31, 66.5, 9, 12.2, .55, STEELM, toneI, .6, 10));
+  { const gy = 66.5, gz = 16.4, gr = 4.4, xf = 33;
+    let sv = cylX(29.6, xf, gy, gz, gr, STEELM, toneI, 1.2, 28);
+    const dial = (r, th) => [xf + .05, gy - r*Math.cos(th), gz + r*Math.sin(th)];
+    let ins = '';
+    if (vis([1,0,0])){
+      sv += shape(on(PX(xf + .03), ellUV(gy, gz, gr - .5, gr - .5, 28)), '#fbf8ee', .7);
+      let tk = '';
+      for (let v = 0; v <= 100; v += 5){ const th = (225 - 2.7*v)*Math.PI/180, r0 = v % 10 ? 3.3 : 3;
+        tk += pd([dial(r0, th), dial(3.75, th)], false); }
+      sv += `<path d="${tk}" fill="none" stroke="${INK}" stroke-width=".45"/>`;
+      for (const v of [0, 20, 40, 60, 80, 100]){ const th = (225 - 2.7*v)*Math.PI/180, q = dial(2.3, th); sv += tx(q[0] + .02, q[1], q[2] - .35, String(v), .85, INK, 800); }
+      sv += tx(xf + .07, gy, gz - 2.1, 'kPa', .8, INK, 800);
+      const th = (225 - 2.7*st.p)*Math.PI/180;
+      sv += ffStroke([dial(-.6, th), dial(3.4, th)], '#e2483d', .35) + shape(on(PX(xf + .1), ellUV(gy, gz, .4, .4, 10)), DARK.m, .4);
+    }
+    // the Bourdon C-tube: it uncurls a little as the pressure inside rises, and its tip drives the pinion through a link
+    const bt = []; const unc = .12*st.p/P_ATM;
+    for (let i = 0; i <= 18; i++){ const a = (-50 + 270*i/18)*Math.PI/180, r = 2.9 + unc*i/18*3; bt.push([31.4, gy - r*Math.cos(a), gz + r*Math.sin(a)]); }
+    ins = ffStroke(bt, '#c58a3a', .9) + ffStroke([bt[18], [31.4, gy + 1.4, gz - 1.2], [31.4, gy, gz]], STEELM.d, .35)
+      + shape(on(PX(31.45), ellUV(gy, gz, .7, .7, 10)), STEELM.m, .4) + ffStroke([[31.4, gy - 2.9*Math.cos(-50*Math.PI/180), gz + 2.9*Math.sin(-50*Math.PI/180)], [31.4, gy - .3, gz - 4.3]], '#c58a3a', .9);
+    put([[29.6, gy - gr, gz - gr], [xf + .2, gy + gr, gz + gr]], sv, ins); }
+}
+
+/* ---------- the stopwatch ---------- */
+function ffTimer(st, m, k){
+  let s = ffPrismY(TP, TY[0], TY[1], m, 1);
+  const lcdQ = off => [ffSlope(22.5, 1.4, off), ffSlope(7.5, 1.4, off), ffSlope(7.5, 7.6, off), ffSlope(22.5, 7.6, off)];
+  if (vis(SLN)){
+    s += shape(lcdQ(.04), '#1d2a26', 1);
+    const g = '#8af0ae', d = st.phase === 'fall' ? st.drop : st.phase === 'replay' ? st.last : st.last;
+    let run = 0, tb = '', tf = '';
+    if (st.phase === 'fall'){ const t = Math.max(0, st.tt); run = Math.min(t, Math.max(d.tb, d.tf)); if (t >= d.tb) tb = d.tb.toFixed(3); if (t >= d.tf) tf = d.tf.toFixed(3); }
+    else if (st.phase === 'replay'){ const t = Math.max(0, st.rt); run = Math.min(t, Math.max(d.tb, d.tf)); if (t >= d.tb) tb = d.tb.toFixed(3); if (t >= d.tf) tf = d.tf.toFixed(3); }
+    else if (d){ run = Math.max(d.tb, d.tf); tb = d.tb.toFixed(3); tf = d.tf.toFixed(3); }
+    s += ffTxS(15, 1.9, run.toFixed(3) + ' s', 2.3, g, 800);
+    s += ffTxS(15, 4.6, ('BALL    ' + (tb || '-.---')).replace(/ /g, ' '), 1.05, g, 700);
+    s += ffTxS(15, 6.3, ('FEATHER ' + (tf || '-.---')).replace(/ /g, ' '), 1.05, g, 700);
+    if (st.phase === 'replay') s += ffTxS(20, 1.9, 'REPLAY', .8, g, 800);
+    for (const [y, lab] of [[20, 'START'], [10, 'RESET']]){ const a = ffSlope(y, 9.9, 0), b = ffSlope(y, 9.9, .6);
+      s += act('timer', rod(a, b, .95, y === 10 ? matOf('#e2483d') : DARK, toneI, .8)) + ffTxS(y, 11.4, lab, .95, INK, 800); }
+    s += ffTxS(15, 10.4, 'STOPWATCH', 1.15, mix(m.d, '#000000', .2), 800);
+  }
+  if (!(k > 0)) return [s, ''];
+  let ins = '';
+  for (const [x, y] of [[31.6, 8], [42.4, 8], [31.6, 22], [42.4, 22]]) ins += cyl(x, y, BH, 4.2, .35, STEELM, toneI, .5, 8);
+  ins += ffBx(31, 7, 4.2, 43, 23, 4.5, PCBM, .7) + ffBx(36, 12, 4.5, 39.4, 15.4, 5.1, DARK, .6);
+  ins += rod([40.6, 14, 4.9], [40.6, 16.4, 4.9], .4, STEELM, toneI, .5);
+  ins += ffBx(31.4, 17, 4.5, 33.2, 22.6, 7.1, matOf('#3f4a8a'), .7);
+  ins += shape(lcdQ(-.5), '#3c4a44', .7);
+  ins += ffStroke([[30.4, 15, 8], [33, 14.5, 5.6], [36, 13.7, 5.1]], '#d8a24a', .45);
+  return [s, ins]; }
+
+/* ---------- the stand ---------- */
+function ffRule(){
+  const xf = UPR[2] + .05; let s = shape(on(PX(xf), rectUV(26.4, 11.3, 29.6, Z0 + 1.6)), '#f6e7a8', .8), tk = '';
+  for (let n = 0; n <= 94; n++){ const z = Z0 - n; tk += pd([[xf + .02, 26.4, z], [xf + .02, n % 10 ? (n % 5 ? 27 : 27.5) : 28, z]], false); }
+  s += `<path d="${tk}" fill="none" stroke="${INK}" stroke-width=".45"/>`;
+  for (let n = 0; n <= 90; n += 10) s += tx(xf + .04, 28.7, Z0 - n - .5, String(n), 1.3, INK, 800);
+  s += `<path d="${pd([[xf + .03, 26.4, Z0], [xf + .03, 29.6, Z0]], false)}" stroke="#e2483d" stroke-width=".7" fill="none"/>`;
+  s += tx(xf + .04, 28, Z0 + .3, 'cm', 1, INK, 800);
+  return s; }
+
+function ffShadows(st){
+  const bx = (x0, y0, z0, x1, y1, z1) => { const o = []; for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) o.push([x, y, z]); return o; };
+  const ps = [bx(UPL[0], UPL[1], BH, UPL[2], UPL[3], 120), bx(UPR[0], UPR[1], BH, UPR[2], UPR[3], 120),
+    [...ffRing(-56, 6, 16), ...ffRing(LZ_TOP + 2, 6, 16)], bx(15, 61, BH, 25, 71, 40.6), bx(PUMP[0] - 1, 61, 40, PUMP[0] + 1, 71, ffPiston(st) + 31.5),
+    bx(27, 62, BH, 35, 71, 9), bx(29.6, 62.1, 9, 33, 70.9, 20.8), [...on(PY(TY[0]), TP), ...on(PY(TY[1]), TP)]];
+  return clipTo(boardTop(0, 0, BW, BD, BH, 4), ps.map(p => castShadow(p, BH)).join('')); }
+
+function scene(st, m){
+  ffPhi = st.phi;
+  const k = ease(st.xr || 0), items = [], ob = ffObjects(st);
+  const put = (b, svg, inside = '') => items.push({ box: b, svg: k > 0 && inside ? `<g opacity="${f(1 - .8*k)}">${svg}</g><g opacity="${f(k)}">${inside}</g>` : svg });
+  let s = castShadow([...on(PZ(0), rectUV(0, 0, BW, BD)), ...on(PZ(BH), rectUV(0, 0, BW, BD))]);
+  s += board(0, 0, BW, BD, BH, 4, WOOD);
+  s += ffShadows(st);
+
+  // ---- posts on their feet, the rule, the bearing blocks
+  for (const U of [UPL, UPR]){
+    const fy0 = U[1] - 1, fy1 = U[3] + 1;
+    put([[10, fy0, BH], [34, fy1, 6]], ffBx(10, fy0, BH, 34, fy1, 6, FRAMEM, 1), ffStroke([[13, (U[1] + U[3])/2, 6], [13, (U[1] + U[3])/2, .4]], STEELM.d, .5) + ffStroke([[31, (U[1] + U[3])/2, 6], [31, (U[1] + U[3])/2, .4]], STEELM.d, .5));
+    let sv = ffBx(U[0], U[1], 6, U[2], U[3], 120, FRAMEM, 1.2);
+    if (U === UPR && vis([1,0,0])) sv += ffRule();
+    put([[U[0], U[1], 6], [U[2], U[3], 120]], sv);
+  }
+  { // left bearing: the trunnion turns in it on a ball race; an O-ring seals the hollow trunnion to the hose barb
+    const ins = rod([XC, 52, ZA], [XC, 56.4, ZA], 1.4, matOf('#cfd5d7'), toneI, .5) + rod([XC, 54.6, ZA], [XC, 55.2, ZA], 1.75, DARK, toneI, .5, 1.75, 16)
+      + rod([XC, 54, ZA], [XC, 54.5, ZA], 2.1, STEELM, toneI, .5, 2.1, 16) + ffStroke([[XC, 55.4, ZA], [XC, 59.5, ZA]], COL.air, .5);
+    put([[19.5, 54, 58], [24.5, 57, 66]], ffBx(19.5, 54, 58, 24.5, 57, 66, STEELM, 1), ins);
+    put([[21.3, 57, 61.3], [22.7, 59.6, 62.7]], rod([XC, 57, ZA], [XC, 59.6, ZA], .65, BRASSM, toneI, .6, .55, 12));
+    put([[19.5, 23, 58], [24.5, 26, 66]], ffBx(19.5, 23, 58, 24.5, 26, 66, STEELM, 1), rod([XC, 23.6, ZA], [XC, 28, ZA], 1.4, matOf('#cfd5d7'), toneI, .5) + rod([XC, 25.4, ZA], [XC, 26, ZA], 2.1, STEELM, toneI, .5, 2.1, 16)
+      + ffStroke([[XC, 28, ZA], [XC, 24, ZA], [XC - .5, 24.2, 58.4]], '#2e2b28', .45));
+  }
+  // ---- the tube
+  { const t = ffTube(st, k, ob); items.push({ box: t.box, svg: t.svg }); }
+  // ---- pump, line, gauge
+  ffPumpParts(st, k, put);
+  items.push(...ffWire([[28.2, 63.4, 11.3], [28.2, 63.4, 15], [27.6, 63, 28], [26, 62.4, 44], [23.6, 61.8, 55], [22.4, 61.4, 60.6], [XC, 60.2, ZA], [XC, 59.4, ZA]], HOSE, 2.2));
+  // ---- stopwatch and its cord from the right bearing
+  { const [sv, ins] = ffTimer(st, m, k); put([[30, TY[0], BH], [44, TY[1], 12]], sv, ins); }
+  items.push(...ffWire([[XC - .5, 24.4, 58], [XC - .5, 24.4, 9], [XC - .5, 24, 6.6], [24, 22, 3.6], [29, 15.5, 3.6], [30, 15, 6], [30, 15, 8]], '#2e2b28', .6));
+
+  s += ffSort(items);
+
+  // ---- overlays: forces on what falls, and the slow-motion marks
+  let ov = '';
+  const lbl = [];
+  if (st.phase === 'fall' || st.phase === 'replay'){
+    const d = ob.d, U = 7, bw = ffT(ob.ball), fw = ffT(ob.fc);
+    if (ob.vb > .05){ const dr = U*Math.min(1.2, (ob.vb/d.vb)**2);
+      ov += ffArrow(bw, ffAdd(bw, [0, 0, -U]), COL.grav) + ffArrow(bw, ffAdd(bw, [0, 0, dr]), COL.drag); }
+    if (ob.vf > .05){ const dr = U*Math.min(1.2, (ob.vf/d.vf)**2);
+      ov += ffArrow(fw, ffAdd(fw, [0, 0, -U]), COL.grav) + ffArrow(fw, ffAdd(fw, [0, 0, dr]), COL.drag);
+      if (k > .6) lbl.push({ at: ffAdd(fw, [0, 0, -U*.8]), text: 'WEIGHT', on: true }, { at: ffAdd(fw, [0, 0, Math.max(1, dr*.8)]), text: 'AIR DRAG', on: true }); }
+  }
+  if (st.strobe && st.last){
+    const d = st.last, rt = st.phase === "replay" ? st.rt : 9, fs = 6.4*INK_K;
+    MARKS.forEach((t, i) => { if (t > rt) return;
+      const o = ffFalling(d, t), b = ffT(o.ball), fz = ffT(o.fc), yr = [UPR[2] + .1, UPR[1] + .2, b[2]];
+      ov += ffBall(b, BALL_R, BALLM, .45) + ffFeather(o.fc, o.psi, o.th, .4);
+      ov += `<path d="${pd([b, yr], false)}" fill="none" stroke="${COL.mark}" stroke-width=".8" stroke-dasharray="1.5 1.2"/>`;
+      const dist = (BALL_TOP[2] - o.ball[2]), first = ffFallX(MARKS[0], d.vb)*100, ratio = dist/first;
+      const q = P(...yr), side = Dv(0, -1, 0)[0] >= 0 ? 1 : -1;
+      const str = `${t.toFixed(1)} s  ${dist.toFixed(1)} cm = ${Math.abs(ratio - Math.round(ratio)) < .05 ? Math.round(ratio) : ratio.toFixed(1)}×`;
+      ov += ffPill(side > 0 ? q[0] + 3 : q[0] - 3 - (str.length*fs*.62 + fs*1.2), q[1], str.replace(/ /g, ' '), fs, i % 2 ? '#e6f0ff' : '#fff4d6');
+      void fz; });
+  }
+  if (st.phase === 'replay'){ const q = P(XC, YC, TOPZ + 2); ov += ffPill(q[0] - 30*INK_K, q[1], 'SLOW MOTION 1/8', 7*INK_K, '#ffe08a'); }
+  s += ov;
+
+  // ---- labels
+  const T = ffT;
+  if (k > .6){
+    const zp = ffPiston(st), moving = st.phase === 'fall' || st.phase === 'replay';
+    lbl.push(
+      { at: T([3.5, -3.5, 20]), text: 'GLASS TUBE', on: false },
+      { at: T([4, 4, 50]), text: 'ACRYLIC HEAD', on: false },
+      { at: T([2.4, .9, LZ_TOP + .3]), text: 'RELEASE BUTTON', on: st.press > 0 },
+      { at: T([4.1, -1.2, 44.6]), text: 'MICROSWITCH', on: st.phase === 'fall' },
+      { at: T([HINGE[0] + 3.7*Math.cos(st.flap*Math.PI/2), 2.6, HINGE[1] - 3.7*Math.sin(st.flap*Math.PI/2)]), text: 'TRAP FLAP', on: st.phase === 'fall' || st.fs === 'close' },
+      { at: T([HINGE[0] + 3.4*Math.cos(st.flap*Math.PI/2), 7.8, HINGE[1] - 3.4*Math.sin(st.flap*Math.PI/2)]), text: 'FLAP LEVER', on: st.phase === 'flip' },
+      { at: T(ob.ball), text: 'STEEL BALL 33 G', on: moving },
+      { at: T(ob.fc), text: 'FEATHER 0.05 G', on: moving },
+      { at: T([3, -3, -48]), text: 'FOAM CUSHION', on: false },
+      { at: T([0, -2, -50.1]), text: 'PIEZO DISC', on: st.phase === 'fall' },
+      { at: T([0, -4, -55]), text: 'BOTTOM CAP', on: false },
+      { at: T([4.3, -4.3, 1.6]), text: 'CLAMP COLLAR', on: st.phase === 'flip' },
+      { at: [XC, YC + 8, ZA], text: 'HOLLOW TRUNNION', on: st.phase === 'pump' },
+      { at: T([0, 6.5, .6]), text: 'GLASS SIDE ARM', on: st.phase === 'pump' },
+      { at: [XC, 54.9, ZA + 1.8], text: 'ROTARY SEAL', on: st.phase === 'pump' },
+      { at: [XC, 24.5, 65.5], text: 'RIGHT BEARING', on: st.phase === 'flip' },
+      { at: [UPR[2], 28, 80], text: 'METRE RULE', on: !!st.strobe },
+      { at: [26, 62.4, 44], text: 'VACUUM HOSE', on: st.phase === 'pump' || st.phase === 'vent' },
+      { at: [33, 66.5, 18.6], text: 'VACUUM GAUGE', on: st.phase === 'pump' || st.phase === 'vent' },
+      { at: [31.4, 66.5 + 2.9, 16.4], text: 'BOURDON TUBE', on: st.phase === 'pump' || st.phase === 'vent' },
+      { at: [31, 74.9, 6], text: 'BLEED VALVE', on: st.phase === 'vent' },
+      { at: [PUMP[0] + 3.9, 64, 24], text: 'PUMP CYLINDER', on: false },
+      { at: [PUMP[0] + 3.4, 66, zp - 1], text: 'PISTON', on: st.phase === 'pump' },
+      { at: [PUMP[0] + 1, 66, zp + .6], text: 'PISTON VALVE', on: st.phase === 'pump' && st.ps >= .5 },
+      { at: [PUMP[0] + 1, 66, 7.8], text: 'INLET VALVE', on: st.phase === 'pump' && st.ps < .5 },
+      { at: [PUMP[0], 70.2, zp + 30.6], text: 'T-HANDLE', on: st.phase === 'pump' },
+      { at: [44, 10, 5], text: 'STOPWATCH', on: st.phase === 'fall' },
+      { at: [37.7, 13.7, 5.1], text: 'MICROCONTROLLER', on: false },
+      { at: [XC - .5, 24.4, 30], text: 'TIMER CORD', on: st.phase === 'fall' },
+      ...(st.p > 1 ? [{ at: T([2.5, -2.6, 10]), text: 'AIR MOLECULES', on: st.phase === 'vent' }] : []));
+    s += xrCallouts(lbl, [0, BW, -2, BD + 2, 0, TOPZ]);
+  } else if (k === 0){
+    s += xrCallouts([
+      { at: T([3.2, 0, LZ_TOP + 2]), text: 'RELEASE BUTTON', on: st.press > 0 },
+      { at: T([HINGE[0] + 3.7*Math.cos(st.flap*Math.PI/2), 2.6, HINGE[1] - 3.7*Math.sin(st.flap*Math.PI/2)]), text: 'TRAP FLAP', on: false },
+      { at: T(ob.ball), text: 'STEEL BALL', on: false },
+      { at: T(ob.fc), text: 'FEATHER', on: false },
+      { at: T([0, 5, 20]), text: 'GLASS TUBE', on: false },
+      { at: [UPR[2], 28, 80], text: 'METRE RULE', on: !!st.strobe },
+      { at: [33, 66.5, 18.6], text: 'VACUUM GAUGE', on: st.phase === 'pump' || st.phase === 'vent' },
+      { at: [PUMP[0] + 3.9, 64, 24], text: 'VACUUM PUMP', on: st.phase === 'pump' },
+      { at: [31, 74.9, 6], text: 'BLEED VALVE', on: st.phase === 'vent' },
+      { at: [44, 10, 5], text: 'STOPWATCH', on: st.phase === 'fall' } ], [0, BW, -2, BD + 2, 0, TOPZ]);
+  }
+  return s;
+}
+
+const ffPkpa = p => p >= 10 ? p.toFixed(1) : p.toFixed(2);
+ui = mountFigure({
+  fig:'F1', title:"Galileo's drop",
+  size:[BW, BD, TOPZ], palette:'tomato', turn:'full',
+  state:{ phase:'idle', where:'top', p:P_ATM, phi:0, flap:0, press:0, bleed:0, tt:0, rt:0, ft:0, fs:'', ps:0, pStart:P_ATM, strokes:0, vt:0, clk:0, drop:null, last:null, strobe:false, next:null },
+  scene,
+  readout: st => st.phase === 'pump' ? `Stroke ${st.strokes + 1}: each up stroke lets the tube's air spread into the cylinder; ${ffPkpa(st.p)} kPa left.`
+    : st.phase === 'vent' ? 'The bleed valve lets the room air back in.'
+    : st.phase === 'flip' ? 'Turning the tube over on its trunnions to bring the ball and feather back up.'
+    : st.phase === 'replay' ? 'Replay at 1/8 speed: a mark every 0.1 s.'
+    : st.where === 'top' ? `Ball and feather sit on the trap flap. Air in the tube: ${ffPkpa(st.p)} kPa.` : `They have landed on the cushion. Air in the tube: ${ffPkpa(st.p)} kPa.`,
+  stats: st => { const d = st.phase === 'fall' ? st.drop : st.last, t = st.phase === 'fall' ? Math.max(0, st.tt) : 99;
+    const tv = (x) => !d ? '–' : t >= x ? x.toFixed(3) + ' s' : t.toFixed(3) + ' s';
+    return [ { label:'Air', value: ffPkpa(st.p) + ' kPa' },
+      { label:'Ball', value: tv(d ? d.tb : 0), small:true },
+      { label:'Feather', value: tv(d ? d.tf : 0), small:true },
+      { label:'g from ball', value: d && t >= d.tb ? (2*DROP/(d.tb*d.tb)).toFixed(2) + ' m/s²' : '–', small:true } ]; },
+  buttons:[
+    { label:'Drop', onClick: st => ffDrop(st) },
+    { label:'Pump out the air', onClick: st => ffPump(st) },
+    { label:'Let the air in', onClick: st => ffVent(st) },
+    { label:'Slow-motion replay', onClick: st => ffReplay(st) },
+  ],
+  acts:{ button: st => ffDrop(st), ball: st => ffDrop(st), flap: st => ffDrop(st), pump: st => ffPump(st), bleed: st => ffVent(st), timer: st => ffReplay(st) },
+  params:(st, q) => {
+    if (q.has('p')) st.p = ffClamp(+q.get('p') || P_ATM, P_MIN, P_ATM);
+    if (q.get('down') === '1'){ st.where = 'bottom'; st.flap = 1; st.last = ffDropOf(st.p); }
+    if (q.has('t')){ st.phase = 'fall'; st.drop = ffDropOf(st.p); st.tt = +q.get('t'); st.flap = st.tt > 0 ? 1 : 0; st.press = st.tt > -.05 && st.tt < .2 ? 1 : 0; }
+    if (q.has('flip')){ st.phase = 'flip'; st.fs = 'over'; st.phi = ffClamp(+q.get('flip'), 0, 180)*Math.PI/180; st.flap = 1; st.ft = st.phi > Math.PI/2 ? 1.4 : 0; st.where = 'bottom'; }
+    if (q.get('strobe') === '1'){ st.where = 'bottom'; st.flap = 1; st.last = ffDropOf(st.p); st.strobe = true; }
+    if (q.has('pump')){ st.phase = 'pump'; st.ps = +q.get('pump'); st.pStart = st.p; }
+  },
+});
+xrMount(() => ui, st => st.phase === 'pump' ? 'Up stroke: the inlet valve lifts and the tube\'s air spreads into the cylinder. Down stroke: the inlet shuts, the piston valve opens and the air goes out through the vents.'
+  : st.phase === 'fall' || st.phase === 'replay' ? 'Both feel the same pull per kilogram. Drag grows with speed and with the air\'s density; it soon matches the feather\'s tiny weight, so it stops speeding up. In vacuum there is no drag and nothing to slow it.'
+  : st.phase === 'flip' ? 'The trunnions turn in their bearings; the left one is hollow and its O-ring keeps the vacuum while the tube turns.'
+  : 'The red button pushes a rod through an O-ring; its wedge draws the latch bolt back and the torsion spring snaps the flap down. The microswitch starts the stopwatch; the piezo disc under the foam stops it at each hit.');
+</script></body></html>
