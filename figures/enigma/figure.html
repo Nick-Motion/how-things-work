@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Enigma machine</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Enigma I (Wehrmacht, 1930s) in its wooden case, lid off, front flap folded down.
+   Truth first: how a key press really runs
+   1. The operator sets the three rotors by their thumbwheels; the letter of each shows in its window in the rotor cover.
+   2. A double-ended cable (stecker) plugged into two plugboard sockets swaps those two letters, on the way in and out.
+   3. Pressing a key first pushes the stepping bail down; the bail link turns the pawl shaft and the three pawls push
+      on the ratchets: the right rotor always steps one letter; the middle rotor steps when the right rotor's notch is
+      under its pawl, and the middle rotor's own notch then steps itself and the left rotor (the double step).
+   4. Only at the bottom of its travel does the key close its contact: the 4.5 V battery, through the rotary switch and
+      the power bus, feeds the key's line to its plugboard socket (and across the cable if one is plugged in), along the
+      loom to the entry wheel, through the right, middle and left rotors' wiring to the reflector, which sends it back
+      through the left, middle and right rotors on a different path, out of the entry wheel to another socket, through
+      the resting contact of that letter's key to its lamp, and back to the battery: the lamp lights the cipher letter.
+      Because the path comes back the same way, a letter never encrypts to itself.
+   5. Releasing the key lets the lamp go out; the key spring lifts it.
+   Wiring: rotors I (left), II (middle), III (right), reflector B, rings at A.
+
+   Parts (each held by another):
+   CASE      wooden box . lid hinges on the back . side clasps . front flap on two hinges, folded down . deck plate
+   KEYS      26 caps with chrome rims . stems through the deck . return springs . stepping bail plate on its pivot rod .
+             changeover contacts on three copper power bus bars (held by the side walls)
+   PLUGBOARD 26 sockets in the front panel . stecker cable with two plugs . socket terminals . loom along the floor
+   ROTORS    entry wheel on its block . right / middle / left rotor: ratchet, alphabet ring with turnover notch, wired
+             bakelite body, knurled thumbwheel . reflector B on its block . axle through all, held by the axle clamp and
+             the left bracket . spring contacts on each face . rotor cover with three windows and three slots
+   STEPPING  bail link . pawl shaft on two brackets . three pawls on the ratchets
+   LAMPS     lampboard with 26 windows . lamp plate on four posts . 26 bulbs in brass sockets . lamp return strip
+   POWER     4.5 V battery in its tray . rotary switch under its knob . two screw terminals for outside power */
+
+const W = 84, D = 102, HC = 32, FLAP = 26, TOPZ = 38;              // case depth, width, height; flap; top of the keys
+const ROWS = ['QWERTZUIO', 'ASDFGHJK', 'PYXCVBNML'];
+const KX = [61, 69, 77], LMPX = [40, 46.5, 53], PLZ = [24, 16.5, 9];  // key rows, lamp rows (x); plugboard rows (z)
+const LETS = {};
+ROWS.forEach((r, row) => [...r].forEach((ch, i) => { const y = 51 + ((row === 1 ? 3.5 : 4) - i)*9.6;
+  LETS[ch] = { row, i, y, kx: KX[row], lx: LMPX[row], pz: PLZ[row] }; }));
+const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const RX = 18, RZ = 22, RY0 = [62, 51, 40], ETW = [33, 39], UKW = [73, 77], RR = 7;   // rotors: axle (x, z), left/middle/right y0
+const RNAME = ['LEFT ROTOR', 'MIDDLE ROTOR', 'RIGHT ROTOR'];
+
+/* ---------- the cipher (real Enigma I wiring) ---------- */
+const A2 = s => [...s].map(ch => ch.charCodeAt(0) - 65);
+const ROT = [A2('EKMFLGDQVZNTOWYHXUSPAIBRCJ'), A2('AJDKSIRUXBLHWTMCQGZNPYFVOE'), A2('BDFHJLCPRTXVZNYEIWGAKMUSQO')];
+const INV = ROT.map(w => { const v = []; w.forEach((o, i) => v[o] = i); return v; });
+const UKWB = A2('YRUHQSLDPXNGOKMIEBFZCWVJAT');
+const NOTCH = [16, 4, 21];                                           // turnover at Q, E, V
+const md = n => ((n % 26) + 26) % 26;
+const fwdR = (i, c, o) => md(ROT[i][md(c + o)] - o), bwdR = (i, c, o) => md(INV[i][md(c + o)] - o);
+const stepPos = ([l, m, r]) => { const sm = m === NOTCH[1], sr = r === NOTCH[2]; return [md(l + (sm ? 1 : 0)), md(m + (sm || sr ? 1 : 0)), md(r + 1)]; };
+const swap = (plug, c) => !plug ? c : c === plug[0] ? plug[1] : c === plug[1] ? plug[0] : c;
+function encode(pos, plug, p){
+  const c = [swap(plug, p)];
+  c.push(fwdR(2, c[0], pos[2])); c.push(fwdR(1, c[1], pos[1])); c.push(fwdR(0, c[2], pos[0])); c.push(UKWB[c[3]]);
+  c.push(bwdR(0, c[4], pos[0])); c.push(bwdR(1, c[5], pos[1])); c.push(bwdR(2, c[6], pos[2]));
+  return { c, out: swap(plug, c[7]) };
+}
+// self-check: AAAAA at AAA with no cable gives BDZGO
+(() => { let pos = [0,0,0], s = ''; for (let i = 0; i < 5; i++){ pos = stepPos(pos); s += ALPHA[encode(pos, null, 0).out]; }
+  if (s !== 'BDZGO') document.documentElement.dataset.errors = 'cipher self-check ' + s; })();
+
+/* ---------- materials ---------- */
+const BAKE = { l:'#4a4440', m:'#35302c', d:'#221e1b' }, DECK = '#2c2826', BRASS = matOf('#d8b25a'), COP = matOf('#d98a52');
+const RINGM = matOf('#efe6cc'), WHEELM = { l:'#8c9396', m:'#686f73', d:'#43494c' }, BATM = matOf('#4c7fc4');
+const PLATEM = matOf('#b98a50'), GLASS = '#f4efdc', LIT = '#ffd84a', FWD = '#ff5a1f', BACKC = '#2f7fe0';
+const caseOf = m => ({ l: mix(m.l, WOOD.l, .55), m: mix(m.m, WOOD.m, .55), d: mix(m.d, WOOD.d, .55) });
+
+/* ---------- small helpers ---------- */
+const txZ = (x, y, z, str, size, col = INK, weight = 800) => `<text transform="${txM(P(x, y, z), Dv(0,-1,0), Dv(1,0,0))}" font-size="${size}" fill="${col}" text-anchor="middle" dy=".36em" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}">${str}</text>`;
+const enBoxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+let enClip = 0;
+const clip2 = (pts3, inner) => { const id = 'eq' + (++enClip); return `<clipPath id="${id}"><path d="${sp(hull(pts3.map(p => P(...p))))}"/></clipPath><g clip-path="url(#${id})">${inner}</g>`; };
+const rad = a => a*Math.PI/180;
+const ring = (c, vis0) => rad(90 + (c - vis0)*360/26);              // angle of contact / letter c on a rotor turned to vis0
+const cpt = (c, y, r = RR) => { const a = ring(c, 0); return [RX + r*Math.cos(a), y, RZ + r*Math.sin(a)]; };
+// a cable bends, it doesn't kink (from the lamp figure)
+const enBend = (pts, r = 1.2) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k]) * d/la), q = c.map((v, k) => b[k] + (v - b[k]) * d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+// a wire cut into short pieces, each with its own box, so it sorts with the solids it passes; r in model units
+const enWire = (pts, col, r = .3, seg = 4, bendR = 1.2) => { const q = enBend(pts, bendR), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < seg){ len += Math.hypot(...q[j].map((v, k) => v - q[j - 1][k])); j++; }
+    if (len < seg) while (j < q.length - 1) j++;
+    const piece = q.slice(i, j + 1), d = pd(piece, false);
+    out.push({ box: enBoxOf(piece, r), svg: `<path d="${d}" fill="none" stroke="${INK}" style="stroke-width:${f(2*r + .45)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" style="stroke-width:${f(2*r)}" stroke-linecap="round" stroke-linejoin="round"/>` });
+    i = j; }
+  return out; };
+
+/* ---------- the key press: timing ---------- */
+const RUN_T = 2.45;
+const runVals = run => { if (!run) return { kd: 0, prog: 0, lamp: false, on: false };
+  const t = run.t; return { kd: t < .15 ? t/.15 : t < 2.2 ? 1 : Math.max(0, 1 - (t - 2.2)/.2), prog: Math.max(0, Math.min(1, (t - .35)/1.25)),
+    lamp: t >= 1.6 && t < 2.35, on: t >= .3 && t < 2.35 }; };
+
+/* ---------- the current's path, port to port, in 3D ---------- */
+const SB = ch => [W - 2.4, LETS[ch].y, LETS[ch].pz];                     // back of a plugboard socket
+const BAT_P = [13, 9, 16], BAT_N = [7, 17, 16], SW_IN = [18, 13, 29], SW_OUT = [22, 13, 29];
+function buildPath(run, plug){
+  const p = ALPHA[run.k], c = run.c, q = ALPHA[c[0]], r = ALPHA[c[7]], o = ALPHA[run.out];
+  const K = LETS[p], KO = LETS[o];
+  const segs = [];
+  // battery + : switch, down to the row's power bus, along it to the key's contact
+  segs.push({ col: FWD, pts: [BAT_P, [13, 9, 27], SW_IN, SW_OUT, [30, 6, 29], [30, 6, 10], [K.kx, 6, 10], [K.kx, 6, 14.9], [K.kx, K.y, 14.9], [K.kx, K.y, 17.5]] });
+  // key's working contact to its socket
+  segs.push({ col: FWD, pts: [[K.kx + 1.3, K.y + .8, 17.5], [K.kx + 2.2, K.y + .8, 17.5], [K.kx + 2.2, K.y + .8, 9], [W - 4, K.y + .8, 9], [W - 4, K.y + .8, K.pz], SB(p)] });
+  if (p !== q) segs.push({ col: FWD, cable: true, pts: cablePts(plug) });
+  // socket to the entry wheel along the loom
+  const a0 = cpt(c[0], 31);
+  segs.push({ col: FWD, pts: [SB(q), [W - 6, LETS[q].y, LETS[q].pz], [W - 6, LETS[q].y, 6], [W - 6, 31, 6], [26, 31, 6], a0, cpt(c[0], 33)] });
+  // through the entry wheel, right, middle, left rotors, the reflector, and back
+  segs.push({ col: FWD, pts: [cpt(c[0], 33), cpt(c[0], 40), cpt(c[1], 50.5), cpt(c[1], 51), cpt(c[2], 61.5), cpt(c[2], 62), cpt(c[3], 72.5), cpt(c[3], 76), [RX, 76.6, RZ]] });
+  segs.push({ col: BACKC, pts: [[RX, 76.6, RZ], cpt(c[4], 76), cpt(c[4], 72.5), cpt(c[5], 62), cpt(c[5], 61.5), cpt(c[6], 51), cpt(c[6], 50.5), cpt(c[7], 40), cpt(c[7], 33)] });
+  // out of the entry wheel, back along the loom to the socket
+  segs.push({ col: BACKC, pts: [cpt(c[7], 33), cpt(c[7], 31.8), [27.5, 31.8, 4.6], [W - 8, 31.8, 4.6], [W - 8, LETS[r].y - .8, 4.6], [W - 8, LETS[r].y - .8, LETS[r].pz], SB(r)] });
+  if (r !== o) segs.push({ col: BACKC, cable: true, pts: cablePts(plug).slice().reverse() });
+  // socket to the resting contact of that letter's key, then to its lamp, then back to the battery
+  segs.push({ col: BACKC, pts: [SB(o), [W - 4, KO.y - .8, KO.pz], [W - 4, KO.y - .8, 10], [KO.kx + 2.2, KO.y - .8, 10], [KO.kx + 2.2, KO.y - .8, 17.5], [KO.kx + 1.3, KO.y - .8, 17.5]] });
+  segs.push({ col: BACKC, pts: [[KO.kx - 1.3, KO.y, 17.5], [KO.kx - 2.2, KO.y, 17.5], [KO.kx - 2.2, KO.y, 12], [56, KO.y, 12], [56, KO.y, 26], [KO.lx, KO.y, 26], [KO.lx, KO.y, 28]] });
+  segs.push({ col: BACKC, pts: [[KO.lx, KO.y + 1, 28.3], [37, KO.y + 1, 28.3], [37, 8, 28.3], [12, 8, 28.3], [8, 15, 26], BAT_N] });
+  let total = 0; for (const s of segs){ s.len = 0; for (let i = 1; i < s.pts.length; i++) s.len += Math.hypot(...s.pts[i].map((v, k) => v - s.pts[i-1][k])); s.at = total; total += s.len; }
+  return { segs, total };
+}
+// the stecker cable: out of plug A, sagging in front of the plugboard above the flap, into plug B
+function cablePts(plug){
+  if (!plug) return [];
+  const A = LETS[ALPHA[plug[0]]], B = LETS[ALPHA[plug[1]]];
+  const zl = Math.max(4.5, Math.min(A.pz, B.pz) - 6 - Math.abs(A.y - B.y)*.05);
+  return [[W + 3.2, A.y, A.pz], [W + 5.5, A.y, A.pz - 2.5], [W + 7.5, A.y + (B.y - A.y)*.25, zl + 1], [W + 8, (A.y + B.y)/2, zl], [W + 7.5, A.y + (B.y - A.y)*.75, zl + 1], [W + 5.5, B.y, B.pz - 2.5], [W + 3.2, B.y, B.pz]];
+}
+// the lit part of the path (prog 0..1), as a drawn overlay: a soft halo, a bright core and a spark at the front
+function pathOverlay(path, prog, inside){
+  const upTo = path.total*prog; let s = '', tip = null;
+  for (const sg of path.segs){
+    if (sg.at >= upTo || (!inside && !sg.cable)) continue;
+    let rest = upTo - sg.at; const pts = [sg.pts[0]];
+    for (let i = 1; i < sg.pts.length && rest > 0; i++){ const a = sg.pts[i-1], b = sg.pts[i], l = Math.hypot(...b.map((v, k) => v - a[k]));
+      if (l <= rest){ pts.push(b); rest -= l; } else { const t = rest/l; pts.push(a.map((v, k) => v + (b[k] - v)*t)); rest = 0; } }
+    const pp = sg.cable ? enBend(pts, 3) : pts, d = pd(pp, false);
+    s += `<path d="${d}" fill="none" stroke="${sg.col}" style="stroke-width:${sg.cable ? 3.4 : 2.4}" opacity=".3" stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${sg.col}" style="stroke-width:${sg.cable ? 1.5 : .9}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    tip = pp[pp.length - 1];
+  }
+  if (tip && prog < 1){ const [X, Y] = P(...tip); s += `<circle cx="${f(X)}" cy="${f(Y)}" r="2.2" fill="#fff6c8" stroke="${FWD}" style="stroke-width:.6"/>`; }
+  return s;
+}
+
+/* ---------- the case ---------- */
+function caseBody(st, cm){
+  const FR = facing([1,0,0]), BK = facing([-1,0,0]), LF = facing([0,1,0]), RT = facing([0,-1,0]);
+  let s = box(0, 0, 0, W, D, HC, cm, tone, 1.2);
+  // deck plate, flush in the rim, with the holes the key stems pass through
+  s += shape(on(PZ(HC + .03), rectUV(2.4, 2.4, W - 2.4, D - 2.4)), DECK, .9);
+  for (const [x, y] of [[4, 4], [4, D - 4], [W - 4, 4], [W - 4, D - 4]]) s += shape(on(PZ(HC + .05), ellUV(x, y, .7, .7, 8)), METAL.m, .4);
+  for (const ch of ALPHA){ const K = LETS[ch]; s += fill(pd(on(PZ(HC + .05), ellUV(K.kx, K.y, 1.2, 1.2, 10))), '#100d0b'); }
+  // grain on the sides
+  const grain = (yy, n) => { let g = ''; for (const z of [7, 15.5, 24]) g += pd([[6, yy, z], [W*.45, yy, z + .6], [W - 6, yy, z - .4]], false); return `<path d="${g}" fill="none" stroke="${mix(cm.d, '#000000', .2)}" stroke-width=".7" opacity=".55"/>`; };
+  if (LF) s += grain(D + .05) + box(W*.5 - 3, D, HC - 7, W*.5 + 3, D + 1.2, HC - 2, METAL, toneI, .8);           // side clasp for the lid
+  if (RT) s += grain(-.05) + box(W*.5 - 3, -1.2, HC - 7, W*.5 + 3, 0, HC - 2, METAL, toneI, .8);
+  if (BK){ s += box(-1, 14, HC - 5, 0, 24, HC, BRASS, toneI, .8) + box(-1, 78, HC - 5, 0, 88, HC, BRASS, toneI, .8);   // lid hinges
+    s += shape(on(PX(-.05), rectUV(44, 12, 58, 18)), '#e9e1c8', .8) + `<text transform="${txM(P(-.1, 51, 14.2), Dv(0,1,0), Dv(0,0,-1))}" font-size="2.6" fill="${INK}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800">A 10694</text>`; }
+  if (FR){
+    s += shape(on(PX(W + .04), rectUV(5, 4, D - 5, 29.5)), '#2b2725', 1);
+    for (const ch of ALPHA){ const K = LETS[ch];
+      s += shape(on(PX(W + .08), ellUV(K.y, K.pz, 2.1, 2.1, 14)), METAL.m, .6);
+      s += fill(pd(on(PX(W + .1), ellUV(K.y, K.pz + .8, .5, .5, 8))) + pd(on(PX(W + .1), ellUV(K.y, K.pz - .8, .5, .5, 8))), '#0d0b0a');
+      s += tx(W + .1, K.y, K.pz + 2.6, ch, 2.4, '#efe6cc', 800); }
+  }
+  return s;
+}
+const caseInk = () => { const pts = []; for (const x of [0, W]) for (const y of [0, D]) for (const z of [0, HC]) pts.push([x, y, z]); return hullInk(pts, 2.8); };
+
+/* ---------- things on the deck (normal view) ---------- */
+function deckItems(st, ui0, inMech){
+  const rv = runVals(st.run), items = [];
+  // lampboard with its 26 windows
+  if (!inMech){ let lb = box(35.5, 4, HC, 56.5, 98, HC + 2, BAKE, toneI, 1);
+    for (const ch of ALPHA){ const K = LETS[ch], on1 = rv.lamp && ALPHA[st.run.out] === ch;
+      const wdw = on(PZ(HC + 2.03), ellUV(K.lx, K.y, 2.6, 2.6, 16));
+      if (on1) lb += fill(pd(on(PZ(HC + 2.03), ellUV(K.lx, K.y, 4.6, 4.6, 16))), LIT, 'opacity=".45"');
+      lb += shape(wdw, on1 ? LIT : GLASS, .6) + txZ(K.lx, K.y, HC + 2.06, ch, 2.8, on1 ? '#7a3a00' : '#5b5348'); }
+    items.push({ box: [[35.5, 4, HC], [56.5, 98, HC + 2]], svg: lb });
+    // rotor cover: slots for the thumbwheels, windows showing each ring's letter
+    let cv = box(2.4, 2.4, HC, 34, D - 2.4, HC + 3, BAKE, toneI, 1);
+    st.pos.forEach((p, i) => { const y0 = RY0[i];
+      cv += shape(on(PZ(HC + 3.03), rectUV(RX - 8.8, y0 + 8.2, RX + 8.8, y0 + 10.8)), '#120f0d', .7);
+      cv += shape(on(PZ(HC + 3.03), rectUV(RX - 2.6, y0 + .6, RX + 2.6, y0 + 4.4)), RINGM.l, .7)
+        + txZ(RX, y0 + 2.5, HC + 3.06, ALPHA[md(Math.round(st.vis[i]))], 3.2, INK); });
+    // switch positions round the knob, terminal plate
+    for (let k = 0; k < 4; k++){ const a = rad(200 + k*40); cv += fill(pd(on(PZ(HC + 3.04), ellUV(20 + 5.2*Math.cos(a), 15 + 5.2*Math.sin(a), .45, .45, 8))), '#e9e1c8'); }
+    items.push({ box: [[2.4, 2.4, HC], [34, D - 2.4, HC + 3]], svg: cv });
+    // rotary switch knob and the two screw terminals
+    const kn = cyl(20, 15, HC + 3, HC + 5.6, 3.4, BAKE, toneI, 1, 20) + line([[20, 15, HC + 5.65], [20 + 3*Math.cos(rad(280)), 15 + 3*Math.sin(rad(280)), HC + 5.65]], 1.1);
+    items.push({ box: [[16.6, 11.6, HC + 3], [23.4, 18.4, HC + 5.6]], svg: kn });
+    for (const x of [11, 26]) items.push({ box: [[x - 1.4, 4.6, HC + 3], [x + 1.4, 7.4, HC + 4.6]], svg: cyl(x, 6, HC + 3, HC + 4.6, 1.3, BRASS, toneI, .8, 12) + line([[x - .9, 6, HC + 4.65], [x + .9, 6, HC + 4.65]], .6) });
+    // thumbwheel tops through their slots (clipped to the part above the cover)
+    st.pos.forEach((p, i) => { const y0 = RY0[i], pr = [];
+      for (const x of [RX - 8.9, RX + 8.9]) for (const y of [y0 + 8.3, y0 + 10.7]) for (const z of [HC + 3, TOPZ]) pr.push([x, y, z]);
+      items.push({ box: [[RX - 8.8, y0 + 8.3, HC + 3], [RX + 8.8, y0 + 10.7, TOPZ]], svg: act('wheel', clip2(pr, thumb(y0, st.vis[i])), `data-r="${i}"`) }); });
+  }
+  // the keys
+  for (const ch of ALPHA){ const K = LETS[ch], dz = st.run && ALPHA[st.run.k] === ch ? -2.6*rv.kd : 0, z0 = 36.2 + dz, z1 = 38 + dz;
+    let k = rod([K.kx, K.y, HC], [K.kx, K.y, z0], .7, METAL, toneI, .6, .7, 10);
+    k += cyl(K.kx, K.y, z0, z0 + .7, 3.6, METAL, toneI, .8, 22) + cyl(K.kx, K.y, z0 + .7, z1, 3.1, BAKE, toneI, .9, 22);
+    k += txZ(K.kx, K.y, z1 + .02, ch, 3.2, '#f3ead2');
+    items.push({ box: [[K.kx - 3.6, K.y - 3.6, HC], [K.kx + 3.6, K.y + 3.6, z1]], svg: act('key', k, `data-k="${ch}"`) }); }
+  return items;
+}
+// a knurled thumbwheel
+function thumb(y0, v){
+  let s = rod([RX, y0 + 8.5, RZ], [RX, y0 + 10.5, RZ], 15.5, WHEELM, toneI, .9, 15.5, 40), kn = '';
+  for (let j = 0; j < 52; j++){ const a = rad(90 + j*360/52 - v*360/26), n = [Math.cos(a), 0, Math.sin(a)];
+    if (vis(n)) kn += pd([[RX + 15.5*n[0], y0 + 8.6, RZ + 15.5*n[2]], [RX + 15.5*n[0], y0 + 10.4, RZ + 15.5*n[2]]], false); }
+  return s + `<path d="${kn}" fill="none" stroke="${INK}" stroke-width=".45" opacity=".8"/>`;
+}
+
+/* ---------- the stecker cable and its two plugs (outside, in front of the plugboard) ---------- */
+function cableItems(st, lit){
+  if (!st.plug) return [];
+  const out = [], FR = facing([1,0,0]);
+  for (const c of st.plug){ const K = LETS[ALPHA[c]];
+    let pl = box(W, K.y - 1.3, K.pz - 1.9, W + 3.2, K.y + 1.3, K.pz + 1.9, BAKE, toneI, .8);
+    if (FR) pl += shape(on(PX(W + 3.25), ellUV(K.y, K.pz, .8, .8, 10)), METAL.m, .5);
+    out.push({ box: [[W, K.y - 1.3, K.pz - 1.9], [W + 3.2, K.y + 1.3, K.pz + 1.9]], svg: pl }); }
+  const pts = cablePts(st.plug).slice(); pts[0] = [W + 3.1, ...pts[0].slice(1)];
+  out.push(...enWire(pts, lit ? '#ff8a3d' : '#5a3a28', .75, 6, 3));
+  return out;
+}
+
+/* ---------- the flap, folded down in front ---------- */
+function flapSvg(cm){
+  let s = box(W, 3, 0, W + FLAP, D - 3, 1.6, cm, tone, 1.1);
+  s += shape(on(PZ(1.63), rectUV(W + 6, 22, W + 20, 80)), '#efe6cc', .8);
+  let ln = ''; for (let k = 0; k < 6; k++) ln += pd([[W + 8 + k*2.2, 26, 1.66], [W + 8 + k*2.2, 76, 1.66]], false);
+  s += `<path d="${ln}" fill="none" stroke="#8d8270" stroke-width=".5"/>`;
+  for (const y of [16, 86]) s += rod([W, y - 4, 1.3], [W, y + 4, 1.3], .9, BRASS, toneI, .7, .9, 12);
+  return s;
+}
+
+/* ---------- see-through: the working parts ---------- */
+let XR_ITEMS = [];
+function mech(st){
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg }), rv = runVals(st.run), runL = st.run ? ALPHA[st.run.k] : null, outL = st.run && rv.lamp ? ALPHA[st.run.out] : null;
+  const bx = (x0, y0, z0, x1, y1, z1, m, w = .7, extra = '') => put([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, m, toneI, w) + extra);
+  const rd = (a, b, r, m, w = .6, n = 14) => put(enBoxOf([a, b], r), rod(a, b, r, m, toneI, w, r, n));
+  const vc = (x, y, z0, z1, r, m, w = .7, n = 16) => put([[x - r, y - r, z0], [x + r, y + r, z1]], cyl(x, y, z0, z1, r, m, toneI, w, n));
+  const wires = w => parts.push(...w);
+  const TOP = facing([0,0,1]);
+  // ---- keys: caps, stems in pieces either side of the deck and the bail, springs, contacts on the bus bars
+  const bailDz = -1.4*rv.kd;
+  for (const ch of ALPHA){ const K = LETS[ch], down = runL === ch, dz = down ? -2.6*rv.kd : 0, z0 = 36.2 + dz, z1 = 38 + dz;
+    put([[K.kx - 3.6, K.y - 3.6, HC], [K.kx + 3.6, K.y + 3.6, z1]], act('key', rod([K.kx, K.y, HC], [K.kx, K.y, z0], .7, METAL, toneI, .6, .7, 10)
+      + cyl(K.kx, K.y, z0, z0 + .7, 3.6, METAL, toneI, .8, 22) + cyl(K.kx, K.y, z0 + .7, z1, 3.1, BAKE, toneI, .9, 22) + txZ(K.kx, K.y, z1 + .02, ch, 3.2, '#f3ead2'), `data-k="${ch}"`));
+    // stem from under the deck to the bail, with its return spring round it
+    const sp = []; for (let i = 0; i <= 14; i++){ const a = i*Math.PI*.9; sp.push([K.kx + 1.3*Math.cos(a), K.y + 1.3*Math.sin(a), 25 + bailDz + (31.4 - 25 - bailDz)*i/14]); }
+    put([[K.kx - 1.4, K.y - 1.4, 24.6 + bailDz], [K.kx + 1.4, K.y + 1.4, HC]], rod([K.kx, K.y, 24.6 + bailDz], [K.kx, K.y, HC - .1], .7, METAL, toneI, .5, .7, 10)
+      + `<path d="${pd(sp, false)}" fill="none" stroke="${INK}" style="stroke-width:.55" stroke-linejoin="round"/><path d="${pd(sp, false)}" fill="none" stroke="#cfd6d8" style="stroke-width:.25"/>`);
+    put([[K.kx - .8, K.y - .8, 19], [K.kx + .8, K.y + .8, 24 + bailDz]], rod([K.kx, K.y, 19 + dz*.3], [K.kx, K.y, 24 + bailDz], .7, METAL, toneI, .5, .7, 10));
+    bx(K.kx - 1.3, K.y - 1.3, 15.4, K.kx + 1.3, K.y + 1.3, 19, down && rv.on ? matOf('#ff9a3a') : BAKE, .6,
+      TOP ? fill(pd(on(PZ(19.02), rectUV(K.kx - .9, K.y - .9, K.kx + .9, K.y + .9))), COP.l) : '');
+  }
+  // stepping bail plate (holes for every stem), its pivot rod on the side walls, the link back to the pawl shaft
+  { let holes = ''; if (TOP) for (const ch of ALPHA){ const K = LETS[ch]; holes += fill(pd(on(PZ(24.62 + bailDz), ellUV(K.kx, K.y, 1, 1, 8))), '#3a3632'); }
+    put([[58, 4, 24 + bailDz], [81, 98, 24.6 + bailDz]], box(58, 4, 24 + bailDz, 81, 98, 24.6 + bailDz, METAL, toneI, .7) + holes); }
+  rd([57.4, 2.4, 24.3], [57.4, D - 2.4, 24.3], .6, METAL, .5);
+  rd([58, 30, 24 + bailDz], [32, 30, 12.4 + bailDz*.5], .55, METAL, .5);
+  // pawl shaft on two brackets, three pawls up to the ratchets (they lift while the key goes down)
+  rd([32, 27, 12], [32, 67, 12], .8, METAL, .6);
+  bx(31, 26, 2, 33, 27, 13, METAL, .6); bx(31, 67, 2, 33, 68, 13, METAL, .6);
+  for (let i = 0; i < 3; i++){ const yp = RY0[i] + .5, lift = 1.6*rv.kd;
+    rd([32, yp, 12], [28.4, yp, 28.4 + lift], .5, matOf('#9aa3a7'), .5);
+    bx(27.4, yp - .5, 27.9 + lift, 28.8, yp + .5, 29.1 + lift, matOf('#9aa3a7'), .4); }
+  // power bus bars, one under each row of contacts, ends held in the side walls
+  for (const x of KX) bx(x - 1.2, 2.4, 14.4, x + 1.2, D - 2.4, 15.4, COP, .6);
+  // ---- plugboard: socket terminals, the loom along the floor, wires from each socket and each key into it
+  for (const ch of ALPHA){ const K = LETS[ch]; rd([W - 4, K.y, K.pz], [W - 2.4, K.y, K.pz], .9, BRASS, .5, 10);
+    wires(enWire([[W - 4, K.y, K.pz], [W - 6, K.y, K.pz], [W - 6, K.y, 7.4]], '#3a3632', .22, 8));
+    wires(enWire([[K.kx + 1.3, K.y + .8, 17.5], [K.kx + 2.2, K.y + .8, 17.5], [K.kx + 2.2, K.y + .8, 9], [W - 6, K.y + .8, 7.4]], '#5d554c', .18, 8)); }
+  rd([W - 6, 8, 6], [W - 6, 94, 6], 1.5, matOf('#4a4038'), .7, 12);
+  rd([W - 6, 31, 6], [27, 31, 6], 1.3, matOf('#4a4038'), .7, 12);
+  for (let c = 0; c < 26; c += 2) wires(enWire([[27, 31, 6.8], cpt(c, 31.2), cpt(c, 32.9)], '#5d554c', .16, 8, .6));
+  // ---- rotors: axle clamp, entry wheel, three rotors, reflector, left bracket, the axle in the gaps
+  bx(14, 26, 2, 22, 29.5, 26, METAL, .8);
+  bx(14, 34, 2, 22, 38, 11.6, METAL, .6); bx(14, 74, 2, 22, 76, 11.1, METAL, .6); bx(14, 78, 2, 22, 81.5, 26, METAL, .8);
+  for (const [a, b] of [[29.5, 33], [39, 40], [50.5, 51], [61.5, 62], [72.5, 73], [77, 78]]) rd([RX, a, RZ], [RX, b, RZ], .9, METAL, .5, 12);
+  const pins = (y, v, ny) => facing([0, ny, 0]) ? Array.from({length: 26}, (_, j) => { const a = ring(j, v);
+    return shape(on(PY(y + ny*.05), ellUV(RX + RR*Math.cos(a), RZ + RR*Math.sin(a), .55, .55, 8)), BRASS.l, .3); }).join('') : '';
+  put([[RX - 10.5, ETW[0], RZ - 10.5], [RX + 10.5, ETW[1], RZ + 10.5]], rod([RX, ETW[0], RZ], [RX, ETW[1], RZ], 10.5, matOf('#8a7a62'), toneI, .9, 10.5, 32) + pins(ETW[0], 0, -1) + pins(ETW[1], 0, 1));
+  put([[RX - 11, UKW[0], RZ - 11], [RX + 11, UKW[1], RZ + 11]], rod([RX, UKW[0], RZ], [RX, UKW[1], RZ], 11, matOf('#6b7377'), toneI, .9, 11, 32) + pins(UKW[0], 0, -1)
+    + (facing([0,1,0]) ? txY(RX, UKW[1] + .1, RZ - 1, 'B', 6, '#efe6cc') : ''));
+  for (let i = 0; i < 3; i++){ const y0 = RY0[i], v = st.vis[i], moving = Math.abs(v - st.pos[i]) > .02 && Math.abs(v - st.pos[i]) < 25.98;
+    // ratchet with 26 teeth
+    let rt = rod([RX, y0, RZ], [RX, y0 + 1, RZ], 12, moving ? matOf('#ffb15a') : METAL, toneI, .7, 12, 52) + pins(y0, v, -1), th = '';
+    for (let j = 0; j < 26; j++){ const a = ring(j, v) + rad(6.9), n = [Math.cos(a), 0, Math.sin(a)]; if (vis(n)) th += pd([[RX + 12*n[0], y0, RZ + 12*n[2]], [RX + 12*n[0], y0 + 1, RZ + 12*n[2]]], false); }
+    put([[RX - 12, y0, RZ - 12], [RX + 12, y0 + 1, RZ + 12]], rt + `<path d="${th}" fill="none" stroke="${INK}" stroke-width=".4"/>`);
+    // alphabet ring with its letters and the turnover notch
+    let rg = rod([RX, y0 + 1, RZ], [RX, y0 + 4, RZ], 11.3, RINGM, toneI, .8, 11.3, 52);
+    for (let j = 0; j < 26; j++){ const a = ring(j, v), n = [Math.cos(a), 0, Math.sin(a)]; if (!vis(n)) continue;
+      const o = P(RX + 11.35*n[0], y0 + 2.5, RZ + 11.35*n[2]);
+      rg += `<text transform="${txM(o, Dv(0,-1,0), Dv(n[2], 0, -n[0]))}" font-size="2.1" fill="${INK}" text-anchor="middle" dy=".36em" font-family="ui-monospace,Menlo,monospace" font-weight="800">${ALPHA[j]}</text>`; }
+    { const a0 = ring(NOTCH[i], v) - rad(4), a1 = ring(NOTCH[i], v) + rad(4), nn = [Math.cos((a0 + a1)/2), 0, Math.sin((a0 + a1)/2)];
+      if (vis(nn)) rg += shape([[RX + 11.4*Math.cos(a0), y0 + 1, RZ + 11.4*Math.sin(a0)], [RX + 11.4*Math.cos(a1), y0 + 1, RZ + 11.4*Math.sin(a1)], [RX + 11.4*Math.cos(a1), y0 + 2, RZ + 11.4*Math.sin(a1)], [RX + 11.4*Math.cos(a0), y0 + 2, RZ + 11.4*Math.sin(a0)]], '#1d1a16', .3); }
+    put([[RX - 11.3, y0 + 1, RZ - 11.3], [RX + 11.3, y0 + 4, RZ + 11.3]], rg);
+    // wired bakelite body
+    put([[RX - 10.6, y0 + 4, RZ - 10.6], [RX + 10.6, y0 + 8.5, RZ + 10.6]], rod([RX, y0 + 4, RZ], [RX, y0 + 8.5, RZ], 10.6, BAKE, toneI, .8, 10.6, 40));
+    // knurled thumbwheel, flat contacts on its outer face
+    put([[RX - 15.5, y0 + 8.5, RZ - 15.5], [RX + 15.5, y0 + 10.5, RZ + 15.5]], act('wheel', thumb(y0, v) + pins(y0 + 10.5, v, 1), `data-r="${i}"`));
+  }
+  // ---- lamps: plate on four posts, 26 bulbs in brass sockets, return strip
+  bx(35.5, 4, 27, 56.5, 98, 28, PLATEM, .7);
+  for (const [x, y] of [[36.5, 5], [55.5, 5], [36.5, 97], [55.5, 97]]) vc(x, y, 28, 31.8, .5, METAL, .4, 8);
+  bx(36.4, 6, 28, 37.4, 96, 28.3, COP, .4);
+  for (const ch of ALPHA){ const K = LETS[ch], on1 = outL === ch;
+    const [X, Y] = P(K.lx, K.y, 31.3), r = 1.5*1.22;
+    put([[K.lx - 1.5, K.y - 1.5, 28], [K.lx + 1.5, K.y + 1.5, 32.8]], cyl(K.lx, K.y, 28, 30, 1.1, BRASS, toneI, .6, 12)
+      + (on1 ? `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r*2.4)}" fill="${LIT}" opacity=".5"/>` : '')
+      + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r)}" fill="${on1 ? LIT : '#ffffff'}" fill-opacity="${on1 ? 1 : .55}" stroke="${INK}" stroke-width=".6"/>`
+      + `<circle cx="${f(X - r*.35)}" cy="${f(Y - r*.35)}" r="${f(r*.25)}" fill="#ffffff" opacity=".8"/>`); }
+  // ---- power: battery in its tray, rotary switch under the knob, terminals, wires
+  bx(4, 4, 2, 16, 22, 5, METAL, .7);
+  bx(5, 5, 2.2, 15, 21, 16, BATM, .8, TOP ? txZ(10, 13, 16.05, '4.5V', 2.8, '#ffffff') : '');
+  bx(12, 7.5, 16, 14, 10.5, 16.6, BRASS, .4); bx(6, 15.5, 16, 8, 18.5, 16.6, BRASS, .4);
+  vc(20, 15, 27.5, HC + 3, 3, BAKE, .8, 18); vc(20, 15, 29.5, 30.3, 4, PLATEM, .5, 18);
+  vc(20, 15, HC + 3, HC + 5.6, 3.4, BAKE, .9, 20);
+  for (const x of [11, 26]){ vc(x, 6, 29, HC + 4.6, .8, BRASS, .5, 10); }
+  wires(enWire([[13, 9, 16.6], [13, 9, 27], SW_IN], '#8a3a24', .3));
+  wires(enWire([SW_OUT, [30, 6, 29], [30, 6, 10]], '#8a3a24', .3));
+  for (const x of KX) wires(enWire([[30, 6, 10], [x, 6, 10], [x, 6, 14.4]], '#8a3a24', .3));
+  wires(enWire([[7, 17, 16.6], [8, 15, 26], [12, 8, 28.3], [36.4, 8, 28.3]], '#3a3632', .3));
+  wires(enWire([[11, 6, 29], [11, 9, 27]], '#3a3632', .25)); wires(enWire([[26, 6, 29], [24, 13, 29]], '#3a3632', .25));
+  // ---- labels, anchored on the parts
+  const pk = runL || 'E', K = LETS[pk], ol = outL || 'Q', KO = LETS[ol];
+  XR_ITEMS = [
+    { at: [K.kx, K.y, 38], text: 'KEY CAP', on: !!runL },
+    { at: [K.kx, K.y, 27], text: 'RETURN SPRING', on: !!runL },
+    { at: [70, 90, 24.6 + bailDz], text: 'STEPPING BAIL', on: rv.kd > .1 },
+    { at: [45, 30, 18], text: 'BAIL LINK', on: rv.kd > .1 },
+    { at: [K.kx, K.y + 1.3, 17], text: 'KEY CONTACTS', on: rv.on },
+    { at: [KX[2], 92, 15.4], text: 'POWER BUS', on: rv.on },
+    { at: [W, 88, PLZ[2]], text: 'PLUG SOCKET', on: false },
+    { at: [W - 6, 70, 6], text: 'WIRING LOOM', on: rv.on },
+    { at: [RX, 33, RZ - 6], text: 'ENTRY WHEEL', on: rv.on },
+    { at: [RX, RY0[2] + 6, RZ - 10.6], text: RNAME[2], on: rv.on },
+    { at: [RX, RY0[1] + 6, RZ - 10.6], text: RNAME[1], on: rv.on },
+    { at: [RX, RY0[0] + 6, RZ - 10.6], text: RNAME[0], on: rv.on },
+    { at: [RX, UKW[1], RZ + 6], text: 'REFLECTOR', on: rv.on },
+    { at: [RX + 11.3, RY0[1] + 2.5, RZ], text: 'ALPHABET RING', on: false },
+    { at: [RX, RY0[0] + 9.5, RZ + 15.5], text: 'THUMBWHEEL', on: false },
+    { at: [RX + 12, RY0[2] + .5, RZ - 3], text: 'RATCHET', on: rv.kd > .1 },
+    { at: [RX + 11.4*Math.cos(ring(NOTCH[2], st.vis[2])), RY0[2] + 1.5, RZ + 11.4*Math.sin(ring(NOTCH[2], st.vis[2]))], text: 'CARRY NOTCH', on: false },
+    { at: [28.4, RY0[1] + .5, 28.4], text: 'PAWLS', on: rv.kd > .1 },
+    { at: [32, 64, 12], text: 'PAWL SHAFT', on: rv.kd > .1 },
+    { at: [RX, 31, RZ], text: 'ROTOR AXLE', on: false },
+    { at: [RX + RR, ETW[1], RZ], text: 'SPRING PINS', on: rv.on },
+    { at: [KO.lx, KO.y, 31.3], text: 'LAMP BULB', on: !!outL },
+    { at: [LMPX[0], LETS.O.y, 29], text: 'LAMP SOCKET', on: false },
+    { at: [56.5, 60, 27.5], text: 'LAMP PLATE', on: false },
+    { at: [37, 70, 28.3], text: 'LAMP RETURN', on: !!outL },
+    { at: [5, 13, 10], text: 'BATTERY 4.5 V', on: rv.on },
+    { at: [20, 15, 28.5], text: 'ROTARY SWITCH', on: rv.on },
+    { at: [26, 6, HC + 4.6], text: 'TERMINALS', on: false },
+    { at: [RX + 2.6, RY0[2] + 2.5, HC + 3], text: 'ROTOR WINDOW', on: false },
+    { at: [W + 20, 60, 1.6], text: 'FRONT FLAP', on: false },
+    { at: [-1, 19, HC - 2], text: 'LID HINGE', on: false },
+  ];
+  if (st.plug){ const A = LETS[ALPHA[st.plug[0]]]; XR_ITEMS.push({ at: [W + 3.2, A.y + 1.3, A.pz], text: 'STECKER PLUG', on: false }, { at: cablePts(st.plug)[3], text: 'STECKER CABLE', on: rv.on }); }
+  // the base layers: under the lamp plate / deck everything sorts together
+  return byDepth(parts);
+}
+
+/* ---------- labels ---------- */
+// xrCallouts splits at the middle of the box; this machine is long and flat, so most anchors land on one side.
+// Split at the anchors' median screen x instead: each half gets a box stretched far out on the other side,
+// so the engine finds no room there (the near edge stays put, so the column still hugs the machine).
+function enCallouts(items, B){
+  const X = it => P(...it.at)[0], xs = items.map(X).sort((a, b) => a - b), mx = xs[items.length >> 1];
+  const d = [P(1, 0, 0)[0] - P(0, 0, 0)[0], P(0, 1, 0)[0] - P(0, 0, 0)[0]], a = Math.abs(d[0]) > Math.abs(d[1]) ? 0 : 1;
+  const far = side => { const b = B.slice(); if ((d[a] > 0) === (side > 0)) b[2*a + 1] += 1e4; else b[2*a] -= 1e4; return b; };
+  return xrCallouts(items.filter(it => X(it) < mx), far(1)) + xrCallouts(items.filter(it => X(it) >= mx), far(-1));
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  enClip = 0;
+  const cm = caseOf(m), k = ease(st.xr || 0), rv = runVals(st.run);
+  const path = st.run ? (st.run.path || (st.run.path = buildPath(st.run, st.plug))) : null;
+  const cableLit = !!(path && rv.on && path.segs.some(sg => sg.cable && sg.at < path.total*rv.prog));
+  let s = castShadow([[0,0,0],[W,0,0],[0,D,0],[W,D,0],[0,0,HC],[W,0,HC],[0,D,HC],[W,D,HC]]);
+  let inner;
+  if (k > 0){
+    // far walls faintly from inside, the mechanism, then the case and its covers as a ghost
+    const far = [[[1,0,0],[[W,0,0],[W,D,0],[W,D,HC],[W,0,HC]]], [[-1,0,0],[[0,0,0],[0,D,0],[0,D,HC],[0,0,HC]]], [[0,1,0],[[0,D,0],[W,D,0],[W,D,HC],[0,D,HC]]], [[0,-1,0],[[0,0,0],[W,0,0],[W,0,HC],[0,0,HC]]], [[0,0,-1],[[0,0,0],[W,0,0],[W,D,0],[0,D,0]]]]
+      .filter(([n]) => !vis(n)).map(([n, q]) => fill(pd(q), mix(toneI(n.map(v => -v), cm), '#f2efe7', .55))).join('');
+    const covers = byDepth(deckItems(st, ui, false).filter(it => !/data-act="key"/.test(it.svg) && !/data-act="wheel"/.test(it.svg)));
+    inner = `<g opacity="${f(.5*k)}">${far}</g><g opacity="${f(k)}">${mech(st)}</g><g opacity="${f(1 - .8*k)}">${caseBody(st, cm)}${covers}</g><g opacity="${f(.6*k)}">${caseInk()}</g>`
+      + (1 - k > .01 ? `<g opacity="${f(1 - k)}">${byDepth(deckItems(st, ui, false).filter(it => /data-act="(key|wheel)"/.test(it.svg)))}</g>` : '');
+  } else inner = caseBody(st, cm) + caseInk() + byDepth(deckItems(st, ui, false));
+  s += byDepth([
+    { box: [[W, 3, 0], [W + FLAP, D - 3, 1.6]], svg: flapSvg(cm) },
+    { box: [[0, 0, 0], [W, D, TOPZ]], svg: inner },
+    ...cableItems(st, cableLit) ]);
+  if (path && rv.on) s += k > 0 ? `<g opacity="${f(k)}">${pathOverlay(path, rv.prog, true)}</g>` : pathOverlay(path, rv.prog, false);
+  const B = [0, W + FLAP, 0, D, 0, TOPZ];
+  if (k > .6) s += enCallouts(XR_ITEMS, B);
+  else s += xrCallouts([
+    { at: [LETS.G.kx, LETS.G.y, 38], text: 'KEYBOARD', on: !!st.run },
+    { at: [LETS.G.lx, LETS.G.y + 15, HC + 2], text: 'LAMPBOARD', on: rv.lamp },
+    { at: [RX, RY0[1] + 2.5, HC + 3], text: 'ROTOR WINDOWS', on: false },
+    { at: [RX - 6, RY0[0] + 9.5, HC + 4.6], text: 'THUMBWHEELS', on: false },
+    { at: [20, 15, HC + 5.6], text: 'ROTARY SWITCH', on: false },
+    { at: [10, 80, HC + 3], text: 'ROTOR COVER', on: false },
+    ...(facing([1,0,0]) ? [{ at: [W, 30, PLZ[1]], text: 'PLUGBOARD', on: false }] : []),
+    { at: [W + 14, 90, 1.6], text: 'FRONT FLAP', on: false },
+    ...(st.plug ? [{ at: cablePts(st.plug)[3], text: 'STECKER CABLE', on: cableLit }] : []) ], B);
+  return s;
+}
+
+/* ---------- behaviour (one state object, one loop) ---------- */
+let ui = null, enLoop = false;
+function makeRun(st, ch){
+  st.pos = stepPos(st.pos);
+  const k = ALPHA.indexOf(ch), e = encode(st.pos, st.plug, k);
+  return { k, c: e.c, out: e.out, t: 0, sp: st.queue && st.queue.length ? 1.7 : 1 };
+}
+function finishRun(st){ if (!st.run) return; st.run = null; st.vis = st.pos.slice(); }
+function tick(dt){
+  const st = ui.st;
+  for (let i = 0; i < 3; i++){ let d = md(st.pos[i] - st.vis[i] + 13) - 13; if (Math.abs(d) < 1e-3){ st.vis[i] = st.pos[i]; continue; }
+    st.vis[i] = md(st.vis[i] + Math.sign(d)*Math.min(Math.abs(d), dt*6)); if (Math.abs(md(st.pos[i] - st.vis[i] + 13) - 13) < 1e-3) st.vis[i] = st.pos[i]; }
+  if (st.run){ st.run.t += dt*st.run.sp;
+    if (st.run.t >= RUN_T){ st.run = null;
+      if (st.queue && st.queue.length) startKey(st, st.queue.shift(), true); } }
+  return !!st.run || st.vis.some((v, i) => v !== st.pos[i]);
+}
+function kick(){ if (enLoop) return; enLoop = true; ui.animate(dt => { const go = tick(dt); if (!go) enLoop = false; return go; }); }
+function startKey(st, ch, fromQueue){
+  if (!fromQueue){ st.queue = []; finishRun(st); }
+  st.run = makeRun(st, ch);
+  st.typed = (st.typed + ch).slice(-12); st.lit = (st.lit + ALPHA[st.run.out]).slice(-12);
+  kick();
+}
+function setRotor(st, i, d){ st.queue = []; finishRun(st); st.pos[i] = md(st.pos[i] + d); kick(); }
+function setAll(st, s){ st.queue = []; finishRun(st); st.pos = A2(s); st.typed = ''; st.lit = ''; kick(); }
+function setPlug(st, pr){ st.queue = []; finishRun(st); st.plug = pr ? A2(pr) : null; }
+const PAIRS = ['EQ', 'AZ', 'NS'];
+
+ui = mountFigure({
+  // the frame is padded (+48 each way) so two columns of part labels fit beside the machine
+  fig:'27', title:'Enigma machine', turn:'full', size:[W + FLAP + 48, D + 48, TOPZ + 48], center:[(W + FLAP)/2, D/2], palette:'mustard',
+  state:{ pos:[0,0,0], vis:[0,0,0], plug:null, run:null, queue:[], typed:'', lit:'' },
+  scene,
+  // in see-through the right label column needs the top-right corner, so the readouts step aside
+  stats: st => (st.xr || 0) > .6 ? [] : [ { label:'Rotors', value: st.pos.map(p => ALPHA[p]).join(' ') },
+    { label:'Key to lamp', value: st.run ? `${ALPHA[st.run.k]} to ${ALPHA[st.run.out]}` : '-', small:true },
+    { label:'Lamps lit', value: st.lit || '-', small:true } ],
+  buttons:[
+    { label:'Set the rotors', choices: st => [
+      ...['Left', 'Middle', 'Right'].map((n, i) => ({ label:`${n} +1`, onClick:(st) => setRotor(st, i, 1) })),
+      { label:'Start at A A A', current: st.pos.join() === '0,0,0', onClick:(st) => setAll(st, 'AAA') },
+      { label:'Start at A D U', current: st.pos.join() === '0,3,20', onClick:(st) => setAll(st, 'ADU') } ] },
+    { label:'Plug a cable', choices: st => [
+      ...PAIRS.map(pr => ({ label:`${pr[0]} to ${pr[1]}`, current: !!st.plug && st.plug.join() === A2(pr).join(), onClick:(st) => setPlug(st, pr) })),
+      { label:'Unplug', disabled: !st.plug, why:'no cable is plugged in', onClick:(st) => setPlug(st, null) } ] },
+    { label:'Press a key', choices: st => [...ROWS.join('')].map(ch => ({ label: ch, onClick:(st) => startKey(st, ch) })) },
+    { label:'Type ENIGMA', onClick:(st) => { finishRun(st); st.queue = [...'NIGMA']; startKey(st, 'E', true); } },
+  ],
+  acts:{ key:(st, el) => startKey(st, el.dataset.k), wheel:(st, el) => setRotor(st, +el.dataset.r, 1) },
+  params:(st, q) => {
+    if (/^[A-Z]{3}$/.test(q.get('rotors') || '')){ st.pos = A2(q.get('rotors')); st.vis = st.pos.slice(); }
+    if (/^[A-Z]{2}$/.test(q.get('plug') || '')) st.plug = A2(q.get('plug'));
+    const ch = q.get('key');
+    if (ch && LETS[ch]){ st.run = makeRun(st, ch); st.run.t = +(q.get('t') || 1.2); st.vis = st.pos.slice(); st.typed = ch; st.lit = ALPHA[st.run.out]; }
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
