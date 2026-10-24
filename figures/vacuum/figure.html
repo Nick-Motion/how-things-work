@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vacuum cleaner</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Upright bagless (single-cyclone) vacuum cleaner on a rug, with a waste can beside it.
+   How it really works (and where the dirt is after each step):
+   1. Switch on (button on the handle): mains from the cord runs up the spine to the switch and back down to the
+      universal motor in the pod over the rear axle. The motor spins the fan at ~30 000 rpm; its shaft runs out the
+      other end to a pulley, and a rubber belt from it turns the brush roll in the nozzle.
+   2. Push over the dust: the brush roll's bristles flick dust up off the rug into the brush chamber; the fan's suction
+      pulls it with the air: brush chamber -> suction duct in the head -> hose up the side -> tangential cyclone inlet.
+      The air spins round the clear bin: heavy dirt is flung to the wall and drops to the bin floor, below the separator
+      skirt. The air turns inward through the perforated shroud, up the vortex finder, through the foam and felt
+      pre-motor filters in the lid, down the clean-air duct in the spine, through the fan, and out through the HEPA
+      filter behind the exhaust grille.
+   3. Empty the bin: switch off, press the bin release, slide the bin forward off its seat, carry it over the waste
+      can, open the bottom door: the dirt drops into the can. Close the door and put the bin back.
+   Parts (each held by another):
+   CASE     floor head (nozzle) . brush window . bumper . headlight . motor pod . exhaust cover . belt cover . neck .
+            spine . lid . handle stem, head block, grip . pedal . cord hooks
+   AIR      brush chamber . suction duct . hose (port on the head) . elbow . cyclone inlet . bin . shroud . separator
+            skirt . bin door . vortex finder . filter frame . foam pre-motor filter . felt filter . clean-air duct .
+            fan housing . fan . scroll outlet . HEPA filter
+   DRIVE    stator + field coils . armature end windings . commutator . carbon brushes + holders . bearings + strap .
+            motor shaft . drive pulley . belt . brush roll pulley . brush roll + bristles . brush roll bearings .
+            motor mounts
+   POWER    cord (wrapped on hooks, one lead to the wall) . mains wires up the spine . power switch . thermal cutout .
+            suppression capacitor . power light
+   WHEELS   rear wheels on stub axles, hubs . front rollers
+   x = depth (front of the head at x = 36), y = width, z = up. 1 unit = 1 cm. The vacuum is modelled in its own frame and
+   moved onto the rug by a fixed offset plus the push distance (orthographic, so a screen translation is exact). */
+
+const RUG = [0, 0, 84, 46], RUG_H = 1.2, VX = 8, VY = 8;
+const BTOP = boardTop(RUG[0], RUG[1], RUG[2], RUG[3], RUG_H, 3);
+const HL = 36, HWD = 32, HZ0 = 1.5, HZ1 = 10;
+const HPROF = rrUV(0, HZ0, HWD, HZ1, 3);                        // head profile (y, z), swept along x
+const PODC = [9, 17], POD_R = 7, POD_Y = [5, 27];                // motor pod: axis along y at (x, z)
+const BIN = { x:16.5, y:16, r:7.5, z0:26, h:28 };
+const LID_Z = [54, 61];
+const SPN = [3, 10, 26, 9, 22, 96];                             // spine box
+const BRC = [29, 4], BR_RC = 1.8, BR_RT = 3.8, BR_Y = [3, 27];  // brush roll centre (x, z), core / tip radius
+const BELT_Y = 27.9;
+const CAN = { x:39.5, y:-12, r:9, h:30 };                        // waste can (world)
+const BIN_OUT = [15, -36, 20];                                    // bin offset when held over the can
+const EMP_END = 4.5;
+const BCPROF = [[3,10],[25,10],[25,11.5],[12,24.5],[3,24.5]];   // belt cover profile (x, z)
+const GRY = { l:'#d3d0c8', m:'#aeaaa0', d:'#77736a' }, RUBBER = { l:'#5a5550', m:'#3d3935', d:'#262321' };
+const COPPER = { l:'#f0b07a', m:'#d08a52', d:'#9a5a2c' }, FOAM = matOf('#f2d36b'), FELT = matOf('#f4f1e8');
+const DUSTM = { l:'#b5a998', m:'#978b7a', d:'#6e6456' }, CANM = matOf('#8fb3c9'), RUGM = { l:'#ecdcc0', m:'#d6c3a2', d:'#a9956f' };
+const REDM = matOf('#e2483d'), BRASS = matOf('#d8b25a'), LAM = matOf('#8e979b'), HEPAM = matOf('#f7f4ea');
+
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const kk = (t, a, b) => ease(clamp01((t - a) / (b - a)));
+const cylY = (x, z, y0, y1, r, m, sh = toneI, w = 1, n = 20) => rod([x, y0, z], [x, y1, z], r, m, sh, w, r, n);
+const bxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+// the visible part of a ring around the y axis / the z axis (rib lines, lamination lines, rims)
+function arcY(x, z, y, r, w = .5, col = INK){ let d = '', run = [];
+  for (let i = 0; i <= 36; i++){ const a = i/36*2*Math.PI;
+    if (vis([Math.cos(a), 0, Math.sin(a)])) run.push([x + r*Math.cos(a), y, z + r*Math.sin(a)]); else { if (run.length > 1) d += pd(run, false); run = []; } }
+  if (run.length > 1) d += pd(run, false);
+  return d ? `<path d="${d}" fill="none" stroke="${col}" stroke-width="${w}" stroke-linecap="round"/>` : ''; }
+function arcZ(x, y, z, r, w = .5, col = INK, near = true){ let d = '', run = [];
+  for (let i = 0; i <= 36; i++){ const a = i/36*2*Math.PI, v = vis([Math.cos(a), Math.sin(a), 0]);
+    if (v === near) run.push([x + r*Math.cos(a), y + r*Math.sin(a), z]); else { if (run.length > 1) d += pd(run, false); run = []; } }
+  if (run.length > 1) d += pd(run, false);
+  return d ? `<path d="${d}" fill="none" stroke="${col}" stroke-width="${w}" stroke-linecap="round"/>` : ''; }
+// a prism: a convex (x, z) profile swept along y
+function extY(prof, y0, y1, m, sh = tone, w = 2){ const A = on(PY(y0), prof), B = on(PY(y1), prof);
+  let s = loft(A, B, n => sh(n, m));
+  if (facing([0,1,0])) s += fill(pd(B), sh([0,1,0], m)) + ink(pd(B), 1.1);
+  if (facing([0,-1,0])) s += fill(pd(A), sh([0,-1,0], m)) + ink(pd(A), 1.1);
+  return s + hullInk([...A, ...B], w); }
+// round each interior corner of a route, then cut it into short pieces so it sorts with the solids it passes
+const bendR = (pts, r = 1.2) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k]) * d/la), q = c.map((v, k) => b[k] + (v - b[k]) * d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+const vWire = (pts, col, w = .3, L = 4, kind = 'mech') => { const q = bendR(pts, Math.max(1.2, w*2)), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < L){ len += Math.hypot(...q[j].map((v, k) => v - q[j - 1][k])); j++; }
+    if (len < L) while (j < q.length - 1) j++;
+    const seg = q.slice(i, j + 1), d = pd(seg, false);
+    out.push({ kind, box: bxOf(seg, w), svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w + .9)}" stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linecap="round" stroke-linejoin="round"/>` }); i = j; }
+  return out; };
+
+/* ---------- dust on the rug ---------- */
+function makeDust(seed){ let s = seed; const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647, out = [];
+  for (let i = 0; i < 44; i++){ const kind = i % 5 === 0 ? 'fluff' : i % 3 === 0 ? 'crumb' : 'grit';
+    out.push({ x: 47 + rnd()*30, y: 11.5 + rnd()*25, r: kind === 'fluff' ? 1.3 + rnd()*.8 : kind === 'crumb' ? .55 + rnd()*.4 : .35 + rnd()*.25, a: rnd()*6.28, kind, gone: false }); }
+  return out; }
+function dustSvg(st){ let s = '';
+  const z = RUG_H + .05;
+  for (const d of st.dust){ if (d.gone) continue;
+    if (d.kind === 'fluff'){ const e = on(PZ(z), ellUV(d.x, d.y, d.r, d.r*.7, 12));
+      s += fill(pd(e), '#a39d92') + ink(pd(e), .45)
+        + ink(pd([[d.x - d.r*.4, d.y, z], [d.x + d.r*.5, d.y + d.r*.3, z]], false), .35); }
+    else if (d.kind === 'crumb'){ const c = Math.cos(d.a), sn = Math.sin(d.a), r = d.r;
+      s += shape([[-1,-.6],[.8,-.9],[1,.5],[-.4,.9]].map(([u, v]) => [d.x + r*(u*c - v*sn), d.y + r*(u*sn + v*c), z]), '#c99a5b', .4); }
+    else s += fill(pd(on(PZ(z), ellUV(d.x, d.y, d.r, d.r, 8))), '#5b524a'); }
+  return s ? `<g opacity="${f(st.settle)}">${s}</g>` : ''; }
+
+/* ---------- the brush roll (seen through the window; drawn whole in see-through) ---------- */
+function brushSvg(st){
+  let s = rod([BRC[0], BR_Y[0], BRC[1]], [BRC[0], BR_Y[1], BRC[1]], BR_RC, matOf('#ece6d4'), toneI, .8, BR_RC, 20);
+  let dk = '', lt = '';
+  for (let row = 0; row < 2; row++) for (let i = 0; i <= 22; i++){
+    const y = BR_Y[0] + .6 + i*(BR_Y[1] - BR_Y[0] - 1.2)/22, a = st.brushA + row*Math.PI + (y - BR_Y[0])*.26, n = [Math.cos(a), 0, Math.sin(a)];
+    if (!vis(n)) continue;
+    const seg = pd([[BRC[0] + BR_RC*n[0], y, BRC[1] + BR_RC*n[2]], [BRC[0] + BR_RT*n[0], y, BRC[1] + BR_RT*n[2]]], false);
+    if (row) lt += seg; else dk += seg; }
+  return s + `<path d="${dk}" fill="none" stroke="${INK}" stroke-width="1.1" stroke-linecap="round"/><path d="${lt}" fill="none" stroke="${INK}" stroke-width="1.1" stroke-linecap="round"/>`
+    + `<path d="${lt}" fill="none" stroke="#e2483d" stroke-width=".5" stroke-linecap="round"/><path d="${dk}" fill="none" stroke="#6b6560" stroke-width=".5" stroke-linecap="round"/>`; }
+
+/* ---------- the bin: clear wall, dirt, cyclone parts ---------- */
+function binPose(t){ if (!(t > 0)) return { o:[0,0,0], door:0 };
+  return { o:[BIN_OUT[0]*(kk(t,0,.6) - kk(t,3.9,4.5)), BIN_OUT[1]*(kk(t,.6,1.6) - kk(t,3,3.9)), BIN_OUT[2]*(kk(t,.6,1.2) - kk(t,3.3,3.9))], door: kk(t,1.6,1.9) - kk(t,2.7,3) }; }
+function binSvg(st, o, door){
+  const cx = BIN.x + o[0], cy = BIN.y + o[1], z0 = BIN.z0 + o[2], z1 = z0 + BIN.h, r = BIN.r;
+  const ring = (z, rr = r, n = 32) => on(PZ(z), ellUV(cx, cy, rr, rr, n)), A = ring(z0), B = ring(z1);
+  let s = `<g opacity=".6">` + loft(A, B, n => toneI(n, CLEAR), true) + `</g>`;
+  if (door < .01) s += fill(pd(A), '#c3d2d5');
+  // dirt on the floor of the bin
+  const h = 18 * Math.min(1, st.fill) * (1 - clamp01(door * 4));
+  if (h > .25){ s += cyl(cx, cy, z0, z0 + h, r - .35, DUSTM, toneI, .6, 32);
+    let sp2 = ''; for (let i = 0; i < 14; i++){ const a = i*2.4, rr = (i % 4 + 1) * 1.5; sp2 += pd(on(PZ(z0 + h + .02), ellUV(cx + rr*Math.cos(a), cy + rr*Math.sin(a), .35, .35, 6))); }
+    s += fill(sp2, '#5f574c'); }
+  // the spinning air: far half of each turn, the skirt and shroud, then the near half
+  const sw = st.spin, swirl = near => { if (sw < .05) return ''; let d = '';
+    for (let j = 0; j < 3; j++){ const z = z0 + Math.max(h + 2, 5) + j*4.2; if (z > z0 + 18.5) continue;
+      d += arcZ(cx, cy, z, r - 1.3 - j*.3, .6, '#8a7d6e', near); }
+    return `<g opacity="${f(.75*sw)}" stroke-dasharray="2.2 1.6" stroke-dashoffset="${f(-st.flow*.6)}">${d}</g>`; };
+  s += swirl(false);
+  s += loft(ring(z0 + 19, 5.4, 24), ring(z0 + 21, 3.6, 24), n => toneI(n, GRY)) + hullInk([...ring(z0 + 19, 5.4, 24), ...ring(z0 + 21, 3.6, 24)], .8);
+  s += cyl(cx, cy, z0 + 21, z1, 3.6, METAL, toneI, .8, 24);
+  let holes = ''; for (let zz = z0 + 22.5; zz < z1 - 1; zz += 1.6) for (let i = 0; i < 18; i++){ const a = (i + (Math.round(zz) % 2)*.5)/18*2*Math.PI;
+    if (vis([Math.cos(a), Math.sin(a), 0]) && rotV([Math.cos(a), Math.sin(a), 0]).reduce((u, v) => u + v) > .5) holes += pd(on(PZ(zz), ellUV(cx + 3.62*Math.cos(a), cy + 3.62*Math.sin(a), .22, .22, 5))); }
+  s += fill(holes, '#5c6369');
+  s += swirl(true);
+  // near wall: clear plastic, two highlights, the MAX line
+  s += `<g opacity=".3">` + loft(A, B, n => toneI(n, CLEAR)) + `</g>`;
+  const av = Math.atan2(CAM_V[1], CAM_V[0]);
+  for (const [a0, w0] of [[.45, .12], [.68, .06]]){ const a = av + a0, b = a + w0, pt = (q, z) => [cx + (r + .05)*Math.cos(q), cy + (r + .05)*Math.sin(q), z];
+    s += fill(pd([pt(a, z0 + 3), pt(b, z0 + 3), pt(b + .1, z1 - 3), pt(a + .1, z1 - 3)]), '#ffffff', 'opacity=".4"'); }
+  s += arcZ(cx, cy, z0 + 18, r + .05, .7, '#e2483d');
+  const fx = cx + Math.cos(av)*(r + .1), fy = cy + Math.sin(av)*(r + .1);
+  if (facing([1,0,0]) && Math.abs(av) < .9) s += tx(cx + r + .1, cy, z0 + 18.6, 'MAX', 1.8, '#e2483d', 800);
+  s += ink(pd(B), 1) + arcZ(cx, cy, z0, r, 1) + hullInk([...A, ...B], 2);
+  return s; }
+// bottom door, swung down about its hinge on the back edge of the bin
+function doorSvg(o, door){
+  const cx = BIN.x + o[0], cy = BIN.y + o[1], z0 = BIN.z0 + o[2], r = BIN.r, hx = cx - r, th = door * 100 * Math.PI/180;
+  const rot = ([x, y, z]) => { const u = x - hx, w = z - z0; return [hx + u*Math.cos(th) - w*Math.sin(th), y, z0 - u*Math.sin(th) - w*Math.cos(th) * -1]; };
+  const A = on(PZ(z0), ellUV(cx, cy, r, r, 28)).map(rot), B = on(PZ(z0 - .7), ellUV(cx, cy, r, r, 28)).map(rot), nTop = [Math.sin(th), 0, Math.cos(th)];
+  let s = loft(A, B, n => toneI(n, CLEAR));
+  s += vis(nTop) ? fill(pd(A), '#b9a993') + ink(pd(A), .9) : fill(pd(B), '#c3d2d5') + ink(pd(B), .9);
+  return { box: bxOf([...A, ...B]), svg: s + hullInk([...A, ...B], 1.2) }; }
+
+/* ---------- the outside of the vacuum (vacuum frame) ---------- */
+function vacParts(st, m, pose){
+  const parts = [], put = (box, svg, kind = 'solid') => parts.push({ box, svg, kind });
+  // head (nozzle) with the brush window
+  { const A = on(PX(0), HPROF), B = on(PX(HL), HPROF);
+    let s = extrude(HPROF, 0, HL, m);
+    if (facing([-1,0,0])) s += fill(pd(A), tone([-1,0,0], m)) + ink(pd(A), 1.4);
+    if (facing([1,0,0])){ s += fill(pd(B), tone([1,0,0], m)) + ink(pd(B), 1.6);
+      s += shape(on(PX(HL + .12), rrUV(1.2, HZ0 + .5, HWD - 1.2, HZ0 + 2.4, .9)), RUBBER.m, .8);
+      s += shape(on(PX(HL + .15), rrUV(12, 6.8, 20, 8.6, .8)), st.spin > .3 ? '#fff4b0' : '#ece8da', .7);
+      s += tx(HL + .2, 16, 5.3, 'CYCLO 900', 2.1, INK, 800); }
+    const win = on(PZ(HZ1 + .05), rrUV(23, 4, 34, 28, 2));
+    s += fill(pd(win), '#3a332d') + clipTo(win, brushSvg(st)) + fill(pd(win), '#cfe9f0', 'opacity=".28"')
+      + fill(pd(on(PZ(HZ1 + .07), [[25,6],[26.6,6],[30.6,26],[29,26]])), '#ffffff', 'opacity=".35"') + ink(pd(win), 1.2);
+    put([[0, 0, HZ0], [HL, HWD, HZ1]], s + hullInk([...A, ...B], 2.6), 'case'); }
+  // motor pod (its box is cut at the exhaust cover, which sits on its front)
+  put([[2, POD_Y[0], 10], [14.5, POD_Y[1], 24]], rod([PODC[0], POD_Y[0], PODC[1]], [PODC[0], POD_Y[1], PODC[1]], POD_R, m, tone, 2.2, POD_R, 32), 'case');
+  { let s = box(14.5, 6, 10, 18.5, 12.5, 19, GRY, tone, 1.1);
+    if (facing([1,0,0])){ let g = ''; for (let z = 11.5; z <= 17.6; z += 1.2) g += pd([[18.55, 7.2, z], [18.55, 11.3, z]], false);
+      s += `<path d="${g}" fill="none" stroke="${INK}" stroke-width=".8" stroke-linecap="round"/>`; }
+    put([[14.5, 6, 10], [18.5, 12.5, 19]], s, 'case'); }
+  put([[3, 27, 10], [25, 30, 24.5]], extY(BCPROF, 27, 30, GRY, tone, 1.8), 'case');
+  put([[3, 9, 21], [15, 23, 26]], box(3, 9, 21, 15, 23, 26, m, tone, 1.2), 'case');
+  { let s = box(...SPN, m, tone, 1.4);
+    if (facing([1,0,0])) s += tx(SPN[3] + .1, 16, 88, 'CYCLO', 2.4, mix(m.d, '#000000', .2), 800);
+    put([[SPN[0], SPN[1], SPN[2]], [SPN[3], SPN[4], SPN[5]]], s, 'case'); }
+  { let s = cyl(BIN.x, BIN.y, LID_Z[0], LID_Z[1], BIN.r, m, tone, 1.6, 32);
+    const zt = LID_Z[1] + .03; let sl = '';
+    for (const y of [12, 14, 16, 18, 20]) sl += pd([[12, y, zt], [16.5, y, zt]], false);
+    s += `<path d="${sl}" fill="none" stroke="${INK}" stroke-width=".9" stroke-linecap="round"/>`;
+    s += act('binrel', box(19.5, 14.2, LID_Z[1], 22.5, 17.8, LID_Z[1] + 1, REDM, toneI, .8));
+    put([[9, 8.5, LID_Z[0]], [24, 23.5, LID_Z[1] + 1]], s, 'case'); }
+  // handle: stem, head block with the switch and power light, grip
+  put([[4.6, 14.6, 96], [7.4, 17.4, 104]], rod([6, 16, 96], [6, 16, 104], 1.4, GRY, tone, 1.2, 1.4, 16));
+  { const pz = st.pressT > 0 ? .4 : 1;
+    let s = box(4, 13.5, 104, 10, 18.5, 108, m, tone, 1.2);
+    s += act('switch', cyl(7, 16, 108, 108 + pz, 1.4, REDM, toneI, .9, 16));
+    if (facing([1,0,0])){ const led = on(PX(10.05), ellUV(14.4, 105.4, .55, .55, 10)); s += fill(pd(led), st.on ? '#43c25c' : '#8d877a') + ink(pd(led), .5); }
+    put([[4, 13.5, 104], [10, 18.5, 109]], s); }
+  put([[10, 14.1, 104.6], [17.9, 17.9, 113.4]], rod([10, 16, 106.5], [16, 16, 111.5], 1.9, RUBBER, tone, 1.4, 1.9, 18));
+  // hose: port collar on the head, ribbed hose up the side, elbow, cyclone inlet into the bin wall
+  { let s = cyl(4, 3, HZ1, HZ1 + 1.4, 2.2, RUBBER, toneI, 1, 18) + rod([4, 3, HZ1 + 1.4], [4, 3, 46], 1.6, GRY, tone, 1.2, 1.6, 18);
+    for (let z = 13; z < 45; z += 1.6) s += arcZ(4, 3, z, 1.62, .55);
+    put([[1.8, .8, HZ1], [6.2, 5.2, 46]], s); }
+  put([[2.4, 1.4, 44.4], [5.6, 8.6, 51.1]], rod([4, 3, 46], [4, 7, 49.5], 1.6, GRY, tone, 1.2, 1.6, 18));
+  put([[2.5, 5.5, 48], [16.5, 8.5, 51]], rod([4, 7, 49.5], [16.5, 7, 49.5], 1.5, GRY, tone, 1.2, 1.5, 18));
+  // pedal, rear wheels + hubs, front rollers
+  put([[-2.6, 21, 4], [0, 27, 6.5]], box(-2.6, 21, 4, 0, 27, 6.5, RUBBER, toneI, 1));
+  for (const [y0, y1, yh0, yh1] of [[-2.4, 0, -2.7, -2.4], [32, 34.4, 34.4, 34.7]]){
+    put([[0, y0, 0], [10, y1, 10]], cylY(5, 5, y0, y1, 5, RUBBER, tone, 1.4, 28));
+    put([[2.8, yh0, 2.8], [7.2, yh1, 7.2]], cylY(5, 5, yh0, yh1, 2.2, METAL, toneI, .8, 18)); }
+  for (const y0 of [6, 22]) put([[32.2, y0, 0], [33.8, y0 + 4, 1.5]], cylY(33, .75, y0, y0 + 4, .75, RUBBER, toneI, .7, 12));
+  // cord hooks on the back of the spine, the cord wrapped between them, and the lead to the wall
+  put([[.6, 13, 86], [3, 19, 89]], box(1.6, 13, 86, 3, 19, 87, GRY, toneI, .8) + box(.6, 13, 86, 1.6, 19, 89, GRY, toneI, .8));
+  put([[.6, 13, 33], [3, 19, 36]], box(1.6, 13, 35, 3, 19, 36, GRY, toneI, .8) + box(.6, 13, 33, 1.6, 19, 36, GRY, toneI, .8));
+  { let d = ''; for (const y of [13.8, 15.3, 16.8, 18.3]) d += pd([[.4, y, 36.4], [.4, y, 85.6]], false);
+    put([[-.4, 13, 36.2], [.6, 19, 85.8]], `<path d="${d}" fill="none" stroke="${INK}" stroke-width="2.1" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${RUBBER.l}" stroke-width="1.2" stroke-linecap="round"/>`); }
+  parts.push(...vWire([[3, 18.5, 30], [1.6, 18.6, 29], [-.5, 19, 24], [-3, 19.3, 12], [-5, 19.5, 4], [-7, 19.5, .5]], RUBBER.l, .6, 5, 'solid'));
+  // the bin and, while it is emptied, its open door
+  const B0 = [BIN.x + pose.o[0], BIN.y + pose.o[1], BIN.z0 + pose.o[2]];
+  put([[B0[0] - BIN.r, B0[1] - BIN.r, B0[2]], [B0[0] + BIN.r, B0[1] + BIN.r, B0[2] + BIN.h]], act('binrel', binSvg(st, pose.o, pose.door)), 'bin');
+  if (pose.door > .01){ const d = doorSvg(pose.o, pose.door); put(d.box, d.svg); }
+  return parts;
+}
+
+/* ---------- the working parts (vacuum frame) ---------- */
+function mechParts(st){
+  const parts = [], put = (box, svg) => parts.push({ box, svg, kind:'mech' });
+  const Y = (x, z, y0, y1, r, m, w = .8, n = 20) => put([[x - r, y0, z - r], [x + r, y1, z + r]], cylY(x, z, y0, y1, r, m, toneI, w, n));
+  const bx = (x0, y0, z0, x1, y1, z1, m, w = .7, extra = '') => put([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, m, toneI, w) + extra);
+  const [px, pz] = PODC, live = st.on;
+  // nozzle: brush chamber wall, brush roll, its end bearings, suction duct to the hose port
+  bx(24.4, 2.5, 1.8, 25, 29.5, 9, GRY, .7);
+  put([[BRC[0] - BR_RT, BR_Y[0], 0], [BRC[0] + BR_RT, BR_Y[1], BRC[1] + BR_RT]], brushSvg(st));
+  bx(27.6, .6, 2.6, 30.4, 2.6, 5.4, RUBBER, .6); Y(BRC[0], BRC[1], 2.6, 3, 1.4, METAL, .6, 14);
+  bx(27.6, 29.4, 2.6, 30.4, 31.5, 5.4, RUBBER, .6); Y(BRC[0], BRC[1], 28.6, 29.4, 1.2, METAL, .6, 14);
+  parts.push(...vWire([[24.4, 3.5, 4.6], [7.5, 3.5, 4.6], [4.4, 3.4, 7.2], [4, 3, HZ1 + .2]], '#c9b48f', 1.3, 6));
+  // stub axles for the rear wheels
+  for (const [a, b] of [[-2.4, 1.6], [30.4, 34.4]]) Y(5, 5, a, b, .6, METAL, .5, 10);
+  // belt drive: drive pulley on the motor shaft, belt, brush roll pulley
+  { const c1 = on(PY(BELT_Y), ellUV(px, pz, 1.25, 1.25, 20)), c2 = on(PY(BELT_Y), ellUV(BRC[0], BRC[1], 1.75, 1.75, 20));
+    const belt = sp(hull([...c1, ...c2].map(p => P(...p))));
+    let s = cylY(px, pz, 27.2, 28.6, 1.1, BRASS, toneI, .7, 16) + cylY(BRC[0], BRC[1], 27, 28.6, 1.6, GRY, toneI, .7, 16);
+    s += `<path d="${belt}" fill="none" stroke="${INK}" stroke-width="1.9" stroke-linejoin="round"/><path d="${belt}" fill="none" stroke="${RUBBER.l}" stroke-width="1.1" stroke-linejoin="round"/>`;
+    if (st.spin > .02) s += `<path d="${belt}" fill="none" stroke="#f4b829" stroke-width=".5" stroke-dasharray="1.4 2.6" stroke-dashoffset="${f(-st.flow*1.4)}"/>`;
+    put([[px - 2, 27, BRC[1] - 2], [BRC[0] + 2, 28.6, pz + 2]], s); }
+  Y(px, pz, 24.5, 27.2, .55, METAL, .5, 10);                                        // motor shaft out to the pulley
+  // fan: impeller blades on a backplate, inside a see-through fan housing
+  { const bl = [];
+    for (let i = 0; i < 8; i++){ const a = st.fanA + i/8*2*Math.PI, c = Math.cos(a), s2 = Math.sin(a);
+      const q = [[px + 1.4*c, 6.8, pz + 1.4*s2], [px + 5.3*c, 6.8, pz + 5.3*s2], [px + 5.3*c, 9.6, pz + 5.3*s2], [px + 1.4*c, 9.6, pz + 1.4*s2]];
+      bl.push({ box: bxOf(q, .02), svg: shape(q, toneI([-s2, 0, c], METAL), .5) }); }
+    let s = cylY(px, pz, 9.6, 10.1, 5.4, METAL, toneI, .6, 24) + byDepth(bl) + cylY(px, pz, 6.6, 9.6, 1.4, GRY, toneI, .6, 14);
+    const A = on(PY(6), ellUV(px, pz, 6.3, 6.3, 28)), B = on(PY(10.4), ellUV(px, pz, 6.3, 6.3, 28));
+    s += `<g opacity=".35">${loft(A, B, n => toneI(n, LAM))}</g>` + hullInk([...A, ...B], .9) + arcY(px, pz, 6, 6.3, .7) + arcY(px, pz, 10.4, 6.3, .7);
+    put([[px - 6.3, 6, pz - 6.3], [px + 6.3, 10.4, pz + 6.3]], s); }
+  bx(13, 7, 12, 15.4, 10, 15.5, LAM, .6);                                            // scroll outlet to the HEPA filter
+  { let s = box(15.4, 6.4, 10.6, 18, 12.2, 18.6, HEPAM, toneI, .7);
+    if (facing([1,0,0])){ let d = ''; for (let y = 6.9; y < 12; y += .7) d += pd([[18.05, y, 10.9], [18.05, y, 18.3]], false); s += `<path d="${d}" fill="none" stroke="#b8b2a2" stroke-width=".4"/>`; }
+    put([[15.4, 6.4, 10.6], [18, 12.2, 18.6]], s); }
+  // motor: front bearing, stator stack with field coils, armature end windings, commutator, brushes, rear bearing + strap
+  Y(px, pz, 10.4, 11.4, 1.4, METAL, .6, 14);
+  { let s = cylY(px, pz, 11.5, 19.5, 4.6, LAM, toneI, .9, 28); for (let y = 12.5; y < 19.5; y += 1) s += arcY(px, pz, y, 4.62, .35);
+    put([[px - 4.6, 11.5, pz - 4.6], [px + 4.6, 19.5, pz + 4.6]], s); }
+  bx(6.5, 13, 21.6, 11.5, 18.5, 22.6, COPPER, .7); bx(6.5, 13, 11.4, 11.5, 18.5, 12.4, COPPER, .7);
+  bx(8.2, 15, 22.6, 9.8, 17, 23.3, matOf('#e8e4da'), .5);                          // thermal cutout
+  Y(px, pz, 19.5, 21, 3.8, COPPER, .7, 22);
+  { let s = cylY(px, pz, 21, 23, 2.2, COPPER, toneI, .7, 20);
+    for (let i = 0; i < 12; i++){ const a = i/12*2*Math.PI + st.fanA, n = [Math.cos(a), 0, Math.sin(a)];
+      if (vis(n)) s += ink(pd([[px + 2.22*n[0], 21.1, pz + 2.22*n[2]], [px + 2.22*n[0], 22.9, pz + 2.22*n[2]]], false), .35); }
+    put([[px - 2.2, 21, pz - 2.2], [px + 2.2, 23, pz + 2.2]], s); }
+  for (const sg of [1, -1]){ const zb = sg > 0 ? [pz + 2.2, pz + 3.6] : [pz - 3.6, pz - 2.2], zh = sg > 0 ? [pz + 3.6, pz + 4.6] : [pz - 4.6, pz - 3.6];
+    bx(8.4, 21.5, zb[0], 9.6, 22.5, zb[1], DARK, .5); bx(8, 21.3, zh[0], 10, 23, zh[1], BRASS, .5); }
+  bx(8.4, 23, pz - 5, 9.6, 23.5, pz + 5, GRY, .6);
+  Y(px, pz, 23.5, 24.5, 1.4, METAL, .6, 14);
+  for (const y of [11.8, 19.2]) bx(7, y, 10, 11, y + 1.2, 12.4, RUBBER, .6);        // rubber motor mounts on the pod floor
+  bx(5.8, 21.5, 10.6, 8, 24.5, 12.8, matOf('#e8c45a'), .6);                         // suppression capacitor
+  // filters in the lid: frame, foam, felt; the vortex finder down to the shroud
+  Y; put([[BIN.x - 2.2, BIN.y - 2.2, 54], [BIN.x + 2.2, BIN.y + 2.2, 55.2]], cyl(BIN.x, BIN.y, 54, 55.2, 2.2, METAL, toneI, .7, 18));
+  put([[BIN.x - 7, BIN.y - 7, 55.2], [BIN.x + 7, BIN.y + 7, 55.6]], cyl(BIN.x, BIN.y, 55.2, 55.6, 7, GRY, toneI, .6, 28));
+  put([[BIN.x - 6.8, BIN.y - 6.8, 55.6], [BIN.x + 6.8, BIN.y + 6.8, 57.6]], cyl(BIN.x, BIN.y, 55.6, 57.6, 6.8, FOAM, toneI, .7, 28));
+  put([[BIN.x - 6.8, BIN.y - 6.8, 57.6], [BIN.x + 6.8, BIN.y + 6.8, 58.4]], cyl(BIN.x, BIN.y, 57.6, 58.4, 6.8, FELT, toneI, .6, 28));
+  // clean-air duct: out of the lid's back, down inside the spine, into the fan's inlet
+  parts.push(...vWire([[10, 11.5, 58.6], [6.2, 11.5, 58.6], [6.2, 11.5, 26], [7, 7.5, 23], [8.2, 5.8, 21.5], [8.6, 5.6, 19]], '#b9c9cf', 1.1, 5));
+  // mains: cord entry, live up to the switch and back down to the motor, neutral straight down
+  const brown = live ? '#ff8a3d' : '#9a5a2c', blue = live ? '#5aa0d8' : '#3c6fb4';
+  parts.push(...vWire([[3.2, 18.5, 30], [4.6, 18.4, 30], [4.6, 18.4, 96], [6, 17.1, 103], [6.6, 16.8, 108]], brown, .25));
+  parts.push(...vWire([[7.4, 15.2, 108], [6.8, 15, 103], [5.4, 14.6, 96], [5.4, 14.6, 27], [8.2, 14.2, 24.4], [9, 14.2, 22.6]], brown, .25));
+  parts.push(...vWire([[3.2, 19.2, 29.6], [5.2, 19.3, 29.6], [5.2, 19.3, 26.5], [8.4, 19, 24.2], [9.2, 18.4, 22.6]], blue, .25));
+  parts.push(...vWire([[8.8, 19.6, 22.2], [7.6, 21.4, 14], [7, 22, 12.8]], blue, .2));
+  return parts;
+}
+// the air's path, as moving dashes over the see-through (dirty air brown, filtered air blue)
+const FLOW_DIRTY = [[31, 16, 1.5], [26, 12, 4.6], [24.4, 3.5, 4.6], [7.5, 3.5, 4.6], [4, 3, 10], [4, 3, 46], [4, 7, 49.5], [16.5, 7, 49.5]];
+const FLOW_CLEAN = [[16.5, 16, 50], [16.5, 16, 57], [10, 11.5, 58.6], [6.2, 11.5, 58.6], [6.2, 11.5, 26], [8.4, 5.7, 20], [9, 7, 17], [14.2, 8.5, 14], [19.5, 9.3, 14.5]];
+function flowSvg(st){ if (st.spin < .05) return '';
+  const cx = BIN.x, cy = BIN.y, spiral = [];
+  for (let i = 0; i <= 40; i++){ const a = -Math.PI/2 + i/40*4*Math.PI, z = 49.5 - i/40*36, r = 6.3 - i/40*2.4; spiral.push([cx + r*Math.cos(a), cy + r*Math.sin(a), Math.max(z, 33)]); }
+  const dash = (pts, col) => `<path d="${pd(pts, false)}" fill="none" stroke="${col}" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1.6 2.4" stroke-dashoffset="${f(-st.flow*2)}"/>`;
+  return `<g opacity="${f(.9*st.spin)}">` + dash([...FLOW_DIRTY, ...spiral], '#b0682e') + dash(FLOW_CLEAN, '#2f7fd0') + `</g>`; }
+
+/* ---------- the waste can (world frame) ---------- */
+function canParts(st){
+  const t = st.empT, ring = z => on(PZ(z), ellUV(CAN.x, CAN.y, CAN.r, CAN.r, 32)), A = ring(0), B = ring(CAN.h);
+  const lvl = .4 + 24*st.canFill, parts = [], fall = [];
+  // dirt dropping out of the bin
+  if (t > 1.6 && t < 3) for (let i = 0; i < 18; i++){ const age = t - 1.6 - i*.04; if (age <= 0) continue;
+    const z = RUG_H + BIN.z0 + BIN_OUT[2] - 2 - 120*age*age; if (z < lvl) continue;
+    const x = CAN.x + 3.2*Math.cos(i*2.3), y = CAN.y + 3.2*Math.sin(i*1.7), [X, Y2] = P(x, y, z), rr = .7 + (i % 3)*.3;
+    fall.push({ z, box: [[x - 1, y - 1, z - 1], [x + 1, y + 1, z + 1]], svg: `<circle cx="${f(X)}" cy="${f(Y2)}" r="${f(rr)}" fill="${i % 4 ? DUSTM.m : '#5f574c'}" stroke="${INK}" stroke-width=".35"/>` }); }
+  let inside = fill(pd(ring(.3)), mix(CANM.d, '#000000', .2));
+  if (st.canFill > .005) inside += fill(pd(on(PZ(lvl), ellUV(CAN.x, CAN.y, CAN.r - .2, CAN.r - .2, 32))), DUSTM.m) + ink(pd(on(PZ(lvl), ellUV(CAN.x, CAN.y, CAN.r - .2, CAN.r - .2, 32))), .5);
+  inside += fall.filter(q => q.z < CAN.h).map(q => q.svg).join('');
+  let s = openShell(A, B, n => toneI(n, CANM), inside);
+  s += ink(pd(B), 1.4) + arcZ(CAN.x, CAN.y, CAN.h - 2.5, CAN.r + .02, .7) + hullInk([...A, ...B], 2.2);
+  parts.push({ box: [[CAN.x - CAN.r, CAN.y - CAN.r, 0], [CAN.x + CAN.r, CAN.y + CAN.r, CAN.h]], svg: s, kind:'can' });
+  for (const q of fall) if (q.z >= CAN.h) parts.push({ ...q, kind:'can' });
+  return parts; }
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0), pose = binPose(st.empT);
+  const OFF = [VX + st.mx, VY, RUG_H], tr = Dv(...OFF), T = svg => `<g transform="translate(${f(tr[0])} ${f(tr[1])})">${svg}</g>`;
+  const Wd = p => [p[0] + OFF[0], p[1] + OFF[1], p[2] + OFF[2]];
+  const mv = q => ({ ...q, box: [Wd(q.box[0]), Wd(q.box[1])], svg: T(q.svg) });
+  let s = board(RUG[0], RUG[1], RUG[2], RUG[3], RUG_H, 3, RUGM);
+  for (const [x0, x1, c] of [[3, 5.5, '#c96f4f'], [6.5, 7.5, '#5f7fa8'], [76.5, 77.5, '#5f7fa8'], [78.5, 81, '#c96f4f']])
+    s += fill(pd(on(PZ(RUG_H + .02), rectUV(x0, 1.5, x1, RUG[3] - 1.5))), c, 'opacity=".75"');
+  // shadows: on the rug for the vacuum, on the floor for the can (and the bin while it is over the can)
+  const bpts = (x0, y0, z0, x1, y1, z1) => { const o = []; for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) o.push([x, y, z]); return o; };
+  s += clipTo(BTOP, T(castShadow(bpts(0, -2.4, 0, HL, 34.4, HZ1), 0) + castShadow(bpts(2, 5, 10, 24, 27, LID_Z[1]), 0) + castShadow(bpts(3, 10, LID_Z[1], 17, 22, 113), 0)
+    + (Math.abs(pose.o[1]) < 1 ? castShadow(on(PZ(BIN.z0 + pose.o[2]), ellUV(BIN.x + pose.o[0], BIN.y, BIN.r, BIN.r, 16)).concat(on(PZ(BIN.z0 + BIN.h + pose.o[2]), ellUV(BIN.x + pose.o[0], BIN.y, BIN.r, BIN.r, 16))), 0) : '')));
+  s += castShadow([...on(PZ(0), ellUV(CAN.x, CAN.y, CAN.r, CAN.r, 20)), ...on(PZ(CAN.h), ellUV(CAN.x, CAN.y, CAN.r, CAN.r, 20))], 0);
+  if (Math.abs(pose.o[1]) >= 1) s += T(castShadow([...on(PZ(BIN.z0 + pose.o[2]), ellUV(BIN.x + pose.o[0], BIN.y + pose.o[1], BIN.r, BIN.r, 16)), ...on(PZ(BIN.z0 + BIN.h + pose.o[2]), ellUV(BIN.x + pose.o[0], BIN.y + pose.o[1], BIN.r, BIN.r, 16))], -RUG_H));
+  s += `<g opacity=".18">` + T(castShadow(bpts(-1, 0, 0, HL, HWD, 0), 0)) + `</g>`;
+  s += dustSvg(st);
+  // the cord's lead along the rug to the back edge and off to the wall
+  { const c0 = Wd([-7, 19.5, .5]), cp = [c0, [Math.min(c0[0], .6), 28, RUG_H + .4], [-.6, 28.4, .4], [-12, 30, .4]], d = pd(cp, false);
+    s += `<path d="${d}" fill="none" stroke="${INK}" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${RUBBER.l}" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>`; }
+  const vac = vacParts(st, m, pose).map(mv), can = canParts(st);
+  if (k <= 0) s += byDepth([...vac, ...can]);
+  else {
+    const gh = q => ({ ...q, svg: `<g opacity="${f(1 - .8*k)}">${q.svg}</g>` }), mech = mechParts(st).map(mv).map(q => ({ ...q, svg: `<g opacity="${f(k)}">${q.svg}</g>` }));
+    const canBehind = CAM_V[1] > 0;
+    s += (canBehind ? byDepth(can) : '') + byDepth(vac.filter(q => q.kind === 'case').map(gh))
+      + byDepth([...vac.filter(q => q.kind !== 'case'), ...mech, ...(canBehind ? [] : can)]) + `<g opacity="${f(k)}">${T(flowSvg(st))}</g>`;
+  }
+  s += labels(st, k, pose, Wd);
+  return s;
+}
+
+/* ---------- labels ---------- */
+function insideCallouts(items){
+  const svg = document.getElementById('fig'), vb = svg.viewBox.baseVal, k = INK_K;
+  const u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.6*k;
+  const controlBottom = Math.max(...['btns', 'stats'].map(id => document.getElementById(id).getBoundingClientRect().bottom));
+  const top = Math.max(vb.y + 18*k, new DOMPoint(0, controlBottom + 14).matrixTransform(svg.getScreenCTM().inverse()).y);
+  const projected = items.map(it => ({ ...it, p: P(...it.at) })).sort((a, b) => a.p[0] - b.p[0]);
+  const middle = Math.ceil(projected.length/2), columns = [projected.slice(0, middle), projected.slice(middle)];
+  return columns.map((col, side) => {
+    col.sort((a, b) => a.p[1] - b.p[1]);
+    const width = u ? 25*u : Math.max(...col.map(it => it.text.length))*fs*.62 + fs*1.5;
+    const x = side ? vb.x + vb.width - width/2 - 4*k : vb.x + width/2 + 4*k;
+    const gap = Math.min(u ? 21*u : 20*k, (vb.y + vb.height - 40*k - top)/Math.max(1, col.length - 1));
+    return col.map((it, i) => tag(it.at, (x - it.p[0])/k, (top + i*gap - it.p[1])/k, it.text, it.on)).join('');
+  }).join('');
+}
+function labels(st, k, pose, Wd){
+  const run = st.spin > .3, pushing = st.push > 0 && run, B = [VX + st.mx - 3, VX + st.mx + 24, VY - 3, VY + 35, 0, 116];
+  const bo = pose.o, bc = [BIN.x + bo[0], BIN.y + bo[1], BIN.z0 + bo[2]], h = 18 * Math.min(1, st.fill), emp = st.empT > 0;
+  const W = items => items.map(it => ({ ...it, at: Wd(it.at) }));
+  if (k > .6) return insideCallouts(W([
+    { at:[BRC[0], 12, BRC[1] + BR_RC], text:'BRUSH ROLL', on: run },
+    { at:[BRC[0] + 2.6, 21, BRC[1] + 2.6], text:'BRISTLES', on: pushing },
+    { at:[BRC[0], 30.4, BRC[1] + 1.4], text:'BRUSH ROLL BEARING', on: run },
+    { at:[19, BELT_Y, 11], text:'BELT', on: run },
+    { at:[PODC[0], 28.6, PODC[1] + 1], text:'DRIVE PULLEY', on: run },
+    { at:[24.7, 24, 8.5], text:'BRUSH CHAMBER', on: pushing },
+    { at:[15, 3.5, 5.9], text:'SUCTION DUCT', on: run },
+    { at:[4, 1.4, 30], text:'HOSE', on: run },
+    { at:[11, 7, 51], text:'CYCLONE INLET', on: run },
+    { at:[bc[0] - 4, bc[1] + 4, bc[2] + Math.max(h + 3, 8)], text:'CYCLONE', on: run },
+    { at:[bc[0] + 2.5, bc[1] + 2.5, bc[2] + 25], text:'SHROUD', on: run },
+    { at:[bc[0] + 3.8, bc[1] + 3.8, bc[2] + 19.2], text:'SEPARATOR SKIRT', on: run },
+    { at:[bc[0] + 3, bc[1] - 3, bc[2] + Math.max(h, .5)], text:'DIRT', on: pushing || (emp && pose.door > .3) },
+    { at:[bc[0] - BIN.r + 1, bc[1], bc[2]], text:'BIN DOOR', on: emp && pose.door > .1 },
+    { at:[BIN.x, BIN.y - 2.2, 54.6], text:'VORTEX FINDER', on: run },
+    { at:[BIN.x, BIN.y + 6.8, 56.6], text:'PRE-MOTOR FILTER', on: run },
+    { at:[BIN.x + 6.5, BIN.y - 2, 58.2], text:'FELT FILTER', on: run },
+    { at:[6.2, 11.5, 40], text:'CLEAN AIR DUCT', on: run },
+    { at:[PODC[0] + 3, 8.2, PODC[1] + 4], text:'FAN', on: run },
+    { at:[PODC[0] - 3, 6, PODC[1] - 5], text:'FAN HOUSING', on: run },
+    { at:[PODC[0] - 2, 16, 22.6], text:'FIELD COILS', on: run },
+    { at:[PODC[0], 20.2, PODC[1] - 3.8], text:'ARMATURE', on: run },
+    { at:[PODC[0] + 2, 22, PODC[1] - 1], text:'COMMUTATOR', on: run },
+    { at:[PODC[0], 22, PODC[1] + 3.6], text:'CARBON BRUSHES', on: run },
+    { at:[PODC[0], 24, PODC[1] + 1.4], text:'MOTOR BEARING', on: run },
+    { at:[PODC[0], 26, PODC[1] + .5], text:'MOTOR SHAFT', on: run },
+    { at:[PODC[0] + 2, 12.4, 10.8], text:'MOTOR MOUNTS', on: false },
+    { at:[PODC[0], 16, 23.3], text:'THERMAL CUTOUT', on: false },
+    { at:[18, 9.3, 17.5], text:'HEPA FILTER', on: run },
+    { at:[7, 16, 109], text:'POWER SWITCH', on: st.on },
+    { at:[4.6, 18.4, 70], text:'MAINS WIRES', on: st.on },
+    { at:[-1.6, 19, 18], text:'POWER CORD', on: st.on },
+    { at:[7, 23, 12.8], text:'SUPPRESSION CAPACITOR', on: st.on },
+    { at:[5, 34.6, 5], text:'REAR WHEEL', on: st.push > 0 } ]));
+  return xrCallouts(W([
+    { at:[13, 16, 110], text:'HANDLE', on: st.push > 0 },
+    { at:[7, 16, 109], text:'POWER SWITCH', on: st.on },
+    { at:[21, 16, LID_Z[1] + 1], text:'BIN RELEASE', on: emp },
+    { at:[bc[0] + 5, bc[1] + 5, bc[2] + 10], text:'DUST BIN', on: run || emp },
+    { at:[4, 1.4, 30], text:'HOSE', on: run },
+    { at:[18.5, 9.3, 15], text:'EXHAUST GRILLE', on: run },
+    { at:[15, 30, 18], text:'BELT COVER', on: false },
+    { at:[30, 20, HZ1], text:'BRUSH WINDOW', on: run },
+    { at:[5, 34.6, 5], text:'REAR WHEEL', on: st.push > 0 },
+    { at:[-1.3, 24, 6.5], text:'PEDAL', on: false },
+    { at:[1, 16, 88.5], text:'CORD HOOK', on: false } ]), B);
+}
+
+/* ---------- behaviour (one state object, one loop) ---------- */
+let ui, looping = false;
+function stepSim(st, dt){
+  st.spin = clamp01(st.spin + (st.on ? dt/.9 : -dt/1.4));
+  st.brushA += st.spin*dt*28; st.fanA += st.spin*dt*40; st.flow += st.spin*dt*12;
+  st.pressT = Math.max(0, st.pressT - dt);
+  if (st.push > 0){ st.push += dt/3.6;
+    if (st.push >= 1){ st.push = 0; st.mx = 0; } else st.mx = 18*(1 - Math.cos(2*Math.PI*st.push));
+    if (st.spin > .5 && st.fill < 1){ const x0 = VX + st.mx + 25, x1 = VX + st.mx + 34;
+      for (const d of st.dust) if (!d.gone && d.x >= x0 && d.x <= x1 && d.y > VY + 2.5 && d.y < VY + 29.5){ d.gone = true; st.fill = Math.min(1, st.fill + .021);
+        if (st.fill >= 1 && !st.saidFull){ st.saidFull = true; ui.flash('The bin is at MAX: empty it', 2200); } } } }
+  if (st.emptying){
+    if (st.empT < 0) st.empT = st.spin > 0 ? st.empT : 0;
+    if (st.empT >= 0) st.empT += dt;
+    if (st.empT > 1.6 && st.empT < 3){ st.fill = st.dump0 * (1 - clamp01((st.empT - 1.6)/.4)); st.canFill = Math.min(1, st.can0 + st.dump0*.3*clamp01((st.empT - 1.7)/.9)); }
+    if (st.empT >= EMP_END){ st.empT = 0; st.emptying = false; st.saidFull = false;
+      if (st.dust.every(d => d.gone)){ st.dust = makeDust(st.seed = st.seed + 7); st.settle = 0; } } }
+  if (st.settle < 1) st.settle = Math.min(1, st.settle + dt/1.2);
+}
+function kick(){ if (looping) return; looping = true;
+  ui.animate(dt => { const st = ui.st; stepSim(st, dt);
+    const busy = st.on || st.spin > 0 || st.push > 0 || st.emptying || st.settle < 1 || st.pressT > 0;
+    if (!busy) looping = false; return busy; }); }
+function toggle(st){
+  if (st.emptying || st.empT > 0) return ui.flash('Put the bin back first');
+  st.on = !st.on; st.pressT = .18; kick(); }
+function push(st){
+  if (st.emptying || st.empT > 0) return ui.flash('Wait: the bin is being emptied');
+  if (st.push > 0) return;
+  if (!st.on){ st.on = true; st.pressT = .18; ui.flash('Switched on first: no suction while it is off'); }
+  else if (st.dust.every(d => d.gone)) ui.flash('The rug is clean: empty the bin and more dust settles');
+  else if (st.fill >= 1) ui.flash('The bin is at MAX: empty it');
+  st.push = 1e-4; kick(); }
+function emptyBin(st){
+  if (st.emptying) return;
+  if (st.push > 0) return ui.flash('Wait for the push to finish');
+  if (st.fill < .02) return ui.flash('The bin is already empty');
+  if (st.on){ st.on = false; st.pressT = .18; ui.flash('Switched off first'); }
+  st.emptying = true; st.empT = st.spin > 0 ? -.01 : 0; st.dump0 = st.fill; st.can0 = st.canFill; kick(); }
+
+ui = mountFigure({
+  fig:'19', turn:'full', title:'Vacuum cleaner',
+  size:[84, 67, 116], center:[42, 12.5], palette:'tomato',
+  // spin 0..1 (motor), mx = how far it has been pushed, fill 0..1 (to the MAX line), empT = time into emptying the bin
+  state:{ on:false, spin:0, brushA:0, fanA:0, flow:0, pressT:0, push:0, mx:0, fill:.12, canFill:.15, empT:0, emptying:false,
+    dump0:0, can0:0, seed:5, dust: makeDust(5), settle:1, saidFull:false },
+  scene,
+  stats: st => [ { label:'Motor', value: st.spin > .01 ? Math.round(st.spin*30).toLocaleString('en-US') + 'k rpm' : 'off' },
+                 { label:'Bin', value: Math.round(st.fill*100) + '%', small:true } ],
+  buttons:[
+    { label:'Switch on / off', onClick: st => toggle(st) },
+    { label:'Push over the dust', onClick: st => push(st) },
+    { label:'Empty the bin', onClick: st => emptyBin(st) },
+  ],
+  acts:{ switch: st => toggle(st), binrel: st => emptyBin(st) },
+  params:(st, q) => {
+    if (q.get('on') === '1'){ st.on = true; st.spin = 1; }
+    if (q.has('fill')) st.fill = clamp01(+q.get('fill'));
+    if (q.has('mx')) st.mx = +q.get('mx');
+    if (q.has('bin')) st.empT = +q.get('bin');
+    if (q.get('dust') === '0') st.dust.forEach(d => d.gone = true);
+  },
+});
+if (ui.st.on) kick();
+xrMount(() => ui, () => '');
+</script></body></html>
