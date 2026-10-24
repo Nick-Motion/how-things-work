@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Escalator</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   The upper motor turns a reduction gearbox and the transverse main shaft. Two sprockets pull
+   the paired step chains around a closed loop. Axles carry each step; separate chain and trailer
+   rollers follow different tracks, keeping the treads level and closing the risers at the landings.
+   The returning steps turn beneath each landing, then travel upside down inside the truss.
+   A chain from the main shaft drives the friction wheels that pull both continuous handrails.
+   A rider boards a level step, stays on that same step, and walks over the comb onto the upper floor.
+   Reverse stops the drive before restarting the empty escalator. Emergency stop opens the contactor
+   and applies the spring brake. Reset releases the stop latch but does not start the motor.
+   Sources read for this model.
+   https://www.otis.com/en/us/products-services/products/escalators-and-moving-walks
+   https://www.dir.ca.gov/title8/3090.html
+   Parts and supports.
+   CASE. Floor plates and combs fixed to landing frames; skirts and glass fixed to truss posts.
+   STRUCTURE. Upper/lower truss chords, diagonal braces, cross members, lower bearing and upper support.
+   STEPS. Tread and riser on the step frame; front axle on the chains; chain and trailer rollers in tracks.
+   DRIVE. Motor and gearbox bolted to upper bedplate; coupling, shaft, sprockets and bearings on that frame;
+   lower sprockets on a spring tension carriage. Handrail wheels, guides and tension roller fixed to truss.
+   POWER. Controller and contactor on the upper frame; conduit along truss to motor and stop switch.
+   SAFETY. Brake disc on motor input shaft, spring caliper fixed to bedplate; stop switches on landing posts.
+   Scale is approximately 1 model unit to 3 cm. Rise 3.12 m, tread width 1.08 m, rider 1.68 m.
+   shortcut: track transitions and tooth profiles are schematic, use manufacturer geometry for engineering use.
+*/
+const escSlope = Math.tan(Math.PI/6), escRise = 180*escSlope;
+const escTop = x => x <= 60 ? 40 : x < 80 ? 40 + escSlope*(x-60)**2/40
+  : x <= 240 ? 40 + escSlope*(x-70) : x < 260 ? 40 + escSlope*(170 + (x-240) - (x-240)**2/40) : 40 + escRise;
+const escFloor = 48, escUpper = 48 + escRise, escRadius = 15;
+const escSteel = matOf('#7f969e'), escBlue = matOf('#5a82c6'), escGold = matOf('#f3c749');
+const escSkin = matOf('#e9b589'), escPants = matOf('#485066'), escShirt = matOf('#e57354');
+const escBounds = pts => [[0,1,2].map(k=>Math.min(...pts.map(p=>p[k]))), [0,1,2].map(k=>Math.max(...pts.map(p=>p[k])))];
+const escPath = [];
+for(let x=30;x<=290;x+=2) escPath.push({x,z:escTop(x),a:0,top:true});
+for(let i=1;i<=24;i++){ const a=Math.PI*i/24; escPath.push({x:290+15*Math.sin(a),z:escTop(290)-15+15*Math.cos(a),a:-a,top:false}); }
+for(let x=288;x>=30;x-=2) escPath.push({x,z:escTop(x)-30,a:-Math.PI,top:false});
+for(let i=1;i<=24;i++){ const a=Math.PI*i/24; escPath.push({x:30-15*Math.sin(a),z:25-15*Math.cos(a),a:-Math.PI-a,top:false}); }
+let escLength=0;
+escPath.forEach((p,i)=>{if(i) escLength+=Math.hypot(p.x-escPath[i-1].x,p.z-escPath[i-1].z);p.s=escLength;});
+const escCount=Math.round(escLength/14), escPitch=escLength/escCount;
+function escAt(s){
+  s=((s%escLength)+escLength)%escLength;
+  let i=1; while(escPath[i].s<s) i++;
+  const p=escPath[i-1],q=escPath[i],t=(s-p.s)/(q.s-p.s);
+  return {x:p.x+(q.x-p.x)*t,z:p.z+(q.z-p.z)*t,a:p.a+(q.a-p.a)*t,top:p.top&&q.top};
+}
+const escPoint=(p,dx,y,dz)=>[p.x+dx*Math.cos(p.a)-dz*Math.sin(p.a),y,p.z+dx*Math.sin(p.a)+dz*Math.cos(p.a)];
+function escBlock(parts,a,b,m,extra=''){
+  parts.push({box:[a,b],svg:box(...a,...b,m,toneI,.75)+extra});
+}
+function escRod(parts,a,b,r,m,w=.65){
+  const bb=escBounds([a,b]);parts.push({box:[bb[0].map(v=>v-r),bb[1].map(v=>v+r)],svg:rod(a,b,r,m,toneI,w,r,8)});
+}
+function escStep(parts,p,detail){
+  const v=([x,y,z])=>escPoint(p,x,y,z), a=[-7,27,6.8],b=[7,63,8];
+  const corners=[];for(const x of [a[0],b[0]])for(const y of [a[1],b[1]])for(const z of [a[2],b[2]])corners.push(v([x,y,z]));
+  let svg=loft([v([-7,27,6.8]),v([7,27,6.8]),v([7,63,6.8]),v([-7,63,6.8])],
+    [v([-7,27,8]),v([7,27,8]),v([7,63,8]),v([-7,63,8])],n=>toneI(n,METAL));
+  const tn=[-Math.sin(p.a),0,Math.cos(p.a)];
+  if(vis(tn)){
+    svg+=shape([v([-7,27,8]),v([7,27,8]),v([7,63,8]),v([-7,63,8])],METAL.l,.65);
+    for(let y=30;y<63;y+=3)svg+=line([v([-7,y,8.05]),v([7,y,8.05])],.45);
+    svg+=shape([v([5.8,27,8.1]),v([7,27,8.1]),v([7,63,8.1]),v([5.8,63,8.1])],escGold.l,.25);
+  }
+  const riser=[v([-7,27,.1]),v([-7,63,.1]),v([-7,63,6.8]),v([-7,27,6.8])];
+  if(vis([-Math.cos(p.a),0,-Math.sin(p.a)]))svg+=shape(riser,escSteel.m,.7);
+  parts.push({box:escBounds([...corners,...riser]),svg});
+  if(detail){
+    escRod(parts,v([0,20,0]),v([0,70,0]),.8,escSteel);
+    for(const y of [25,65]){
+      escRod(parts,v([0,y,0]),v([0,y,6.8]),.8,escSteel);
+      escRod(parts,v([-10,y,-4]),v([0,y,6.8]),.75,escSteel);
+      escRod(parts,v([0,y,6.8]),v([-6,y,6.8]),.7,escSteel);
+    }
+    for(const y of [20,70])escRod(parts,v([0,y-1,0]),v([0,y+1,0]),2,METAL);
+    for(const y of [24,66])escRod(parts,v([-10,y-1,-4]),v([-10,y+1,-4]),1.6,escBlue);
+  }
+}
+function escWheel(parts,x,y,z,r,angle,m){
+  const a=[x,y-1.2,z],b=[x,y+1.2,z],ring=on(PY(CAM_V[1]>0?y+1.25:y-1.25),ellUV(x,z,r*.66,r*.66,16));
+  let svg=rod(a,b,r,m,toneI,.85,r,20)+ink(pd(ring),.5);
+  for(let i=0;i<6;i++){const t=angle+i*Math.PI/3;svg+=line([[x,y+(CAM_V[1]>0?1.3:-1.3),z],[x+r*.82*Math.cos(t),y+(CAM_V[1]>0?1.3:-1.3),z+r*.82*Math.sin(t)]],.75);}
+  parts.push({box:[[x-r,y-1.3,z-r],[x+r,y+1.3,z+r]],svg});
+}
+function escRider(parts,st){
+  let x=14,z=escFloor;
+  if(st.rider==='riding'){const p=escAt(st.riderS);x=p.x;z=p.z+8;}
+  if(st.rider==='leaving'||st.rider==='upper'){x=st.riderX;z=escUpper;}
+  const y=48;
+  for(const dy of [-3.2,3.2]){
+    escBlock(parts,[x-3,y+dy-1.6,z],[x+3.5,y+dy+1.6,z+2],DARK);
+    escRod(parts,[x,y+dy,z+2],[x,y+dy,z+23],2,escPants,1);
+  }
+  escBlock(parts,[x-4,y-6,z+22],[x+4,y+6,z+40],escShirt);
+  escRod(parts,[x,y,z+40],[x,y,z+43],1.7,escSkin);
+  parts.push({box:[[x-4.4,y-4.4,z+43],[x+4.4,y+4.4,z+56]],svg:cyl(x,y,z+43,z+51,4.4,escSkin,toneI,1,16)+cyl(x,y,z+51,z+56,4.5,DARK,toneI,.9,16)});
+  for(const dy of [-6,6]){
+    const handY=dy>0&&st.rider==='riding'?72:y+dy;
+    escRod(parts,[x,y+dy,z+37],[x+3,y+dy,z+30],1.7,escShirt,1);
+    escRod(parts,[x+3,y+dy,z+30],[x+5,handY,z+32],1.4,escSkin,1);
+  }
+}
+function escCallouts(items){
+  const svg=document.getElementById('fig'),vb=svg.viewBox.baseVal,k=INK_K;
+  const inverse=svg.getScreenCTM().inverse();
+  const bottom=Math.max(...['btns','stats'].map(id=>document.getElementById(id).getBoundingClientRect().bottom));
+  const top=new DOMPoint(0,bottom+12).matrixTransform(inverse).y+9*k;
+  const sorted=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  const half=Math.ceil(sorted.length/2);
+  return [sorted.slice(0,half),sorted.slice(half)].map((col,side)=>{
+    col.sort((a,b)=>a.p[1]-b.p[1]);
+    const gap=Math.min(20*k,(vb.height-60*k-top)/Math.max(1,col.length-1));
+    return col.map((it,i)=>tag(it.at,((side?vb.width-100*k:100*k)-it.p[0])/k,(top+i*gap-it.p[1])/k,it.text,it.on)).join('');
+  }).join('');
+}
+let escLabels=[];
+function escScene(st,m){
+  const shell=[],work=[],mech=[],labels=[],xr=ease(st.xr||0),moving=Math.abs(st.speed)>.01;
+  const label=(at,text,on=false)=>labels.push({at,text,on});
+  const bb=(p,a,b,material)=>{if(p!==mech||xr>0)escBlock(p,a,b,material);};
+  const rr=(p,a,b,r,material)=>{if(p!==mech||xr>0)escRod(p,a,b,r,material);};
+  const floorM=matOf('#e2d9bd');
+  bb(shell,[0,0,escFloor-5],[40,90,escFloor],floorM);
+  bb(shell,[280,0,escUpper-5],[325,90,escUpper],floorM);
+  bb(shell,[306,6,0],[320,18,escUpper-5],CERAMIC);
+  bb(shell,[306,72,0],[320,84,escUpper-5],CERAMIC);
+  for(const [x,z] of [[13,40],[307,escTop(290)]])bb(shell,[x,13,z-36],[x+2,77,z+8],m);
+  for(let x=16;x<307;x+=12){
+    const end=Math.min(307,x+12),a=[[x,13,escTop(x)-36],[end,13,escTop(end)-36],[end,77,escTop(end)-36],[x,77,escTop(x)-36]],b=a.map(p=>[p[0],p[1],p[2]+2]);
+    shell.push({box:escBounds([...a,...b]),svg:loft(a,b,n=>tone(n,m))+shape(vis([0,0,1])?b:a,m.d,.65)});
+  }
+  for(const y of [13,74]){
+    for(let x=20;x<300;x+=20){
+      const x1=Math.min(300,x+20),z0=escTop(x),z1=escTop(x1);
+      const A=[[x,y,z0-35],[x1,y,z1-35],[x1,y,z1+5],[x,y,z0+5]],B=A.map(p=>[p[0],p[1]+3,p[2]]);
+      shell.push({box:escBounds([...A,...B]),svg:loft(A,B,n=>tone(n,m))+shape(CAM_V[1]>0?B:A,tone([0,CAM_V[1]>0?1:-1,0],m),.8)});
+      for(const off of [-32,2])rr(mech,[x,y+1.5,z0+off],[x1,y+1.5,z1+off],1.6,escSteel);
+      rr(mech,[x,y+1.5,z0-32],[x1,y+1.5,z1+2],1.05,escSteel);
+      const g0=[[x,y+1.5,z0+8],[x1,y+1.5,z1+8],[x1,y+1.5,z1+39],[x,y+1.5,z0+39]];
+      shell.push({box:escBounds(g0),svg:shape(g0,'#b9dbe0',.65).replace('fill="#b9dbe0"','fill="#b9dbe0" fill-opacity=".34"')});
+      rr(shell,[x,y+1.5,z0+5],[x,y+1.5,z0+39],.65,METAL);
+    }
+    for(let x=30;x<=290;x+=26)rr(mech,[x,16,escTop(x)-32],[x,74,escTop(x)-32],1.3,escSteel);
+  }
+  label([130,14.5,escTop(130)+2],'UPPER TRUSS CHORD');
+  label([130,75.5,escTop(130)-32],'LOWER TRUSS CHORD');
+  label([150,75.5,escTop(150)-15],'DIAGONAL BRACE');
+  label([160,45,escTop(160)-32],'CROSS MEMBER');
+  label([313,12,110],'UPPER FLOOR SUPPORT');
+  bb(mech,[23,12,3],[37,78,8],escSteel); label([30,45,8],'LOWER SUPPORT');
+  for(const y of [20,70]){
+    for(const x of [30,290]){
+      const z=escTop(x)-15;
+      escWheel(mech,x,y,z,14.5,-st.travel/15,escGold);
+      bb(mech,[x-4,y-5,z-6],[x+4,y-2,z+6],escSteel);
+    }
+    for(let i=5;i<escPath.length+5;i+=5){
+      const a=escPath[i-5],b=escPath[Math.min(i,escPath.length-1)];
+      rr(mech,[a.x,y,a.z-2],[b.x,y,b.z-2],.55,escBlue);
+      const aa=escPoint(a,-10,y===20?24:66,-5.6),bbp=escPoint(b,-10,y===20?24:66,-5.6);
+      rr(mech,aa,bbp,.45,escSteel);
+    }
+    for(let i=0;i<escCount*2;i++){
+      const p=escAt(i*escPitch/2+st.travel),q=escAt((i+1)*escPitch/2+st.travel);
+      rr(mech,[p.x,y,p.z],[q.x,y,q.z],.75,escGold);
+    }
+  }
+  label([290,70,escTop(290)-1],'DRIVE SPROCKET',moving);
+  label([30,20,39],'TENSION SPROCKET',moving);
+  label([164,20,escTop(164)],'LEFT STEP CHAIN',moving);
+  label([210,70,escTop(210)],'RIGHT STEP CHAIN',moving);
+  label([110,20,escTop(110)-2],'CHAIN ROLLER TRACK');
+  label([110,66,escTop(120)-5.6],'TRAILER ROLLER TRACK');
+  label([180,20,escTop(180)-32],'RETURN TRACK');
+  for(let i=0;i<escCount;i++){const p=escAt(i*escPitch+st.travel);if(xr>0||p.top&&p.x>=40&&p.x<=280)escStep(xr>0?mech:work,p,xr>0);}
+  const sample=escAt(escPitch*8+st.travel);
+  label(escPoint(sample,0,45,0),'STEP AXLE',moving);
+  label(escPoint(sample,0,45,8),'GROOVED TREAD',moving);
+  label(escPoint(sample,-7,45,3),'STEP RISER',moving);
+  label(escPoint(sample,-4,25,3),'STEP FRAME',moving);
+  label(escPoint(sample,0,70,0),'CHAIN ROLLER',moving);
+  label(escPoint(sample,-10,66,-4),'TRAILER ROLLER',moving);
+  const shaftZ=escTop(290)-15;
+  rr(mech,[290,10,shaftZ],[290,79,shaftZ],1.8,METAL);
+  bb(mech,[284,28,shaftZ-10],[321,62,shaftZ-7],escSteel);
+  bb(mech,[287,41,shaftZ-7],[299,58,shaftZ+7],escGold);
+  rr(mech,[299,49,shaftZ],[304,49,shaftZ],2.4,METAL);
+  rr(mech,[304,49,shaftZ],[320,49,shaftZ],5.6,escBlue);
+  for(let x=306;x<319;x+=2)rr(mech,[x,49,shaftZ],[x+.6,49,shaftZ],6,escBlue);
+  mech.push({box:[[302,44.5,shaftZ-4.5],[303,53.5,shaftZ+4.5]],svg:cylX(302,303,49,shaftZ,4.5,DARK,toneI,.8,20)});
+  bb(mech,[299,53,shaftZ-3],[305,57,shaftZ+3],st.mode==='run'?METAL:escGold);
+  rr(mech,[302,57,shaftZ],[302,60,shaftZ],1.6,escGold);
+  label([314,49,shaftZ+6],'DRIVE MOTOR',st.mode==='run');
+  label([294,49,shaftZ+7],'REDUCTION GEARBOX',moving);
+  label([301,49,shaftZ],'MOTOR COUPLING',moving);
+  label([290,37,shaftZ],'MAIN DRIVE SHAFT',moving);
+  label([302,49,shaftZ+4.5],'BRAKE DISC',st.mode!=='run');
+  label([302,59,shaftZ],'SPRING BRAKE',st.mode!=='run');
+  bb(mech,[25,14,10],[35,76,14],escSteel);
+  for(let x=19;x<27;x+=1.3)rr(mech,[x,17,20],[x+.5,17,20],1.7,escGold);
+  rr(mech,[18,17,20],[30,17,20],.5,METAL);
+  label([23,17,20],'CHAIN TENSION SPRING');
+  for(const y of [18,72]){
+    const rail=[];
+    for(let x=28;x<=292;x+=4)rail.push([x,y,escTop(x)+40]);
+    for(let i=1;i<=14;i++){const a=Math.PI*i/14;rail.push([292+9*Math.sin(a),y,escTop(292)+31+9*Math.cos(a)]);}
+    for(let x=288;x>=28;x-=4)rail.push([x,y,escTop(x)+22]);
+    for(let i=1;i<=14;i++){const a=Math.PI*i/14;rail.push([28-9*Math.sin(a),y,escTop(28)+31-9*Math.cos(a)]);}
+    for(let i=1;i<rail.length;i++)rr(work,rail[i-1],rail[i],1.65,DARK);
+    for(let i=0;i<8;i++){
+      const topS=escPath[130].s,x=escAt(((i*34+st.travel)%topS+topS)%topS).x;
+      rr(work,[x,y-.9,escTop(x)+41.5],[x,y+.9,escTop(x)+41.5],.45,escGold);
+    }
+    for(let x=30;x<290;x+=12)rr(mech,[x,y,escTop(x)+38],[x+12,y,escTop(x+12)+38],.6,METAL);
+    escWheel(mech,275,y,escTop(275)+27,5,-st.travel/5,escGold);
+    escWheel(mech,230,y,escTop(230)+18,3.4,-st.travel/3.4,METAL);
+    rr(mech,[275,y,escTop(275)+27],[275,y+3,escTop(275)+27],1,METAL);
+  }
+  const hx=275,hz=escTop(275)+27,dx=hx-290,dz=hz-shaftZ,len=Math.hypot(dx,dz),nx=-dz/len*3,nz=dx/len*3;
+  rr(mech,[hx,14,hz],[hx,79,hz],1.1,METAL);
+  for(const [x,z] of [[290,shaftZ],[hx,hz]])escWheel(mech,x,78,z,3,-st.travel/3,escGold);
+  for(const side of [-1,1])rr(mech,[290+nx*side,78,shaftZ+nz*side],[hx+nx*side,78,hz+nz*side],.65,escGold);
+  label([150,72,escTop(150)+40],'RUBBER HANDRAIL',moving);
+  label([150,18,escTop(150)+38],'HANDRAIL GUIDE');
+  label([275,72,escTop(275)+27],'HANDRAIL FRICTION DRIVE',moving);
+  label([230,18,escTop(230)+18],'HANDRAIL TENSION ROLLER',moving);
+  label([282,75,shaftZ+25],'HANDRAIL DRIVE CHAIN',moving);
+  for(const [x,z] of [[39,escFloor],[280,escUpper]]){
+    bb(work,[x-6,26,z-.8],[x+6,64,z],METAL);
+    for(let y=28;y<=62;y+=3)bb(work,[x+(x<100?5:-8),y,z],[x+(x<100?8:-5),y+1,z+.4],escGold);
+  }
+  label([45,45,escFloor],'LOWER COMB PLATE');
+  label([273,45,escUpper],'UPPER COMB PLATE');
+  label([16,45,escFloor],'LOWER FLOOR PLATE');
+  label([311,45,escUpper],'UPPER FLOOR PLATE');
+  label([180,75.5,escTop(180)+24],'GLASS BALUSTRADE');
+  bb(mech,[303,21,shaftZ-5],[317,34,shaftZ+2],matOf('#5d9a76'));
+  bb(mech,[306,23,shaftZ+2],[313,29,shaftZ+6],DARK);
+  label([311,30,shaftZ+2],'CONTROLLER',st.mode==='run');
+  label([310,25,shaftZ+6],'MOTOR CONTACTOR',st.mode==='run');
+  const cable=[[317,28,shaftZ],[320,28,shaftZ],[320,49,shaftZ]];
+  for(let i=1;i<cable.length;i++)rr(mech,cable[i-1],cable[i],.65,DARK);
+  for(const [x,z] of [[34,escFloor],[286,escUpper]]){
+    bb(work,[x-2,72,z],[x+2,77,z+32],m);
+    rr(work,[x,77,z+30],[x,79,z+30],1.8,matOf('#e2483d'));
+  }
+  label([34,79,escFloor+30],'EMERGENCY STOP SWITCH',st.mode==='emergency');
+  const riderParts=[];escRider(riderParts,st);
+  escLabels=labels;
+  const shadow=castShadow([[15,10,0],[320,80,0],[290,72,escTop(290)+40],[30,18,80]]);
+  let svg=shadow;
+  if(xr>0)svg+=`<g opacity="${1-.86*xr}">${byDepth(shell)}</g>`+byDepth([...work,...mech]);
+  else svg+=byDepth([...shell,...work]);
+  svg+=byDepth(riderParts);
+  if(xr>.6)svg+=escCallouts(labels);
+  return svg;
+}
+const escState={mode:'stopped',direction:1,speed:0,travel:0,rider:'lower',riderS:0,riderX:303,pending:0};
+let escUI,escLoop=false;
+function escUpdate(st,dt){
+  const target=st.mode==='run'?st.direction*18:0,old=st.speed;
+  st.speed+=Math.sign(target-st.speed)*Math.min(Math.abs(target-st.speed),(st.mode==='emergency'?90:30)*dt);
+  const ds=(old+st.speed)*dt/2;st.travel+=ds;
+  if(st.rider==='riding'){
+    st.riderS+=ds;
+    if(st.riderS>=escPath[130].s-10){st.rider='leaving';st.riderS=escPath[130].s-10;st.riderX=280;}
+  }
+  if(st.rider==='leaving'){st.riderX=Math.min(303,st.riderX+22*dt);if(st.riderX===303)st.rider='upper';}
+  if(st.pending&&st.speed===0){st.direction=st.pending;st.pending=0;st.mode='run';}
+}
+function escKick(){
+  if(escLoop)return;escLoop=true;
+  escUI.animate(dt=>{escUpdate(escState,dt);const more=escState.mode==='run'||Math.abs(escState.speed)>.001||!!escState.pending||escState.rider==='leaving';if(!more)escLoop=false;return more;});
+}
+function escStart(st,ui){
+  if(st.mode==='emergency')return ui.flash('Reset the emergency stop first');
+  st.mode='run';st.pending=0;escKick();
+}
+function escRide(st,ui){
+  if(st.mode!=='run'||st.direction!==1||st.pending)return ui.flash('Start the escalator upward first');
+  if(st.rider==='riding'||st.rider==='leaving')return ui.flash('The rider is already on a step');
+  if(st.rider==='upper')return ui.flash('The rider has reached the upper floor');
+  const choices=Array.from({length:escCount},(_,i)=>i*escPitch+st.travel).map(s=>((s%escLength)+escLength)%escLength);
+  st.riderS=choices.filter(s=>escAt(s).top&&escAt(s).x>=36&&escAt(s).x<60).sort((a,b)=>a-b)[0];
+  if(st.riderS==null)return ui.flash('Wait for the next level step');
+  st.rider='riding';escKick();
+}
+function escReverse(st,ui){
+  if(st.mode==='emergency')return ui.flash('Reset the emergency stop first');
+  if(st.rider==='riding'||st.rider==='leaving')return ui.flash('Let the rider reach the landing before reversing');
+  if(st.pending)return ui.flash('The drive is stopping before reversal');
+  if(st.mode==='run'||st.speed){st.pending=-st.direction;st.mode='stopped';escKick();}
+  else st.direction=-st.direction;
+}
+function escStop(st){st.mode='emergency';st.pending=0;escKick();}
+function escReset(st,ui){
+  if(st.mode!=='emergency')return ui.flash('The emergency stop is already reset');
+  if(st.speed!==0)return ui.flash('Wait for the brake to stop the steps');
+  st.mode='stopped';
+}
+escUI=mountFigure({fig:'escalator',turn:'full',title:'Escalator',size:[325,90,escUpper+56],palette:'cobalt',state:escState,scene:escScene,
+  stats:st=>[{label:'Step speed',value:(Math.abs(st.speed)*.03).toFixed(2)+' m/s'},
+    {label:'Direction',value:st.pending?'Stopping':st.direction===1?'Up':'Down',small:true},
+    {label:'Drive',value:st.mode==='emergency'?'STOP LATCHED':st.mode==='run'?'Running':'Stopped',small:true}],
+  buttons:[{label:'Start',onClick:escStart},{label:'Ride up',onClick:escRide},{label:'Reverse direction',onClick:escReverse},
+    {label:'Emergency stop',onClick:escStop},{label:'Reset stop',onClick:escReset}],
+  params:(st,q)=>{
+    if(q.get('direction')==='down')st.direction=-1;
+    if(['lower','upper'].includes(q.get('rider')))st.rider=q.get('rider');
+    const n=Number(q.get('travel'));if(q.has('travel')&&Number.isFinite(n))st.travel=n;
+    if(q.get('emergency')==='1')st.mode='emergency';
+  }});
+const escQuery=new URLSearchParams(location.search);
+if(!escQuery.has('yaw'))setCam(135,35.264);
+document.getElementById('vreset').addEventListener('click',()=>escUI.camTo(135,35.264));
+xrMount(()=>escUI,()=> '');
+</script>
+</body></html>
