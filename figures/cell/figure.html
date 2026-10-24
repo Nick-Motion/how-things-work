@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The living cell</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. This is an enlarged teaching model on a stand, not a cell-sized apparatus.
+   The membrane is closed at rest. See-through ghosts it and reveals enlarged organelles.
+   Secreted protein follows DNA transcription, mRNA through a nuclear pore, translation at a
+   rough-ER ribosome into the ER lumen, a transport vesicle, Golgi cisternae, a secretory
+   vesicle and exocytosis. DNA stays in the nucleus. mRNA is not turned into protein.
+   Mitosis starts after DNA replication. Four representative duplicated chromosomes condense,
+   align on the spindle, then sister chromatids separate. Envelopes reform and an actin
+   contractile ring pinches the membrane into two cells. Four is illustrative, not human 46.
+   Organelle shapes, molecular sizes and elapsed times are schematic, not to scale.
+   Organelles are suspended in cytosol, not fixed by invented brackets. ER joins the nuclear
+   outer membrane. Ribosomes sit on ER, cristae join the mitochondrial inner membrane,
+   cytoskeletal filaments span cytoplasm, channels and receptors cross the lipid bilayer.
+   Parts. Nucleus, envelope inner/outer membranes, pore, nucleolus, chromatin, DNA;
+   rough ER, ER lumen, bound/free ribosomes, smooth ER, Golgi cis/trans faces and cisternae,
+   transport/secretory vesicles; mitochondrion, outer/inner membranes, cristae, matrix;
+   lysosome and enzymes, peroxisome; centrosome, paired centrioles, microtubules,
+   intermediate filaments, actin cortex; cytosol, plasma membrane, phospholipid heads/tails,
+   cholesterol, channel protein, receptor, glycoprotein. Stand is teaching equipment.
+   Sources. https://openstax.org/books/biology-2e/pages/4-4-the-endomembrane-system-and-proteins
+   https://openstax.org/books/biology-2e/pages/10-2-the-cell-cycle
+   Data shape. One process enum with elapsed seconds; a label-group key; completed outputs.
+   Throughput checkpoint. Build once, inspect all views plus live controls, repair only observed
+   functional failures, at most three rounds. Model the Domain keeps mutually exclusive
+   processes in one state. Prove It Works requires a real browser journey and saved frames. */
+const cellOrigin = [65,65,86], cellRadius = 42;
+const cellGroups = ['All organelles','Nucleus','Protein pathway','Energy and recycling','Membrane and skeleton'];
+const cellProteinStages = ['Read DNA','mRNA leaves nucleus','Ribosome builds protein','ER transport vesicle','Golgi processing','Secretory vesicle','Exocytosis'];
+const cellDivisionStages = ['Prophase','Metaphase','Anaphase','Telophase','Cytokinesis','Two daughter cells'];
+const cellClamp = v => Math.max(0,Math.min(1,v));
+const cellLerp = (a,b,t) => a.map((v,i)=>v+(b[i]-v)*t);
+const cellBounds = (points,pad=0) => [0,1].map(side=>[0,1,2].map(i=>(side?Math.max:Math.min)(...points.map(p=>p[i]))+(side?pad:-pad)));
+function cellBall(c,r,m,ghost=0){
+  const rings=[], pts=[], faces=[];
+  for(let j=0;j<=10;j++){
+    const a=-Math.PI/2+j*Math.PI/10;
+    const ring=Array.from({length:24},(_,i)=>{const b=i*Math.PI/12;return [c[0]+r[0]*Math.cos(a)*Math.cos(b),c[1]+r[1]*Math.cos(a)*Math.sin(b),c[2]+r[2]*Math.sin(a)];});
+    rings.push(ring);pts.push(...ring);
+  }
+  for(let j=0;j<10;j++)for(let i=0;i<24;i++){
+    const q=[rings[j][i],rings[j][(i+1)%24],rings[j+1][(i+1)%24],rings[j+1][i]], mid=avg(q), n=norm(mid.map((v,k)=>(v-c[k])/(r[k]*r[k])));
+    if(vis(n))faces.push({at:mid,svg:face(pd(q),toneI(n,m))});
+  }
+  return `<g opacity="${1-ghost}">${byDepth(faces)}</g><g opacity="${Math.max(.32,1-ghost)}">${hullInk(pts,2.3)}</g>`;
+}
+function cellCallouts(items){
+  const svg=document.getElementById('fig'), vb=svg.viewBox.baseVal, matrix=svg.getScreenCTM();
+  const reserved=Math.max(document.getElementById('btns').getBoundingClientRect().bottom,document.getElementById('stats').getBoundingClientRect().bottom);
+  const top=new DOMPoint(0,reserved+14).matrixTransform(matrix.inverse()).y;
+  const ordered=items.map(it=>({...it,screen:P(...it.at)})).sort((a,b)=>a.screen[0]-b.screen[0]);
+  const phone=window.LBL_U?LBL_U():0, count=phone?4:2, perColumn=Math.ceil(ordered.length/count);
+  const cols=Array.from({length:count},(_,i)=>ordered.slice(i*perColumn,(i+1)*perColumn));
+  const gap=phone?22*phone:Math.min(19*INK_K,(vb.height-40*INK_K-top)/Math.max(1,perColumn-1));
+  const tags=cols.map((col,side)=>col.sort((a,b)=>a.screen[1]-b.screen[1]).map((it,i)=>{
+    const x=vb.width*(phone?[.06,.23,.77,.94][side]:side?.83:.21), y=top+i*gap;
+    return tag(it.at,(x-it.screen[0])/INK_K,(y-it.screen[1])/INK_K,it.text,it.on);
+  }));
+  const leaders=[];
+  const pills=tags.flat().map(svg=>svg.replace(/<path[^>]*\/><circle[^>]*\/>/,s=>{leaders.push(s);return '';}));
+  return leaders.join('')+pills.join('');
+}
+function cellScene(st,m){
+  const parts=[],labels=[], k=ease(st.xr||0), mitosis=st.process==='mitosis', t=st.elapsed;
+  const division=mitosis?cellClamp((t-8)/4):0, split=division>=1;
+  let distribute=true;
+  const moved=(p,side)=>!distribute?p:p.map((v,i)=>cellOrigin[i]+(v-cellOrigin[i])*(1-.31*division)+(i===0?side*27*ease(division):0));
+  const put=(bounds,svg)=>{
+    const at=boxMid(bounds), side=at[0]<65?-1:1;
+    if(distribute&&division>0){
+      const scale=1-.31*division, a=P(...at), b=P(...moved(at,side));
+      svg=`<g transform="translate(${b[0]} ${b[1]}) scale(${scale}) translate(${-a[0]} ${-a[1]})">${svg}</g>`;
+      bounds=bounds.map(p=>moved(p,side));
+    }
+    parts.push({box:bounds,svg});
+  };
+  const add=(at,r,svg)=>put(cellBounds([at.map((v,i)=>v-r[i]),at.map((v,i)=>v+r[i])]),svg);
+  const ball=(at,r,col)=>add(at,r,cellBall(at,r,matOf(col)));
+  const label=(at,text,group,on=false)=>labels.push({at:moved(at,at[0]<65?-1:1),text,group,on});
+  const segment=(a,b,r,col)=>put(cellBounds([a,b],r),rod(a,b,r,matOf(col),toneI,.65));
+  const path=(ps,col,w=.7)=>{for(let i=1;i<ps.length;i++)segment(ps[i-1],ps[i],w,col);};
+  const nucleus=[53,64,96];
+  let s=board(19,19,111,111,3,7,WOOD);
+  s+=castShadow([[65,65,3],[65,65,130],[23,65,86],[107,65,86],[65,23,86],[65,107,86]],3,boardTop(19,19,111,111,3,7));
+  s+=cyl(65,65,3,8,22,DARK)+cyl(65,65,8,43,3.5,METAL)+cyl(65,65,40,45,9,DARK);
+  const cellShell=(center,r)=>cellBall(center,r,m,k*.9);
+  if(mitosis&&t>=8){
+    const sep=27*ease(division), r=[42-17*division,42-13*division,42-13*division];
+    s+=byDepth([-1,1].map(side=>({box:cellBounds([[65,65,43],[65+side*sep,65,86-r[2]]],2),svg:rod([65,65,43],[65+side*sep,65,86-r[2]],2,METAL)})));
+    s+=byDepth([-1,1].map(side=>({at:[65+side*sep,65,86],box:[[23+side*sep,23,44],[107+side*sep,107,128]],svg:cellShell([65+side*sep,65,86],r)})));
+  }else s+=cellShell(cellOrigin,[42,42,42]);
+  if(k>.01){
+    if(!mitosis||t<2){
+      add(nucleus,[15,14,15],cellBall(nucleus,[15,14,15],matOf('#bca4d8'),.55)+cellBall(nucleus,[13.7,12.7,13.7],matOf('#d5c0ea'),.55));
+      ball([51,66,100],[4,4,4],'#8052a1');
+      path(Array.from({length:20},(_,i)=>[46+i*.7,64+3*Math.sin(i*.7),94+3*Math.cos(i*.7)]),'#7257a1',.55);
+      path(Array.from({length:20},(_,i)=>[46+i*.7,64-3*Math.sin(i*.7),94-3*Math.cos(i*.7)]),'#cf759f',.55);
+      for(let i=0;i<10;i++)segment([46+i*1.4,64+3*Math.sin(i*1.4),94+3*Math.cos(i*1.4)],[46+i*1.4,64-3*Math.sin(i*1.4),94-3*Math.cos(i*1.4)],.25,'#e1b072');
+      add([66,68,98],[1.2,2,2],rod([65,68,98],[68,68,98],2,matOf('#836ca1'),toneI,.7)+rod([65,68,98],[68.3,68,98],.85,DARK,toneI,.4));
+      label([53,55,102],'NUCLEUS',1);label([41,65,101],'INNER NUCLEAR MEMBRANE',1);label([39,63,96],'OUTER NUCLEAR MEMBRANE',1);label([67,68,98],'NUCLEAR PORE',1,st.process==='protein'&&t<4);
+      label([51,66,100],'NUCLEOLUS',1);label([50,64,94],'DNA',1,st.process==='protein'&&t<2);label([58,66,96],'CHROMATIN',1);
+    }
+    for(let j=0;j<4;j++){
+      const z=76+j*4, at=[67,61,z];
+      add(at,[11,10,1.2],rod([57,52,z],[77,52,z],1.4,matOf('#63a8c6'),toneI,.6)+rod([77,52,z],[77,70,z],1.4,matOf('#63a8c6'),toneI,.6)+rod([77,70,z],[59,70,z],1.4,matOf('#63a8c6'),toneI,.6));
+      for(let i=0;i<5;i++)ball([59+i*4,52,z+1.8],[.8,.8,.8],'#574366');
+    }
+    segment([53,51,94],[57,52,88],1.2,'#63a8c6');
+    for(let i=0;i<4;i++)path([[43+i*3,76,78],[43+i*3,83,82],[48+i*3,84,87]],'#81bfab',1.1);
+    label([67,52,84],'ROUGH ER',2);label([72,52,84],'ER LUMEN',2);label([71,52,85.8],'BOUND RIBOSOME',2,st.process==='protein'&&t>=4&&t<6);label([46,84,82],'SMOOTH ER',2);
+    ball([74,79,100],[1.1,1.1,1.1],'#574366');label([74,79,100],'FREE RIBOSOME',2);
+    for(let j=0;j<5;j++)add([82,65,65+j*3],[8,10,1],rod([77+j*.5,57,65+j*3],[85+j*.5,61,65+j*3],1.4,matOf('#e6a66d'),toneI,.6)+rod([85+j*.5,61,65+j*3],[82+j*.5,73,65+j*3],1.4,matOf('#e6a66d'),toneI,.6));
+    label([83,65,77],'GOLGI CIS FACE',2);label([81,65,71],'GOLGI CISTERNAE',2);label([82,65,65],'GOLGI TRANS FACE',2);
+    ball([77,54,79],[2.5,2.5,2.5],'#95c5cd');label([77,54,79],'TRANSPORT VESICLE',2);
+    ball([91,56,68],[2.7,2.7,2.7],'#e9b46e');label([91,56,68],'SECRETORY VESICLE',2);
+    for(const c of [[46,44,73],[67,85,68]]){
+      add(c,[9,4,5],cellBall(c,[9,4,5],matOf('#e89075'),.25)+cellBall(c,[7.7,3,3.8],matOf('#f1ba7a'),.32));
+      for(let i=0;i<5;i++)path([[c[0]-5+i*2,c[1]-2,c[2]+1],[c[0]-4+i*2,c[1],c[2]+3],[c[0]-3+i*2,c[1]+2,c[2]]],'#b56d57',.45);
+    }
+    label([46,44,73],'MITOCHONDRION',3);label([39,44,73],'MITOCHONDRIAL OUTER MEMBRANE',3);label([41,45,75],'MITOCHONDRIAL INNER MEMBRANE',3);label([47,44,76],'CRISTAE',3);label([51,44,73],'MATRIX',3);
+    ball([72,78,88],[4,4,4],'#cc8dba');
+    for(const p of [[70,78,89],[73,79,89],[73,76,87]])ball(p,[.8,.8,.8],'#855290');
+    label([72,78,88],'LYSOSOME',3);label([70,78,89],'DIGESTIVE ENZYMES',3);
+    ball([44,75,69],[3,3,3],'#b7c976');label([44,75,69],'PEROXISOME',3);
+    const poles=mitosis?[[35,65,86],[95,65,86]]:[[50,45,96]];
+    for(const p of poles){segment([p[0]-2,p[1],p[2]],[p[0]+2,p[1],p[2]],1,'#d59c56');segment([p[0],p[1]+2,p[2]],[p[0],p[1]+2,p[2]+4],1,'#d59c56');}
+    label(poles[0],'CENTROSOME',4,mitosis);label([poles[0][0],poles[0][1]+2,poles[0][2]+2],'CENTRIOLE PAIR',4,mitosis);
+    for(let i=0;i<7;i++){const a=i*2*Math.PI/7;path([[50,45,96],[65+25*Math.cos(a),65+25*Math.sin(a),69],[65+33*Math.cos(a),65+33*Math.sin(a),81]],'#79a89c',.35);}
+    label([85,80,72],'MICROTUBULE',4,mitosis);
+    path([[36,60,69],[50,90,71],[76,93,88]],'#aa929c',.45);label([50,90,71],'INTERMEDIATE FILAMENT',4);
+    path(Array.from({length:25},(_,i)=>{const a=i*Math.PI/12;return [65+37*Math.cos(a),65+37*Math.sin(a),86];}),'#d6868c',.55);label([65,102,86],'ACTIN CORTEX',4);
+    const channel=[99,65,109];
+    segment([94,65,106],[101,65,111],2.2,'#76aebe');segment([94,65,106],[102,65,112],.7,'#3b6679');label(channel,'CHANNEL PROTEIN',4);
+    segment([68,100,105],[69,105,110],1.1,'#9d7eb6');segment([69,105,110],[72,107,111],.6,'#9d7eb6');segment([69,105,110],[67,107,112],.6,'#9d7eb6');label([69,105,110],'RECEPTOR',4);
+    path([[41,94,103],[39,98,105],[37,98,109]],'#a7759f',.65);ball([37,98,109],[1,1,1],'#e5b967');label([37,98,109],'GLYCOPROTEIN',4);
+    for(let i=0;i<8;i++){
+      const p=[90+i*.85,83-i*.7,105];ball(p,[.65,.65,.65],'#e4caa4');ball([p[0],p[1],102],[.65,.65,.65],'#e4caa4');segment([p[0],p[1],104.5],[p[0]+.2,p[1],103.8],.18,'#b49c74');segment([p[0],p[1],102.5],[p[0]-.2,p[1],103.5],.18,'#b49c74');
+    }
+    segment([94,81,103],[95,81,104],.6,'#f0bf66');
+    label([93,81,105],'PHOSPHOLIPID HEADS',4);label([93,81,103.7],'LIPID TAILS',4);label([95,81,103.8],'CHOLESTEROL',4);label([96,81,104],'PLASMA MEMBRANE',4);label([61,91,93],'CYTOSOL',4);
+    if(st.process==='protein'){
+      if(t<6){const q=cellLerp([53,64,96],t<2?[61,67,98]:[71,52,86],cellClamp(t<2?t/2:(t-2)/2));path([q,[q[0]-3,q[1]+1,q[2]],[q[0]-5,q[1],q[2]]],'#e4574f',.7);label(q,'mRNA',2,true);}
+      if(t>=4){
+        const route=[[71,52,84],[77,54,79],[83,65,77],[82,65,65],[91,56,68],[104,57,76],[113,55,77]], u=cellClamp((t-4)/10)*(route.length-1), i=Math.min(route.length-2,Math.floor(u)), q=cellLerp(route[i],route[i+1],u-i);
+        const vesicle=t>=6&&t<14;
+        if(vesicle)add(q,[3.4,3.4,3.4],cellBall(q,[3.4,3.4,3.4],matOf('#f3c977'),.62));
+        path([[q[0]-1,q[1],q[2]],[q[0],q[1]+1,q[2]+1],[q[0]+1,q[1],q[2]+1],[q[0]+2,q[1]+1,q[2]]],'#e54e47',.7);label(q,t>=14?'RELEASED PROTEIN':'PROTEIN CARGO',2,true);
+      }
+    }
+    distribute=false;
+    if(mitosis){
+      const align=cellClamp(t/3), apart=cellClamp((t-5)/3), reform=t>=8;
+      for(let i=0;i<4;i++){
+        const y=53+i*8, x=65+(1-align)*(i%2?8:-8);
+        for(const side of [-1,1]){
+          const q=[x+side*(1.3+20*apart),y,86];
+          if(t<8)segment(poles[side<0?0:1],q,.2,'#81b8b0');
+          const arm=side*1.8*(1-2*apart);
+          const ends=[[q[0]+arm,q[1],q[2]-3],[q[0],q[1],q[2]],[q[0]+arm,q[1],q[2]+3]];
+          path(ends,side<0?'#a36baa':'#d47da0',.9);
+        }
+      }
+      label([65-(1.3+20*apart),61,86],t<5?'DUPLICATED CHROMOSOME':'DAUGHTER CHROMOSOME',1,true);
+      if(reform)for(const side of [-1,1]){const q=[65+side*(22+division*5),65,86];add(q,[9,11,11],cellBall(q,[9,11,11],matOf('#c7a4d5'),.55));}
+      if(t>=8&&!split){const r=30*(1-division)+1;path(Array.from({length:25},(_,i)=>[65,65+r*Math.cos(i*Math.PI/12),86+r*Math.sin(i*Math.PI/12)]),'#cc617c',.9);label([65,65+r,86],'CONTRACTILE RING',4,true);}
+    }
+    s+=`<g opacity="${k}">${byDepth(parts)}</g>`;
+    const shown=labels.filter(it=>st.group===0||it.group===st.group);
+    if(k>.6)s+=cellCallouts(shown);
+  }
+  return s;
+}
+function cellRun(st,ui,process){
+  if(st.running)return ui.flash('Let this process finish, or reset the model.');
+  if(st.process==='mitosis'&&st.elapsed>=12)return ui.flash('Reset the model before starting again.');
+  st.process=process;st.elapsed=0;st.running=true;st.xr=st.xrT=1;
+  st.group=process==='protein'?2:1;
+  document.getElementById('xrb').setAttribute('aria-pressed','true');
+  const runId=st.runId=(st.runId||0)+1;
+  ui.animate(dt=>{if(!st.running||st.runId!==runId)return false;st.elapsed=Math.min(process==='protein'?14:12,st.elapsed+dt);if(st.elapsed<(process==='protein'?14:12))return true;st.running=false;if(process==='protein')st.secreted++;return false;});
+}
+const ui=mountFigure({fig:'CELL',turn:'full',title:'The living cell',size:[130,130,133],palette:'mint',state:{process:'rest',elapsed:0,running:false,group:0,secreted:0,xr:0,xrT:0},scene:cellScene,
+  stats:st=>[{label:'Process',value:st.process==='protein'?cellProteinStages[Math.min(6,Math.floor(st.elapsed/2))]:st.process==='mitosis'?cellDivisionStages[st.elapsed<2?0:st.elapsed<5?1:st.elapsed<8?2:st.elapsed<9?3:st.elapsed<12?4:5]:'Interphase',small:true},{label:'Proteins secreted',value:String(st.secreted),small:true},{label:'Cells',value:st.process==='mitosis'&&st.elapsed>=12?'2':'1',small:true}],
+  buttons:[{label:'Organelle labels',choices:st=>cellGroups.map((label,group)=>({label,current:st.group===group,onClick:(st)=>{st.group=group;st.xr=st.xrT=1;document.documentElement.classList.remove('nolabels');document.getElementById('lblb').setAttribute('aria-pressed','true');document.getElementById('xrb').setAttribute('aria-pressed','true');}}))},{label:'Make a protein',onClick:(st,ui)=>cellRun(st,ui,'protein')},{label:'Run mitosis',onClick:(st,ui)=>cellRun(st,ui,'mitosis')},{label:'Reset model',onClick:(st)=>{st.process='rest';st.elapsed=0;st.running=false;st.secreted=0;st.runId=(st.runId||0)+1;}}],
+  params:(st,q)=>{const group=Number(q.get('group'));if(Number.isInteger(group)&&group>=0&&group<cellGroups.length)st.group=group;const process=q.get('process');if(['protein','mitosis'].includes(process)){st.process=process;const t=Number(q.get('t'));st.elapsed=Number.isFinite(t)?Math.max(0,Math.min(process==='protein'?14:12,t)):0;}}});
+xrMount(()=>ui,()=> '');
+</script></body></html>
