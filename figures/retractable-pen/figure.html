@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Click pen</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. A representative rotary-cam click pen, enlarged about ten times.
+   Reference https://patents.google.com/patent/US5263786A/en, figures 1, 3 and 4.
+   Pressing the guided plunger pushes the rotor and refill toward the nose, compressing
+   the spring between the fixed nose seat and the refill shoulder. Once the followers
+   clear the guide ends, sloping teeth index the rotor. Release lets the spring push
+   the refill back. Followers alternately stop at short ledges or enter deep channels.
+   The ball and refill stay together. Ink stays inside the refill in every state.
+   Case parts are fixed together. The clip is fixed to the rear collar. The guide ribs
+   are moulded inside the rear barrel. Rotor followers are integral with the rotor.
+   Plunger teeth and guide keys are integral with the plunger. Spring ends touch the
+   fixed nose seat at x=25 and the moving refill shoulder at x=46-travel.
+   Parts and features, grouped by their real parent, rather than extra invented parts.
+   CASE nose cone, tip aperture, grip sleeve, grip ribs, barrel, barrel joint,
+        rear barrel, rear collar, clip root, clip arm, clip foot.
+   REFILL ball, ball socket, point cone, feed stem, feed bore, reservoir tube,
+          ink column, ink meniscus, air space, rear vent, refill end, spring shoulder.
+   RETURN front seat, rear seat, spring wire, front end turn, rear end turn.
+   INDEX fixed cam body, deep guide channels, short latch ledges, sloping guide ends,
+         rotor, rotor socket, three followers, rotor cam faces, plunger teeth,
+         plunger stem, guide keys, travel stop, push cap.
+   State is one phase in idle/press/hold/release, plus refill travel and rotor angle.
+   Travel 0 retracts the ball behind x=14. Travel 6 exposes it to x=10.
+   A full press travels 9. Each cycle indexes 60 degrees through alternating stops.
+*/
+const penCY = 26, penCZ = 8, penR = 6;
+const penGold = matOf('#e6ad37'), penBlue = matOf('#3d79ad'), penInk = matOf('#243d78');
+const penPoint = (x,r,a) => [x,penCY+r*Math.cos(a),penCZ+r*Math.sin(a)];
+const penBounds = (x0,x1,r) => [[x0,penCY-r,penCZ-r],[x1,penCY+r,penCZ+r]];
+const penRing = (x,r) => on(PX(x),ellUV(penCY,penCZ,r,r,32));
+function penTube(x0,x1,r0,r1,thick,m){
+  const a=penRing(x0,r0), b=penRing(x1,r1), ai=penRing(x0,r0-thick), bi=penRing(x1,r1-thick);
+  const near=vis([1,0,0]), rim=near?b:a, bore=near?bi:ai;
+  return loft(ai,bi,n=>toneI(n.map(v=>-v),m),true)+loft(a,b,n=>tone(n,m))
+    +`<path d="${pd(rim)}${pd(bore)}" fill="${m.l}" fill-rule="evenodd"/>`
+    +ink(pd(rim),1)+ink(pd(bore),.65)+hullInk([...a,...b],2.6);
+}
+function penGeometry(st,m){
+  const outer=[], inside=[], labels=[], e=st.travel, a=st.angle*Math.PI/180;
+  const busy=st.phase!=='idle';
+  const put=(list,x0,x1,r,svg)=>list.push({box:penBounds(x0,x1,r),svg});
+  const label=(text,at,on=false)=>labels.push({text,at,on});
+  const tube=(x0,x1,r0,r1,t,mat)=>put(outer,x0,x1,Math.max(r0,r1),penTube(x0,x1,r0,r1,t,mat));
+  tube(14,30,1.5,6,.65,METAL);
+  tube(30,54,6,6,.65,DARK);
+  tube(54,100,6,6,.65,m);
+  tube(100,137,6,6,.65,m);
+  tube(137,140,6,5,.8,METAL);
+  for(let x=33;x<53;x+=3) put(outer,x,x+.6,6.15,penTube(x,x+.6,6.15,6.15,.3,DARK));
+  put(outer,98.8,100.2,6.12,penTube(98.8,100.2,6.12,6.12,.3,METAL));
+  const clip=[
+    {box:[[130,24.8,13],[136,27.2,17]],svg:box(130,24.8,13,136,27.2,17,METAL)},
+    {box:[[108,24.8,16],[133,27.2,17]],svg:box(108,24.8,16,133,27.2,17,METAL)},
+    {box:[[106,24.8,13.7],[110,27.2,17]],svg:box(106,24.8,13.7,110,27.2,17,METAL)}
+  ];
+  outer.push(...clip);
+  const cylinder=(x0,x1,r,mat)=>put(inside,x0,x1,r,cylX(x0,x1,penCY,penCZ,r,mat,toneI,.8,24));
+  const ball=16-e;
+  cylinder(ball,ball+1,.62,METAL);
+  cylinder(ball+.7,ball+2.7,.85,METAL);
+  put(inside,ball+2.7,ball+8,1.7,rod([ball+2.7,penCY,penCZ],[ball+8,penCY,penCZ],.85,METAL,toneI,.8,1.7,24));
+  cylinder(ball+8,46-e,1.7,METAL);
+  // A transparent refill wall exposes the ink and air above the ink meniscus.
+  put(inside,46-e,107-e,2.2,`<g opacity=".32">${penTube(46-e,107-e,2.2,2.2,.35,CLEAR)}</g>`);
+  cylinder(29-e,92-e,1.25,penInk);
+  cylinder(46-e,47.2-e,3.1,METAL);
+  cylinder(104-e,107-e,2.2,DARK);
+  cylinder(107-e,115-e,3.65,penGold);
+  cylinder(115-e,121-e,3.35,CERAMIC);
+  cylinder(121-e,142-e,2.5,CERAMIC);
+  cylinder(140-e,142-e,4.2,METAL);
+  put(outer,142-e,148-e,4.7,act('click',cylX(142-e,148-e,penCY,penCZ,4.7,m,tone,1.5,32)));
+  put(inside,25,26.2,4.7,penTube(25,26.2,4.7,4.7,2.7,METAL));
+  const coil=[];
+  for(let i=0;i<=200;i++){const t=i/200, th=t*Math.PI*20;coil.push(penPoint(26.2+(46-e-26.2)*t,2.8,th));}
+  for(let i=0;i<coil.length-1;i++){
+    const p=coil[i],q=coil[i+1];
+    inside.push({box:[p.map((v,j)=>Math.min(v,q[j])-.2),p.map((v,j)=>Math.max(v,q[j])+.2)],svg:rod(p,q,.2,METAL,toneI,.35,.2,6)});
+  }
+  // Six fixed cam ribs alternate short ledges and deep channels. Their near walls ghost.
+  const camParts=[];
+  for(let i=0;i<6;i++){
+    const th=i*Math.PI/3, end=i%2?105:111;
+    const ribA=penPoint(end,4.65,th),ribB=penPoint(135,4.65,th);
+    camParts.push({box:[ribA.map((v,j)=>Math.min(v,ribB[j])-.5),ribA.map((v,j)=>Math.max(v,ribB[j])+.5)],svg:rod(ribA,ribB,.48,penBlue,toneI,.6)});
+    const ramp=[penPoint(end,4.65,th),penPoint(end-3,4.65,th+.32)];
+    camParts.push({box:penBounds(end-3,end,5.2),svg:rod(ramp[0],ramp[1],.48,penBlue,toneI,.6)});
+  }
+  inside.push(...camParts);
+  for(let i=0;i<3;i++){
+    const th=a+i*2*Math.PI/3;
+    const p=penPoint(110-e,3.3,th),q=penPoint(110-e,4.65,th);
+    put(inside,109-e,111-e,5,rod(p,q,.7,penGold,toneI,.6));
+    const tooth=[penPoint(115-e,3,th),penPoint(117-e,3,th+.4)];
+    put(inside,115-e,117-e,3.7,rod(tooth[0],tooth[1],.65,penGold,toneI,.6));
+  }
+  for(let i=0;i<3;i++){
+    const th=i*2*Math.PI/3, p=penPoint(117-e,3,th+.4),q=penPoint(120-e,3,th+.4);
+    put(inside,117-e,120-e,3.7,rod(p,q,.65,CERAMIC,toneI,.6));
+    const keyA=penPoint(124-e,4.65,th),keyB=penPoint(130-e,4.65,th);
+    put(inside,124-e,130-e,5.2,rod(keyA,keyB,.4,CERAMIC,toneI,.6));
+    put(inside,130-e,130.7-e,5.2,rod(penPoint(130-e,2.5,th),keyB,.4,CERAMIC,toneI,.6));
+  }
+  label('BALL TIP',[ball,penCY,penCZ],st.latched);
+  label('BALL SOCKET',[ball+1.5,penCY+.8,penCZ],busy);
+  label('POINT CONE',[ball+5,penCY+1,penCZ],busy);
+  label('FEED STEM',[29-e,penCY+1.7,penCZ]);
+  label('INK FEED',[29-e,penCY,penCZ],st.latched);
+  label('TIP APERTURE',[14,penCY+1.5,penCZ]);
+  label('NOSE CONE',[22,penCY+3,penCZ+2]);
+  label('FRONT SPRING SEAT',[25.5,penCY+3.5,penCZ]);
+  label('SPRING WIRE',coil[95],busy);
+  label('REFILL SHOULDER',[46.6-e,penCY+3,penCZ],busy);
+  label('GRIP SLEEVE',[40,penCY+6,penCZ]);
+  label('INK CARTRIDGE',[65-e,penCY+2.2,penCZ],busy);
+  label('INK COLUMN',[76-e,penCY,penCZ]);
+  label('BARREL',[80,penCY+6,penCZ]);
+  label('BARREL JOINT',[99.5,penCY+6,penCZ]);
+  label('REFILL END',[105-e,penCY+2.2,penCZ],busy);
+  label('ROTATING CAM',[111-e,penCY+3.65,penCZ],busy);
+  label('ROTOR FOLLOWERS',penPoint(110-e,4.65,a),busy);
+  label('CAM FACES',penPoint(116-e,3,a+.2),busy);
+  label('PLUNGER TEETH',penPoint(118-e,3,.4),busy);
+  label('FIXED CAM BODY',penPoint(132,4.65,0));
+  label('DEEP GUIDE',penPoint(119,4.65,0));
+  label('LATCH LEDGE',penPoint(105,4.65,Math.PI/3),st.latched);
+  label('SLOPING GUIDE END',penPoint(109,4.65,.2),busy);
+  label('GUIDE KEYS',penPoint(126-e,4.65,0),busy);
+  label('PLUNGER STEM',[136-e,penCY+2.5,penCZ],busy);
+  label('TRAVEL STOP',penPoint(130-e,4.65,0));
+  label('REAR COLLAR',[139,penCY+5,penCZ]);
+  label('PUSH CAP',[148-e,penCY,penCZ],busy);
+  label('CLIP ROOT',[134,penCY,16]);
+  label('CLIP ARM',[121,penCY,17]);
+  label('CLIP FOOT',[108,penCY,15]);
+  return {outer,inside,labels,ball};
+}
+function penLabels(items){
+  const vb=document.getElementById('fig').viewBox.baseVal,phone=innerWidth<=560;
+  const sorted=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  return [sorted.slice(0,16),sorted.slice(16)].map((col,side)=>col.sort((a,b)=>a.p[1]-b.p[1]).map((it,i)=>{
+    const x=vb.width*(side?.82:.18),y=vb.height*((phone?.08:.30)+i*(phone?.81:.63)/(col.length-1));
+    return tag(it.at,(x-it.p[0])/INK_K,(y-it.p[1])/INK_K,it.text,it.on);
+  }).join('')).join('');
+}
+function penScene(st,m){
+  const g=penGeometry(st,m),k=ease(st.xr||0);
+  let s=board(0,10,158,42,2,3)+castShadow([...penRing(30,6),...penRing(140,6)],2,boardTop(0,10,158,42,2,3));
+  if(k>0) s+=`<g opacity="${1-.87*k}">${byDepth(g.outer)}</g><g opacity="${k}">${byDepth(g.inside)}</g>`;
+  else {
+    const tip=clipTo(on(PX(14),rectUV(penCY-7,penCZ-7,penCY+7,penCZ+7)),byDepth(g.inside.filter(p=>p.box[0][0]<14)));
+    s+=byDepth([...g.outer,{box:penBounds(g.ball,14,1),svg:tip}]);
+  }
+  if(k>.6) s+=penLabels(g.labels);
+  return s;
+}
+function penRun(st,ui){
+  ui.animate(dt=>{
+    st.t+=dt;
+    if(st.phase==='press'){
+      const k=Math.min(1,st.t/.55);
+      st.travel=st.from+(9-st.from)*ease(k);
+      st.angle=st.base+30*ease(Math.max(0,(k-.65)/.35));
+      if(k===1){st.t=0;st.phase=st.hold?'hold':'release';}
+    }else if(st.phase==='release'){
+      const k=Math.min(1,st.t/.65),goal=st.latched?0:6;
+      st.travel=9+(goal-9)*ease(k);st.angle=st.base+30+30*ease(k);
+      if(k===1){st.latched=!st.latched;st.phase='idle';st.clicks++;}
+    }
+    return st.phase==='press'||st.phase==='release';
+  });
+}
+function penPress(st,ui,hold){
+  if(st.phase!=='idle') return ui.flash('Release the button before pressing again');
+  st.phase='press';st.t=0;st.from=st.travel;st.base=st.angle;st.hold=hold;
+  penRun(st,ui);
+}
+function penRelease(st,ui){
+  if(st.phase==='press'){st.hold=false;return;}
+  if(st.phase!=='hold') return ui.flash('The button is already released');
+  st.phase='release';st.t=0;penRun(st,ui);
+}
+const penUI=mountFigure({fig:'01',turn:'full',title:'Click pen',size:[158,52,22],center:[79,26],palette:'cobalt',
+  state:{phase:'idle',travel:0,angle:0,latched:false,clicks:0,t:0,hold:false},scene:penScene,
+  buttons:[{label:'Click',onClick:(st,ui)=>penPress(st,ui,false)},
+    {label:'Hold button',onClick:(st,ui)=>penPress(st,ui,true)},
+    {label:'Release button',onClick:penRelease}],
+  acts:{click:(st,el,ui)=>penPress(st,ui,false)},
+  stats:st=>[{label:'Tip',value:st.phase==='idle'?(st.latched?'OUT':'IN'):st.phase==='hold'?'HELD':'MOVING'},
+    {label:'Cam index',value:Math.round(st.angle%360)+' deg',small:true}],
+  params:(st,q)=>{if(q.get('out')==='1'){st.latched=true;st.travel=6;st.angle=60;}}
+});
+if(innerWidth<=560){
+  const svg=document.getElementById('fig'),vb=svg.viewBox.baseVal;
+  svg.setAttribute('viewBox',`0 0 ${vb.width} ${vb.width}`);svg.style.aspectRatio='1';
+}
+xrMount(()=>penUI,()=> '');
+</script></body></html>
