@@ -1,0 +1,618 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Espresso machine</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Espresso machine: a home single-group machine with a brew boiler and a steam thermoblock, on a kitchen counter.
+   x = depth (front face x = 80), y = width (+y = viewer-left), z = up; 2 units = 1 cm (case 28 x 25 x 32 cm).
+
+   TRUTH FIRST: how it really works, and where the water is after each step
+   1 FILL THE TANK   water jug -> lid flap -> clear 1.8 L tank hung on the back (half the width, nearly full height).
+                     The tank's spring valve sits in a socket in the tank seat; the intake hose leaves the socket
+                     through the back wall.
+   2 SWITCH ON       mains inlet -> control board -> power switch -> boiler element. The brew thermostat holds the
+                     boiler at about 93 C; the ready light comes on when it is there.
+   3 LOCK            the portafilter (basket of ground coffee) is lifted under the group head, its two lugs go into the
+                     bayonet and the handle twists to the front: the basket rim seals against the gasket.
+   4 PULL A SHOT     brew switch -> vibration pump: tank -> inlet filter -> valve -> intake hose -> flowmeter -> pump
+                     -> OPV (bleeds back to the tank above ~9 bar) -> T-junction -> PTFE tube -> boiler -> 3-way solenoid
+                     -> group head -> shower screen -> coffee puck -> basket -> spouts -> cup on the drip tray. The gauge
+                     line from the boiler feed shows ~9 bar. Brew switch off: the solenoid vents the group through the
+                     drain pipe into the drip tray, so the puck comes out dry.
+   5 STEAM MILK      steam switch -> thermoblock heats to ~135 C. Steam knob opens the steam valve; the pump pulses
+                     water from the T-junction through a check valve into the thermoblock, where it flashes to steam:
+                     thermoblock -> steam pipe -> steam valve -> ball joint -> steam wand -> tip, under the milk in the
+                     pitcher. The milk heats to ~60 C and the foam rises. Knob shut, steam switch off.
+
+   PARTS (each is fixed to something)
+   CASE       body shell with the brew recess . head . top cup-warmer plate and rail . tank seat . drip tray + grate
+   WATER      water tank . tank lid + fill flap . tank valve . inlet filter . intake hose . flowmeter (on the chassis)
+              . vibration pump on two rubber mounts (on the chassis) . OPV on the pump outlet . return hose to the tank
+              . T-junction . PTFE tube up to the boiler
+   BREW       boiler (on the head floor, bolted to the group) . heating element (horseshoe inside) . brew thermostat
+              . thermal fuse . 3-way solenoid valve (on the boiler outlet) . drain pipe to the drip tray . group head
+              . gasket . shower screen . portafilter . filter basket . coffee puck . spouts . cup + saucer
+   STEAM      check valve . thermoblock (bracket to the left wall) . steam thermostat . steam pipe . steam valve (behind
+              the knob, through the left wall) . steam knob . ball joint . steam wand . milk pitcher
+   CONTROLS   pressure gauge (front) + gauge line . power / brew / steam rocker switches . three lights . control board
+              (on the right wall) . mains inlet (back) . wiring harness . chassis plate */
+
+const G = 3;                                   // counter top
+const X0 = 24, XR = 62, X1 = 80;               // case back, back wall of the brew recess, front face
+const Y0 = 26, Y1 = 76, ZT = 67, ZH = 43;      // right side, left side, top, underside of the head
+const GX = 71, GY = 51;                        // axis of the group head and the boiler
+const TK = { x0:12.5, x1:23.5, y0:52, y1:75.5, z0:7, z1:62 };
+const ESP_FULL = 1.8, ESP_CAPL = 2.0;          // litres: a full fill, what the tank holds
+const CASE_BOX = [[X0, Y0, G], [X1, Y1, ZT]];
+const ROCK = [{ y:73, name:'POWER' }, { y:67, name:'BREW' }, { y:61, name:'STEAM' }];
+const GAUGE = [34, 55, 5.5];                   // y, z, radius on the front
+const KNOB = [68, 59];                         // steam knob (x, z) on the left side
+const WAND = [[74, Y1, 47], [74, Y1 + 3, 47], [76, 83.5, 44], [83, 88, 12], [83, 88, 9.5]];
+const WAND_R = [1.6, .9, .9, 1.1];
+const PIT = { x:83, y:88, r0:7, r1:6, h:20 };
+const PF_REST = [93, 40, 11.5], PF_IN = [71, 51, 32.6], PF_LOCK = 36;
+const BRASS = { l:'#f1cf7a', m:'#d2a94e', d:'#93702c' }, COPPER = { l:'#f0b07a', m:'#d08a52', d:'#9a5a2c' };
+const ALU = matOf('#d5d9dc'), RUBBER = matOf('#4a4642'), PCB = matOf('#3f8f5c'), WHITEP = matOf('#f4f1e8');
+const WATER = '#4f9fd8', COFFEE = '#6b3a1c', CREMA = '#c58a4a', MILK = '#fbf8f0', RECESS = '#2b2523';
+const SIL = '#e3f0f2', PTFE = '#f3f1ea', HOTW = '#e9773d', STEAMC = '#ffffff';
+
+const eLerp = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const eClamp = t => Math.max(0, Math.min(1, t));
+const eBoxOf = (pts, pad = 0) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - pad), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + pad)];
+const eCyl = (x, y, z0, z1, r, m, w = .9, n = 18) => ({ box:[[x - r, y - r, z0], [x + r, y + r, z1]], svg: cyl(x, y, z0, z1, r, m, toneI, w, n) });
+const eBx = (x0, y0, z0, x1, y1, z1, m, w = .9, extra = '') => ({ box:[[x0, y0, z0], [x1, y1, z1]], svg: box(x0, y0, z0, x1, y1, z1, m, toneI, w) + extra });
+const eRod = (a, b, r, m, w = .8, r1 = r) => ({ box: eBoxOf([a, b], Math.max(r, r1)), svg: rod(a, b, r, m, toneI, w, r1, 14) });
+const eCylX = (x0, x1, y, z, r, m, w = .9) => ({ box:[[x0, y - r, z - r], [x1, y + r, z + r]], svg: cylX(x0, x1, y, z, r, m, toneI, w, 18) });
+const espTxB = (x, y, z, str, size) => `<text transform="${txM(P(x, y, z), Dv(0,1,0), Dv(0,0,-1))}" font-size="${size}" fill="${INK}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em">${str}</text>`;
+
+// a hose, pipe or wire in short pieces (each with its own box, so it sorts with the solids round it);
+// flow = colour of the dashes that run along it while something flows, t = clock
+function espTube(pts, col, w, flow = null, t = 0, len = 5){
+  const out = []; let cum = 0;
+  for (let i = 0; i < pts.length - 1; i++){
+    const a = pts[i], b = pts[i + 1], n = Math.max(1, Math.round(Math.hypot(...sub(b, a)) / len));
+    for (let j = 0; j < n; j++){
+      const p = eLerp(a, b, j/n), q = eLerp(a, b, (j + 1)/n), d = pd([p, q], false), s0 = P(...p), s1 = P(...q);
+      let svg = `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w + .9)}" stroke-linecap="round"/>`
+        + `<path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linecap="round"/>`;
+      if (flow) svg += `<path d="${d}" fill="none" stroke="${flow}" stroke-width="${f(1.1*w)}" stroke-dasharray="1.3 1.7" stroke-dashoffset="${(cum - t*12).toFixed(2)}"/>`;
+      cum += Math.hypot(s1[0] - s0[0], s1[1] - s0[1]);
+      out.push({ box: eBoxOf([p, q], .4), svg });
+    }
+  }
+  return out;
+}
+
+/* ---------- what each process is doing right now (from its progress 0..1, -1 = not running) ---------- */
+function espShotInfo(st){
+  const t = st.shotT;
+  if (t < 0) return { brew:0, pump:0, bar:0, pour:0, vent:0 };
+  const up = ease(eClamp((t - .04)/.22)), down = t < .9 ? 1 : eClamp(1 - (t - .9)/.05);
+  return { brew: t < .92 ? 1 : 0, pump: t > .04 && t < .9 ? 1 : 0, bar: 9.2*up*down, pour: t > .2 && t < .93 ? 1 : 0, vent: t > .9 ? 1 : 0 };
+}
+function espSteamInfo(st){
+  const t = st.steamT;
+  if (t < 0) return { sw:0, knob:0, steam:0, pump:0 };
+  const knob = t < .25 ? 0 : t < .33 ? ease((t - .25)/.08) : t < .85 ? 1 : t < .93 ? 1 - ease((t - .85)/.08) : 0;
+  return { sw:1, knob, steam: knob > .4 ? 1 : 0, pump: knob > .4 && (st.clock*3) % 1 < .5 ? 1 : 0 };
+}
+function espJugPose(st){
+  const t = st.fillT, R0 = [12, 88, G], R1 = [18, 82, 70.2];
+  if (t < 0) return { b: R0, a: 0, pour: 0 };
+  const up = t < .16 ? ease(t/.16) : t < .9 ? 1 : 1 - ease((t - .9)/.1);
+  const tilt = t < .18 ? 0 : t < .28 ? ease((t - .18)/.1) : t < .8 ? 1 : t < .9 ? 1 - ease((t - .8)/.1) : 0;
+  return { b: eLerp(R0, R1, up), a: 70*tilt*Math.PI/180, pour: t > .29 && t < .8 ? 1 : 0 };
+}
+function espPfPose(st){
+  const s = st.pf;
+  if (s <= .6){ const u = s/.6, mv = ease(eClamp((u - .3)/.7));
+    return { c: [PF_REST[0] + (PF_IN[0] - PF_REST[0])*mv, PF_REST[1] + (PF_IN[1] - PF_REST[1])*mv, PF_REST[2] + (PF_IN[2] - PF_REST[2])*ease(eClamp(u/.4))], th: -90 + 130*mv }; }
+  const u = (s - .6)/.4;
+  return { c: [PF_IN[0], PF_IN[1], PF_IN[2] + (PF_LOCK - PF_IN[2])*ease(eClamp(u/.5))], th: 40*(1 - ease(eClamp((u - .5)/.5))) };
+}
+
+/* ---------- the case: a box with the brew recess cut out under the head (a C-shaped side profile) ----------
+   Two convex blocks: the back block (x 24..62, full height) and the head (x 62..80 above z 43). Whichever is nearer
+   the viewer is drawn last and carries the faces they share (both sides, the top), so no seam is inked. */
+const espQuad = (poly, n, m, w) => face(pd(poly), tone(n, m)) + ink(pd(poly), w);
+const espCapPoly = y => [[X0, y, G], [XR, y, G], [XR, y, ZH], [X1, y, ZH], [X1, y, ZT], [X0, y, ZT]];
+const ESP_BACKC = [], ESP_HEADC = [];
+for (const y of [Y0, Y1]) for (const z of [G, ZT]) for (const x of [X0, XR]) ESP_BACKC.push([x, y, z]);
+for (const y of [Y0, Y1]) for (const z of [ZH, ZT]) for (const x of [XR, X1]) ESP_HEADC.push([x, y, z]);
+function espFrontDecor(){
+  let s = shape([[X1 + .05, Y0 + 1, 44], [X1 + .05, Y1 - 1, 44], [X1 + .05, Y1 - 1, 45.2], [X1 + .05, Y0 + 1, 45.2]], METAL.l, .8);   // chrome trim
+  s += tx(X1 + .06, 50, 61.2, 'ESPRESSO', 2.4, INK, 800);
+  for (const r of ROCK) s += tx(X1 + .06, r.y, 48.9, r.name, 1.25, INK, 800);
+  return s;
+}
+function espSideDecor(y){
+  const o = y === Y1 ? .06 : -.06; let d = '';
+  for (let z = 10; z <= 20; z += 2.5) d += pd([[30, y + o, z], [52, y + o, z]], false);
+  return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="1.1" opacity=".55"/>`;
+}
+function espBackDecor(){
+  const x = X0 - .05;
+  let s = shape(on(PX(x), rrUV(29, 42, 47, 53, 1.2)), '#f3f0e6', .9);
+  s += espTxB(x - .02, 38, 49, '230V 50HZ 1350W', 1.4) + espTxB(x - .02, 38, 45.5, 'ESPRESSO E1', 1.3);
+  let d = ''; for (let z = 24; z <= 36; z += 2.4) d += pd([[x, 30, z], [x, 46, z]], false);
+  s += `<path d="${d}" fill="none" stroke="${INK}" stroke-width="1.1" opacity=".55"/>`;
+  return s + shape(on(PX(x), rrUV(33, 11, 39, 17, .8)), RECESS, 1);    // mains socket
+}
+function espTopDecor(m){
+  const pl = on(PZ(ZT + .05), rectUV(28, 30, 76, 72));
+  let d = ''; for (let x = 32; x <= 72; x += 4) d += pd([[x, 30, ZT + .07], [x, 72, ZT + .07]], false);
+  return shape(pl, mix(tone([0,0,1], m), '#ffffff', .22), 1.1) + `<path d="${d}" fill="none" stroke="${INK}" stroke-width=".7" opacity=".45"/>`;
+}
+function espCase(m, inner){
+  const FR = CAM_V[0] >= 0;
+  let early, late;
+  if (FR){
+    early = hullInk(ESP_BACKC, 2.8) + (vis([1,0,0]) ? espQuad([[XR, Y0, G], [XR, Y1, G], [XR, Y1, ZH], [XR, Y0, ZH]], [1,0,0], m, 1.8) : '');
+    late = hullInk(ESP_HEADC, 2.8) + (vis([1,0,0]) ? espQuad([[X1, Y0, ZH], [X1, Y1, ZH], [X1, Y1, ZT], [X1, Y0, ZT]], [1,0,0], m, 2.2) + espFrontDecor() : '');
+  } else {
+    early = hullInk(ESP_HEADC, 2.8);
+    late = hullInk(ESP_BACKC, 2.8) + (vis([-1,0,0]) ? espQuad([[X0, Y0, G], [X0, Y1, G], [X0, Y1, ZT], [X0, Y0, ZT]], [-1,0,0], m, 2.2) + espBackDecor() : '');
+  }
+  for (const [y, n] of [[Y0, [0,-1,0]], [Y1, [0,1,0]]]) if (vis(n)) late += espQuad(espCapPoly(y), n, m, 2.2) + espSideDecor(y);
+  if (vis([0,0,1])) late += espQuad([[X0, Y0, ZT], [X1, Y0, ZT], [X1, Y1, ZT], [X0, Y1, ZT]], [0,0,1], m, 2.2) + espTopDecor(m);
+  return early + inner + late;
+}
+
+/* ---------- things in the brew recess: drip tray, cup, coffee streams, group head, portafilter ---------- */
+const espStream = (a, b) => { const d = pd([a, b], false);
+  return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="1.5" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${COFFEE}" stroke-width=".8" stroke-linecap="round"/>`; };
+function espTray(st){
+  let s = box(XR, 34, G, 86, 68, 10, DARK, toneI, 1.4);
+  if (vis([1,0,0])){ s += shape(on(PX(86.05), rrUV(59, 4.5, 64.5, 8.5, 1)), '#cfe9f0', .8) + shape(on(PX(86.1), rectUV(60.2, 5, 63.3, 6.2 + 1.2*st.drip)), '#e2483d', .5); }
+  s += box(XR + .5, 34.5, 10, 85.5, 67.5, 10.6, METAL, toneI, .9);
+  if (vis([0,0,1])){ let d = ''; for (let x = 64.5; x <= 83.5; x += 1.9) d += pd([[x, 37, 10.65], [x, 65, 10.65]], false);
+    s += `<path d="${d}" fill="none" stroke="${METAL.d}" stroke-width="1.2" stroke-linecap="round"/>`; }
+  return { box: [[XR, 34, G], [86, 68, 10.6]], svg: s };
+}
+function espCup(st, sh){
+  const A = on(PZ(11.3), ellUV(GX, GY, 3.4, 3.4, 24)), B = on(PZ(21), ellUV(GX, GY, 4.8, 4.8, 24));
+  let cont = fill(pd(on(PZ(11.4), ellUV(GX, GY, 3.3, 3.3, 24))), CERAMIC.m), zs = 11.4;
+  if (st.ml > .3){ zs = 11.5 + 8*st.ml/40; const r = 3.4 + 1.4*(zs - 11.3)/9.7 - .1, cr = on(PZ(zs), ellUV(GX, GY, r, r, 24));
+    cont += fill(pd(cr), CREMA) + fill(pd(on(PZ(zs + .02), ellUV(GX + .4, GY - .3, r*.55, r*.5, 16))), mix(CREMA, '#f0c890', .45)) + ink(pd(cr), .5); }
+  if (sh.pour) for (const g of [-1.6, 1.6]) cont += espStream([GX, GY + g, 21], [GX, GY + g*.6, zs]);
+  const hp = [[GX, GY + 4.5, 19.4], [GX, GY + 7.2, 18.6], [GX, GY + 7.2, 14.6], [GX, GY + 3.9, 13.6]];
+  let hd = ''; for (let i = 0; i < 3; i++) hd += rod(hp[i], hp[i + 1], .65, CERAMIC, toneI, .8, .65, 10);
+  const cup = openShell(A, B, n => toneI(n, CERAMIC), cont) + ink(pd(B), 1) + hullInk([...A, ...B], 1.3);
+  const sau = cyl(GX, GY, 10.6, 11.3, 6.4, CERAMIC, toneI, 1, 28);
+  return { box: [[GX - 6.4, GY - 6.4, 10.6], [GX + 6.4, GY + 7.9, 21]], svg: sau + (vis([0,1,0]) ? cup + hd : hd + cup) };
+}
+function espGroup(){
+  const s = cyl(GX, GY, 36, 36.3, 4.6, METAL, toneI, .6, 20) + cyl(GX, GY, 36.3, 36.9, 5.9, DARK, toneI, .7, 24)
+    + cyl(GX, GY, 36.9, 41.6, 6.5, METAL, toneI, 1.3, 28) + cyl(GX, GY, 41.6, 43, 7, METAL, toneI, 1.1, 28);
+  return { box: [[GX - 7, GY - 7, 36], [GX + 7, GY + 7, ZH]], svg: s };
+}
+function espPf(st, k){
+  const { c:[cx, cy, cz], th } = espPfPose(st), a = th*Math.PI/180, ca = Math.cos(a), sa = Math.sin(a), R = 5.6, nx = -sa, ny = ca;
+  const droop = 2*(1 - eClamp(st.pf*4));                                  // at rest the handle lies on the counter
+  const hb = [cx + R*ca, cy + R*sa, cz - 2.4], hn = [cx + 9*ca, cy + 9*sa, cz - 3 - droop*.3], he = [cx + 20*ca, cy + 20*sa, cz - 4.6 - droop];
+  // under the body: the spout block and its two spouts
+  let low = '';
+  for (const [p, q] of [-1, 1].map(g => [[cx + g*1.1*nx, cy + g*1.1*ny, cz - 6.2], [cx + g*1.6*nx, cy + g*1.6*ny, cz - 8.5]]).sort((p, q) => depthOf(p[1]) - depthOf(q[1])))
+    low += rod(p, q, .55, METAL, toneI, .7, .45, 10);
+  low += cyl(cx, cy, cz - 6.2, cz - 4.5, 2.1, METAL, toneI, .8, 14);
+  let body = cyl(cx, cy, cz - 4.5, cz, R, METAL, toneI, 1.2, 28);
+  const inner = on(PZ(cz + .02), ellUV(cx, cy, R - .9, R - .9, 24));
+  body += fill(pd(inner), st.spent ? '#3a2416' : '#5a3a22') + ink(pd(inner), .7);
+  // the two lugs that ride the group's bayonet: the far one before the body, the near one after
+  for (const g of [-1, 1]){ const lug = rod([cx + g*(R - .2)*nx, cy + g*(R - .2)*ny, cz - .8], [cx + g*(R + 1.2)*nx, cy + g*(R + 1.2)*ny, cz - .8], .55, METAL, toneI, .6, .55, 8);
+    body = vis([g*nx, g*ny, 0]) ? body + lug : lug + body; }
+  if (k > 0) body = cyl(cx, cy, cz - 4.1, cz - .1, R - .8, METAL, toneI, .7, 22) + cyl(cx, cy, cz - 3.9, cz - 1.3, R - 1, matOf(st.spent ? '#3a2416' : '#6a4428'), toneI, .6, 22)
+    + `<g opacity="${f(1 - .65*k)}">${body}</g>`;
+  const hf = vis([ca, sa, 0]);
+  const neck = rod(hb, hn, 1.05, METAL, toneI, .9, 1.05, 12), grip = rod(hn, he, 1.45, DARK, toneI, 1.2, 1.75, 14);
+  const hs = hf ? neck + grip : grip + neck;
+  return { box: eBoxOf([[cx - R - 1.2, cy - R - 1.2, cz - 8.5], [cx + R + 1.2, cy + R + 1.2, cz], he.map(v => v - 1.8), he.map(v => v + 1.8)]),
+    svg: low + (hf ? body + hs : hs + body), handle: eLerp(hn, he, .5) };
+}
+function espRecess(st, k, sh){
+  const out = [espTray(st), espCup(st, sh), espGroup()];
+  if (sh.pour) out.push({ box: [[GX - .6, GY - 2, 21], [GX + .6, GY + 2, 27.5]], svg: [-1.6, 1.6].map(g => espStream([GX, GY + g, 27.5], [GX, GY + g, 21])).join('') });
+  if (st.pf > 0) out.push(espPf(st, k));
+  return out;
+}
+
+/* ---------- outside the case ---------- */
+function espTank(st, m){
+  const { x0, x1, y0, y1, z0, z1 } = TK;
+  let s = box(12, 51.5, G, 24, 76, z0, m, tone, 1.4);                    // the tank seat, part of the case
+  const fcs = [[[1,0,0], [[x1,y0,z0],[x1,y1,z0],[x1,y1,z1],[x1,y0,z1]]], [[-1,0,0], [[x0,y0,z0],[x0,y1,z0],[x0,y1,z1],[x0,y0,z1]]],
+               [[0,1,0], [[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]]], [[0,-1,0], [[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1]]]];
+  for (const [n, q] of fcs) if (!vis(n)) s += fill(pd(q), CLEAR.d, 'opacity=".4"') + ink(pd(q), .7);
+  // inside: the valve in the floor with the inlet filter on it, the return port, then the water
+  s += cyl(18, 64, z0, z0 + 2.2, 2.2, WHITEP, toneI, .8, 16) + cyl(18, 64, z0 + 2.2, z0 + 7, 1.6, METAL, toneI, .8, 16)
+    + cyl(18, 70, z0, z0 + 3, .9, WHITEP, toneI, .7, 12);
+  const wz = z0 + .4 + (z1 - z0 - 1)*st.water/ESP_CAPL;
+  if (st.water > .01) s += `<g opacity=".5">${box(x0 + .4, y0 + .4, z0 + .3, x1 - .4, y1 - .4, wz, matOf('#7cc0e6'), toneI, 0)}</g>`
+    + `<path d="${pd(on(PZ(wz), rectUV(x0 + .4, y0 + .4, x1 - .4, y1 - .4)))}" fill="none" stroke="#3c86c0" stroke-width=".9"/>`;
+  for (const [n, q] of fcs) if (vis(n)){ s += fill(pd(q), CLEAR.l, 'opacity=".28"') + ink(pd(q), 1);
+    const c = avg(q), e = sub(q[1], q[0]), up = [0, 0, 1];
+    for (const o of [-.28, -.18]) s += `<path d="${pd([c.map((v, i) => v + e[i]*o - up[i]*18), c.map((v, i) => v + e[i]*(o + .12) + up[i]*14)], false)}" fill="none" stroke="#ffffff" stroke-width="1.4" opacity=".38" stroke-linecap="round"/>`; }
+  s += box(12, 51.5, z1, 24, 76, z1 + 2, DARK, toneI, 1.2);             // lid
+  const cs = []; for (const x of [12, 24]) for (const y of [51.5, 76]) for (const z of [G, z1 + 2]) cs.push([x, y, z]);
+  return { box: [[12, 51.5, G], [24, 76, z1 + 2]], svg: s + hullInk(cs, 1.8) };
+}
+function espFlap(st){
+  const t = st.fillT, ph = (t < 0 ? 0 : t < .12 ? ease(t/.12) : t < .9 ? 1 : 1 - ease((t - .9)/.1))*100*Math.PI/180;
+  const zl = TK.z1 + 2.05, c = Math.cos(ph), sn = Math.sin(ph);
+  const q = [[14.5, 59, zl], [21.5, 59, zl], [21.5, 59 + 12*c, zl + 12*sn], [14.5, 59 + 12*c, zl + 12*sn]];
+  let n = norm(cross(sub(q[1], q[0]), sub(q[3], q[0]))); if (!vis(n)) n = n.map(v => -v);
+  const hole = ph > .01 ? shape(on(PZ(zl - .02), rectUV(14.5, 59, 21.5, 71)), RECESS, .9) : '';
+  return { box: eBoxOf(q, .1), svg: hole + shape(q, toneI(n, DARK), 1) };
+}
+function espJug(st){
+  const { b, a, pour } = espJugPose(st), ca = Math.cos(a), sa = Math.sin(a);
+  const W = (u, v, w) => [b[0] + u, b[1] + v*ca - w*sa, b[2] + v*sa + w*ca];
+  const ring = (w, r) => ellUV(0, 0, r, r, 24).map(([u, v]) => W(u, v, w));
+  const A = ring(0, 5.2), B = ring(15, 5.8), axis = [0, -sa, ca], side = [0, ca, sa];
+  let cont = '';
+  if (vis(axis) && st.jug > .02){ const lv = 1 + 12*st.jug; cont = fill(pd(ring(lv, 5.2 + .6*lv/15 - .15)), WATER); }
+  let s = openShell(A, B, n => toneI(n, CERAMIC), cont) + ink(pd(B), 1) + (vis(axis.map(v => -v)) ? shape(A, toneI(axis.map(v => -v), CERAMIC), 1) : '') + hullInk([...A, ...B], 1.6);
+  s += shape([W(-1.7, -5.7, 15), W(1.7, -5.7, 15), W(0, -7.6, 15.4)], toneI([0, -ca, -sa], CERAMIC), .9);   // pouring lip
+  const hp = [W(0, 5.6, 13), W(0, 9.4, 12), W(0, 9.8, 4.5), W(0, 5.1, 3)];
+  let hd = ''; for (let i = 0; i < 3; i++) hd += rod(hp[i], hp[i + 1], .9, CERAMIC, toneI, .9, .9, 10);
+  s = vis(side) ? s + hd : hd + s;
+  const pts = [...A, ...B, ...hp];
+  if (pour){ const tp = W(0, -7.6, 15.4), d = pd([tp, [tp[0], tp[1], TK.z1 + 2.1]], false);
+    s += `<path d="${d}" fill="none" stroke="${INK}" stroke-width="2.6" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${WATER}" stroke-width="1.6" stroke-linecap="round"/>`
+      + `<path d="${d}" fill="none" stroke="#ffffff" stroke-width=".5" opacity=".6" stroke-dasharray="2 3" stroke-dashoffset="${f(-st.clock*30)}"/>`;
+    pts.push([tp[0], tp[1], TK.z1 + 2.1]); }
+  return { box: eBoxOf(pts, .3), svg: s, pts: [...A, ...B] };
+}
+function espWandPart(zlo, zhi){
+  // the wand's pieces between two heights (its tip dips into the pitcher), joint first
+  let s = '';
+  for (let i = 0; i < WAND.length - 1; i++){
+    const a = WAND[i], b = WAND[i + 1]; let t0 = 0, t1 = 1;
+    if (b[2] < a[2]){ t0 = eClamp((zhi - a[2])/(b[2] - a[2])); t1 = eClamp((zlo - a[2])/(b[2] - a[2])); }
+    else if (a[2] < zlo || a[2] > zhi) continue;
+    if (t1 - t0 < 1e-3) continue;
+    s += rod(eLerp(a, b, t0), eLerp(a, b, t1), WAND_R[i], METAL, toneI, i ? .9 : 1.1, WAND_R[i], 12);
+    if (i === 0){ const [X, Y] = P(...WAND[1]); s += `<circle cx="${f(X)}" cy="${f(Y)}" r="2.3" fill="${METAL.l}" stroke="${INK}" stroke-width="1"/>`; }
+  }
+  return s;
+}
+function espPitcher(st, sm){
+  const { x, y, r0, r1, h } = PIT, z1 = G + h;
+  const A = on(PZ(G), ellUV(x, y, r0, r0, 28)), B = on(PZ(z1), ellUV(x, y, r1, r1, 28));
+  const ms = G + 8 + 6*st.foam, rm = r0 + (r1 - r0)*(ms - G)/h - .15, sf = on(PZ(ms), ellUV(x, y, rm, rm, 28));
+  let cont = fill(pd(sf), st.foam > .05 ? '#fffdf7' : MILK) + ink(pd(sf), .6);
+  if (st.foam > .05){ let d = ''; for (const [u, v] of [[-3, 1], [2, -3], [3.2, 2], [-1, 3.6], [-3.5, -2]]) { const [X, Y] = P(x + u*rm/6, y + v*rm/6, ms); d += `M${f(X - .5)} ${f(Y)}a.5 .35 0 1 0 1 0a.5 .35 0 1 0 -1 0`; }
+    cont += `<path d="${d}" fill="none" stroke="#b9b2a2" stroke-width=".6"/>`; }
+  if (sm.steam){ const sw = st.clock*5, pts = Array.from({length: 13}, (_, i) => { const t = sw + i*.45, rr = 1 + i*.33; return [x + rr*Math.cos(t), y + rr*Math.sin(t), ms + .03]; });
+    cont += `<path d="${pd(pts, false)}" fill="none" stroke="#c9c1ae" stroke-width=".8" stroke-linecap="round"/>`; }
+  cont += espWandPart(ms, z1);
+  let s = openShell(A, B, n => toneI(n, METAL), cont) + ink(pd(B), 1.1) + hullInk([...A, ...B], 1.6);
+  s += shape([[x - 1.8, y - r1 + .2, z1], [x + 1.8, y - r1 + .2, z1], [x, y - r1 - 2.2, z1]], METAL.l, .9);   // spout lip
+  const hp = [[x, y + r1 - .3, z1 - 2], [x, y + r1 + 3.6, z1 - 3], [x, y + r0 + 3.2, G + 6], [x, y + r0 - .3, G + 4]];
+  let hd = ''; for (let i = 0; i < 3; i++) hd += rod(hp[i], hp[i + 1], .8, METAL, toneI, .9, .8, 10);
+  return { box: [[x - r0 - .5, y - r1 - 2.5, G], [x + r0 + .5, y + r0 + 4, z1]], svg: vis([0,1,0]) ? s + hd : hd + s, pts: [...A, ...B] };
+}
+function espWand(st, sm){
+  let s = espWandPart(G + PIT.h, 60);
+  if (sm.steam){ let d = ''; for (const [u, v, ph] of [[-2.2, -1, 0], [1.6, 1.8, 2], [2.4, -2.2, 4]]){ const pts = [];
+      for (let i = 0; i <= 8; i++){ const z = G + PIT.h + 1 + i*1.1; pts.push([PIT.x + u + .9*Math.sin(st.clock*6 + ph + i*.8), PIT.y + v, z]); } d += pd(pts, false); }
+    s += `<path d="${d}" fill="none" stroke="#ffffff" stroke-width="1.6" opacity=".75" stroke-linecap="round"/>`; }
+  return { box: [[73, Y1, G + PIT.h], [85, 90, 48.6]], svg: s };
+}
+function espKnob(sm){
+  const [kx, kz] = KNOB;
+  let s = rod([kx, Y1, kz], [kx, Y1 + 1, kz], 3.3, METAL, toneI, .9, 3.3, 20) + rod([kx, Y1 + 1, kz], [kx, Y1 + 3.4, kz], 2.8, DARK, toneI, 1.1, 2.6, 20);
+  if (vis([0,1,0])){ const b = (-60 + 240*sm.knob)*Math.PI/180;
+    s += `<path d="${pd([[kx, Y1 + 3.45, kz], [kx + 2*Math.sin(b), Y1 + 3.45, kz + 2*Math.cos(b)]], false)}" fill="none" stroke="#f4f1e8" stroke-width="1.3" stroke-linecap="round"/>`; }
+  return { box: [[kx - 3.3, Y1, kz - 3.3], [kx + 3.3, Y1 + 3.4, kz + 3.3]], svg: s };
+}
+function espFrontParts(st, sh, sm){
+  const out = [], FRONT = vis([1,0,0]), [gy, gz, gr] = GAUGE;
+  let g = cylX(X1, X1 + 2.2, gy, gz, gr, METAL, toneI, 1.2, 28);
+  if (FRONT){
+    const fx = X1 + 2.25, dial = on(PX(fx), ellUV(gy, gz, gr - .9, gr - .9, 28));
+    const at = (an, r) => [fx + .02, gy - r*Math.sin(an), gz + r*Math.cos(an)], ang = b => (-135 + 270*b/16)*Math.PI/180;
+    g += fill(pd(dial), '#fbf7ea') + ink(pd(dial), .7);
+    const band = []; for (let i = 0; i <= 8; i++) band.push(at(ang(8 + 2*i/8), gr - 1.8));
+    g += `<path d="${pd(band, false)}" fill="none" stroke="#43c25c" stroke-width="1.8"/>`;
+    let tk = ''; for (let b = 0; b <= 16; b += 2) tk += pd([at(ang(b), gr - 1.3), at(ang(b), gr - 2.2)], false);
+    g += `<path d="${tk}" fill="none" stroke="${INK}" stroke-width=".8"/>` + tx(fx + .03, gy, gz - 2.9, 'BAR', 1.2, INK, 800);
+    const na = ang(Math.min(16, sh.bar));
+    g += `<path d="${pd([at(na + Math.PI, .8), at(na, gr - 1.5)], false)}" fill="none" stroke="#e2483d" stroke-width="1.2" stroke-linecap="round"/>`
+      + fill(pd(on(PX(fx + .04), ellUV(gy, gz, .55, .55, 10))), INK);
+  }
+  out.push({ box: [[X1, gy - gr, gz - gr], [X1 + 2.3, gy + gr, gz + gr]], svg: g });
+  const lit = [st.on, sh.brew, sm.sw], led = [st.on ? '#f29b38' : '#8f877b', st.on && st.temp >= 90 ? '#43c25c' : '#8f877b', sm.sw && st.stemp >= 125 ? '#43c25c' : '#8f877b'];
+  ROCK.forEach((r, i) => {
+    const y = r.y, onR = lit[i], pm = i === 0 ? matOf(onR ? '#ef6a4c' : '#b9483a') : matOf(onR ? '#8a847c' : '#5b5650');
+    // a rocker: the half that is pressed in sits nearly flush, the other half stands out (lower part first)
+    const lo = onR ? box(X1 + .6, y - 1.4, 52, X1 + 1.8, y + 1.4, 55, pm, toneI, .8) : box(X1 + .6, y - 1.4, 52, X1 + 1, y + 1.4, 55, pm, toneI, .7);
+    const hi = onR ? box(X1 + .6, y - 1.4, 55, X1 + 1, y + 1.4, 58, pm, toneI, .7) : box(X1 + .6, y - 1.4, 55, X1 + 1.8, y + 1.4, 58, pm, toneI, .8);
+    out.push({ box: [[X1, y - 1.8, 51.5], [X1 + 1.8, y + 1.8, 58.5]], svg: box(X1, y - 1.8, 51.5, X1 + .6, y + 1.8, 58.5, DARK, toneI, .9) + lo + hi });
+    out.push(eCylX(X1, X1 + .7, y, 61.2, .75, matOf(led[i]), .7));
+  });
+  return out;
+}
+const ESP_RAIL = [[27, 29], [77, 29], [77, 73], [27, 73]];
+function espCord(){
+  const pts = [[21, 36, 14], [17, 36.5, 11], [14.5, 37, 6], [12, 38, 3.7], [5, 39.5, 3.7], [2.4, 40, 3.4], [2.1, 40, .5]], d = pd(pts, false);
+  return { box: [[2, 34.5, 0], [24, 40.5, 15.7]], svg: box(21, 34.5, 12.3, 24, 37.5, 15.7, DARK, toneI, .9)
+    + `<path d="${d}" fill="none" stroke="${INK}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${DARK.l}" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>` };
+}
+
+/* ---------- see-through: the working parts inside the case ---------- */
+function espBoiler(heat){
+  const br = 7.5, z0 = 44, z1 = 56, A = on(PZ(z0), ellUV(GX, GY, br, br, 28)), B = on(PZ(z1), ellUV(GX, GY, br, br, 28));
+  const arc = []; for (let i = 0; i <= 16; i++){ const t = Math.PI*(1 + i/16); arc.push([GX + 4.5*Math.cos(t), GY + 4.5*Math.sin(t), 46.4]); }
+  const el = pd([[GX - 4.5, GY, z1], [GX - 4.5, GY, 47], ...arc, [GX + 4.5, GY, 47], [GX + 4.5, GY, z1]], false);
+  const elSvg = `<path d="${el}" fill="none" stroke="${INK}" stroke-width="2.4" stroke-linejoin="round"/><path d="${el}" fill="none" stroke="${heat ? '#ff5a1f' : '#9a9c9c'}" stroke-width="1.3" stroke-linejoin="round"/>`;
+  let s = loft(A, B, n => toneI(n, COPPER), true) + elSvg + `<g opacity=".5">${loft(A, B, n => toneI(n, COPPER))}${fill(pd(B), COPPER.l)}</g>` + ink(pd(B), 1) + hullInk([...A, ...B], 1.6);
+  s += byDepth([eCyl(GX - 4.5, GY, z1, 58, .8, BRASS, .6, 10), eCyl(GX + 4.5, GY, z1, 58, .8, BRASS, .6, 10),
+    eCyl(GX, GY + 4.5, z1, 57.2, 1.6, METAL, .7, 16), eCyl(GX, GY - 4.5, z1, 57, 1.1, WHITEP, .6, 12)].map(p => ({ box: p.box, svg: p.svg })));
+  return { box: [[GX - br, GY - br, z0], [GX + br, GY + br, 58]], svg: s };
+}
+function espThermo(heat){
+  const x0 = 36, x1 = 52, y0 = 60, y1 = 72, z0 = 26, z1 = 36;
+  let s = box(x0, y0, z0, x1, y1, z1, ALU, toneI, 1.1);
+  if (heat > .02) s += box(x0, y0, z0, x1, y1, z1, matOf('#ff6a2a'), toneI, 0).replace(/<path /g, `<path opacity="${f(.35*heat)}" `);
+  if (vis([0,0,1])){ const sp = []; let a0 = x0 + 1.5, a1 = x1 - 1.5, b0 = y0 + 1.5, b1 = y1 - 1.5;
+    for (let i = 0; i < 3; i++){ sp.push([a0, b0], [a1, b0], [a1, b1], [a0 + 1.5, b1]); a0 += 1.5; a1 -= 1.5; b0 += 1.5; b1 -= 1.5; }
+    s += `<path d="${pd(sp.map(([x, y]) => [x, y, z1 + .05]), false)}" fill="none" stroke="${ALU.d}" stroke-width="1" stroke-linejoin="round"/>`; }
+  const tops = byDepth([eCyl(44, 62.5, z1, 38, .8, BRASS, .6, 10), eCyl(44, 69.5, z1, 38, .8, BRASS, .6, 10), eCyl(39.5, 66, z1, 37.2, 1.6, METAL, .7, 16), eCyl(48, 64, z1, 38, .9, BRASS, .6, 12)]);
+  const inl = cylX(x1, x1 + 1, 66, 30, .8, BRASS, toneI, .6, 12);
+  s = vis([1,0,0]) ? s + inl : inl + s;
+  return { box: [[x0, y0, z0], [x1 + 1, y1, 38]], svg: s + tops };
+}
+function espMech(st, k, sh, sm){
+  const parts = [], t = st.clock, pump = sh.pump || sm.pump, jit = pump ? .18*Math.sin(t*95) : 0;
+  const tube = (pts, col, w, flow) => parts.push(...espTube(pts, col, w, flow, t));
+  const cold = pump ? WATER : null;
+  // chassis plate on the floor of the case
+  parts.push(eBx(X0 + 1, Y0 + 1, G, XR - 1, Y1 - 1, G + 1, matOf('#c3c8c8'), .8));
+  // ---- water in: hose from the tank socket, flowmeter, vibration pump on rubber mounts
+  tube([[18, 64, 7], [18, 64, 6], [X0, 63, 8], [27, 62, 7], [29, 59.5, 6.5]], SIL, .6, cold);
+  let fm = ''; if (vis([0,0,1])){ const w = on(PZ(8.55), ellUV(29, 57, 1.6, 1.6, 14)), ang = t*(pump ? 14 : 0);
+    fm = shape(w, '#cfe9f0', .6) + `<path d="${[0, 1, 2].map(i => pd([[29, 57, 8.6], [29 + 1.4*Math.cos(ang + i*2.1), 57 + 1.4*Math.sin(ang + i*2.1), 8.6]], false)).join('')}" fill="none" stroke="${INK}" stroke-width=".7"/>`; }
+  parts.push(eBx(26.5, 54.5, G + 1, 31.5, 59.5, 8.5, WHITEP, .8, fm));
+  tube([[29, 54.5, 6.5], [28.5, 50, 7], [26.5, 46, 10], [26.5, 44, 12], [28, 44, 12]], SIL, .6, cold);
+  parts.push(eBx(35, 41.5, G + 1, 37, 46.5, 8, RUBBER, .7), eBx(41, 41.5, G + 1, 43, 46.5, 8, RUBBER, .7));
+  parts.push(eBx(34 + jit, 40, 8, 44 + jit, 48, 16, DARK, 1, vis([0,0,1]) ? shape(on(PZ(16.05), rectUV(36 + jit, 41.5, 42 + jit, 46.5)), '#e8e4da', .6) : ''));
+  parts.push(eCylX(28 + jit, 34 + jit, 44, 12, 1.6, BRASS, .8), eCylX(44 + jit, 48, 44, 12, 1.3, BRASS, .7));
+  // ---- OPV on the pump outlet (its return hose runs back to the tank), T-junction
+  parts.push(eBx(48, 42, 10, 52, 46, 14, BRASS, .8), eCyl(50, 44, 14, 15.6, 1.1, BRASS, .6, 12));
+  tube([[50, 46, 12], [50, 50, 17], [34, 56, 17], [26, 66, 12], [X0, 67.5, 9], [18, 70, 10]], SIL, .5, sh.bar > 8.8 ? WATER : null);
+  tube([[52, 45, 12.5], [54.5, 46, 12.5], [54.5, 48.5, 12.5]], PTFE, .5, cold);
+  parts.push(eBx(53, 48.5, 11, 56, 51.5, 14, BRASS, .8));
+  // ---- brew: PTFE tube up to the boiler, boiler, outlet to the 3-way solenoid, solenoid to the group, drain to the tray
+  tube([[54.5, 50, 14], [54.5, 50, 42], [58, 51, 46], [GX - 7.5, GY, 48]], PTFE, .55, sh.pump ? WATER : null);
+  tube([[58, 51, 46], [60, 40, 47], [70, 34, 52], [76, 34, 55]], COPPER.m, .35, null);       // gauge line
+  parts.push(eCylX(76, X1, GAUGE[0], GAUGE[1], 3.6, METAL, .9));
+  parts.push(espBoiler(st.heat));
+  tube([[GX, GY, 56], [GX, GY, 60], [63, 45, 60], [61.6, 44, 52], [61, 44, 51]], PTFE, .5, sh.pour && sh.brew ? HOTW : null);
+  parts.push(eBx(55, 41, 48, 61, 47, 52, BRASS, .8), eBx(55.5, 41.5, 52, 60.5, 46.5, 58, sh.brew ? matOf('#5d5045') : DARK, .9));
+  tube([[58, 44, 48], [58, 44, 41], [63, 47, 40], [65, 49, 40]], PTFE, .5, sh.pour && sh.brew ? HOTW : null);
+  tube([[58, 41, 50], [58, 38.5, 50], [58, 38.5, 9.5], [61, 38.5, 8.6], [63.5, 38.5, 8.6]], SIL, .55, sh.vent ? '#8a5a3a' : null);
+  // ---- steam: check valve, thermoblock (bracket to the left wall), steam pipe, steam valve behind the knob, pipe to the wand
+  tube([[54.5, 51.5, 12.5], [54.5, 55, 12.5]], PTFE, .5, sm.pump ? WATER : null);
+  parts.push(eRod([54.5, 55, 12.5], [54.5, 60, 12.5], 1.2, BRASS, .8));
+  tube([[54.5, 60, 12.5], [54.5, 64, 22], [53, 66, 30]], PTFE, .5, sm.pump ? WATER : null);
+  parts.push(espThermo(st.sheat ? 1 : st.stemp > 100 ? .5 : 0), eBx(40, 72, 28, 48, Y1 - .5, 34, matOf('#9aa0a3'), .7));
+  tube([[48, 64, 38], [48, 64, 42], [58, 69, 52], [65, 71, 59]], METAL.m, .55, sm.steam ? STEAMC : null);
+  parts.push(eBx(65, 68, 56, 71, 74, 62, BRASS, .9), eRod([68, 74, 59], [68, Y1, 59], .7, METAL, .6));
+  tube([[68, 71, 56], [70, 73, 52], [74, 74.5, 47], [74, Y1, 47]], METAL.m, .55, sm.steam ? STEAMC : null);
+  // ---- controls and power: switch bank behind the rockers, control board on the right wall, mains inlet, wiring
+  parts.push(eBx(76, 59, 51.5, X1, 75, 58.5, DARK, .9));
+  const brd = vis([0,1,0]) ? shape(on(PY(28.05), rectUV(34, 22, 50, 34)), mix(PCB.l, '#ffffff', .08), 0) : '';
+  parts.push(eBx(32, Y0 + .5, 20, 52, 28, 36, PCB, .9, brd), eBx(36, 28, 24, 40, 30.5, 28, matOf('#3a6fb0'), .7), eBx(44, 28, 29, 47.5, 30, 32.5, DARK, .7));
+  parts.push(eCyl(48.5, 29.5, 22, 26.5, 1.3, matOf('#2c3a66'), .6, 12));
+  parts.push(eBx(X0, 33, 11, 27.5, 39, 17, DARK, .9));
+  const live = st.on ? '#c8663a' : '#9a5a2c', blk = '#2b2723';
+  tube([[27.5, 36, 14], [30, 30, 15], [32, 28, 22]], live, .3, null);
+  tube([[38, 28, 21], [38, 34, 12], [38, 40, 12]], blk, .3, null);
+  tube([[50, 28, 35], [56, 32, 62], [66, 44, 62], [66.5, 49, 59.5], [66.5, GY, 58]], live, .3, null);
+  tube([[44, 28, 36], [44, 40, 40], [44, 58, 39.5], [44, 62.5, 38]], blk, .3, null);
+  tube([[52, 28, 30], [59.5, 34, 46], [59.5, 41.5, 55]], blk, .3, null);
+  tube([[51, 28, 36], [60, 34, 62.5], [76, 60, 63], [77, 62, 58.5]], live, .3, null);
+  return parts.map(p => ({ box: p.box, svg: `<g opacity="${f(k)}">${p.svg}</g>` }));
+}
+
+// Balance the dense cutaway labels and keep both columns clear of the controls.
+function espCallouts(items){
+  const svg = document.getElementById('fig'), vb = svg.viewBox.baseVal, ctm = svg.getScreenCTM();
+  const u = 1/Math.hypot(ctm.a, ctm.b), phone = innerWidth <= 560;
+  const projected = items.map(it => ({...it, p:P(...it.at)})).sort((a,b) => a.p[0] - b.p[0]);
+  const columns = [projected.slice(0, Math.ceil(items.length/2)), projected.slice(Math.ceil(items.length/2))];
+  const bottom = vb.y + vb.height - 36*u;
+  const tops = ['btns', 'stats'].map(id => {
+    const r = document.getElementById(id).getBoundingClientRect();
+    return Math.max(vb.y + 12*u, new DOMPoint(r.left, r.bottom + 12).matrixTransform(ctm.inverse()).y);
+  });
+  const h = Math.min(17*u, ...columns.map((col,i) => (bottom - tops[i])/col.length - 2*u));
+  const fs = h*.57;
+  let result = '';
+  columns.forEach((col, side) => {
+    col.sort((a,b) => a.p[1] - b.p[1]);
+    const gap = Math.min(h + 3*u, (bottom - tops[side] - h)/Math.max(1,col.length - 1));
+    col.forEach((it,i) => {
+      const n = ((window.__ln || (window.__ln = {}))[it.text] || (__ln[it.text] = Object.keys(__ln).length + 1));
+      const w = phone ? h*(n > 9 ? 1.3 : 1) : it.text.length*fs*.62 + fs*1.5;
+      const x = side ? vb.x + vb.width - w/2 - 3*u : vb.x + w/2 + 3*u;
+      const y = tops[side] + h/2 + i*gap, edge = x + (side ? -w/2 : w/2);
+      result += `<g class="tag${it.on ? ' on' : ''}" data-n="${n}" data-t="${it.text}">`
+        + `<path d="M${f(it.p[0])} ${f(it.p[1])}L${f(edge)} ${f(y)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(it.p[0])}" cy="${f(it.p[1])}" r="${f(u)}" fill="${INK}"/>`
+        + `<rect x="${f(x-w/2)}" y="${f(y-h/2)}" width="${f(w)}" height="${f(h)}" rx="${f(h/2)}" fill="${it.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(x)}" y="${f(y+fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">${phone ? n : it.text}</text></g>`;
+    });
+  });
+  return result;
+}
+
+/* ---------- scene ---------- */
+function espScene(st, m){
+  const k = ease(st.xr || 0), sh = espShotInfo(st), sm = espSteamInfo(st);
+  const btop = boardTop(2, 2, 102, 104, G, 6);
+  let s = board(2, 2, 102, 104, G, 6);
+  const mc = []; for (const x of [12, X1]) for (const y of [Y0, Y1]) for (const z of [G, ZT]) mc.push([x, y, z]);
+  const jug = espJug(st), pit = espPitcher(st, sm), pf = espPf(st, 0);
+  s += castShadow(mc, G, btop) + castShadow(jug.pts, G, btop) + castShadow(pit.pts, G, btop);
+  if (st.pf < 1) s += castShadow([[PF_REST[0] - 6, PF_REST[1] - 6, G], [PF_REST[0] + 6, PF_REST[1] + 6, G], pf.box[0], pf.box[1]], G, btop);
+  const ext = [espTank(st, m), espFlap(st), jug, pit, espWand(st, sm), espKnob(sm), espCord(), ...espFrontParts(st, sh, sm)];
+  for (let i = 0; i < 4; i++){ const a = ESP_RAIL[i], b = ESP_RAIL[(i + 1) % 4];
+    ext.push(eRod([a[0], a[1], ZT + 1.2], [b[0], b[1], ZT + 1.2], .55, METAL, .8), eCyl(a[0], a[1], ZT, ZT + 1.2, .7, METAL, .6, 10)); }
+  if (st.pf <= 0) ext.push(espPf(st, k));
+  const rec = espRecess(st, k, sh);
+  if (k <= 0) s += byDepth([{ box: CASE_BOX, svg: espCase(m, byDepth(rec)) }, ...ext]);
+  else {
+    const caseIt = { box: CASE_BOX };
+    s += byDepth(ext.filter(it => sepOrder(it, caseIt) < 0)) + `<g opacity="${f(1 - .8*k)}">${espCase(m, '')}</g>`
+      + byDepth([...rec, ...espMech(st, k, sh, sm)]) + byDepth(ext.filter(it => sepOrder(it, caseIt) >= 0));
+  }
+  const pfH = espPf(st, 0).handle, B = [12, 90, Y0, 96, G, ZT + 2];
+  if (k > .6) s += espCallouts([
+    { at:[TK.x1, 74, 30], text:'WATER TANK', on: st.fillT >= 0 },
+    { at:[18, 63, 13], text:'INLET FILTER', on: pump(sh, sm) },
+    { at:[18, 65.5, 8], text:'TANK VALVE', on: pump(sh, sm) },
+    { at:[27, 62, 7], text:'INTAKE HOSE', on: pump(sh, sm) },
+    { at:[29, 59.5, 8.5], text:'FLOWMETER', on: pump(sh, sm) },
+    { at:[39, 48, 14], text:'VIBRATION PUMP', on: pump(sh, sm) },
+    { at:[36, 46.5, 6], text:'RUBBER MOUNTS', on: false },
+    { at:[50, 46, 13], text:'OPV', on: sh.bar > 8.8 },
+    { at:[42, 53, 17], text:'RETURN HOSE', on: sh.bar > 8.8 },
+    { at:[55, 51.5, 13], text:'T-JUNCTION', on: pump(sh, sm) },
+    { at:[54.5, 50, 30], text:'PTFE TUBE', on: sh.pump },
+    { at:[GX - 1, GY + 7.4, 50], text:'BOILER', on: st.heat },
+    { at:[GX + 4.5, GY, 52], text:'HEATING ELEMENT', on: st.heat },
+    { at:[GX, GY + 4.5, 57.2], text:'BREW THERMOSTAT', on: st.on },
+    { at:[GX, GY - 4.5, 57], text:'THERMAL FUSE', on: false },
+    { at:[58, 47, 55], text:'SOLENOID VALVE', on: sh.brew },
+    { at:[58, 38.5, 25], text:'DRAIN PIPE', on: sh.vent },
+    { at:[GX, GY + 6.5, 40], text:'GROUP HEAD', on: sh.pour },
+    { at:[GX - 4, GY + 4.2, 36.6], text:'GASKET', on: false },
+    { at:pfH, text:'PORTAFILTER', on: st.phase === 'lock' },
+    { at:[espPfPose(st).c[0] - 3, espPfPose(st).c[1] + 3, espPfPose(st).c[2] - 2], text:'FILTER BASKET', on: sh.pour },
+    { at:[GX, GY + 1.6, espPfPose(st).c[2] - 8.3], text:'SPOUTS', on: sh.pour },
+    { at:[86, 64, 6], text:'DRIP TRAY', on: sh.vent },
+    { at:[54.5, 58, 13.5], text:'CHECK VALVE', on: sm.pump },
+    { at:[44, 72, 30], text:'THERMOBLOCK', on: st.sheat },
+    { at:[39.5, 66, 37.2], text:'STEAM THERMOSTAT', on: sm.sw },
+    { at:[68, 74, 61], text:'STEAM VALVE', on: sm.knob > .5 },
+    { at:[56, 68, 50], text:'STEAM PIPE', on: sm.steam },
+    { at:eLerp(WAND[2], WAND[3], .3), text:'STEAM WAND', on: sm.steam },
+    { at:[X1, GAUGE[0], GAUGE[1] + 3.6], text:'PRESSURE GAUGE', on: sh.bar > .5 },
+    { at:[66, 36.5, 50.5], text:'GAUGE LINE', on: sh.bar > .5 },
+    { at:[42, 28, 34], text:'CONTROL BOARD', on: st.on },
+    { at:[X0, 36, 17], text:'MAINS INLET', on: st.on },
+    { at:[44, 40, 40], text:'WIRING', on: st.on },
+    { at:[78, 67, 58.5], text:'SWITCHES', on: sh.brew || sm.sw },
+  ], B);
+  else s += xrCallouts([
+    { at:[TK.x1, 74, 30], text:'WATER TANK', on: st.fillT >= 0 },
+    { at:[12, 88, G + 15], text:'WATER JUG', on: st.fillT >= 0 },
+    { at:[50, 72, ZT + 1.2], text:'CUP WARMER', on: false },
+    { at:[X1 + 2.2, GAUGE[0], GAUGE[1] + GAUGE[2]], text:'PRESSURE GAUGE', on: sh.bar > .5, n:[1,0,0] },
+    { at:[X1 + 1.8, ROCK[1].y, 58], text:'SWITCHES', on: st.on, n:[1,0,0] },
+    { at:[KNOB[0], Y1 + 3.4, KNOB[1] + 2.8], text:'STEAM KNOB', on: sm.knob > .5, n:[0,1,0] },
+    { at:eLerp(WAND[2], WAND[3], .3), text:'STEAM WAND', on: sm.steam },
+    { at:[PIT.x, PIT.y + PIT.r1, G + PIT.h], text:'MILK PITCHER', on: sm.steam },
+    { at:[GX, GY + 7, 41], text:'GROUP HEAD', on: sh.pour },
+    { at:pfH, text:'PORTAFILTER', on: st.phase === 'lock' },
+    { at:[GX, GY + 4.8, 20], text:'CUP', on: sh.pour },
+    { at:[86, 64, 6], text:'DRIP TRAY', on: sh.vent, n:[1,0,0] },
+  ].filter(it => !it.n || vis(it.n)), B);
+  return s;
+}
+const pump = (sh, sm) => !!(sh.pump || sm.pump);
+
+/* ---------- behaviour: one state object, one clock ---------- */
+let ui, espLoopOn = false;
+function espStep(st, dt){
+  st.clock += dt;
+  const sh = espShotInfo(st), sm = espSteamInfo(st);
+  // brew boiler: the thermostat keeps it at 93 C; a shot draws heat out of it
+  st.heat = st.on && st.temp < 93 ? 1 : 0;
+  st.temp = Math.max(22, Math.min(93, st.temp + (st.heat ? 30*dt : st.on ? 0 : -3*dt) - (sh.pump ? 2.5*dt : 0)));
+  // steam thermoblock: heats while the steam switch is on
+  st.sheat = sm.sw && st.stemp < 135 ? 1 : 0;
+  st.stemp = Math.max(22, Math.min(135, st.stemp + (st.sheat ? 70*dt : sm.sw ? 0 : -12*dt) - (sm.steam ? 4*dt : 0)));
+  if (st.fillT >= 0){ st.fillT = Math.min(1, st.fillT + dt/3.2); const p = eClamp((st.fillT - .3)/.5);
+    st.water = st.w0 + (ESP_FULL - st.w0)*p; st.jug = 1 - p; if (st.fillT >= 1){ st.fillT = -1; st.phase = 'idle'; } }
+  if (st.phase === 'lock'){ st.pf = Math.min(1, st.pf + dt/1.9); if (st.pf >= 1) st.phase = 'idle'; }
+  if (st.phase === 'shot'){ st.shotT = Math.min(1, st.shotT + dt/5.5);
+    if (sh.pour && st.shotT < .9) st.ml = Math.min(38, st.ml + dt*38/(.68*5.5));
+    if (sh.pump) st.water = Math.max(0, st.water - dt*.012);
+    if (sh.vent) st.drip = Math.min(1, st.drip + dt*.8);
+    if (st.shotT >= 1){ st.shotT = -1; st.phase = 'idle'; st.spent = 1; } }
+  if (st.phase === 'steam'){ const nt = st.steamT + dt/6;
+    st.steamT = nt > .25 && st.stemp < 125 ? Math.min(st.steamT, .2499) : Math.min(1, nt);
+    if (sm.steam){ st.foam = Math.min(1, st.foam + dt/3); st.milkT = Math.min(62, st.milkT + dt*56/3); st.water = Math.max(0, st.water - dt*.004); }
+    if (st.steamT >= 1){ st.steamT = -1; st.phase = 'idle'; } }
+  return st.fillT >= 0 || st.phase !== 'idle' || (st.on && st.temp < 93) || (!st.on && st.temp > 22) || st.stemp > 22;
+}
+function espRun(){
+  if (espLoopOn) return; espLoopOn = true;
+  ui.animate(dt => { const busy = espStep(ui.st, dt); if (!busy) espLoopOn = false; return busy; });
+}
+function espBusy(st){ if (st.phase !== 'idle'){ ui.flash('One step at a time — wait a moment'); return true; } return false; }
+function espFill(st){
+  if (espBusy(st)) return;
+  if (st.water >= ESP_FULL - .05) return ui.flash('The tank is full');
+  st.phase = 'fill'; st.fillT = 0; st.w0 = st.water; st.jug = 1; espRun();
+}
+function espPower(st){
+  if (st.on) return ui.flash('It is on already');
+  if (st.water < .15) return ui.flash('Fill the tank first');
+  st.on = 1; espRun();
+}
+function espLock(st){
+  if (st.pf >= 1) return ui.flash('The portafilter is locked in');
+  if (espBusy(st)) return;
+  st.phase = 'lock'; espRun();
+}
+function espShot(st){
+  if (st.phase === 'shot' || espBusy(st)) return;
+  if (st.water < .1) return ui.flash('Fill the tank first');
+  if (!st.on) return ui.flash('Switch on first');
+  if (st.pf < 1) return ui.flash('Lock the portafilter first');
+  if (st.spent) return ui.flash('That coffee is spent — one shot per dose');
+  if (st.temp < 90) return ui.flash('Still heating — wait for the green light');
+  st.phase = 'shot'; st.shotT = 0; espRun();
+}
+function espSteam(st){
+  if (st.phase === 'steam' || espBusy(st)) return;
+  if (st.water < .1) return ui.flash('Fill the tank first');
+  if (!st.on) return ui.flash('Switch on first');
+  if (st.foam >= 1) return ui.flash('The milk is steamed');
+  st.phase = 'steam'; st.steamT = 0; espRun();
+}
+
+ui = mountFigure({
+  fig:'12', turn:'full', title:'Espresso machine',
+  size:[104, 106, 84], palette:'tomato',
+  state:{ phase:'idle', clock:0, water:.2, w0:.2, jug:1, fillT:-1, on:0, temp:22, heat:0, stemp:22, sheat:0, pf:0, shotT:-1, ml:0, spent:0, drip:0,
+          steamT:-1, foam:0, milkT:6 },
+  scene: espScene,
+  stats: st => [
+    { label:'Boiler', value:`${Math.round(st.temp)}°C` },
+    { label:'Pressure', value:`${espShotInfo(st).bar.toFixed(1)} bar`, small:true },
+    { label:'In the cup', value:`${Math.round(st.ml)} ml`, small:true },
+    { label:'Milk', value:`${Math.round(st.milkT)}°C`, small:true },
+  ],
+  buttons:[
+    { label:'Fill the tank', onClick: st => espFill(st) },
+    { label:'Switch on', onClick: st => espPower(st) },
+    { label:'Lock the portafilter', onClick: st => espLock(st) },
+    { label:'Pull a shot', onClick: st => espShot(st) },
+    { label:'Steam milk', onClick: st => espSteam(st) },
+  ],
+  params:(st, q) => {
+    for (const key of ['water', 'temp', 'pf', 'ml', 'foam', 'milkT', 'stemp', 'jug']) if (q.has(key)) st[key] = +q.get(key);
+    if (q.get('on') === '1'){ st.on = 1; if (!q.has('temp')) st.temp = 93; }
+    if (q.has('fill')){ st.phase = 'fill'; st.fillT = +q.get('fill'); }
+    if (q.has('shot')){ st.phase = 'shot'; st.shotT = +q.get('shot'); st.on = 1; st.temp = 93; st.pf = 1; st.water = Math.max(st.water, 1.5); }
+    if (q.has('steam')){ st.phase = 'steam'; st.steamT = +q.get('steam'); st.on = 1; st.stemp = 135; st.water = Math.max(st.water, 1.5); }
+  },
+});
+xrMount(() => ui, () => '');
+new ResizeObserver(() => ui.invalidate()).observe(document.getElementById('fig'));
+</script></body></html>
