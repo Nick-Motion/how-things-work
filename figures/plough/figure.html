@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Plough</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Representative single-bottom walking mouldboard plough, with a knife coulter.
+   Book evidence is the saved 2016 page 16 OCR, now-pages.json index 17.
+   Land Pride MP10/MP20 manual, printed pages 14 and 17, confirms the bottom's
+   share, mouldboard, landside, frog and standard, and their load path.
+   Smithsonian nmaahc_2017.108.23.2 documents the wooden beam, hitch and handles.
+   Lower stages an operator setting the tool, not an onboard powered actuator.
+   Pull supplies external draft at the hitch. The knife cuts vertically ahead
+   of the share. The share cuts horizontally, and soil rides up and over the
+   curved mouldboard, falling sideways with its green surface underneath.
+   The landside bears against the uncut furrow wall. Nothing spins or gears.
+   Parts grouped by attachment.
+   Structure: beam, hitch eye, standard, frog, two handles and cross brace.
+   Soil-working bottom: knife coulter clamped to beam; share and its point and
+   cutting edge, mouldboard and landside fixed to the frog on the standard.
+   Fixture: soil and wooden tray on a tabletop; no hidden plough drive.
+   Controls: Lower, Pull, Deepen are teaching actions, not plough hardware.
+   Lower after a completed pass replaces the teaching soil and returns the tool.
+   shortcut: soil is coherent rectangular slices and draft is proportional to
+   depth at fixed width and speed, use a soil model for quantitative prediction.
+*/
+const plSoil = matOf('#aa7650'), plSod = matOf('#8da868');
+const plState = {phase:'raised', depth:-10, target:8, x:30, travel:0, cuts:[]};
+const plCells = Array.from({length:18},(_,i)=>42+i*5);
+const plClamp = v => Math.max(0,Math.min(1,v));
+const plBounds = pts => [0,1].map(end=>[0,1,2].map(k=>(end?Math.max:Math.min)(...pts.map(p=>p[k]))));
+function plSolid(pts, material, faces){
+  const center=avg(pts);
+  return faces.map(ids=>{const ps=ids.map(i=>pts[i]);let n=norm(cross(sub(ps[1],ps[0]),sub(ps[2],ps[0])));
+    if(dot(n,sub(avg(ps),center))<0)n=n.map(v=>-v);
+    return vis(n)?shape(ps,toneI(n,material),.65):'';
+  }).join('');
+}
+const plCubeFaces=[[0,1,2,3],[4,7,6,5],[0,4,5,1],[1,5,6,2],[2,6,7,3],[3,7,4,0]];
+function plScene(st,m){
+  const k=ease(st.xr||0), parts=[], soil=[], labs=[];
+  const put=(pts,svg,list=parts)=>list.push({box:plBounds(pts),svg});
+  const bx=(a,b,mat,list=parts,w=.65)=>put([a,b],box(...a,...b,mat,toneI,w),list);
+  const rd=(a,b,r,mat)=>put([a.map(v=>v-r),a.map(v=>v+r),b.map(v=>v-r),b.map(v=>v+r)],rod(a,b,r,mat,toneI,.8));
+  const at=(x,y,z)=>[st.x+x,y,24-st.depth+z];
+  const label=(p,text,on=false)=>labs.push({at:p,text,on});
+  let s=board(0,0,205,98,3,5,WOOD);
+  s+=castShadow([[8,8,3],[172,8,3],[172,90,3],[8,90,3],[st.x-26,31,77],[st.x+33,38,57]],3,boardTop(0,0,180,98,3,5));
+  bx([7,7,3],[173,91,5],m,soil);
+  for(const y of [7,89])bx([7,y,5],[173,y+2,27],m,soil);
+  for(const x of [7,171])bx([x,9,5],[x+2,89,27],m,soil);
+  bx([9,9,5],[171,36,24],plSoil,soil);
+  bx([9,54,5],[171,89,24],plSoil,soil);
+  bx([9,36,5],[42,54,24],plSoil,soil);
+  bx([132,36,5],[171,54,24],plSoil,soil);
+  for(const x of plCells){
+    const cut=st.cuts.find(c=>c.x===x), d=cut?cut.depth:0;
+    bx([x,36,5],[x+5,54,24-d],plSoil,soil,.15);
+    if(!cut){
+      put([[x,36,24],[x+5,54,24]],shape([[x,36,24.05],[x+5,36,24.05],[x+5,54,24.05],[x,54,24.05]],'#a1ad70',.15),soil);
+    } else {
+      const t=plClamp((st.x+7-(x+2.5))/26), angle=t*150*Math.PI/180;
+      const c=Math.cos(angle), sn=Math.sin(angle), y=45+23*t;
+      const offsets=[[-9,-d/2],[9,-d/2],[9,d/2],[-9,d/2]];
+      const zmin=Math.min(...offsets.map(([u,v])=>u*sn+v*c));
+      const z=24-d*(1-t)-zmin+9*Math.sin(Math.PI*t);
+      const q=(xx,u,v)=>[xx,y+u*c-v*sn,z+u*sn+v*c];
+      const pts=[...offsets.map(([u,v])=>q(x,u,v)),...offsets.map(([u,v])=>q(x+5,u,v))];
+      let clod=plSolid(pts,plSoil,plCubeFaces);
+      const top=[q(x,-9,d/2+.04),q(x+5,-9,d/2+.04),q(x+5,9,d/2+.04),q(x,9,d/2+.04)];
+      if(vis([0,-sn,c]))clod+=shape(top,'#8da868',.25);
+      put(pts,clod);
+    }
+  }
+  for(const y of [18,27,79])for(let x=20;x<165;x+=17){
+    const pts=[[x,y,24.1],[x-1,y,26],[x,y,24.1],[x+2,y+1,25.7]];
+    put(pts,line(pts,.5).replaceAll(INK,'#637c46'),soil);
+  }
+  const base=24-st.depth;
+  // Short beam sections sort independently around the coulter and standard.
+  for(let x=-10;x<32;x+=7)bx(at(x,34,33),at(x+7,38,37),m);
+  rd(at(-4,36,6),at(-4,36,33),1.7,DARK);
+  bx(at(-9,35,0),at(3,39,8),DARK);
+  bx(at(-19,34.5,0),at(8,36,4),METAL);
+  const share=[at(13,36,0),at(5,54,0),at(-2,53,1.6),at(3,36,1.6)];
+  const shareB=share.map(p=>[p[0],p[1],p[2]+.9]);
+  put([...share,...shareB],loft(share,shareB,n=>toneI(n,METAL))+shape(shareB,METAL.l,.85)+hullInk([...share,...shareB],1.5));
+  const knife=[at(19,35.8,32),at(22,35.8,32),at(17,35.8,1),at(14,35.8,1)];
+  const knifeB=knife.map(p=>[p[0],p[1]+.9,p[2]]);
+  put([...knife,...knifeB],loft(knife,knifeB,n=>toneI(n,METAL))+shape(vis([0,1,0])?knifeB:knife,METAL.m,.9));
+  bx(at(17.5,33,31),at(23,40,34),DARK);
+  const mesh=[];
+  for(let i=0;i<8;i++)for(let j=0;j<3;j++){
+    const point=(t,u)=>{const a=t*150*Math.PI/180;return at(5-26*t,36+25*t+18*u*Math.cos(a),1+12*t+18*u*Math.sin(a));};
+    const a=point(i/8,j/3),b=point((i+1)/8,j/3),c=point((i+1)/8,(j+1)/3),d=point(i/8,(j+1)/3);
+    const back=[a,b,c,d].map(p=>[p[0]-.4,p[1],p[2]-.4]);
+    put([a,b,c,d,...back],shape([a,b,c,d],toneI(norm(cross(sub(b,a),sub(d,a))),METAL),.3)+loft([a,b,c,d],back,n=>toneI(n,METAL)));
+    mesh.push(a,b,c,d);
+  }
+  for(const y of [31,43]){
+    rd(at(-7,y,10),at(-27,y,52),1.25,WOOD);
+    rd(at(-27,y,52),at(-34,y,54),1.5,WOOD);
+    rd(at(-7,y,10),at(-4,36,8),.7,DARK);
+  }
+  rd(at(-20,31,37),at(-20,43,37),.75,WOOD);
+  const eyeA=on(PY(35),ellUV(st.x+34,base+35,2.8,2.8,16)),eyeB=on(PY(37),ellUV(st.x+34,base+35,2.8,2.8,16));
+  const boreA=on(PY(35),ellUV(st.x+34,base+35,1.4,1.4,16)),boreB=on(PY(37),ellUV(st.x+34,base+35,1.4,1.4,16));
+  const nearEye=vis([0,1,0])?eyeB:eyeA,nearBore=vis([0,1,0])?boreB:boreA;
+  put([...eyeA,...eyeB],loft(eyeA,eyeB,n=>toneI(n,METAL))+loft(boreA,boreB,n=>toneI(n,DARK),true)+fill(pd(nearEye)+pd(nearBore),METAL.l,'fill-rule="evenodd"')+ink(pd(nearEye),.8)+ink(pd(nearBore),.6));
+  s+= k>0 ? `<g opacity="${f(1-.84*k)}">${byDepth(soil)}</g>`+byDepth(parts) : byDepth([...soil,...parts]);
+  if(k>.6){
+    const working=st.phase==='pulling';
+    label(at(18,36.5,15),'COULTER',working);
+    label(at(6,47,1.8),'SHARE',working);
+    label(at(13,36,1),'SHARE POINT',working);
+    label(at(9,45,1),'CUTTING EDGE',working);
+    label(at(-10,53,20),'MOULDBOARD',working);
+    label(at(-14,35,2),'LANDSIDE',working);
+    label(at(-3,38,7),'FROG');
+    label(at(-4,36,24),'STANDARD');
+    label(at(6,38,35),'BEAM');
+    label(at(34,37,35),'HITCH EYE',working);
+    label(at(-30,43,53),'HANDLES');
+    label(at(-20,37,37),'CROSS BRACE');
+    s+=xrCallouts(labs,[12,169,12,87,3,80]);
+    const arrows=[{p:[at(15,48,2),at(0,49,12)],text:'LIFTING WEDGE'},{p:[at(14,35,2),at(4,53,2)],text:'CUTTING WEDGE'}];
+    for(const a of arrows){const end=a.p[1],start=a.p[0],v=norm(sub(start,end));
+      s+=`<path d="${pd(a.p,false)}" fill="none" stroke="#dc6d35" stroke-width="2.2" stroke-dasharray="3 2"/>`;
+      s+=line([[end[0]+v[0]*4,end[1]+v[1]*4-2,end[2]+v[2]*4],end,[end[0]+v[0]*4,end[1]+v[1]*4+2,end[2]+v[2]*4]],1.7).replaceAll(INK,'#dc6d35');
+    }
+    s+=tag(at(1,52,12),30,24,'LIFT / TURN',working)+tag(at(6,51,2),15,42,'HORIZONTAL CUT',working);
+  }
+  return s;
+}
+function plMove(st,ui,key,target,seconds,phase,done){
+  const from=st[key];st.phase=phase;let t=0;
+  ui.animate(dt=>{t=Math.min(1,t+dt/seconds);st[key]=from+(target-from)*ease(t);
+    if(key==='x')for(const x of plCells)if(x+2.5<=st.x+7&&!st.cuts.some(c=>c.x===x))st.cuts.push({x,depth:st.depth});
+    if(t===1){st.phase=done;return false;}return true;});
+}
+function plAction(st,ui,action){
+  if(['lowering','pulling','deepening'].includes(st.phase))return ui.flash('The plough is moving.');
+  if(action==='Lower'){
+    if(st.phase==='done'){st.x=30;st.cuts=[];st.depth=-10;st.target=8;st.travel=0;ui.flash('Fresh teaching tray.');}
+    else if(st.phase!=='raised')return ui.flash('The share is already in the soil.');
+    plMove(st,ui,'depth',st.target,.75,'lowering','ready');
+  }else if(action==='Pull'){
+    if(st.phase==='raised')return ui.flash('Lower the share first.');
+    if(st.phase==='done')return ui.flash('The tray is finished. Lower starts a fresh tray.');
+    const target=Math.min(160,st.x+44);st.travel=target-30;
+    plMove(st,ui,'x',target,1.7,'pulling',target===160?'done':'ready');
+  }else{
+    if(st.phase==='raised')return ui.flash('Lower the share first.');
+    if(st.phase==='done')return ui.flash('The tray is finished. Lower starts a fresh tray.');
+    if(st.target===12)return ui.flash('Maximum teaching depth reached.');
+    st.target=12;plMove(st,ui,'depth',12,.75,'deepening','ready');
+  }
+}
+const plUi=mountFigure({fig:'08',title:'Plough',turn:'full',size:[205,98,82],palette:'tomato',state:plState,scene:plScene,
+  stats:st=>[{label:'Cut depth',value:`${Math.round(Math.max(0,st.depth))} cm`,small:true},{label:'Draft index',value:st.depth>0?`${(st.depth/8).toFixed(2)} x`:'0',small:true}],
+  buttons:['Lower','Pull','Deepen'].map(label=>({label,onClick:(st,ui)=>plAction(st,ui,label)})),
+  params:(st,q)=>{const depth=Number(q.get('depth'));if(Number.isFinite(depth)&&depth>0){st.depth=st.target=Math.max(8,Math.min(12,depth));st.phase='ready';}
+    const x=Number(q.get('travel'));if(Number.isFinite(x)&&x>0){st.x=30+Math.min(130,x);if(st.depth<0)st.depth=st.target=8;st.phase=st.x===160?'done':'ready';for(const c of plCells)if(c+2.5<=st.x+7)st.cuts.push({x:c,depth:st.depth});}}
+});
+xrMount(()=>plUi,()=> '');
+</script></body></html>
