@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pin tumbler lock</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Pin tumbler lock: a section of a front door (44 mm thick) with a euro-profile key-and-thumbturn cylinder driving a
+   mortise deadbolt, the door frame (jamb) beside it with its strike, all standing on a demo base board. Two keys lie on
+   the board: the right key (brass) and a wrong key (nickel).
+   Modelled large: 3 units = 1 mm. x = depth (outside face of the door at x = 167, inside face at x = 35),
+   y = width (door edge at y = 95, the jamb at y = 20..86), z = up (board top at z = 10).
+
+   How it really works:
+   0. Locked: the bolt is thrown 17 mm out of the door edge into the strike box in the jamb. In the cylinder, five pin
+      stacks (key pin, driver pin, spring) sit in chambers drilled through the housing into the plug. The springs push the
+      stacks down, so every driver pin crosses the shear line (the gap between the plug and the housing) and the plug
+      cannot turn.
+   1. Insert the key: the blade slides into the keyway; the pins ride up the tip ramp and over the cuts (bitting) and
+      drop into them. With the right key each cut lifts its key pin so the key pin's top sits exactly at the shear line:
+      the drivers are all in the housing, the key pins all in the plug.
+   2. Turn: the plug turns with the key. Its tail turns the clutch, the clutch turns the cam. The cam's lobe swings round
+      the bottom, enters the fork under the bolt and carries the bolt 17 mm (a detent lever with two notches lets go and
+      re-catches at each end). A full turn brings the key back upright, where the pins drop back in line and the key can
+      come out. Turning the other way throws the bolt again.
+   3. Wrong key: its cuts lift some key pins over the shear line and leave some drivers across it: the plug only rocks
+      a few degrees and the bolt stays put.
+
+   Parts (each held by another):
+   DOOR      door section (painted faces, timber cut faces) . jamb with strike plate (2 screws) and strike box let into it
+   CYLINDER  euro housing (outer half with the pins, inner half for the thumbturn) . plug . keyway . 5 pin chambers .
+             chamber cover strip . 5 key pins . 5 driver pins . 5 springs . clutch . cam . bridge joining the halves with
+             the threaded fixing hole . fixing screw from the forend . outside escutcheon . inside escutcheon .
+             thumbturn on its spindle
+   KEY       bow with ring hole . shoulder . blade with warding groove . bitting (5 cuts) . tip
+   LOCK      mortise case (walls) . forend (2 screws) . deadbolt with guide slot and two detent notches . bolt fork .
+             guide stud . detent lever on its pivot . detent leaf spring */
+const BH = 10;
+const DX0 = 35, DX1 = 167, DY0 = 95, DY1 = 305, DZ1 = 250;     // door section
+const JY0 = 20, JY1 = 86;                                       // jamb
+const YC = 230, ZC = 145;                                       // cylinder axis: 45 mm backset
+const XE = 171, XF = 176;                                       // escutcheon front, cylinder face (outside)
+const RP = 18, RH = 25.5, BW2 = 15, BIBT = ZC + 73.5, ZCOV = ZC + 66;
+const XK0 = 89, XK1 = 96, XC1 = 106, XB0 = 26;                  // clutch, cam, inner half starts
+const PIN_X = [164, 152, 140, 128, 116], PR = 4.5, DRV = 18;
+const CUTS = { right:[-3, 6, 0, 9, 3], wrong:[6, -3, 9, 3, 0] };
+const KP = CUTS.right.map(h => RP - h);                         // key pin lengths: tops at the shear line with the right key
+const PIN_REST = -12, BLADE = 72;
+const T_BOLT = 51, LOBE = 37.5, LOBE_R = 7.5, HUB = 22, SINW = .68;
+const BX0 = 86, BX1 = 116, BZ0 = 35, BZ1 = 95, BTAIL = 285, FORK = 255.5;
+const ESC = rrUV(YC - 34, ZC - 38, YC + 34, ZC + 96, 34);
+const EURO = [[YC - BW2, BIBT], [YC + BW2, BIBT], ...arcUV(YC, ZC, RH, 54, -234, 26)];
+const BRD = [0, 0, 245, 327];
+const BRASS = { l:'#f4d684', m:'#dcb04e', d:'#9a742c' }, NICKEL = { l:'#eef1f3', m:'#c5ccd2', d:'#8a949c' };
+const STEEL = { l:'#d9dee0', m:'#aab2b6', d:'#6f787d' }, WHITE = { l:'#fbf8f0', m:'#e6e1d3', d:'#bdb6a4' };
+const CUTB = '#f8e6a6', CUTB2 = '#efd07a', HOLE = '#2b2523';
+const BOARD_KEY = { right:[207, 255, BH + 4.5], wrong:[207, 115, BH + 4.5] }, READY = [XF + 76, YC, ZC];
+const lkClamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const rad = a => a*Math.PI/180;
+
+/* ---------- small drawing helpers ---------- */
+const quad = (n, pts, col, w = 1) => vis(n) ? shape(pts, col, w) : '';
+const holed = (outer, hole, col, w = 1) => `<path d="${pd(outer)}${pd(hole)}" fill="${col}" fill-rule="evenodd"/>` + ink(pd(outer), w) + ink(pd(hole), w*.8);
+const it = (b, svg) => ({ box: b, svg });
+const bxi = (x0, y0, z0, x1, y1, z1, m, w = .8) => it([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, m, toneI, w));
+const boxOf = pts => [[0, 1, 2].map(i => Math.min(...pts.map(p => p[i]))), [0, 1, 2].map(i => Math.max(...pts.map(p => p[i])))];
+const screwHead = (pts3, w = .8) => fill(pd(pts3), STEEL.l) + ink(pd(pts3), w);
+// a profile in (y, z) swept along x, drawn as strips with known outward normals (for open or concave outlines)
+function stripsX(pts, x0, x1, m, shade = toneI, closed = false){
+  let s = ''; const n = pts.length, cen = [pts.reduce((a, p) => a + p[0], 0)/n, pts.reduce((a, p) => a + p[1], 0)/n];
+  for (let i = 0; i < (closed ? n : n - 1); i++){ const p = pts[i], q = pts[(i + 1) % n];
+    let nr = [0, q[1] - p[1], -(q[0] - p[0])]; const l = Math.hypot(nr[1], nr[2]) || 1; nr = nr.map(v => v/l);
+    if ((p[0] + q[0])/2 - cen[0] < 0 === nr[1] > 0 && Math.abs(nr[1]) > .2) {}  // orientation checked below
+    const mid = [(p[0] + q[0])/2 - cen[0], (p[1] + q[1])/2 - cen[1]];
+    if (mid[0]*nr[1] + mid[1]*nr[2] < 0) nr = nr.map(v => -v);
+    if (vis(nr)) s += face(pd([[x0, p[0], p[1]], [x1, p[0], p[1]], [x1, q[0], q[1]], [x0, q[0], q[1]]]), shade(nr, m)); }
+  return s;
+}
+// the euro profile cylinder between x0 and x1 (closed, seen from outside)
+function euroCyl(x0, x1, m, shade = tone){
+  const bib = rectUV(YC - BW2, ZC, YC + BW2, BIBT), arc = arcUV(YC, ZC, RH, 54, -234, 26);
+  let s = loft(on(PX(x0), bib), on(PX(x1), bib), n => shade(n, m)) + stripsX(arc, x0, x1, m, shade);
+  const fx = vis([1, 0, 0]) ? x1 : vis([-1, 0, 0]) ? x0 : null;
+  if (fx != null) s += fill(pd(on(PX(fx), EURO)), shade([fx === x1 ? 1 : -1, 0, 0], m)) + ink(pd(on(PX(fx), EURO)), 1.1);
+  return s + hullInk([...on(PX(x0), EURO), ...on(PX(x1), EURO)], 1.8);
+}
+// a pill plate (escutcheon) between x0 and x1
+function escPlate(x0, x1){
+  const A = on(PX(x0), ESC), B = on(PX(x1), ESC), fx = vis([1, 0, 0]) ? B : vis([-1, 0, 0]) ? A : null;
+  return loft(A, B, n => tone(n, NICKEL)) + (fx ? fill(pd(fx), tone(fx === B ? [1, 0, 0] : [-1, 0, 0], NICKEL)) + ink(pd(fx), 1.3) : '') + hullInk([...A, ...B], 2);
+}
+const rotYZ = (b, c, beta) => { const r = rad(beta); return [YC + b*Math.cos(r) - c*Math.sin(r), ZC + b*Math.sin(r) + c*Math.cos(r)]; };
+const plugPt = (x, c, beta, b = 0) => [x, ...rotYZ(b, c, beta)];
+
+/* ---------- the keys ---------- */
+const keyH = (a, cuts) => { let h = Math.min(12, -7 + 1.3*(BLADE - a));
+  cuts.forEach((c, i) => { h = Math.min(h, c + 1.25*Math.max(0, Math.abs(a - 12*(i + 1)) - 1.5)); }); return h; };
+function bladePoly(cuts){
+  const as = new Set(); for (let a = 0; a <= BLADE; a += 1.5) as.add(+a.toFixed(2));
+  for (let i = 1; i <= 5; i++){ as.add(12*i - 1.5); as.add(12*i + 1.5); }
+  const top = [...as].sort((p, q) => q - p).map(a => [a, keyH(a, cuts)]);
+  return [[0, -13.5], [66, -13.5], ...top];
+}
+const BLADES = { right: bladePoly(CUTS.right), wrong: bladePoly(CUTS.wrong) };
+function keyXf(o, psi, rho){
+  const ps = rad(psi), r = rad(rho), u = [-Math.cos(ps), -Math.sin(ps), 0], v0 = [-Math.sin(ps), Math.cos(ps), 0];
+  const B = [v0[0]*Math.cos(r), v0[1]*Math.cos(r), Math.sin(r)], Cc = [-v0[0]*Math.sin(r), -v0[1]*Math.sin(r), Math.cos(r)];
+  return { u, B, Cc, T: (a, b, c) => [0, 1, 2].map(i => o[i] + a*u[i] + b*B[i] + c*Cc[i]), N: (na, nb, nc) => [0, 1, 2].map(i => na*u[i] + nb*B[i] + nc*Cc[i]) };
+}
+function clipA(poly, lo, hi){
+  const cut = (pts, keep, edge) => { const o = []; for (let i = 0; i < pts.length; i++){ const p = pts[i], q = pts[(i + 1) % pts.length], kp = keep(p), kq = keep(q);
+    if (kp) o.push(p); if (kp !== kq){ const t = (edge - p[0]) / (q[0] - p[0]); o.push([edge, p[1] + t*(q[1] - p[1])]); } } return o; };
+  let r = cut(poly, p => p[0] >= lo, lo); if (r.length) r = cut(r, p => p[0] <= hi, hi);
+  return r.length >= 3 && Math.max(...r.map(p => p[0])) - Math.min(...r.map(p => p[0])) > .5 ? r : null;
+}
+// a flat key piece: polygon in (a, c), b from -t to t
+function slab(X, poly, t, M, extra){
+  let ar = 0; poly.forEach((p, i) => { const q = poly[(i + 1) % poly.length]; ar += p[0]*q[1] - q[0]*p[1]; });
+  const sg = ar > 0 ? 1 : -1, Fp = poly.map(([a, c]) => X.T(a, t, c)), Bp = poly.map(([a, c]) => X.T(a, -t, c));
+  const fv = vis(X.B), front = fv ? Fp : Bp, back = fv ? Bp : Fp, bf = fv ? t : -t;
+  let s = ink(pd(back), .8);
+  poly.forEach((p, i) => { const q = poly[(i + 1) % poly.length], ea = q[0] - p[0], ec = q[1] - p[1], n = X.N(sg*ec, 0, -sg*ea);
+    if (Math.hypot(ea, ec) > 1e-6 && vis(n)) s += face(pd([X.T(p[0], t, p[1]), X.T(q[0], t, q[1]), X.T(q[0], -t, q[1]), X.T(p[0], -t, p[1])]), toneI(norm(n), M)); });
+  s += fill(pd(front), toneI(fv ? X.B : X.B.map(v => -v), M)) + (extra ? extra(bf) : '') + ink(pd(front), 1);
+  return { svg: s, pts: [...Fp, ...Bp] };
+}
+function keyPose(st, which){
+  const kt = st.key === which ? st.kt : 0;
+  if (kt <= 1){ const e = ease(kt), o = lerp3(BOARD_KEY[which], READY, e); o[2] += 70*Math.sin(Math.PI*e); return { o, psi: 90*(1 - e), rho: 90*(1 - e), inLine: false }; }
+  const e = ease(kt - 1); return { o: [READY[0] + (XF - READY[0])*e, YC, ZC], psi: 0, rho: st.beta, inLine: true };
+}
+// key pieces between a = lo and a = hi, as sorted items
+function keyItem(st, which, lo = -1e9, hi = 1e9){
+  const ps = keyPose(st, which), X = keyXf(ps.o, ps.psi, ps.rho), M = which === 'right' ? BRASS : NICKEL;
+  const bow = rrUV(-60, -27, -6, 27, which === 'right' ? 14 : 27, 6), neck = rectUV(-8, -16, 0, 14);
+  const hole = bf => { const ha = which === 'right' ? -47 : -44, hp = ellUV(ha, 0, 6, 6, 16).map(([a, c]) => X.T(a, bf, c));
+    return fill(pd(hp), HOLE, 'opacity=".75"') + ink(pd(hp), .7) + ink(pd(rrUV(-56, -23, -10, 23, which === 'right' ? 11 : 23, 5).map(([a, c]) => X.T(a, bf*1.01, c))), .5); };
+  const g0 = Math.max(4, lo), g1 = Math.min(62, hi), groove = bf => g1 - g0 > 1 ? ink(pd([X.T(g0, bf*1.02, -6), X.T(g1, bf*1.02, -6)], false), .7) : '';
+  const pieces = [[bow, 4.5, hole], [neck, 3.2, null], [BLADES[which], 3, groove]].map(([p, t, ex]) => { const c = clipA(p, lo, hi); return c ? slab(X, c, t, M, ex) : null; }).filter(Boolean);
+  if (!pieces.length) return null;
+  const order = vis(X.u) ? pieces : pieces.slice().reverse();
+  return { box: boxOf(order.flatMap(p => p.pts)), svg: order.map(p => p.svg).join(''), X };
+}
+// where the bottom of key pin i sits (plug frame, units above the axis)
+function pinBottom(st, i){
+  if (!st.key || st.kt <= 1) return PIN_REST;
+  const ps = keyPose(st, st.key), a = ps.o[0] - XF + (XF - PIN_X[i]);
+  return a >= 0 && a <= BLADE ? Math.max(PIN_REST, keyH(a, CUTS[st.key])) : PIN_REST;
+}
+const kpTop = (st, i) => pinBottom(st, i) + KP[i];
+const aligned = st => [0, 1, 2, 3, 4].filter(i => Math.abs(kpTop(st, i) - RP) < 1.2).length;
+
+/* ---------- the closed object ---------- */
+function doorSvg(m){
+  let s = '';
+  const F = (n, pts, col, extra = '') => { if (vis(n)) s += fill(pd(pts), col) + extra + ink(pd(pts), 1.6); };
+  F([-1, 0, 0], [[DX0, DY0, BH], [DX0, DY1, BH], [DX0, DY1, DZ1], [DX0, DY0, DZ1]], tone([-1, 0, 0], m));
+  F([0, -1, 0], [[DX0, DY0, BH], [DX1, DY0, BH], [DX1, DY0, DZ1], [DX0, DY0, DZ1]], tone([0, -1, 0], m));
+  F([1, 0, 0], [[DX1, DY0, BH], [DX1, DY1, BH], [DX1, DY1, DZ1], [DX1, DY0, DZ1]], tone([1, 0, 0], m));
+  let g = ''; for (const x of [45, 61, 80, 97, 118, 133, 151]) g += pd([[x, DY1 + .2, BH + 2], [x + 2, DY1 + .2, 90], [x - 1, DY1 + .2, 170], [x + 1, DY1 + .2, DZ1 - 2]], false);
+  F([0, 1, 0], [[DX0, DY1, BH], [DX1, DY1, BH], [DX1, DY1, DZ1], [DX0, DY1, DZ1]], tone([0, 1, 0], WOOD), `<path d="${g}" fill="none" stroke="${WOOD.d}" stroke-width=".8" opacity=".7"/>`);
+  let gt = ''; for (const x of [52, 74, 99, 126, 150]) gt += pd([[x, DY0 + 6, DZ1 + .2], [x + 2, 200, DZ1 + .2], [x, DY1 - 6, DZ1 + .2]], false);
+  F([0, 0, 1], [[DX0, DY0, DZ1], [DX1, DY0, DZ1], [DX1, DY1, DZ1], [DX0, DY1, DZ1]], WOOD.l, `<path d="${gt}" fill="none" stroke="${WOOD.d}" stroke-width=".8" opacity=".6"/>`);
+  // paint edges on the timber cut faces
+  if (vis([0, 0, 1])) s += ink(pd([[DX1 - 2, DY0, DZ1 + .3], [DX1 - 2, DY1, DZ1 + .3]], false), .6) + ink(pd([[DX0 + 2, DY0, DZ1 + .3], [DX0 + 2, DY1, DZ1 + .3]], false), .6);
+  const cs = []; for (const x of [DX0, DX1]) for (const y of [DY0, DY1]) for (const z of [BH, DZ1]) cs.push([x, y, z]);
+  return s + hullInk(cs, 2.8);
+}
+function strikePlate(){
+  const out = [[71, 87.5, 16], [131, 87.5, 16], [131, 87.5, 114], [71, 87.5, 114]], hole = [[84, 87.5, 32], [118, 87.5, 32], [118, 87.5, 98], [84, 87.5, 98]];
+  if (!vis([0, 1, 0])) return '';
+  return fill(pd(hole.map(p => [p[0], 87.4, p[2]])), HOLE) + holed(out, hole, tone([0, 1, 0], BRASS), 1)
+    + [24, 106].map(z => screwHead(on(PY(87.7), ellUV(101, z, 4.5, 4.5, 14)))).join('');
+}
+function jambSvg(){
+  let s = '';
+  s += quad([0, -1, 0], [[DX0, JY0, BH], [DX1, JY0, BH], [DX1, JY0, DZ1], [DX0, JY0, DZ1]], tone([0, -1, 0], WHITE), 1.4);
+  s += quad([-1, 0, 0], [[DX0, JY0, BH], [DX0, JY1, BH], [DX0, JY1, DZ1], [DX0, JY0, DZ1]], tone([-1, 0, 0], WHITE), 1.4);
+  s += quad([1, 0, 0], [[DX1, JY0, BH], [DX1, JY1, BH], [DX1, JY1, DZ1], [DX1, JY0, DZ1]], tone([1, 0, 0], WHITE), 1.4);
+  if (vis([0, 1, 0])) s += shape([[DX0, JY1, BH], [DX1, JY1, BH], [DX1, JY1, DZ1], [DX0, JY1, DZ1]], tone([0, 1, 0], WHITE), 1.4) + strikePlate();
+  s += quad([0, 0, 1], [[DX0, JY0, DZ1], [DX1, JY0, DZ1], [DX1, JY1, DZ1], [DX0, JY1, DZ1]], WOOD.l, 1.4);
+  const cs = []; for (const x of [DX0, DX1]) for (const y of [JY0, JY1]) for (const z of [BH, DZ1]) cs.push([x, y, z]);
+  return s + hullInk(cs, 2.6);
+}
+function forendSvg(){
+  const y0 = 93, y1 = 95, fv = vis([0, -1, 0]), yf = fv ? y0 : y1;
+  const out = [[68, yf, 16], [134, yf, 16], [134, yf, 244], [68, yf, 244]], hole = [[85, yf, 34], [117, yf, 34], [117, yf, 96], [85, yf, 96]];
+  let s = quad([1, 0, 0], [[134, y0, 16], [134, y1, 16], [134, y1, 244], [134, y0, 244]], toneI([1, 0, 0], BRASS), .6)
+    + quad([-1, 0, 0], [[68, y0, 16], [68, y1, 16], [68, y1, 244], [68, y0, 244]], toneI([-1, 0, 0], BRASS), .6)
+    + quad([0, 0, 1], [[68, y0, 244], [134, y0, 244], [134, y1, 244], [68, y1, 244]], toneI([0, 0, 1], BRASS), .6);
+  if (fv || vis([0, 1, 0])) s += holed(out, hole, tone(fv ? [0, -1, 0] : [0, 1, 0], BRASS), 1.1);
+  if (fv){ for (const z of [28, 232]){ const h = on(PY(92.8), ellUV(101, z, 5, 5, 14)); s += screwHead(h) + ink(pd([[101, 92.7, z - 3.5], [101, 92.7, z + 3.5]], false), .8); }
+    const h = on(PY(92.8), ellUV(101, 207, 5.5, 5.5, 14)); s += screwHead(h) + ink(pd([[97, 92.7, 207], [105, 92.7, 207]], false), .8) + ink(pd([[101, 92.7, 203], [101, 92.7, 211]], false), .8); }
+  return s;
+}
+// bolt pieces split where it passes the forend and the strike plate (hidden bits inside them are skipped)
+function boltItems(st, inner){
+  const d = st.d, y0 = DY0 - d, y1 = BTAIL - d, cuts = [86, 87.5, 93, 95].filter(v => v > y0 + .01 && v < y1 - .01), ed = [y0, ...cuts, y1], out = [];
+  for (let i = 0; i < ed.length - 1; i++){ const a = ed[i], b = ed[i + 1];
+    if ((a >= 86 && b <= 87.5) || (a >= 93 && b <= 95)) continue;
+    if (!inner && (b > 95.01 || a < 86)) continue;                     // closed view: only the bit in the gap shows
+    let s = box(BX0, a, BZ0, BX1, b, BZ1, NICKEL, toneI, 1);
+    if (b > 95.01){ const xf = vis([1, 0, 0]) ? BX1 + .2 : vis([-1, 0, 0]) ? BX0 - .2 : null;
+      if (xf != null){ s += shape(on(PX(xf), rrUV(197 - d, 59, 263 - d, 71, 6, 4)), HOLE, .7);
+        for (const ny of [215 - d, 266 - d]) s += fill(pd(on(PX(xf), rectUV(ny - 3, BZ0, ny + 3, BZ0 + 6))), HOLE); } }
+    out.push(it([[BX0, a, BZ0], [BX1, b, BZ1]], s)); }
+  return out;
+}
+function edgeSvg(st){
+  const bolt = byDepth(boltItems(st, false));
+  const endFace = st.d < 2 && vis([0, -1, 0]) ? shape(on(PY(DY0 - st.d - .1), rectUV(BX0, BZ0, BX1, BZ1)), tone([0, -1, 0], NICKEL), .9) : '';
+  return vis([0, -1, 0]) ? forendSvg() + endFace + bolt : bolt;
+}
+function frontSvg(st){
+  const parts = [escPlate(DX1, XE), euroCyl(XE, XF, BRASS)];
+  if (vis([1, 0, 0])){
+    const pf = on(PX(XF + .2), ellUV(YC, ZC, RP, RP, 28));
+    let p = fill(pd(pf), tone([1, 0, 0], BRASS)) + ink(pd(pf), .9);
+    const kw = [[-3, 13], [3, 13], [3, -2], [1, -5], [3, -8], [3, -15], [-3, -15], [-3, 4], [-1, 6], [-3, 8]];
+    p += fill(pd(kw.map(([b, c]) => [XF + .3, ...rotYZ(b, c, st.beta)])), HOLE);
+    parts.push(p);
+  }
+  return (vis([1, 0, 0]) ? parts : parts.reverse()).join('');
+}
+function thumbturnSvg(){
+  const shaft = cylX(17, XB0, YC, ZC, 9, NICKEL, toneI, 1.1, 20);
+  const pad = rrUV(YC - 5, ZC - 26, YC + 5, ZC + 26, 5, 5), A = on(PX(7), pad), B = on(PX(17), pad), fa = vis([-1, 0, 0]);
+  const paddle = loft(A, B, n => toneI(n, NICKEL)) + (fa ? fill(pd(A), toneI([-1, 0, 0], NICKEL)) + ink(pd(A), 1) : fill(pd(B), toneI([1, 0, 0], NICKEL))) + hullInk([...A, ...B], 1.5);
+  return fa ? shaft + paddle : paddle + shaft;
+}
+function backSvg(){
+  const parts = [escPlate(31, DX0), euroCyl(XB0, 31, BRASS), thumbturnSvg()];
+  return (vis([-1, 0, 0]) ? parts : parts.reverse()).join('');
+}
+
+/* ---------- see-through: the cylinder cut in half through its axis, and the lock case ---------- */
+function halfHousing(x0, x1, sg){        // sg = -1 keeps y <= YC (seen from +y), +1 keeps y >= YC
+  const yb = YC + sg*BW2, arc = sg < 0 ? arcUV(YC, ZC, RH, 126, 270, 12) : arcUV(YC, ZC, RH, 54, -90, 12);
+  const prof = [[YC, BIBT], [yb, BIBT], [yb, ZC + 20.6], ...arc, [YC, ZC - RH]];
+  let s = stripsX([[YC, BIBT], [yb, BIBT], [yb, ZC + 20.6]], x0, x1, BRASS) + stripsX([[yb, ZC + 20.6], ...arc], x0, x1, BRASS);
+  const fx = vis([1, 0, 0]) ? x1 : vis([-1, 0, 0]) ? x0 : null;
+  if (fx != null) s += shape(on(PX(fx), prof), toneI([fx === x1 ? 1 : -1, 0, 0], BRASS), .9);
+  if (vis([0, -sg, 0])) s += shape(on(PY(YC), rectUV(x0, ZC - RH, x1, BIBT)), CUTB, 1);
+  return s + hullInk([...on(PX(x0), prof), ...on(PX(x1), prof)], 1.6);
+}
+function cylFront(st, sg, keyIn){
+  const cutOn = vis([0, -sg, 0]), yq = YC - sg*.2, cb = Math.cos(rad(st.beta));
+  let s = halfHousing(XC1, XF, sg);
+  if (cutOn){
+    for (const x of PIN_X) s += fill(pd(on(PY(yq), rectUV(x - PR - .5, ZC + RP, x + PR + .5, ZCOV))), '#5a4a2c');
+    s += shape(on(PY(yq), rectUV(XC1 + 4, ZCOV, XF - 4, BIBT - 1)), STEEL.l, .7);                       // chamber cover strip
+    s += shape(on(PY(yq), rectUV(XC1, ZC - RP, XF, ZC + RP)), CUTB2, .9);                               // the plug, cut
+    if (cb > .9){ s += fill(pd(on(PY(YC - sg*.4), rectUV(XC1 + 3, ZC - 15, XF, ZC + 13))), HOLE);
+      for (const x of PIN_X) s += fill(pd(on(PY(YC - sg*.4), rectUV(x - PR - .5, ZC + 13, x + PR + .5, ZC + RP))), '#5a4a2c'); }
+  }
+  const fx = vis([1, 0, 0]);
+  if (fx) s += fill(pd(on(PX(XF + .2), sg < 0 ? arcUV(YC, ZC, RP, 90, 270, 12) : arcUV(YC, ZC, RP, -90, 90, 12))), toneI([1, 0, 0], BRASS)) + ink(pd(on(PX(XF + .2), ellUV(YC, ZC, RP, RP, 24))), .7);
+  // pins, springs, the key blade: in front of the cut
+  const parts = [];
+  if (keyIn) parts.push(keyIn);
+  PIN_X.forEach((x, i) => {
+    const b0 = pinBottom(st, i), b1 = b0 + KP[i], a = plugPt(x, b0, st.beta), a3 = plugPt(x, b0 + 3, st.beta), e = plugPt(x, b1, st.beta);
+    const up = norm(sub(e, a)), body = rod(a3, e, PR, BRASS, toneI, .8), tip = rod(a3, a, PR, BRASS, toneI, .7, 2);
+    parts.push(it(boxOf([a, e].map(p => [p[0] - PR, p[1] - PR, p[2] - PR]).concat([a, e].map(p => [p[0] + PR, p[1] + PR, p[2] + PR]))), vis(up) ? tip + body : body + tip));
+    const db = Math.abs(st.beta) < 6 ? b1 : RP, d0 = ZC + db, d1 = d0 + DRV;
+    parts.push(it([[x - PR, YC - PR, d0], [x + PR, YC + PR, d1]], rod([x, YC, d0], [x, YC, d1], PR, STEEL, toneI, .8)));
+    const hp = []; const n = 7; for (let j = 0; j <= n*16; j++){ const t = j/(n*16), th = t*n*2*Math.PI; hp.push([x + 3.6*Math.cos(th), YC + 3.6*Math.sin(th), d1 + (ZCOV - d1)*t]); }
+    parts.push(it([[x - 4, YC - 4, d1], [x + 4, YC + 4, ZCOV]], `<path d="${pd(hp, false)}" fill="none" stroke="${INK}" stroke-width="1.5"/><path d="${pd(hp, false)}" fill="none" stroke="#e6ecee" stroke-width=".6"/>`));
+  });
+  s += byDepth(parts);
+  if (cutOn){ const ok = aligned(st) === 5;
+    s += `<path d="${pd([[XC1, YC - sg*5, ZC + RP], [XF, YC - sg*5, ZC + RP]], false)}" fill="none" stroke="${ok ? '#43c25c' : '#e2483d'}" stroke-width="1.6" stroke-dasharray="4 3"/>`; }
+  return s;
+}
+function cylBack(sg){
+  let s = halfHousing(XB0, XK0, sg);
+  if (vis([0, -sg, 0])) s += shape(on(PY(YC - sg*.2), rectUV(XB0, ZC - RP, XK0, ZC + RP)), CUTB2, .9) + shape(on(PY(YC - sg*.4), rectUV(XB0, ZC - 6, XK0, ZC + 6)), NICKEL.m, .7);
+  return s;
+}
+function camSvg(beta){
+  const r = rad(beta), dy = -Math.sin(r), dz = Math.cos(r);
+  const prof = hull([...ellUV(YC, ZC, HUB, HUB, 24), ...ellUV(YC + LOBE*dy, ZC + LOBE*dz, LOBE_R, LOBE_R, 14)]);
+  const A = on(PX(XK1), prof), B = on(PX(XC1), prof), cap = vis([1, 0, 0]) ? B : vis([-1, 0, 0]) ? A : null;
+  let s = loft(A, B, n => toneI(n, STEEL));
+  if (cap){ const xc = cap === B ? XC1 + .2 : XK1 - .2;
+    s += fill(pd(cap), toneI(cap === B ? [1, 0, 0] : [-1, 0, 0], STEEL)) + ink(pd(cap), .9)
+      + shape([[-5, -5], [5, -5], [5, 5], [-5, 5]].map(([b, c]) => [xc, ...rotYZ(b, c, beta)]), HOLE, .5); }
+  return s + hullInk([...A, ...B], 1.4);
+}
+function mechSvg(st, keyIn){
+  const sg = vis([0, 1, 0]) ? -1 : 1, d = st.d, items = [];
+  // mortise case: far plate (faint) and its walls
+  const xp = vis([1, 0, 0]) ? 77 : 125;
+  let s = fill(pd(on(PX(xp), rectUV(DY0, 20, 295, 238))), STEEL.m, 'opacity=".35"') + ink(pd(on(PX(xp), rectUV(DY0, 20, 295, 238))), .7);
+  s += `<g opacity=".4">${byDepth([bxi(77, DY0, 235, 125, 295, 238, STEEL), bxi(77, DY0, 20, 125, 295, 23, STEEL), bxi(77, 292, 23, 125, 295, 235, STEEL)])}</g>`;
+  items.push(it([[XC1, YC - RH, ZC - RH], [XF, YC + RH, BIBT]], cylFront(st, sg, keyIn)));
+  items.push(it([[XB0, YC - RH, ZC - RH], [XK0, YC + RH, BIBT]], cylBack(sg)));
+  items.push(bxi(XK0, sg < 0 ? YC - BW2 : YC, ZC + 50, XC1, sg < 0 ? YC : YC + BW2, BIBT, BRASS));                         // bridge
+  { let c = rod([XK0, YC, ZC], [XK1, YC, ZC], 15, BRASS, toneI, .9);
+    for (let j = 0; j < 6; j++){ const [y, z] = rotYZ(15*Math.cos(j*Math.PI/3), 15*Math.sin(j*Math.PI/3), st.beta);
+      if (vis([0, y - YC, z - ZC])) c += ink(pd([[XK0 + 1, y, z], [XK1 - 1, y, z]], false), .6); }
+    items.push(it([[XK0, YC - 15, ZC - 15], [XK1, YC + 15, ZC + 15]], c)); }                                            // clutch
+  { const r = rad(st.beta), ly = YC - LOBE*Math.sin(r), lz = ZC + LOBE*Math.cos(r);
+    items.push(it([[XK1, Math.min(YC - HUB, ly - LOBE_R), Math.min(ZC - HUB, lz - LOBE_R)], [XC1, Math.max(YC + HUB, ly + LOBE_R), Math.max(ZC + HUB, lz + LOBE_R)]], camSvg(st.beta))); }
+  for (const [a, b] of [[FORK - 17.5, FORK - 8.5], [FORK + 8.5, FORK + 17.5]]) items.push(bxi(96, a - d, BZ1, 106, b - d, 122, NICKEL, .8));    // bolt fork
+  items.push(...boltItems(st, true));
+  { const xs = vis([1, 0, 0]) ? [BX1, BX1 + 3] : [BX0 - 3, BX0];
+    items.push(it([[xs[0], 200, 60], [xs[1], 210, 70]], cylX(xs[0], xs[1], 205, 65, 5, STEEL, toneI, .8, 14))); }            // guide stud
+  items.push(it([[67, 93, 91], [135, 95, 245]], forendSvg()));
+  items.push(it([[71, 86, 16], [131, 87.5, 114]], strikePlate()));
+  items.push(bxi(84, 33, 32, 118, 35, 98, STEEL, .7), bxi(84, 35, 30, 118, 86, 32, STEEL, .7), bxi(84, 35, 98, 118, 86, 100, STEEL, .7),
+    bxi(82, 35, 30, 84, 86, 100, STEEL, .7), bxi(118, 35, 30, 120, 86, 100, STEEL, .7));                                  // strike box
+  items.push(it([[97, 93, 203], [105, 215, 211]], rod([101, 93, 207], [101, 215, 207], 3.6, STEEL, toneI, .8)
+    + [...Array(10)].map((_, j) => ink(pd([[101, 150 + 6.5*j, 203.6], [101, 152 + 6.5*j, 210.4]], false), .5)).join('')));  // fixing screw
+  { const e = lkClamp(1 - Math.min(d, T_BOLT - d)/4, 0, 1), th = rad(4.4*(1 - e)), pv = [281, 29];
+    const rt = ([y, z]) => [pv[0] + (y - pv[0])*Math.cos(th) - (z - pv[1])*Math.sin(th), pv[1] + (y - pv[0])*Math.sin(th) + (z - pv[1])*Math.cos(th)];
+    const bar = rectUV(212, 26, 286, 32).map(rt), tooth = rectUV(212, 32, 218, 40).map(rt), pc = (pr, m) => { const A = on(PX(94), pr), B = on(PX(108), pr), cp = vis([1, 0, 0]) ? B : A;
+      return loft(A, B, n => toneI(n, m)) + fill(pd(cp), toneI(cp === B ? [1, 0, 0] : [-1, 0, 0], m)) + ink(pd(cp), .7) + hullInk([...A, ...B], 1); };
+    items.push(it([[94, 208, 23], [108, 288, 41]], pc(bar, STEEL) + pc(tooth, STEEL) + cylX(vis([1, 0, 0]) ? 108 : 91, vis([1, 0, 0]) ? 111 : 94, pv[0], pv[1], 3, METAL, toneI, .6, 12)));
+    const sp = [[101, 256, 23], [101, 248, 24.2], [101, 240, 26 + 2*th]]; const dd = pd(sp, false);
+    items.push(it([[99, 238, 23], [103, 257, 27]], `<path d="${dd}" fill="none" stroke="${INK}" stroke-width="3"/><path d="${dd}" fill="none" stroke="${STEEL.l}" stroke-width="1.4"/>`)); }
+  return s + byDepth(items);
+}
+
+/* ---------- labels ---------- */
+function labelItems(st, k){
+  const turning = !!st.turnDir, moving = st.d > .5 && st.d < T_BOLT - .5, ok = aligned(st) === 5, out = [];
+  const kr = keyItem(st, 'right'), kw = keyItem(st, 'wrong'), use = st.key ? (st.key === 'right' ? kr : kw) : kr;
+  out.push({ at: kr.X.T(-40, 0, 18), text: 'RIGHT KEY', on: st.key === 'right' }, { at: kw.X.T(-40, 0, 18), text: 'WRONG KEY', on: st.key === 'wrong' });
+  if (k <= .6){
+    if (vis([1, 0, 0])) out.push({ at: [169, YC + 20, ZC + 85], text: 'ESCUTCHEON', on: false }, { at: [XF, YC + 18, ZC - 16], text: 'CYLINDER', on: turning });
+    if (vis([1, 0, 0]) && !(st.key && st.kt > 1.9)) out.push({ at: [XF, YC, ZC + 8], text: 'KEYWAY', on: false });
+    if (vis([-1, 0, 0])) out.push({ at: [12, YC, ZC + 20], text: 'THUMBTURN', on: false });
+    if (vis([0, -1, 0])) out.push({ at: [101, 93, 160], text: 'FOREND', on: false });
+    out.push({ at: [DX1, DY1 - 30, DZ1 - 30], text: 'DOOR', on: false }, { at: [DX1, 50, DZ1 - 30], text: 'JAMB', on: false });
+    return out;
+  }
+  const X = use.X, r = rad(st.beta), lob = [101, YC - LOBE*Math.sin(r), ZC + LOBE*Math.cos(r)];
+  out.push({ at: X.T(30, 0, -11), text: 'KEY BLADE', on: false }, { at: X.T(36, 0, keyH(36, CUTS[st.key || 'right'])), text: 'BITTING', on: st.key && st.kt > 1 && st.kt < 2 },
+    { at: X.T(0, 0, 13), text: 'SHOULDER', on: false }, { at: X.T(70, 0, -9), text: 'KEY TIP', on: false },
+    { at: [150, YC, ZC - 15], text: 'PLUG', on: turning }, { at: [150, YC - 12, ZC - RH], text: 'CYLINDER BODY', on: false },
+    { at: [XF, ...rotYZ(0, 9, st.beta)], text: 'KEYWAY', on: false },
+    { at: plugPt(PIN_X[0], pinBottom(st, 0) + KP[0]/2, st.beta), text: 'KEY PIN', on: ok },
+    { at: [PIN_X[0], YC, ZC + (Math.abs(st.beta) < 6 ? kpTop(st, 0) : RP) + DRV/2], text: 'DRIVER PIN', on: ok },
+    { at: [PIN_X[0], YC, ZCOV - 8], text: 'SPRING', on: false }, { at: [PIN_X[2], YC, ZCOV - 3], text: 'PIN CHAMBER', on: false },
+    { at: [XC1 + 30, YC, ZCOV + 3], text: 'CHAMBER COVER', on: false }, { at: [XC1 + 4, YC, ZC + RP], text: 'SHEAR LINE', on: ok },
+    { at: lob, text: 'CAM', on: turning }, { at: [92, YC, ZC - 15], text: 'CLUTCH', on: turning },
+    { at: [101, YC - 8, BIBT], text: 'CYLINDER BRIDGE', on: false }, { at: [101, 160, 207], text: 'FIXING SCREW', on: false },
+    { at: [55, YC, ZC], text: 'THUMBTURN SPINDLE', on: false }, { at: [12, YC, ZC + 20], text: 'THUMBTURN', on: false },
+    { at: [101, 150 - st.d, BZ1], text: 'DEADBOLT', on: moving }, { at: [101, FORK - 13 - st.d, 122], text: 'BOLT FORK', on: moving },
+    { at: [BX1, 255 - st.d, 65], text: 'GUIDE SLOT', on: false }, { at: [BX1 + 3, 205, 65], text: 'GUIDE STUD', on: false },
+    { at: [101, 262, 31], text: 'DETENT LEVER', on: moving }, { at: [101, 248, 24], text: 'DETENT SPRING', on: moving },
+    { at: [101, 293, 170], text: 'MORTISE CASE', on: false }, { at: [101, 93, 160], text: 'FOREND', on: false },
+    { at: [101, 93, 28], text: 'FOREND SCREW', on: false }, { at: [76, 87.5, 70], text: 'STRIKE PLATE', on: false },
+    { at: [101, 34, 65], text: 'STRIKE BOX', on: false }, { at: [169, YC + 20, ZC + 85], text: 'ESCUTCHEON', on: false },
+    { at: [DX1, 50, DZ1 - 30], text: 'JAMB', on: false }, { at: [DX1, DY1 - 30, DZ1 - 30], text: 'DOOR', on: false });
+  return out;
+}
+
+/* ---------- scene ---------- */
+const OUT_D = rectUV(DY0, BH, DY1, DZ1);
+function scene(st, m){
+  const k = ease(st.xr || 0);
+  let s = board(...BRD, BH, 10, BOARD);
+  const cs = []; for (const x of [DX0, DX1]) for (const y of [JY0, DY1]) for (const z of [BH, DZ1]) cs.push([x, y, z]);
+  s += castShadow(cs, BH, boardTop(...BRD, BH, 10));
+  const body = [it([[DX0, JY0, BH], [DX1, 87.5, DZ1]], jambSvg()), it([[67, 87.5, 16], [135, DY0, 244]], edgeSvg(st)),
+    it([[DX0, DY0, BH], [DX1, DY1, DZ1]], doorSvg(m)), it([[DX1, YC - 34, ZC - 38], [XF, YC + 34, ZC + 96]], frontSvg(st)),
+    it([[7, YC - 34, ZC - 38], [DX0, YC + 34, ZC + 96]], backSvg())];
+  // keys: the part outside the plug face is always drawn; the blade inside only in see-through
+  const keys = [], ins = st.key && st.kt > 1 ? keyPose(st, st.key).o[0] - XF : null;
+  let keyIn = null;
+  for (const w of ['right', 'wrong']){
+    if (w === st.key && ins != null){ const o = keyItem(st, w, -1e9, ins); if (o) keys.push(o); if (k > 0) keyIn = keyItem(st, w, ins, 1e9); }
+    else keys.push(keyItem(st, w));
+  }
+  if (k <= 0) s += byDepth([...body, ...keys]);
+  else {
+    // the keys lie outside the front face, the thumbturn outside the back one: each is in front of the door only when that face is
+    const tt = it([[7, YC - 9, ZC - 26], [XB0, YC + 9, ZC + 26]], thumbturnSvg()), fr = vis([1, 0, 0]);
+    const near = fr ? keys : [tt], far = fr ? [tt] : keys;
+    s += byDepth(far) + xrGhost(byDepth(body), '', k, OUT_D, DX0, DX1, m);
+    s += `<g opacity="${f(k)}">${mechSvg(st, keyIn)}</g>` + byDepth(near);
+  }
+  return s + lkCallouts(labelItems(st, k), [0, 245, 0, 327, 0, DZ1]);
+}
+// its most central labels to the other side. Same markup as core (phones keep core's numbered badges).
+function lkCallouts(items, B){
+  const svgEl = document.getElementById('fig'), M = svgEl.getScreenCTM(), btn = document.getElementById('btns'), vs = document.querySelector('.vset');
+  if ((window.LBL_U && LBL_U()) || !M || !btn || !vs) return xrCallouts(items, B);
+  const vb = svgEl.viewBox.baseVal, inv = M.inverse(), k = INK_K, fs = 8.6*k, hgt = fs*1.8, gap0 = hgt + 3*k;
+  const yAt = py => new DOMPoint(0, py).matrixTransform(inv).y;
+  const bx = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) bx.push(P(x, y, z)[0]);
+  const xmin = Math.min(...bx), xmax = Math.max(...bx), cx = (xmin + xmax)/2;
+  const t0 = vb.y + hgt/2 + 2*k, tL = Math.max(t0, yAt(btn.getBoundingClientRect().bottom + 40) + hgt/2);
+  // whatever sits over the drawing's top right (stats, view switches) pushes the right column down
+  const fr = svgEl.getBoundingClientRect(), over = [vs, document.getElementById('stats')].filter(Boolean).map(el => el.getBoundingClientRect())
+    .filter(r => r.height && r.right > fr.left + fr.width/2 && r.top < fr.top + fr.height/2).map(r => r.bottom);
+  const top = { [-1]: tL, [1]: over.length ? Math.max(t0, yAt(Math.max(...over) + 10) + hgt/2) : tL }, zc = document.querySelector('.zchip');
+  const bot0 = vb.y + vb.height - hgt/2 - 2*k, bot = { [-1]: bot0, [1]: zc ? Math.min(bot0, yAt(zc.getBoundingClientRect().top - 6) - hgt/2) : bot0 - 2*hgt };
+  const its = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  const cap = side => Math.floor((bot[side] - top[side])/gap0) + 1;
+  const nL = Math.min(cap(-1), Math.max(its.length - cap(1), its.filter(c => c.X < cx).length));
+  let s = '';
+  for (const [col, side] of [[its.slice(0, nL), -1], [its.slice(nL), 1]]){
+    if (!col.length) continue;
+    col.sort((a, b) => a.Y - b.Y);
+    const n = col.length, gap = n > 1 ? Math.min(gap0, (bot[side] - top[side])/(n - 1)) : gap0;
+    let y = -1e9; col.forEach(c => { c.py = y = Math.max(c.Y, y + gap, top[side]); });
+    col.forEach((c, i) => { c.py = Math.min(c.py, bot[side] - (n - 1 - i)*gap); });
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+
+/* ---------- behaviour ---------- */
+let ui, loopOn = false;
+function camBolt(st){
+  const a = ((180 - st.beta) % 360 + 540) % 360 - 180;
+  if (Math.abs(a) < 90) st.d = lkClamp(LOBE*(Math.sin(rad(a)) + SINW), 0, T_BOLT);
+}
+function runLoop(){
+  if (loopOn) return; loopOn = true;
+  ui.animate(dt => { const st = ui.st; let busy = false;
+    if (st.kt !== st.kT){ const g = Math.sign(st.kT - st.kt); st.kt = g > 0 ? Math.min(st.kT, st.kt + dt/.85) : Math.max(st.kT, st.kt - dt/.85); busy = true;
+      if (st.kt === 0 && st.kT === 0) st.key = null; }
+    if (st.turnDir){ st.tt = Math.min(1, st.tt + dt/2.6); st.beta = st.turnDir*360*ease(st.tt); camBolt(st); busy = true;
+      if (st.tt >= 1){ st.beta = 0; const dir = st.turnDir; st.turnDir = 0; ui.flash(dir > 0 ? 'Unlocked: the cam pulled the bolt in' : 'Locked: the cam threw the bolt', 2200); } }
+    if (st.wig > 0){ st.wig = Math.max(0, st.wig - dt); st.beta = st.wig > 0 ? 3*Math.sin((.9 - st.wig)*34)*Math.min(1, st.wig*3) : 0; busy = true; }
+    if (!busy) loopOn = false;
+    return busy; });
+}
+function insertKey(st, w){
+  if (st.turnDir) return ui.flash('Wait, the key is turning');
+  if (st.key && st.key !== w) return ui.flash('Take the other key out first');
+  st.key = w; st.kT = 2; runLoop();
+}
+function turnKey(st){
+  if (!st.key) return ui.flash('Put a key in first');
+  if (st.kt < 2 || st.kT !== 2) return ui.flash('Push the key all the way in first');
+  if (st.turnDir || st.wig > 0) return;
+  if (aligned(st) < 5){ st.wig = .9; runLoop(); return ui.flash('Wrong key: pins are off the shear line, the plug can\'t turn', 2600); }
+  st.turnDir = st.d > T_BOLT/2 ? 1 : -1; st.tt = 0; runLoop();
+}
+function removeKey(st){
+  if (!st.key) return ui.flash('There is no key in the lock');
+  if (st.turnDir) return ui.flash('Let the key come back upright first');
+  st.kT = 0; runLoop();
+}
+
+ui = mountFigure({
+  fig:'47', turn:'full', title:'Pin tumbler lock', palette:'tomato',
+  size:[245, 327, DZ1],
+  state:{ key:null, kt:0, kT:0, beta:0, d:T_BOLT, turnDir:0, tt:0, wig:0 },
+  scene,
+  readout: st => st.d > T_BOLT/2 ? 'locked' : 'unlocked',
+  stats: st => [{ label:'Pins at shear line', value:`${aligned(st)}/5` }, { label:'Bolt out', value:`${Math.round(st.d/3)} mm`, small:true }],
+  buttons:[
+    { label:'Insert key', choices: st => ['right', 'wrong'].map(w => ({ label: w === 'right' ? 'Right key' : 'Wrong key',
+        current: st.key === w && st.kT === 2, disabled: !!st.key && st.key !== w, why:'Take the other key out first', onClick: st => insertKey(st, w) })) },
+    { label:'Turn key', onClick: st => turnKey(st) },
+    { label:'Take key out', onClick: st => removeKey(st) },
+  ],
+  params:(st, q) => {
+    if (q.get('key') === 'right' || q.get('key') === 'wrong'){ st.key = q.get('key'); st.kt = st.kT = q.has('kt') ? +q.get('kt') : 2; }
+    if (q.has('beta')) st.beta = +q.get('beta');
+    if (q.has('bolt')) st.d = lkClamp(+q.get('bolt'), 0, 1)*T_BOLT;
+  },
+});
+addEventListener('keydown', e => {
+  if (/input|textarea|button/i.test(e.target.tagName)) return;
+  const kk = e.key.toLowerCase(), st = ui.st;
+  if (kk === 'k') insertKey(st, 'right'); else if (kk === 'w') insertKey(st, 'wrong'); else if (kk === ' ' || kk === 't') turnKey(st); else if (kk === 'r') removeKey(st); else return;
+  e.preventDefault(); ui.render();
+});
+xrMount(() => ui, () => '');
+</script></body></html>
