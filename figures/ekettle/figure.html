@@ -1,0 +1,541 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Electric kettle</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Electric kettle: how it knows when to stop.
+   TRUTH FIRST (a cordless kettle with a Strix-style control, the kind in most kettles):
+   - Heating: a sheathed element (a steel tube with a coiled wire packed in magnesium oxide) is brazed, with an aluminium
+     heat spreader, under the stainless floor plate. The water never touches it ("concealed element"), about 2.2 kW.
+   - Stopping: at 100 °C the water makes steam. With the lid shut it can't get out, so it is pushed into a port high in the
+     wall by the handle and down a tube inside the handle, where it blows onto a small domed bimetal disc in the handle foot.
+     The disc (two metals bonded together, one grows more when hot) holds its dome until it is hot enough, then snaps through
+     to the opposite dome. The snap pushes a rod onto the trip lever, which springs the switch contacts open and kicks the
+     rocker off: the click. With the lid open the steam escapes instead and a real kettle keeps on boiling.
+   - The disc must cool for a few seconds and snap back before the switch will stay on again.
+   - Dry boil: two more bimetals press on the underside of the element plate, by the element's ends. With no water the plate
+     passes 100 °C in seconds; they snap and cut the power, and reset when cool.
+   - Cordless 360° connector: the base has a centre post (centre pin, contact ring, earth ring outermost so earth meets
+     first); the kettle has the matching socket in its bottom. Lift the kettle off and the circuit is broken.
+   PARTS (each held by another):
+   kettle  body (water window with MIN/MAX), lid on a hinge block, lid button on the handle, spout with a limescale filter,
+           handle (the steam tube runs inside it) ending in a foot that holds the rocker, the indicator LED, the steam bimetal
+           and its push rod, steam vents; inside the bottom: floor plate, heat spreader, sheathed element, element terminals,
+           control unit (moulding, two pairs of switch contacts for live and neutral, trip lever on a pin, trip spring, switch
+           link to the rocker, two dry-boil bimetals, LED resistor), cordless socket and its contacts, internal wires, earth tag,
+           bottom cover.
+   base    shell, rubber feet, centre post (centre pin, contact ring, earth ring), base wiring, cord grip, mains cord.
+   props   a worktop, a jug (to fill it), a cup (to pour into).
+   Scale: 1 unit = 2.5 mm, the kettle is about 23 cm tall and holds 1.7 L at MAX. Heating runs about 30x faster than life.
+   Axes: x = depth (+x is the front), y = width (+y is the spout side, viewer-left at the default view), z = up. The kettle
+   is drawn in its own coordinates (origin at the bottom centre) and placed by kP(), so it can lift and tilt to pour. */
+const KX = 45, KY = 64, BZ = 10, CUPY = KY + 50, BRD = [0, 0, 90, 130];
+const KPROF = [[0,27.5],[2,29],[14,29],[30,28.5],[50,27.4],[70,26],[84,25]];
+const FLOOR = 12, TOP = 84, MAXML = 1700, MINML = 500, U3 = .015625, NS = 36;   // U3: ml in one unit³
+const LIDP = [[84.2,25.3],[86.4,24.7],[89.2,20],[91,12]], HINGE = [-26.7, 85.2];
+const HAND = [[0,-24.6,75.5],[0,-40,79],[0,-45,71],[0,-44.8,30],[0,-40,19]];
+const TUBE = [[0,-23.2,77],[0,-39.5,79],[0,-44.6,71],[0,-44.4,30],[0,-40,20],[0,-34.5,14],[0,-33.4,11.6]];
+const FOOT = [-7,-41,1, 7,-28,20];
+const ELEM = Array.from({length:41}, (_, i) => { const a = (-70 + 320*i/40)*Math.PI/180; return [19*Math.cos(a), 19*Math.sin(a), 9.2]; });
+const WATER = '#5b9fd8', WSURF = '#9bcdf0', WATERM = { l:'#cfe8fa', m:'#6fb0e3', d:'#3d7fb8' };
+const BASEM = matOf('#5a554e'), BR = matOf('#d9a441'), CU = matOf('#d08a52'), CTL = matOf('#4a4540'), ALU = matOf('#d5d8d6');
+const TUBEM = matOf('#d6e2e5'), CORDM = matOf('#3f3b37'), GLASS = matOf('#dcecef');
+const SPEED = 30, PW = 2200;
+
+/* ---------- placing the kettle: tilt about x (spout dips), then lift and slide ---------- */
+let KC = 1, KS = 0, KZ = BZ, KTY = 0;
+const kP = p => [KX + p[0], KY + KTY + p[1]*KC + p[2]*KS, KZ - p[1]*KS + p[2]*KC];
+const kN = n => [n[0], n[1]*KC + n[2]*KS, -n[1]*KS + n[2]*KC];
+const kPts = ps => ps.map(kP);
+const kRing = (z, r, n = NS, x0 = 0, y0 = 0) => Array.from({length:n}, (_, i) => { const a = i/n*2*Math.PI; return [x0 + r*Math.cos(a), y0 + r*Math.sin(a), z]; });
+const kBoxOf = ps => [[0,1,2].map(i => Math.min(...ps.map(p => p[i]))), [0,1,2].map(i => Math.max(...ps.map(p => p[i])))];
+const kUnion = bs => kBoxOf(bs.flat());
+const kCl = x => Math.max(0, Math.min(1, x));
+const kTo = (v, t, d) => v < t ? Math.min(t, v + d) : Math.max(t, v - d);
+const kR = z => { for (let i = 1; i < KPROF.length; i++) if (z <= KPROF[i][0]){ const [z0, r0] = KPROF[i-1], [z1, r1] = KPROF[i]; return r0 + (r1 - r0)*(z - z0)/(z1 - z0); } return KPROF[KPROF.length-1][1]; };
+const kRi = z => kR(z) - 1.6;
+function kSetPose(st){
+  const p = kCl(st.pourK), pk = ease(kCl(p/.7)), tk = ease(kCl((p - .2)/.8)), yk = ease(kCl((p - .15)/.85)), zl = BZ + 26*ease(kCl(st.lift));
+  KZ = zl + (33 - zl)*pk; KTY = -44*yk; const a = 48*Math.PI/180*tk; KC = Math.cos(a); KS = Math.sin(a);
+}
+const kOnBase = st => st.lift < .02 && st.pourK < .02;
+const kPowered = st => st.on && kOnBase(st);
+
+/* ---------- small drawing helpers in the kettle's frame ---------- */
+const kSmooth = (pts, it = 2) => { for (let k = 0; k < it; k++){ const o = [pts[0]];
+  for (let i = 0; i < pts.length - 1; i++){ const a = pts[i], b = pts[i+1]; o.push(a.map((v, j) => v*.75 + b[j]*.25), a.map((v, j) => v*.25 + b[j]*.75)); }
+  o.push(pts[pts.length-1]); pts = o; } return pts; };
+// a round tube seen in an orthographic view is a thick stroke along its centre line (width in drawing units, not rescaled)
+const kTube = (pts, r, mt, w = 1, hi = true) => { const d = pd(pts, false), rw = 2*r*CAM_K, j = 'stroke-linecap="round" stroke-linejoin="round"';
+  return `<path d="${d}" fill="none" stroke="${INK}" style="stroke-width:${f(rw + 2*w*INK_K)}" ${j}/><path d="${d}" fill="none" stroke="${mt.m}" style="stroke-width:${f(rw)}" ${j}/>`
+    + (hi && rw > 1.2 ? `<path d="${d}" fill="none" stroke="${mt.l}" style="stroke-width:${f(rw*.36)}" ${j} transform="translate(${f(rw*.13)} ${f(-rw*.15)})"/>` : ''); };
+const kPart = (pts, t) => { if (t <= 0) return []; const ls = []; let tot = 0;
+  for (let i = 1; i < pts.length; i++){ const d = Math.hypot(...sub(pts[i], pts[i-1])); ls.push(d); tot += d; }
+  let want = tot*Math.min(1, t); const o = [pts[0]];
+  for (let i = 1; i < pts.length; i++){ if (want >= ls[i-1]){ o.push(pts[i]); want -= ls[i-1]; } else { const u = want/ls[i-1]; o.push(pts[i-1].map((v, j) => v + (pts[i][j] - v)*u)); break; } }
+  return o; };
+function kBoxT(x0, y0, z0, x1, y1, z1, m, shade = toneI, w = .9){
+  const F = [[[0,1,0],[[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]]], [[1,0,0],[[x1,y0,z0],[x1,y1,z0],[x1,y1,z1],[x1,y0,z1]]],
+    [[0,-1,0],[[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1]]], [[-1,0,0],[[x0,y0,z0],[x0,y1,z0],[x0,y1,z1],[x0,y0,z1]]],
+    [[0,0,1],[[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]]], [[0,0,-1],[[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0]]]];
+  return F.filter(([n]) => vis(kN(n))).map(([n, q]) => shape(kPts(q), shade(kN(n), m), w)).join('');
+}
+function kCylT(cx, cy, z0, z1, r, mt, shade = toneI, w = 1, n = 18){
+  const A = kPts(kRing(z0, r, n, cx, cy)), B = kPts(kRing(z1, r, n, cx, cy)), up = kN([0,0,1]), cap = vis(up) ? [B, up] : [A, up.map(v => -v)];
+  return loft(A, B, nr => shade(nr, mt)) + fill(pd(cap[0]), shade(cap[1], mt)) + ink(pd(cap[0]), w*.8) + hullInk([...A, ...B], w);
+}
+// a thin plate seen through (the floor plate, the heat spreader): its edge solid, its face faint so what is under it shows
+const kDisc = (z0, z1, r, mt, op) => { const A = kPts(kRing(z0, r)), B = kPts(kRing(z1, r)), c = vis(kN([0,0,1])) ? B : A;
+  return loft(A, B, n => toneI(n, mt)) + fill(pd(c), mt.l, `opacity="${op}"`) + ink(pd(c), .7) + hullInk([...A, ...B], .9); };
+const kRod = (a, b, r, mt, w = .6) => rod(kP(a), kP(b), r, mt, toneI, w);
+const kRingInk = (z, r, w) => { let d = '';
+  for (let i = 0; i < NS; i++){ const a = i/NS*2*Math.PI, b = (i+1)/NS*2*Math.PI, c = (a + b)/2;
+    if (vis(kN([Math.cos(c), Math.sin(c), 0]))) d += pd([kP([r*Math.cos(a), r*Math.sin(a), z]), kP([r*Math.cos(b), r*Math.sin(b), z])], false); }
+  return d ? ink(d, w) : ''; };
+const kTx = (p, str, size, col = INK, w = 800) => `<text transform="${txM(P(...kP(p)), Dv(...kN([0,-1,0])), Dv(...kN([0,0,-1])))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${w}" letter-spacing=".04em">${str}</text>`;
+const kWisps = (b, amt, t, n = 3, hgt = 34) => { let s = '';
+  for (let i = 0; i < n; i++){ const ph = (t*.55 + i/n) % 1, pts = [];
+    for (let j = 0; j <= 10; j++){ const u = j/10, w = Math.sin(u*5 + t*2.2 + i*2.1)*3.6*u;
+      pts.push([b[0] + w*.6, b[1] + (i - (n-1)/2)*2 + w, b[2] + 2 + hgt*u*(.55 + .45*ph) + ph*6]); }
+    const op = amt*.8*Math.sin(Math.PI*ph), d = pd(pts, false);
+    s += `<path d="${d}" fill="none" stroke="#6d7f86" style="stroke-width:${f(6.4*INK_K)}" stroke-linecap="round" opacity="${f(op*.7)}"/><path d="${d}" fill="none" stroke="#ffffff" style="stroke-width:${f(4.2*INK_K)}" stroke-linecap="round" opacity="${f(Math.min(1, op*1.2))}"/>`; }
+  return s; };
+
+/* ---------- the water: how high it stands for a volume, at any tilt ---------- */
+function kVolBelow(h){   // ml of the inside below the world height h
+  let v = 0;
+  for (let z = FLOOR; z < TOP; z++){ const zm = z + .5, r = kRi(zm), A = Math.PI*r*r;
+    if (KS < 1e-4){ v += A*kCl((h - KZ)/KC - z); continue; }
+    const c = (zm*KC - (h - KZ))/KS;                                   // the part of this slice with local y > c is under water
+    v += c >= r ? 0 : c <= -r ? A : r*r*Math.acos(c/r) - c*Math.sqrt(r*r - c*c); }
+  return v*U3;
+}
+function kLevel(ml){ if (ml < .5) return null; let lo = KZ - 40, hi = KZ + 110;
+  for (let i = 0; i < 34; i++){ const mid = (lo + hi)/2; if (kVolBelow(mid) < ml) lo = mid; else hi = mid; } return (lo + hi)/2; }
+const KWZ = [FLOOR, 14, 30, 50, 70, TOP];
+function kWaterGeom(h){   // points of the water body, and of its flat top, in world space
+  const R = KWZ.map(z => kPts(kRing(z, kRi(z)))), below = [], surf = [];
+  const cut = (a, b) => { const da = a[2] - h, db = b[2] - h; if ((da < 0) !== (db < 0)){ const t = da/(da - db); surf.push([a[0] + (b[0]-a[0])*t, a[1] + (b[1]-a[1])*t, h]); } };
+  for (const ring of R) for (const p of ring) if (p[2] < h) below.push(p);
+  for (let i = 0; i < R.length; i++) for (let j = 0; j < NS; j++){ cut(R[i][j], R[i][(j+1) % NS]); if (i < R.length - 1) cut(R[i][j], R[i+1][j]); }
+  return below.length ? { below, surf } : null;
+}
+const kClipBelow = (poly, h) => { const o = [];
+  for (let i = 0; i < poly.length; i++){ const a = poly[i], b = poly[(i+1) % poly.length], ia = a[2] < h, ib = b[2] < h;
+    if (ia) o.push(a); if (ia !== ib){ const t = (h - a[2])/(b[2] - a[2]); o.push([a[0] + (b[0]-a[0])*t, a[1] + (b[1]-a[1])*t, h]); } }
+  return o; };
+const ZMAX = kLevel(MAXML) - BZ, ZMIN = kLevel(MINML) - BZ;          // the MIN / MAX marks (kettle upright)
+
+/* ---------- the kettle, outside ---------- */
+const kBodyRings = () => KPROF.map(([z, r]) => kPts(kRing(z, r)));
+const WA = .2, WZ0 = 17, WZ1 = 74;                                     // water window: half-width (rad), bottom, top
+const kOnBody = (a, z, o = .3) => [(kR(z) + o)*Math.cos(a), (kR(z) + o)*Math.sin(a), z];
+function kWindow(st, h){
+  if (!vis(kN([1,0,0]))) return '';
+  const poly = [], n = 6;
+  for (let i = 0; i <= n; i++) poly.push(kOnBody(-WA + 2*WA*i/n, WZ0));
+  for (let i = n; i >= 0; i--) poly.push(kOnBody(-WA + 2*WA*i/n, WZ1));
+  const W3 = kPts(poly);
+  let s = fill(pd(W3), '#6f8f99');
+  if (h != null){ const wp = kClipBelow(W3, h); if (wp.length > 2) s += fill(pd(wp), WATER);
+    // the surface line, and bubbles rising in the window when it boils
+    const sl = kClipBelow(W3, h + .35).filter(p => Math.abs(p[2] - h - .35) < 1e-6); if (sl.length === 2) s += line(sl, .8);
+    if (st.bub > .05) for (let i = 0; i < 9; i++){ const z = WZ0 + 2 + ((st.clock*(.7 + (i % 4)*.18) + i*.31) % 1)*(WZ1 - WZ0), q = kP(kOnBody(-WA*.8 + 1.6*WA*((i*.37) % 1), z, .35));
+      if (q[2] < h - .6 && i < 9*st.bub) s += `<circle cx="${f(P(...q)[0])}" cy="${f(P(...q)[1])}" r="${f(.5 + .3*(i % 3))}" fill="none" stroke="#ffffff" stroke-width=".6"/>`; } }
+  s += fill(pd(W3), '#ffffff', 'opacity=".16"');
+  for (const [z, t] of [[ZMAX, 'MAX'], [ZMIN, 'MIN']]){
+    s += line(kPts([kOnBody(-WA, z, .4), kOnBody(WA*.3, z, .4)]), .9) + kTx(kOnBody(-WA - .2, z - 1.1, .4), t, 3, INK, 800); }
+  return s + ink(pd(W3), 1.1);
+}
+function kBody(st, m, R, h){
+  let s = '';
+  for (let i = 0; i < R.length - 1; i++) s += loft(R[i], R[i+1], n => tone(n, m));
+  const dn = kN([0,0,-1]);
+  if (vis(dn)){ const sk = kPts(kRing(0, 9.6, 24)); s += shape(R[0], toneI(dn, matOf('#45413c')), 1) + fill(pd(sk), '#2c2926') + ink(pd(sk), .8); }   // the underside, with the socket
+  s += kRingInk(14, kR(14) + .05, .8) + kWindow(st, h);
+  return s + hullInk(R.flat(), 2.6);
+}
+function kSpout(m){
+  const A = [], M = [], B = [], n = 18;
+  for (let i = 0; i < n; i++){ const t = i/n*2*Math.PI, c = Math.cos(t), s2 = Math.sin(t), zA = 75 - 6.5*s2, dA = .27*c, rA = kR(zA) - .4;
+    A.push([-rA*Math.sin(dA), rA*Math.cos(dA), zA]); M.push([-5.6*c, 31.5 + 4.2*s2, 82.5 - 3.6*s2]); B.push([-4.6*c, 37.5 + 4.6*s2, 89]); }
+  const Aw = kPts(A), Mw = kPts(M), Bw = kPts(B);
+  let s = loft(Aw, Mw, nr => tone(nr, m)) + loft(Mw, Bw, nr => tone(nr, m));
+  if (vis(kN([0,0,1]))){ s += fill(pd(Bw), '#26323a');
+    // the limescale filter's mesh, seen down the spout
+    const F = kPts(B.map(([x, y]) => [x*.62, 37.5 + (y - 37.5)*.62, 88.6]));
+    s += fill(pd(F), '#8d9aa0');
+    let mesh = ''; for (let k = -2; k <= 2; k++) mesh += pd(kPts([[k*1.1, 35, 88.7], [k*1.1, 40, 88.7]]), false) + pd(kPts([[-2.8, 37.5 + k*1.1, 88.7], [2.8, 37.5 + k*1.1, 88.7]]), false);
+    s += clipTo(F, `<path d="${mesh}" fill="none" stroke="#5c676c" stroke-width=".4"/>`) + ink(pd(Bw), 1.1); }
+  return { box: kBoxOf([...Aw, ...Mw, ...Bw]), svg: s + hullInk([...Aw, ...Mw, ...Bw], 1.7) };
+}
+function kRocker(st, pw){
+  const x = 7, y0 = -35.6, y1 = -30.4, zc = 13, hz = 4.4, tt = st.on ? .5 : 1.9, tb = st.on ? 1.9 : .5;
+  const RK = pw ? matOf('#ef5b3f') : matOf('#4b4641');
+  const fr = [[x+tb, y0, zc-hz], [x+tb, y1, zc-hz], [x+tt, y1, zc+hz], [x+tt, y0, zc+hz]], nf = norm(cross(sub(fr[1], fr[0]), sub(fr[3], fr[0])));
+  const sides = [[[0,0,1], [[x,y0,zc+hz],[x,y1,zc+hz],[x+tt,y1,zc+hz],[x+tt,y0,zc+hz]]], [[0,0,-1], [[x,y0,zc-hz],[x,y1,zc-hz],[x+tb,y1,zc-hz],[x+tb,y0,zc-hz]]],
+    [[0,-1,0], [[x,y0,zc-hz],[x+tb,y0,zc-hz],[x+tt,y0,zc+hz],[x,y0,zc+hz]]], [[0,1,0], [[x,y1,zc-hz],[x+tb,y1,zc-hz],[x+tt,y1,zc+hz],[x,y1,zc+hz]]]];
+  let s = '';
+  for (const [n, q] of sides) if (vis(kN(n))) s += shape(kPts(q), toneI(kN(n), RK), .7);
+  if (vis(kN(nf))){ const Fp = (u, v) => [x + tb + (tt - tb)*v + .06, y0 + (y1 - y0)*u, zc - hz + 2*hz*v];
+    s += shape(kPts(fr), toneI(kN(nf), RK), .9) + line(kPts([Fp(.5, .62), Fp(.5, .86)]), .8)
+      + ink(pd(kPts(Array.from({length:10}, (_, i) => { const a = i/10*2*Math.PI; return Fp(.5 + .13*Math.cos(a), .25 + .09*Math.sin(a)); }))), .7); }
+  return act('rocker', s);
+}
+function kHandle(st, m, pw){
+  const hp = kPts(kSmooth(HAND, 3));
+  let s = kTube(hp, 4, m, 1.3) + kBoxT(...FOOT, m, tone, 1.1);
+  if (vis(kN([1,0,0]))){
+    const led = kPts(on(PX(7.05), ellUV(-33, 5.2, 1.25, 1.25, 12)));
+    s += fill(pd(led), pw ? '#ff7a2e' : '#6e4535') + ink(pd(led), .6);
+    if (pw){ const c = P(...kP([7.1, -33, 5.2])); s += `<circle cx="${f(c[0])}" cy="${f(c[1])}" r="${f(2.6)}" fill="#ffb15e" opacity=".45"/>`; }
+    let v = ''; for (const y of [-39.6, -38.4, -37.2]) v += pd(kPts([[7.05, y, 2.2], [7.05, y, 4.4]]), false);
+    s += `<path d="${v}" fill="none" stroke="${INK}" stroke-width="1" stroke-linecap="round"/>`;
+    s += kRocker(st, pw);
+  }
+  s += kCylT(0, -34, 80.2, 82.4, 2.3, matOf('#4b4641'), toneI, .9, 14);
+  return { box: kBoxOf([...hp, ...kPts([[FOOT[0], FOOT[1], FOOT[2]], [FOOT[3], FOOT[4], FOOT[5]]])]), svg: s };
+}
+function kLidRot(st){ const a = st.lid*105*Math.PI/180, c = Math.cos(a), s2 = Math.sin(a);
+  return { p: q => [q[0], HINGE[0] + (q[1] - HINGE[0])*c - (q[2] - HINGE[1])*s2, HINGE[1] + (q[1] - HINGE[0])*s2 + (q[2] - HINGE[1])*c],
+           n: q => [q[0], q[1]*c - q[2]*s2, q[1]*s2 + q[2]*c] }; }
+function kLid(st, m){
+  const r = kLidRot(st), R = LIDP.map(([z, rr]) => kPts(kRing(z, rr, 30).map(r.p))), dn = kN(r.n([0,0,-1])), up = kN(r.n([0,0,1]));
+  let s = '';
+  if (vis(dn)) s += shape(R[0], '#d8d4cc', 1);
+  for (let i = 0; i < R.length - 1; i++) s += loft(R[i], R[i+1], n => tone(n, m));
+  if (vis(up)) s += shape(R[R.length-1], tone(up, m), .9);
+  s += hullInk(R.flat(), 1.8);
+  const hb = [-4, -28, 82, 4, -24.6, 84.6];
+  const hinge = kBoxT(...hb, m, tone, .8);
+  return { box: kBoxOf(R.flat()), svg: byDepth([{ box: kBoxOf(kPts([[-4, -28, 82], [4, -24.6, 84.6]])), svg: hinge }, { box: kBoxOf(R.flat()), svg: s }]) };
+}
+function kOpening(m, W){
+  if (!vis(kN([0,0,1]))) return null;
+  const rim = kPts(kRing(TOP, kR(TOP))), inn = kPts(kRing(TOP, kRi(TOP)));
+  let s = fill(pd(rim), m.l) + fill(pd(inn), '#33414a');
+  if (W && W.surf.length > 2){ const t = sp(hull(W.surf.map(p => P(...p)))); s += clipTo(inn, fill(t, WATER) + ink(t, .6)); }
+  return { box: kBoxOf(rim), svg: s + ink(pd(inn), .9) + ink(pd(rim), 1.1) };
+}
+function kJug(st){
+  if (st.jug < .01) return [];
+  const off = (1 - ease(st.jug))*34, a = [KX, KY + 42 + off, KZ + 101 + off*.5], b = [KX, KY + 19 + off, KZ + 116 + off*.5];
+  const d = norm(sub(b, a)), ld = [0, -d[2], d[1]], at = (p, u, v) => [p[0] + d[0]*u + ld[0]*v, p[1] + d[1]*u + ld[1]*v, p[2] + d[2]*u + ld[2]*v];
+  const lip = at(b, 0, 9.2), hd = kSmooth([at(a, 5, -9.6), at(a, 4, -16), at(a, 18, -16), at(a, 21, -9.2)], 2);
+  const out = [{ box: kBoxOf([at(a, 0, 10), at(a, 0, -16), at(b, 0, 10), at(b, 0, -10)]), svg: kTube(hd, 1.5, GLASS, 1) + rod(a, b, 10, GLASS, toneI, 1.3, 9.2, 24) }];
+  if (st.flow && st.phase === 'fill'){ const pts = kSmooth([lip, [KX, lip[1] - 1.5, lip[2] - 6], [KX, KY + 6, KZ + TOP]], 2); out.push({ box: kBoxOf(pts), svg: kTube(pts, 1, WATERM, .5) }); }
+  return out;
+}
+function kKettle(st, m, h, W, pw){
+  const R = kBodyRings(), parts = [{ box: kBoxOf(R.flat()), svg: kBody(st, m, R, h) }, kSpout(m), kHandle(st, m, pw)];
+  if (st.lid > .02){ const o = kOpening(m, W); if (o) parts.push(o); }
+  parts.push(kLid(st, m), ...kJug(st));
+  let svg = byDepth(parts);
+  if (st.vapor > .02) svg += kWisps(kP([0, 39, 90]), st.vapor, st.clock, 4, 34);
+  if (st.vapor > .02 && st.lid > .3) svg += kWisps(kP([0, 4, 86]), st.vapor, st.clock + .5, 3, 30);
+  return { box: kUnion(parts.map(p => p.box)), svg };
+}
+
+/* ---------- the base, the cord, the cup ---------- */
+const BASER = [[4.5,31],[5.6,33],[8.8,33],[10,31.6]].map(([z, r]) => on(PZ(z), ellUV(KX, KY, r, r, 40)));
+function kBase(){
+  let s = ''; for (let i = 0; i < BASER.length - 1; i++) s += loft(BASER[i], BASER[i+1], n => tone(n, BASEM));
+  const dish = on(PZ(10.02), ellUV(KX, KY, 14, 14, 30));
+  return s + fill(pd(BASER[3]), BASEM.l) + fill(pd(dish), BASEM.m) + ink(pd(dish), .8) + ink(pd(BASER[3]), 1) + hullInk(BASER.flat(), 2);
+}
+function kPost(pw){
+  const g = mix(METAL.m, '#f4b829', pw ? .5 : 0), CR = { l: mix(METAL.l, '#ffd36a', pw ? .5 : 0), m: g, d: METAL.d };
+  const band = loft(on(PZ(12.6), ellUV(KX, KY, 6.7, 6.7, 24)), on(PZ(13.6), ellUV(KX, KY, 6.7, 6.7, 24)), n => toneI(n, CR));
+  return cyl(KX, KY, 10, 11.4, 8.2, METAL, toneI, .9) + cyl(KX, KY, 10, 15.2, 6.4, matOf('#3a3632'), toneI, .9) + band + cyl(KX, KY, 15.2, 16.8, 1.5, CR, toneI, .7, 12);
+}
+const CORD = kSmooth([[KX-31, KY-8, 6.6], [KX-36, KY-9, 5.2], [KX-40, KY-10.5, 4.4], [3, KY-13, 4.4], [-1, KY-14, 3.6], [-3, KY-14.5, -2], [-4, KY-15, -10]], 2);
+function kCord(){ const grip = box(KX-36, KY-11, 4.5, KX-31, KY-5, 8.6, BASEM, toneI, .9);
+  return { box: kBoxOf([...CORD, [KX-36, KY-11, 4.5], [KX-31, KY-5, 8.6]]), svg: kTube(CORD, 1.4, CORDM, 1) + grip }; }
+function kCup(st, m){
+  const z0 = 3, z1 = 31, rr = z => 11 + 1.5*(z - z0)/(z1 - z0), ring = (z, r, n = 30) => on(PZ(z), ellUV(KX, CUPY, r, r, n));
+  const A = ring(z0, rr(z0)), B = ring(z1, rr(z1));
+  let inside = fill(pd(ring(z0 + 1.2, rr(z0) - 1.2, 24)), CERAMIC.d);
+  if (st.cup > 2){ const zl = z0 + 1.5 + 25*Math.min(1, st.cup/280), c = ring(zl, rr(zl) - 1, 24); inside += fill(pd(c), WATER) + ink(pd(c), .5); }
+  const hd = kTube(kSmooth([[KX+12, CUPY, 25], [KX+18, CUPY, 24.5], [KX+19.5, CUPY, 17], [KX+17.5, CUPY, 10.5], [KX+11.4, CUPY, 9.5]], 2), 1.7, CERAMIC, 1.1);
+  const front = vis([1,0,0]);
+  return (front ? '' : hd) + openShell(A, B, n => toneI(n, CERAMIC), inside) + loft(ring(22, rr(22)+.05), ring(25.5, rr(25.5)+.05), n => tone(n, m))
+    + ink(pd(B), 1.1) + hullInk([...A, ...B], 1.8) + (front ? hd : '');
+}
+
+/* ---------- see-through: the parts inside ---------- */
+let MECH_ITEMS = [];
+function kMech(st, h, W, pw){
+  let water = '';
+  const parts = [], items = [], lv = st.on ? 0 : 1;          // lv: trip lever, 0 = contacts held shut, 1 = sprung open
+  const putL = (ptsL, svg) => parts.push({ box: kBoxOf(kPts(ptsL)), svg }), putW = (pts, svg) => parts.push({ box: kBoxOf(pts), svg });
+  const lab = (pL, text, on = false) => items.push({ at: kP(pL), text, on }), labW = (p, text, on = false) => items.push({ at: p, text, on });
+  const bx = (x0, y0, z0, x1, y1, z1, mt, w = .7) => putL([[x0, y0, z0], [x1, y1, z1]], kBoxT(x0, y0, z0, x1, y1, z1, mt, toneI, w));
+  const tb = (ptsL, r, mt, w = .6) => putL(ptsL, kTube(kPts(ptsL), r, mt, w));
+  // the water, with bubbles from the hot floor
+  if (W){ const sol = hull([...W.below, ...W.surf].map(p => P(...p))), top = W.surf.length > 2 ? sp(hull(W.surf.map(p => P(...p)))) : '';
+    let s = fill(sp(sol), WATER, 'opacity=".3"');
+    if (st.bub > .02){ const hl = (h - KZ)/KC;
+      for (let i = 0; i < 26*st.bub; i++){ const a = i*2.4, r = 4 + (i*7.3) % 19, z = FLOOR + 1 + ((st.clock*(.6 + (i % 5)*.14) + i*.137) % 1)*(hl - FLOOR), q = kP([r*Math.cos(a), r*Math.sin(a), z]);
+        if (q[2] < h - .5){ const c = P(...q); s += `<circle cx="${f(c[0])}" cy="${f(c[1])}" r="${f(.4 + .35*(i % 3))}" fill="#eaf6ff" fill-opacity=".5" stroke="#ffffff" stroke-width=".5"/>`; } } }
+    if (top) s += fill(top, WSURF, 'opacity=".75"') + ink(top, .6);
+    water = s;
+    items.push({ at: avg(W.below), text: 'WATER', on: st.temp >= 99.5 }); }
+  // floor plate, heat spreader, the element brazed under them, its terminals
+  putL([[-27.4, -27.4, 11], [27.4, 27.4, 12]], kDisc(11, 12, kRi(12) - .05, METAL, .18)); lab([18.5, 15.5, 12], 'FLOOR PLATE');
+  putL([[-24, -24, 10.1], [24, 24, 11]], kDisc(10.1, 11, 24, ALU, .18)); lab([17, -17, 10.6], 'HEAT SPREADER');
+  const hot = { l: mix(METAL.l, '#ffb08a', st.heat*.8), m: mix(METAL.m, '#e0603a', st.heat*.75), d: METAL.d };
+  tb(ELEM, 1.3, hot, .7); lab(ELEM[9], 'HEATING ELEMENT', pw && st.ml > 40 || st.dryH > .05);
+  for (const sx of [1, -1]){ const e = ELEM[sx > 0 ? 0 : 40];
+    tb([e, [6.5*sx, -19.6, 7.6], [6.5*sx, -20.3, 6.8]], .8, hot, .5);
+    bx(6.5*sx - .9, -21.2, 5.2, 6.5*sx + .9, -19.4, 6.8, BR, .6);
+    tb([[6.5*sx, -20.6, 5.8], [3.5*sx, -25, 6]], .35, BR, .4); }
+  lab([6.5, -20.3, 6.8], 'ELEMENT TERMINALS', pw);
+  // the control unit: moulding, two pairs of contacts (live and neutral), trip lever, trip spring, link, dry-boil bimetals
+  bx(-8, -27, 1.4, 8, -13, 3.4, CTL, .8); lab([8, -16, 2.4], 'CONTROL UNIT');
+  for (const x of [3.5, -3.5]){
+    bx(x - 1.1, -18.6, 3.4, x + 1.1, -16.4, 5.6, BR, .6);
+    bx(x - 1.1, -26, 3.4, x + 1.1, -24, 6, BR, .6);
+    tb([[x, -25, 5.6], [x, -17.5, 5.9 + 1.6*lv]], .45, CU, .5); }
+  lab([3.5, -17.5, 5.9 + 1.6*lv], 'SWITCH CONTACTS', pw);
+  const lo = [-34.5, 4.2 - .83*lv], li = [-21, 4.2 + 1.2*lv];
+  putL([[-4.5, lo[0], lo[1]], [4.5, li[0], li[1]]], shape(kPts([[-4.5, ...lo], [4.5, ...lo], [4.5, ...li], [-4.5, ...li]]), mix(BR.m, '#9a7a3c', .3), .7)
+    + kRod([-5.2, -29, 4.2], [5.2, -29, 4.2], .6, METAL, .5));
+  lab([4.5, -26, 4.2 + .4*lv], 'TRIP LEVER', st.discOn || st.dryOn);
+  { const a = [-3.5, -34, lo[1] - .2], b = [-3.5, -37.6, 9], z = Array.from({length:13}, (_, i) => { const t = i/12, w = i && i < 12 ? (i % 2 ? .9 : -.9) : 0; return [a[0] + w, a[1] + (b[1] - a[1])*t, a[2] + (b[2] - a[2])*t]; });
+    putL(z, `<path d="${pd(kPts(z), false)}" fill="none" stroke="${INK}" stroke-width="1.3" stroke-linejoin="round"/><path d="${pd(kPts(z), false)}" fill="none" stroke="#cfd6d8" stroke-width=".55" stroke-linejoin="round"/>`); }
+  lab([-3.5, -36, 7], 'TRIP SPRING');
+  tb([[6.2, -33, 13 + (st.on ? -1.4 : 1.4)], [3.8, -34, lo[1] + .3]], .4, METAL, .4); lab([5.4, -33.3, 10], 'SWITCH LINK');
+  for (const x of [5.5, -5.5]){ const sn = st.dry;
+    bx(x - 1, -16.5, 3.4, x + 1, -14.5, 7.6, CTL, .6);
+    putL([[x - 2.6, -18.1, 7.6], [x + 2.6, -12.9, 9.9]], kCylT(x, -15.5, 7.6, 9.2, 2.6, CTL, toneI, .7, 14)
+      + loft(kPts(kRing(9.3, 2.2, 14, x, -15.5)), kPts(kRing(9.3 + .8*(1 - 2*sn), .4, 14, x, -15.5)), n => toneI(n, { l: mix(CU.l, '#ff6a2a', st.dryH), m: mix(CU.m, '#e0502a', st.dryH), d: CU.d }))); }
+  lab([5.5, -15.5, 9.8], 'DRY-BOIL BIMETALS', st.dryH > .2);
+  // the steam path: inlet by the lid, the tube down the handle, the bimetal disc, its push rod; steam vents out of the foot
+  const tube = kSmooth(TUBE, 2);
+  putL(tube, kTube(kPts(tube), 1.25, TUBEM, .6)
+    + (st.steam > .01 ? `<path d="${pd(kPts(kPart(tube, st.steam)), false)}" fill="none" stroke="#ffffff" style="stroke-width:${f(1.5*CAM_K)}" stroke-linecap="round" stroke-linejoin="round" opacity=".95"/>` : ''));
+  lab([0, -44.4, 52], 'STEAM TUBE', st.steam > .05);
+  putL([[-1.6, -24.8, 75.4], [1.6, -21.2, 78.6]], kRod([0, -21.2, 77], [0, -24.8, 77], 1.6, METAL, .6)); lab([0, -21.2, 77], 'STEAM INLET', st.steam > .05);
+  const dh = { l: mix(CU.l, '#ff6a2a', st.discH*.8), m: mix(CU.m, '#e0502a', st.discH*.8), d: CU.d };
+  putL([[-3.8, -36.8, 7.2], [3.8, -29.2, 9.4]], kCylT(0, -33, 7.2, 7.9, 3.8, CTL, toneI, .6, 16)
+    + loft(kPts(kRing(8.3, 3.2, 16, 0, -33)), kPts(kRing(8.3 + .9*(1 - 2*st.disc), .45, 16, 0, -33)), n => toneI(n, dh)) + ink(pd(kPts(kRing(8.3, 3.2, 16, 0, -33))), .6));
+  lab([3.2, -33, 8.3], 'STEAM BIMETAL', st.discOn || st.steam >= 1);
+  putL([[-.5, -33.5, 4.4], [.5, -32.5, 7.6]], kRod([0, -33, 7.4 - .8*st.disc], [0, -33, 4.7 - .8*st.disc], .45, METAL, .5)); lab([0, -33, 5.6], 'PUSH ROD', st.discOn);
+  lab([7, -38.4, 3.3], 'STEAM VENTS', st.steam > .5);
+  // the LED and its resistor across the element terminals
+  putL([[4.4, -34.2, 4], [7, -31.8, 6.4]], kRod([4.6, -33, 5.2], [6.9, -33, 5.2], 1.05, pw ? matOf('#ff8a3d') : matOf('#b46a4c'), .5)); lab([7, -33, 5.2], 'INDICATOR LED', pw);
+  putL([[2.4, -37, 6], [3.6, -30.4, 7.2]], kRod([3, -36.8, 6.6], [3, -30.6, 6.6], .55, matOf('#c9a46a'), .5));
+  // the cordless socket in the bottom (with the base's post inside when it is seated), its contacts, the wires, earth tag
+  const seated = kOnBase(st);
+  putL([[-9.6, -9.6, .8], [9.6, 9.6, 6.8]], `<g opacity=".5">${kCylT(0, 0, .8, 6.8, 9.6, CTL, toneI, .8, 24)}</g>` + (seated ? kPost(pw) : ''));
+  lab([9.6, 2, 3.6], 'CORDLESS SOCKET', pw);
+  for (const [x0, y0] of [[2.4, -6.6], [-3.6, -6.6], [5.4, 1.4]]) bx(x0, y0, 6.8, x0 + 1.2, y0 + 1.2, 8.2, BR, .5);
+  lab([3, -6, 8.2], 'SOCKET CONTACTS', pw);
+  tb([[3, -6, 8], [3, -11, 7.6], [3.5, -16.6, 5.4]], .5, matOf('#9a5530'), .4);
+  tb([[-3, -6, 8], [-3, -11, 7.6], [-3.5, -16.6, 5.4]], .5, matOf('#3d6fb8'), .4);
+  tb([[6, 2, 8], [10, 4, 9], [13, 6, 10]], .5, matOf('#8fb339'), .4); lab([3, -11, 7.6], 'INTERNAL WIRING', pw);
+  bx(12, 5, 9.6, 15, 7.5, 10.1, BR, .5);
+  { const o = kPts(kRing(.8, 27.4)), i = kPts(kRing(.8, 9.8)); putL([[-27.4, -27.4, 0], [27.4, 27.4, .8]], `<path d="${pd(o)}${pd(i)}" fill="#c9cdd0" fill-rule="evenodd" opacity=".55"/>` + ink(pd(o), .6)); }
+  // the outside parts are named in see-through too
+  const lr = kLidRot(st);
+  lab(lr.p([0, 4, 91]), 'LID');
+  lab([-4.6, 37.5, 89], 'SPOUT'); lab([0, kR(75) - .4, 75], 'LIMESCALE FILTER'); lab(kOnBody(0, 44), 'WATER WINDOW');
+  lab([8.4, -33, 15], 'ROCKER SWITCH', st.on);
+  // the base: post (centre pin, contact ring, earth ring), base wiring, cord grip, rubber feet
+  for (const [dy, c] of [[-1.4, '#9a5530'], [0, '#8fb339'], [1.4, '#3d6fb8']]){ const w = [[KX-31, KY-8 + dy, 6.6], [KX-16, KY-5 + dy, 6.6], [KX-3, KY + dy*.6, 6.6]];
+    putW(w, kTube(kSmooth(w, 2), .5, matOf(c), .4)); }
+  labW([KX-16, KY-5, 6.6], 'BASE WIRING', pw);
+  for (const a of [40, 160, 280]){ const x = KX + 26*Math.cos(a*Math.PI/180), y = KY + 26*Math.sin(a*Math.PI/180); putW([[x-3, y-3, 3], [x+3, y+3, 4.6]], cyl(x, y, 3, 4.6, 3, matOf('#2f2c29'), toneI, .7, 14)); }
+  labW([KX + 33*Math.cos(.35), KY + 33*Math.sin(.35), 8.6], 'POWER BASE', pw);
+  labW([KX + 4.7, KY + 4.7, 13.1], 'CONTACT RING', pw); labW([KX, KY, 16.8], 'CENTRE PIN', pw); labW([KX + 5.8, KY - 5.8, 11.2], 'EARTH RING');
+  labW(CORD[9], 'MAINS CORD', pw);
+  MECH_ITEMS = items;
+  return water + byDepth(parts);
+}
+
+/* ---------- scene ---------- */
+// xrCallouts sends a label left or right by which side of the bounds' centre it is on; the parts here crowd into the
+// handle foot, so split the labels by screen x (as many to each side as it has room for) and lay out each side alone:
+// the bounds are stretched far to the other side, which leaves no room for a column there (only that side's extent
+// moves, so the columns stay where they were)
+function kCallouts(items, B){
+  const svg = document.getElementById('fig'), M = svg.getScreenCTM(), vb = svg.viewBox.baseVal, k = INK_K, fs = 8.6*k;
+  // core stacks each column down from its anchors; the mechanism sits low, so a long column runs off the bottom into the
+  // zoom chip. Restack each column evenly between what really bounds it: the buttons (left) or the stats and See-through
+  // buttons (right) above, the figure's bottom edge or the zoom chip below. Leaders still end at their anchors.
+  const toY = y => new DOMPoint(0, y).matrixTransform(M.inverse()).y, toX = x => new DOMPoint(x, 0).matrixTransform(M.inverse()).x;
+  const cs = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) cs.push(P(x, y, z)[0]);
+  const colL = Math.max(...cs) + 10*k, colR = colL + Math.max(0, ...items.map(it => it.text.length))*fs*.62 + fs*1.5;
+  const lim = { L: [vb.y + fs, vb.y + vb.height - fs], R: [vb.y + fs + 30*k, vb.y + vb.height - fs] };
+  if (M){
+    const btn = document.getElementById('btns'), st = document.getElementById('stats'), vs = document.querySelector('.vset'), chip = document.querySelector('.zchip');
+    if (btn){ const y = toY(btn.getBoundingClientRect().bottom + 12); if (y > lim.L[0]) lim.L[0] = y; }
+    const rs = []; if (st){ const rg = document.createRange(); rg.selectNodeContents(st); rs.push(...rg.getClientRects()); }
+    if (vs) rs.push(...[...vs.querySelectorAll('button')].map(b => b.getBoundingClientRect()));
+    for (const r of rs) if (r.width && toX(r.left) < colR && toX(r.right) > colL) lim.R[0] = Math.max(lim.R[0], toY(r.bottom) + 4*k);
+    const sb = toY(svg.getBoundingClientRect().bottom) - 2*k; lim.L[1] = Math.min(lim.L[1], sb); lim.R[1] = Math.min(lim.R[1], sb);
+    if (chip && chip.offsetParent){ const r = chip.getBoundingClientRect(); if (toX(r.left) < colR) lim.R[1] = Math.min(lim.R[1], toY(r.top) - 3*k); }
+  }
+  const restack = (s, [top, bot]) => {
+    const gs = [...s.matchAll(/<g class="tag[\s\S]*?<\/g>/g)].map(m => m[0]), n = gs.length;   // core emits them in anchor order
+    if (!n) return { s, cost: 0 };
+    const geo = gs.map(g => { const m = g.match(/<path d="M([^ ]+) ([^L]+)L([^ ]+) ([^L]+)L([^ ]+) ([^"]+)"/);
+      return { m, Y: +m[2], py: +m[6], h: +g.match(/<rect [^>]*height="([^"]+)"/)[1] }; });
+    const h = geo[0].h, gap = h*1.19; top += h/2; bot -= h/2;
+    const p = geo.map(c => Math.min(Math.max(c.Y, top), bot));
+    for (let i = 0; i < n; i++) p[i] = Math.max(p[i], i ? p[i - 1] + gap : top);
+    for (let i = n - 1; i >= 0; i--) p[i] = Math.min(p[i], i < n - 1 ? p[i + 1] - gap : bot);
+    for (let i = 0; i < n; i++) p[i] = Math.max(p[i], i ? p[i - 1] + gap : top);   // too many to fit: the top wins, it spills below
+    const out = gs.map((g, i) => { const { m, py } = geo[i], d = p[i] - py;
+      return g.replace(m[0], `<path d="M${m[1]} ${m[2]}L${m[3]} ${f(p[i])}L${m[5]} ${f(p[i])}"`)
+        .replace(/(<rect [^>]*?y=")([^"]+)/, (_, a, y) => a + f(+y + d)).replace(/(<text [^>]*?y=")([^"]+)/, (_, a, y) => a + f(+y + d)); });
+    // overflow costs most; then labels far from their anchors (long slanted leaders)
+    return { s: out.join(''), cost: 1e3*Math.max(0, p[n - 1] - bot) + geo.reduce((a, c, i) => a + Math.abs(p[i] - c.Y), 0) };
+  };
+  const xs = items.map(it => P(...it.at)[0]), ord = items.map((_, i) => i).sort((a, b) => xs[a] - xs[b]);
+  const dirs = [[0, 1], [1, 1], [0, -1], [1, -1]].map(([ax, sg]) => ({ ax, sg, dx: sg*Dv(...[0, 1].map(i => i === ax ? 1 : 0), 0)[0] }));
+  const far = sgn => { const d = dirs.reduce((a, b) => b.dx*sgn > a.dx*sgn ? b : a), b = B.slice(); b[2*d.ax + (d.sg > 0 ? 1 : 0)] += d.sg*2000; return b; };
+  const BL = far(1), BR = far(-1);
+  // the leftmost h anchors go left, the rest right: try every split, keep the one that fits best
+  let best = null;
+  for (let h = Math.ceil(items.length*.2); h <= Math.floor(items.length*.8); h++){
+    const L = restack(xrCallouts(ord.slice(0, h).map(i => items[i]), BL), lim.L), R = restack(xrCallouts(ord.slice(h).map(i => items[i]), BR), lim.R);
+    if (!best || L.cost + R.cost < best.cost) best = { svg: L.s + R.s, cost: L.cost + R.cost };
+  }
+  return best.svg;
+}
+function scene(st, m){
+  kSetPose(st);
+  const k = ease(st.xr || 0), pw = kPowered(st), h = kLevel(st.ml), W = h == null ? null : kWaterGeom(h), seated = kOnBase(st);
+  const bt = boardTop(...BRD, 3, 6);
+  let s = board(...BRD, 3, 6);
+  const ket = kKettle(st, m, h, W, pw);
+  s += castShadow([...BASER[1], ...kBodyRings().flat(), ...kPts(HAND)], 3, bt);
+  const cupR = [...on(PZ(3), ellUV(KX, CUPY, 11, 11, 20)), ...on(PZ(31), ellUV(KX, CUPY, 12.5, 12.5, 20))];
+  s += castShadow(cupR, 3, bt);
+  const outer = [{ box: [[KX-33, KY-33, 3], [KX+33, KY+33, 10]], svg: kBase() }, kCord(), ket];
+  if (!seated) outer.push({ box: [[KX-8.2, KY-8.2, 10], [KX+8.2, KY+8.2, 16.8]], svg: kPost(false) });
+  let ext = byDepth(outer);
+  if (k > 0){ const R = kBodyRings(); let far = '';
+    for (let i = 0; i < R.length - 1; i++) far += loft(R[i], R[i+1], n => mix(toneI(n.map(v => -v), m), '#f2efe7', .55), true);
+    ext = `<g opacity="${f(.5*k)}">${far}</g><g opacity="${f(1 - .8*k)}">${ext}</g><g opacity="${f(k)}">${kMech(st, h, W, pw)}</g>`; }
+  // the cup, and the stream poured into it, go behind or in front of the kettle
+  let cup = kCup(st, m);
+  if (st.flow && st.phase === 'pour'){ const lip = kP([0, 42.1, 89]), pts = kSmooth([lip, [KX, lip[1] + 1.5, lip[2] - 5], [KX, CUPY + .5, 40], [KX, CUPY, 31.5]], 2); cup += kTube(pts, 1, WATERM, .5); }
+  if (st.cup > 20 && st.cupT > 55) cup += kWisps([KX, CUPY, 30], Math.min(1, (st.cupT - 55)/25), st.clock + .3, 3, 20);
+  const cupFirst = byDepth([{ box: [[KX-13, CUPY-13, 3], [KX+20, CUPY+13, 31]], svg: 'C' }, { box: kBoxOf(kBodyRings().flat()), svg: 'K' }]) === 'CK';
+  s += cupFirst ? cup + ext : ext + cup;
+  const B = [KX-34, KX+34, KY-48, KY+46, 0, 95];
+  if (k > .6) s += kCallouts(MECH_ITEMS, B);
+  else s += kCallouts([
+    { at: kP(kLidRot(st).p([0, 4, 91])), text: 'LID' }, { at: kP([-4.6, 37.5, 89]), text: 'SPOUT' }, { at: kP(kOnBody(0, 44)), text: 'WATER WINDOW' },
+    { at: kP([0, -45, 62]), text: 'HANDLE' }, { at: kP([8.4, -33, 15]), text: 'ON/OFF SWITCH', on: st.on }, { at: kP([0, -34, 82.4]), text: 'LID BUTTON' },
+    { at: [KX + 33*Math.cos(.35), KY + 33*Math.sin(.35), 8.6], text: 'POWER BASE', on: pw }, { at: CORD[9], text: 'MAINS CORD', on: pw } ], B);
+  return s;
+}
+const kCaption = st => st.discOn ? 'Steam ran down the tube onto the bimetal disc; it snapped and kicked the switch off.'
+  : kPowered(st) ? 'The element under the floor plate heats the water. At 100 °C steam is pushed down the tube in the handle.'
+  : 'Inside: a sheathed element under the floor plate, a steam tube down the handle to a bimetal disc, and the cordless contacts.';
+
+/* ---------- behaviour: one state, one clock ---------- */
+let ui, kLoop = false, kIdleAt = performance.now();
+function kSay(t, ms = 2600){ if (ui) ui.flash(t, ms); }
+function kStep(st, dt){
+  st.clock += dt;
+  if (st.phase === 'fill'){ st.t += dt; const t = st.t;
+    st.lid = t < 1.95 ? Math.min(1, t/.35) : Math.max(0, 1 - (t - 1.95)/.35);
+    st.jug = t < .3 ? 0 : t < .65 ? (t - .3)/.35 : t < 1.6 ? 1 : Math.max(0, 1 - (t - 1.6)/.35);
+    st.flow = t > .65 && st.fillLeft > 0;
+    if (st.flow){ const d = Math.min(st.fillLeft, 560*dt); st.temp = (st.temp*st.ml + 15*d)/(st.ml + d); st.ml += d; st.fillLeft -= d; }
+    if (t > 2.3){ st.phase = 'idle'; st.lid = 0; st.jug = 0; st.flow = false; }
+  } else if (st.phase === 'pour'){ st.t += dt; const t = st.t, T1 = .9, T2 = T1 + st.pourDur;
+    st.pourK = t < T1 ? t/T1 : t < T2 ? 1 : Math.max(0, 1 - (t - T2)/.9);
+    st.flow = t > T1 + .1 && t < T2 && st.pourLeft > 0 && st.ml > 0;
+    if (st.flow){ const d = Math.min(st.ml, 230*dt, st.pourLeft); st.cupT = (st.cupT*st.cup + st.temp*d)/(st.cup + d); st.cup += d; st.ml -= d; st.pourLeft -= d; }
+    if (t > T2 + .9){ st.phase = 'idle'; st.pourK = 0; st.flow = false; }
+  }
+  if (st.phase !== 'pour') st.lift = kTo(st.lift, st.liftT, dt/.45);
+  const pw = kPowered(st), wet = st.ml > 40;
+  st.heat = kTo(st.heat, pw ? 1 : 0, dt/.5);
+  if (pw && wet) st.temp = Math.min(100, st.temp + dt*SPEED*PW/(st.ml*4.186 + 400));
+  else if (!pw) st.temp -= (st.temp - 20)*dt*.012;
+  const boiling = pw && wet && st.temp >= 99.95;
+  if (boiling){ st.ml = Math.max(0, st.ml - dt*SPEED*PW/2257);
+    if (!st.saidBoil){ st.saidBoil = 1; kSay('100 °C: the steam can’t get out past the lid, so it is pushed down the tube in the handle', 2600); } }
+  if (st.temp < 99) st.saidBoil = 0;
+  // the steam disc: heated by steam in the tube, snaps through, and needs a few seconds to cool and snap back
+  st.steam = boiling && st.lid < .05 ? Math.min(1, st.steam + dt/1.1) : Math.max(0, st.steam - dt/1.6);
+  if (st.steam >= 1) st.discH = Math.min(1, st.discH + dt/.45); else if (st.steam < .5) st.discH = Math.max(0, st.discH - dt/3.5);
+  if (st.discH >= 1 && !st.discOn){ st.discOn = true; if (st.on){ st.on = false; kSay('Click! The hot steam made the bimetal disc snap, and it pushed the switch off', 3400); } }
+  if (st.discOn && st.discH < .3) st.discOn = false;
+  st.disc = kTo(st.disc, st.discOn ? 1 : 0, dt/.12);
+  // dry boil: with no water the plate overheats; the bimetals under it snap and cut the power
+  st.dryH = pw && !wet ? Math.min(1, st.dryH + dt/1.3) : Math.max(0, st.dryH - dt/4);
+  if (st.dryH >= 1 && !st.dryOn){ st.dryOn = true; if (st.on){ st.on = false; kSay('No water! The plate overheated in seconds, a dry-boil bimetal snapped and cut the power', 3600); } }
+  if (st.dryOn && st.dryH < .3) st.dryOn = false;
+  st.dry = kTo(st.dry, st.dryOn ? 1 : 0, dt/.12);
+  st.bub = kTo(st.bub, pw && wet ? kCl((st.temp - 70)/30) : 0, dt/.7);
+  st.vapor = kTo(st.vapor, st.temp >= 99 && (pw || st.steam > .3) ? 1 : 0, dt/1.2);
+  if (st.cup > 0) st.cupT -= (st.cupT - 20)*dt*.01;
+}
+function kRun(){
+  if (kLoop) return; kLoop = true;
+  const st = ui.st, gap = (performance.now() - kIdleAt)/1000;
+  st.temp = 20 + (st.temp - 20)*Math.exp(-.012*gap); st.cupT = 20 + (st.cupT - 20)*Math.exp(-.01*gap);
+  ui.animate(dt => { kStep(st, dt);
+    const busy = st.phase !== 'idle' || kPowered(st) || st.lift !== st.liftT || st.steam > 0 || st.discH > 0 || st.dryH > 0
+      || st.disc !== (st.discOn ? 1 : 0) || st.dry !== (st.dryOn ? 1 : 0) || st.heat > 0 || st.bub > 0 || st.vapor > 0;
+    if (!busy){ kLoop = false; kIdleAt = performance.now(); }
+    return busy; });
+}
+function kSwitch(st){
+  if (st.on){ st.on = false; return kSay('Switched off by hand', 1600); }
+  if (st.discOn) return kSay('The steam disc is still hot and holds the switch off. Wait a few seconds');
+  if (st.dryOn) return kSay('The dry-boil bimetals are still hot. Let them cool, and fill it first');
+  st.on = true;
+  if (!kOnBase(st)) kSay('Switched on, but off its base there is no power yet');
+  else if (st.ml > 40) kSay('Current flows through the element under the floor plate', 2200);
+  kRun();
+}
+function kFill(st){
+  if (st.phase !== 'idle') return kSay('One thing at a time', 1400);
+  if (st.ml >= MAXML - 10) return kSay('Already at MAX: 1.7 litres');
+  st.phase = 'fill'; st.t = 0; st.fillLeft = Math.min(500, MAXML - st.ml); kRun();
+}
+function kPour(st){
+  if (st.phase !== 'idle') return kSay('One thing at a time', 1400);
+  if (st.ml < 20) return kSay('Nothing to pour. Fill it first');
+  st.phase = 'pour'; st.t = 0; st.cup = 0; st.pourLeft = Math.min(250, st.ml); st.pourDur = st.pourLeft/230 + .2;
+  if (kPowered(st)) kSay('Lifted off the base, the element loses power while you pour', 2200);
+  kRun();
+}
+function kLift(st){
+  if (st.phase !== 'idle') return kSay('One thing at a time', 1400);
+  st.liftT = st.liftT ? 0 : 1;
+  if (st.liftT && st.on) kSay('Off the base the contacts part, so the element gets no power');
+  kRun();
+}
+
+ui = mountFigure({
+  fig:'22', turn:'full', title:'Electric kettle', size:[90, 130, 108], palette:'cobalt',
+  state:{ ml:1000, temp:18, on:false, lift:0, liftT:0, phase:'idle', t:0, lid:0, jug:0, flow:false, fillLeft:0, pourK:0, pourLeft:0, pourDur:0,
+    cup:0, cupT:20, steam:0, discH:0, disc:0, discOn:false, dryH:0, dry:0, dryOn:false, heat:0, bub:0, vapor:0, clock:0, saidBoil:0 },
+  scene,
+  stats: st => [{ label:'Water', value: `${Math.round(st.temp)}°C` }, { label:'In the kettle', value: `${Math.round(st.ml)} ml`, small:true }],
+  buttons:[
+    { label:'Fill with water', onClick: st => kFill(st) },
+    { label:'Switch on', onClick: st => kSwitch(st) },
+    { label:'Pour a cup', onClick: st => kPour(st) },
+    { label:'Lift off base', onClick: st => kLift(st) },
+  ],
+  acts:{ rocker: st => kSwitch(st) },
+  params:(st, q) => {
+    for (const key of ['ml', 'temp', 'lift', 'pourK', 'lid', 'jug', 'steam', 'disc', 'discH', 'dry', 'dryH', 'cup', 'cupT', 'bub', 'heat', 'vapor', 'clock']) if (q.has(key)) st[key] = +q.get(key);
+    if (q.get('on') === '1') st.on = true;
+    if (q.get('flow') === '1'){ st.flow = true; st.phase = q.get('phase') || 'fill'; }
+    st.liftT = st.lift > .5 ? 1 : 0; st.discOn = st.disc > .5; st.dryOn = st.dry > .5;
+  },
+});
+xrMount(() => ui, kCaption);
+document.fonts.ready.then(() => requestAnimationFrame(() => ui.render()));   // the labels dodge the buttons, which settle once the fonts load
+</script></body></html>
