@@ -1,0 +1,541 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Standing waves</title></head><body>
+<script src="core.js"></script>
+<script>
+/* ---------- Truth first: Melde's experiment on a lab bench ----------
+   1. A stretchy cord is tied to the clip on top of a mechanical vibrator's drive post, runs level for 1.20 m to a
+      bench pulley clamped on the bench's end, goes over the wheel and down to a weight hanger. The hanging mass sets
+      the tension: T = m g (100 g of hanger and slotted masses = 0.98 N).
+   2. The signal generator makes a sine wave at the frequency on its dial; its power amplifier drives the vibrator's
+      voice coil through two test leads. The coil sits in a permanent magnet's gap, so the current pushes it up and
+      down; two leaf springs keep it centred; the drive shaft carries the motion up to the post, a stroke of ~2.5 mm.
+   3. Each push sends a wave along the cord at v = sqrt(T / mu) (mu = 1.0 g/m, so 31 m/s at 0.98 N). At the pulley
+      the cord can't move (a node), so the wave reflects upside down and runs back. The wave going out and the one
+      coming back add: where they always cancel are nodes, where they add most are antinodes.
+   4. When a whole number of half wavelengths fit between the post and the pulley, L = n lambda / 2, each new push lands
+      in step with the returning wave and the loops grow big: f_n = n v / (2 L). At 100 g that is 13.0, 26.1 and 39.1 Hz
+      for one, two and three loops. Between harmonics the cord barely moves. Air drag stops the loops growing for ever.
+   5. A slotted mass is lifted off the spare stack, carried past the bench end, and slid sideways onto the hanger's stem
+      through its slot. More tension = faster waves = every harmonic moves up (as sqrt of the mass), so the dial must be
+      turned up to find the loops again.
+   6. At 13-40 Hz the eye sees a blur: the loops' envelope. The strobe lamp's xenon tube flashes at the same frequency,
+      so it lights the cord at the same point of every cycle and the cord looks frozen in one shape.
+   Parts (each held by another):
+   BENCH     laminate top . four steel legs . side and end rails . power strip on the back edge and its cord
+   VIBRATOR  case on rubber feet . permanent magnet (ring) . pole piece . voice coil . drive shaft through the top .
+             two leaf springs on wall blocks . drive post and string clip . red/black terminals on the front, wires to
+             the coil
+   GENERATOR case on feet . front panel . frequency dial on a potentiometer . LCD display (module behind it) . amplitude
+             knob . output sockets . output button and LED . circuit board on standoffs . oscillator chip . power
+             amplifier on a finned heat sink . mains transformer . mains inlet at the back and its cord to the strip
+   LEADS     red and black test leads, plug to plug, lying on the bench
+   STRING    the cord, clip to pulley . over the wheel . down to the hanger's hook
+   PULLEY    G-clamp frame on the bench end . top jaw . bottom arm . clamp screw with pad and T-handle . pulley rod .
+             fork . axle . grooved wheel
+   HANGER    hook . stem . base disc (hanger 50 g) . slotted 50 g masses . spare stack on the bench
+   STROBE    case on feet . bezel and window . reflector . xenon flash tube . flash capacitor . trigger coil . circuit
+             board . rate dial on its potentiometer . rate display . mains cord to the strip
+   OVERLAYS (see-through) the wave going to the pulley . the reflected wave . nodes . antinodes */
+
+/* ---------- geometry (x = depth, y = along the bench, z = up; 1 unit = 1 cm) ---------- */
+const BX = 50, BY = 150, TZ = 73, BZ0 = 70;                       // bench depth, length, top, underside
+const XS = 25, ZS = 90, PYT = -3, PR = 2.5, PCZ = ZS - PR;          // cord plane, cord height, pulley top y, wheel
+const VY = 117, LEN = (VY - PYT)/100, HY = PYT - PR;               // drive post y, vibrating length (m), hanging cord y
+const MU = .001, GRAV = 9.81, A0 = .25, GAM = 3.1;                 // kg/m, m/s2, drive stroke (cm), air damping (1/s)
+const HZ0 = 40, SLOT_T = .8, SLOT_R = 2.2, SPARE = [40, 12];       // hanger base top, slotted mass size, spare stack
+const VB = [19, 111, 74, 31, 123, 85], GB = [28, 126, 74, 48, 148, 85], SB = [6, 34, 74, 16, 48, 83];
+const DIAL = [135, 79.6, 2.6], FMAX = 80;
+const BENCHM = { l:'#ecd8ad', m:'#d0b47f', d:'#96794b' }, STEELM = { l:'#dfe3e4', m:'#b4bcbf', d:'#7d878b' };
+const LEGM = matOf('#7d868c'), GENM = { l:'#e8ebe6', m:'#c9cec8', d:'#8e958e' }, PANEL = '#3b4045', CREAM = '#f2efe7';
+const PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, COPM = matOf('#d08a52'), MAGM = matOf('#5d646b'), BRASSM = matOf('#c9a24a');
+const SLOTM = matOf('#9aa3a8'), CORD = '#e2483d', COL = { inc:'#f08c1e', ref:'#3d7fd8', node:'#ffffff' };
+
+/* ---------- small helpers ---------- */
+const swLerp = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const swAdd = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], swScl = (a, s) => a.map(v => v*s);
+const swBoxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const swBx = (b, M, w = .8) => box(b[0], b[1], b[2], b[3], b[4], b[5], M, toneI, w);
+const swBB = b => [[b[0], b[1], b[2]], [b[3], b[4], b[5]]];
+const swCorners = b => { const o = []; for (const x of [b[0], b[3]]) for (const y of [b[1], b[4]]) for (const z of [b[2], b[5]]) o.push([x, y, z]); return o; };
+const swStroke = (pts, col, w, extra = '') => { const d = pd(pts, false);
+  return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(w + .9)}" stroke-linecap="round" stroke-linejoin="round" ${extra}/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(w)}" stroke-linecap="round" stroke-linejoin="round" ${extra}/>`; };
+// a cable in short pieces (each with its own box) so it sorts with the solids it passes
+function swWire(pts, col, w = .7, seg = 3){
+  const q = [pts[0]];
+  for (let i = 1; i < pts.length; i++){ const a = pts[i-1], b = pts[i], n = Math.max(1, Math.ceil(Math.hypot(...sub(b, a)) / seg));
+    for (let j = 1; j <= n; j++) q.push(swLerp(a, b, j/n)); }
+  const out = [];
+  for (let i = 0; i < q.length - 1; i++) out.push({ box: swBoxOf([q[i], q[i+1]]), svg: swStroke([q[i], q[i+1]], col, w) });
+  return out; }
+// text lying on a top face, read from the front
+const txT = (x, y, z, str, size, col = INK, weight = 700) => `<text transform="${txM(P(x, y, z), Dv(0,-1,0), Dv(1,0,0))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+function swArrow(a, b, col){
+  const A = P(...a), B = P(...b), dx = B[0] - A[0], dy = B[1] - A[1], len = Math.hypot(dx, dy);
+  if (len < 1) return '';
+  const ux = dx/len, uy = dy/len, hl = Math.min(len*.5, 3.6), hw = hl*.5, E = [B[0] - ux*hl*.85, B[1] - uy*hl*.85];
+  const head = `M${f(B[0])} ${f(B[1])}L${f(B[0] - ux*hl - uy*hw)} ${f(B[1] - uy*hl + ux*hw)}L${f(B[0] - ux*hl + uy*hw)} ${f(B[1] - uy*hl - ux*hw)}Z`;
+  const ln = `M${f(A[0])} ${f(A[1])}L${f(E[0])} ${f(E[1])}`;
+  return `<path d="${ln}" fill="none" stroke="${INK}" stroke-width="3.4" stroke-linecap="round"/><path d="${ln}" fill="none" stroke="${col}" stroke-width="2" stroke-linecap="round"/>`
+    + `<path d="${head}" fill="${col}" stroke="${INK}" stroke-width="1" stroke-linejoin="round"/>`; }
+
+// byDepth's pair rule is not transitive, so with ~90 parts a far part can land over a near one: every separated pair
+// that overlaps on screen becomes an edge, then the parts go out farthest-first (as in the pendulum figure)
+function swSort(items){
+  items = items.filter(Boolean); const n = items.length, out = Array.from({length:n}, () => []), deg = new Array(n).fill(0);
+  const dep = items.map(p => depthOf(p.at || boxMid(p.box))), done = new Array(n).fill(false);
+  const R = items.map(p => { if (!p.box) return null; const xs = [], ys = [];
+    for (const x of [0, 1]) for (const y of [0, 1]) for (const z of [0, 1]){ const q = P(p.box[x][0], p.box[y][1], p.box[z][2]); xs.push(q[0]); ys.push(q[1]); }
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; });
+  const hit = (a, b) => a && b && a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+  // like sepOrder, but a height gap wins first: this rig is mostly things stacked on a bench, so z gaps keep the order consistent
+  const sep = (p, q) => { if (!p.box || !q.box) return 0; for (const k of [2, 0, 1]){ if (p.box[1][k] <= q.box[0][k] + 1e-6) return CAM_V[k] >= 0 ? -1 : 1; if (q.box[1][k] <= p.box[0][k] + 1e-6) return CAM_V[k] >= 0 ? 1 : -1; } return 0; };
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++){ const o = hit(R[i], R[j]) ? sep(items[i], items[j]) : 0;
+    if (o < 0){ out[i].push(j); deg[j]++; } else if (o > 0){ out[j].push(i); deg[i]++; } }
+  let svg = '';
+  for (let c = 0; c < n; c++){ let best = -1;
+    for (let i = 0; i < n; i++) if (!done[i] && (best < 0 || (deg[i] === 0) > (deg[best] === 0) || ((deg[i] === 0) === (deg[best] === 0) && dep[i] < dep[best]))) best = i;
+    done[best] = true; svg += items[best].svg; for (const j of out[best]) deg[j]--; }
+  return svg; }
+
+/* ---------- physics: a driven cord, fixed at the pulley, with light air damping ----------
+   y(s, t) = Re[ B sin(k~ s) e^(i w t) ], s from the pulley (m), k~ = k - i kap, B = A0 / sin(k~ L): the post moves A0 */
+const swMul = (a, b) => [a[0]*b[0] - a[1]*b[1], a[0]*b[1] + a[1]*b[0]];
+const swDiv = (a, b) => { const d = b[0]*b[0] + b[1]*b[1]; return [(a[0]*b[0] + a[1]*b[1])/d, (a[1]*b[0] - a[0]*b[1])/d]; };
+const swSin = ([x, y]) => [Math.sin(x)*Math.cosh(y), Math.cos(x)*Math.sinh(y)];
+const swMass = st => 50 + 50*st.slots.filter(p => p === 'h').length;          // grams: hanger + landed slotted masses
+const swF1 = g => Math.sqrt(g/1000*GRAV/MU)/(2*LEN);
+function swModel(st){
+  const T = swMass(st)/1000*GRAV, v = Math.sqrt(T/MU), kk = 2*Math.PI*st.fq/v, kap = GAM/(2*v);
+  const B = swDiv([A0, 0], swSin([kk*LEN, -kap*LEN]));
+  return { T, v, kk, kap, B, absB: Math.hypot(B[0], B[1]), f1: v/(2*LEN) }; }
+// complex displacement (cm) at s, scaled by how far the loops have built up
+const swDisp = (st, md, s) => { const sc = md.absB > 1e-9 ? st.Am/md.absB : 0, c = swMul(md.B, swSin([md.kk*s, -md.kap*s])); return [c[0]*sc, c[1]*sc]; };
+const swRe = (c, ph) => c[0]*Math.cos(ph) - c[1]*Math.sin(ph);
+const swPhase = (st, md) => st.strobe ? -Math.atan2(md.B[1], md.B[0]) : st.ph;     // the strobe always catches the crest
+function swHarm(st, md){ const r = st.fq/md.f1, n = Math.round(r); return st.on && n >= 1 && Math.abs(r - n) < .05 && st.Am > 1.2 ? n : 0; }
+const swS = y => (y - PYT)/100;
+
+/* ---------- the slotted masses: on the hanger, on the spare stack, or being carried ---------- */
+const swOnHanger = i => [XS, HY, HZ0 + i*SLOT_T], swOnSpare = i => [SPARE[0], SPARE[1], TZ + (3 - i)*SLOT_T];
+function swPath(pts, u){
+  const seg = []; let tot = 0; for (let i = 1; i < pts.length; i++){ const l = Math.hypot(...sub(pts[i], pts[i-1])); seg.push(l); tot += l; }
+  let d = u*tot; for (let i = 0; i < seg.length; i++){ if (d <= seg[i] || i === seg.length - 1) return swLerp(pts[i], pts[i+1], Math.min(1, d/seg[i])); d -= seg[i]; }
+  return pts[pts.length - 1]; }
+function swSlotPos(st, i){
+  if (st.slots[i] === 'h') return swOnHanger(i);
+  if (st.slots[i] === 's') return swOnSpare(i);
+  const mv = st.mv.find(m => m.i === i), S = swOnSpare(i), H = swOnHanger(i);
+  // up off the stack, across past the bench end at 79 cm, down beside the hanger, then slid sideways onto the stem
+  const path = [S, [S[0], S[1], 79], [XS, HY - 9, 79], [XS, HY - 9, H[2]], H];
+  const u = ease(mv ? Math.max(0, mv.t) : 0);
+  return swPath(mv && mv.to === 's' ? path.slice().reverse() : path, u); }
+
+/* ---------- behaviour ---------- */
+let ui, swLoopOn = false;
+const swBusy = st => st.on || st.Am > .02 || st.fp < 1 || st.mv.length > 0 || st.retune > 0 || st.strobe;
+function swStep(st, dt){
+  st.tt += dt;
+  if (st.fp < 1){ st.fp = Math.min(1, st.fp + dt/st.fDur); st.fq = st.fFrom + (st.fT - st.fFrom)*ease(st.fp); }
+  for (const mv of st.mv){ if (mv.d > 0){ mv.d -= dt; continue; } mv.t = Math.min(1, mv.t + dt/1.5); if (mv.t >= 1) st.slots[mv.i] = mv.to; }
+  const had = st.mv.length; st.mv = st.mv.filter(mv => mv.t < 1);
+  if (had && !st.mv.length) st.retune = st.on ? .9 : .2;
+  if (st.retune > 0){ st.retune -= dt; if (st.retune <= 0){ st.retune = 0; swTune(st, st.nSel); } }
+  const md = swModel(st), tgt = st.on ? md.absB : 0;
+  st.Am += (tgt - st.Am)*(1 - Math.exp(-dt*GAM*1.4));
+  if (!st.strobe) st.ph += 2*Math.PI*.55*dt;                       // slow motion for the see-through
+}
+function swRun(){ if (swLoopOn) return; swLoopOn = true;
+  ui.animate(dt => { const st = ui.st; swStep(st, dt); if (!swBusy(st)){ swLoopOn = false; return false; } return true; }); }
+function swTune(st, n){
+  st.nSel = n; const t = n*swF1(swMass(st));
+  if (Math.abs(t - st.fq) > .01){ st.fFrom = st.fq; st.fT = t; st.fp = 0; st.fDur = Math.max(.6, Math.min(1.8, Math.abs(t - st.fq)/14)); }
+  swRun(); }
+function swStartStop(st){ st.on = !st.on; swRun(); }
+function swAddWeight(st){
+  if (st.mv.length) return ui.flash('One moment');
+  const nH = st.slots.filter(p => p === 'h').length;
+  if (nH < 4){ st.mv.push({ i: nH, to:'h', t:0, d:0 }); st.slots[nH] = 'm'; }
+  else { ui.flash('Hanger full: back to 100 g'); [3, 2, 1].forEach((i, j) => { st.mv.push({ i, to:'s', t:0, d:.5*j }); st.slots[i] = 'm'; }); }
+  swRun(); }
+function swStrobe(st){ st.strobe = !st.strobe; if (st.strobe && !st.on) ui.flash('Start the vibrator to see the cord freeze'); swRun(); }
+
+/* ---------- the cord: blur (what the eye sees), or one sharp shape (strobe, or slow motion in see-through) ---------- */
+function swCord(st, md, k, y0, y1, n){
+  const ph = swPhase(st, md), ys = Array.from({length:n + 1}, (_, i) => y0 + (y1 - y0)*i/n);
+  const cs = ys.map(y => swDisp(st, md, swS(y)));
+  const sharp = ys.map((y, i) => [XS, y, ZS + swRe(cs[i], ph)]);
+  const wSharp = st.strobe || st.Am < .12 ? 1 : k, wBlur = 1 - wSharp;
+  let s = '';
+  if (wBlur > .01){
+    const top = ys.map((y, i) => [XS, y, ZS + Math.hypot(...cs[i])]), bot = ys.map((y, i) => [XS, y, ZS - Math.hypot(...cs[i])]);
+    s += `<g opacity="${f(wBlur)}"><path d="${pd([...top, ...bot.reverse()])}" fill="${CORD}" opacity=".3"/>`
+      + `<path d="${pd(top, false)}${pd(bot, false)}" fill="none" stroke="${CORD}" stroke-width=".7" opacity=".85"/></g>`; }
+  if (wSharp > .01) s += `<g opacity="${f(wSharp)}">${swStroke(sharp, CORD, .55)}</g>`;
+  const env = Math.max(...cs.map(c => Math.hypot(...c))) + .4;
+  return { box: [[XS - .4, y0, ZS - env], [XS + .4, y1, ZS + env]], svg: s }; }
+
+/* ---------- parts ---------- */
+function swShadows(st){
+  const top = boardTop(0, 0, BX, BY, TZ, 0);
+  const ps = [swCorners(VB), swCorners(GB), swCorners(SB), swCorners([0.5, 62, TZ, 4.5, 96, 76.5]),
+    swCorners([22, -1, TZ, 28, 4, 75]), swCorners([24.5, 116.5, TZ, 25.5, 117.5, ZS + .8]),
+    [...on(PZ(TZ), ellUV(SPARE[0], SPARE[1], SLOT_R, SLOT_R, 12)), [SPARE[0], SPARE[1], TZ + 3*SLOT_T]]];
+  return clipTo(top, ps.map(p => castShadow(p, TZ)).join('')); }
+
+function swVibrator(st, m, k, items, put){
+  const dz = A0*Math.cos(st.on ? swPhase(st, swModel(st)) : 0)*(st.Am > .05 ? 1 : 0);
+  let sv = swBx([19, 111, 74, 31, 123, 85], m, 1.1);
+  if (facing([1,0,0])){
+    sv += shape(on(PX(31.03), rectUV(112.5, 80.2, 121.5, 83.6)), mix(m.l, '#ffffff', .4), .7) + tx(31.06, 117, 81.5, 'VIBRATOR', 1.2, INK, 800);
+    for (const [y, c] of [[114.5, '#e2483d'], [119.5, '#2b2725']]) sv += shape(on(PX(31.04), ellUV(y, 77.5, .9, .9, 14)), c, .6);
+  }
+  if (facing([-1,0,0])) sv += shape(on(PX(18.97), rectUV(113, 78, 121, 82)), '#f3f0e6', .6);
+  if (facing([0,0,1])) sv += shape(on(PZ(85.02), ellUV(25, 117, 1.1, 1.1, 14)), '#241f1a', .6);
+  let ins = '';
+  if (k > 0){
+    const pi = [];
+    pi.push({ box: [[21.4, 113.4, 74.3], [28.6, 120.6, 78]], svg: cyl(25, 117, 74.3, 78, 3.6, MAGM, toneI, .8, 22) });
+    pi.push({ box: [[22.8, 114.8, 78], [27.2, 119.2, 81.6 + dz]], svg: cyl(25, 117, 78, 80.4, 1.1, STEELM, toneI, .6, 14) + cyl(25, 117, 79 + dz, 81.6 + dz, 1.9, COPM, toneI, .8, 18) });
+    pi.push({ box: [[24.6, 116.6, 81.6 + dz], [25.4, 117.4, 83 + dz]], svg: rod([25, 117, 81.6 + dz], [25, 117, 83 + dz], .4, STEELM, toneI, .5) });
+    pi.push({ box: [[23.5, 112, 83 + dz], [26.5, 122, 83.3 + dz]], svg: swBx([23.5, 112, 83 + dz, 26.5, 122, 83.3 + dz], STEELM, .5) });
+    pi.push({ box: [[24.6, 116.6, 83.3 + dz], [25.4, 117.4, 85]], svg: rod([25, 117, 83.3 + dz], [25, 117, 85], .4, STEELM, toneI, .5) });
+    for (const y of [111, 122]) pi.push({ box: [[23, y, 82.4], [27, y + 1, 84]], svg: swBx([23, y, 82.4, 27, y + 1, 84], MAGM, .5) });
+    pi.push(...swWire([[30.8, 114.5, 77.5], [28.6, 115.2, 79.3], [26.9, 116.3, 80.3 + dz]], '#e2483d', .3, 1.5));
+    pi.push(...swWire([[30.8, 119.5, 77.5], [28.6, 118.8, 79.3], [26.9, 117.7, 80.3 + dz]], '#2b2725', .3, 1.5));
+    ins = swSort(pi);
+  }
+  put(swBB(VB), sv, ins);
+  for (const [x, y] of [[20, 112], [30, 112], [20, 122], [30, 122]]) put([[x - .8, y - .8, TZ], [x + .8, y + .8, 74]], swBx([x - .8, y - .8, TZ, x + .8, y + .8, 74], DARK, .5));
+  // drive post through the top, the string clip on it
+  put([[24.5, 116.5, 85], [25.5, 117.5, 89.3 + dz]], rod([25, 117, 85], [25, 117, 89.3 + dz], .45, STEELM, toneI, .7));
+  put([[24.2, 116.2, 89.3 + dz], [25.8, 117.8, 90.8 + dz]], swBx([24.2, 116.2, 89.3 + dz, 25.8, 117.8, 90.8 + dz], BRASSM, .7)
+    + rod([25.8, 117, 90.4 + dz], [26.6, 117, 90.4 + dz], .35, STEELM, toneI, .5));
+  return dz; }
+
+function swGenerator(st, k, put){
+  let sv = swBx(GB, GENM, 1.1);
+  if (facing([1,0,0])){
+    const X = 48.03, F = (u0, v0, u1, v1, c, w = .6, dx = 0) => shape(on(PX(X + dx), rectUV(u0, v0, u1, v1)), c, w);
+    sv += F(126.8, 74.6, 147.2, 84.4, PANEL, .8);
+    sv += F(139.2, 79.8, 146.8, 83.6, '#1d2a26', .7, .02);
+    sv += tx(X + .05, 142.4, 80.9, st.fq.toFixed(1), 2.2, '#8af0ae', 800) + tx(X + .05, 145.9, 80.9, 'HZ', .8, '#8af0ae', 800);
+    // the dial's scale, 0 to 80 Hz
+    let tk = '';
+    for (let q = 0; q <= FMAX; q += 5){ const a = (-135 + 270*q/FMAX)*Math.PI/180, r0 = q % 20 ? 3.05 : 2.85;
+      tk += pd([[X + .04, DIAL[0] - r0*Math.sin(a), DIAL[1] + r0*Math.cos(a)], [X + .04, DIAL[0] - 3.45*Math.sin(a), DIAL[1] + 3.45*Math.cos(a)]], false); }
+    sv += `<path d="${tk}" fill="none" stroke="${CREAM}" stroke-width=".45"/>`;
+    for (const q of [0, 40, 80]){ const a = (-135 + 270*q/FMAX)*Math.PI/180; sv += tx(X + .05, DIAL[0] - 4.3*Math.sin(a), DIAL[1] + 4.3*Math.cos(a) - .35, String(q), .8, CREAM, 800); }
+    sv += tx(X + .05, DIAL[0], 75.4, 'FREQUENCY', .9, CREAM, 800) + tx(X + .05, 129.4, 79.2, 'AMPLITUDE', .7, CREAM, 800)
+      + tx(X + .05, 129.6, 75, 'OUTPUT', .8, CREAM, 800) + tx(X + .05, 144.4, 75, 'ON', .8, CREAM, 800) + tx(X + .05, 129.6, 83.3, 'SIGNAL', .8, CREAM, 800);
+    for (const [y, c] of [[128.4, '#e2483d'], [130.8, '#2b2725']]) sv += shape(on(PX(X + .03), ellUV(y, 76.6, .75, .75, 14)), c, .5);
+    sv += shape(on(PX(X + .04), ellUV(141.2, 76.6, .5, .5, 12)), st.on ? '#43c25c' : '#2c4a33', .4);
+  }
+  if (facing([-1,0,0])){ sv += shape(on(PX(27.97), rectUV(140.5, 75.6, 144, 78.4)), '#2b2725', .6);
+    let v = ''; for (let z = 77; z <= 83; z += 1.2) v += pd([[27.96, 129, z], [27.96, 137, z]], false); sv += ink(v, .7); }
+  if (facing([0,1,0])){ let v = ''; for (let x = 31; x <= 45; x += 2) v += pd([[x, 148.03, 77], [x, 148.03, 82.5]], false); sv += ink(v, .8); }
+  let ins = '';
+  if (k > 0){
+    const pi = [];
+    for (const [x, y] of [[29.6, 127.6], [46.4, 127.6], [29.6, 146.4], [46.4, 146.4]]) pi.push({ box: [[x - .3, y - .3, 74], [x + .3, y + .3, 74.4]], svg: cyl(x, y, 74, 74.4, .3, STEELM, toneI, .4, 8) });
+    pi.push({ box: [[29, 127, 74.4], [47, 147, 74.9]], svg: swBx([29, 127, 74.4, 47, 147, 74.9], PCBM, .6) });
+    pi.push({ box: [[38, 131, 74.9], [41.5, 135, 75.5]], svg: swBx([38, 131, 74.9, 41.5, 135, 75.5], DARK, .5) });
+    pi.push({ box: [[30, 128.5, 74.9], [34, 134, 76]], svg: swBx([30, 128.5, 74.9, 34, 134, 76], STEELM, .5) });
+    for (const y of [128.6, 130, 131.4, 132.8]) pi.push({ box: [[30, y, 76], [34, y + .5, 79.5]], svg: swBx([30, y, 76, 34, y + .5, 79.5], STEELM, .45) });
+    pi.push({ box: [[34, 130, 75.5], [34.7, 132.6, 77.6]], svg: swBx([34, 130, 75.5, 34.7, 132.6, 77.6], DARK, .45) });
+    pi.push({ box: [[30, 139.5, 74.9], [36, 145.5, 77.5]], svg: swBx([30, 139.5, 74.9, 36, 145.5, 77.5], MAGM, .6) });
+    pi.push({ box: [[31, 140, 77.5], [35, 145, 80.5]], svg: swBx([31, 140, 77.5, 35, 145, 80.5], COPM, .6) });
+    pi.push({ box: [[45, 133, 74.9], [45.4, 137, 81.5]], svg: swBx([45, 133, 74.9, 45.4, 137, 81.5], STEELM, .45) });
+    pi.push({ box: [[45.4, DIAL[0] - 1.5, DIAL[1] - 1.5], [48, DIAL[0] + 1.5, DIAL[1] + 1.5]], svg: cylX(45.4, 48, DIAL[0], DIAL[1], 1.5, STEELM, toneI, .6, 16) });
+    pi.push({ box: [[46.2, 139.8, 79.8], [47.8, 146.4, 83.2]], svg: swBx([46.2, 139.8, 79.8, 47.8, 146.4, 83.2], matOf('#2e3d36'), .5) });
+    pi.push(...swWire([[46.6, 143, 79.8], [44, 143, 75.2], [41.5, 134, 75.2]], '#d8a24a', .25, 2));
+    pi.push(...swWire([[47.6, 128.4, 76.6], [36, 130.4, 76.4], [34.7, 131, 76.6]], '#e2483d', .3));
+    pi.push(...swWire([[47.6, 130.8, 76.6], [36, 131.9, 76.8], [34.7, 131.9, 77]], '#2b2725', .3));
+    pi.push(...swWire([[28.4, 142.2, 77], [30, 142.5, 78.5]], '#2b2725', .35, 1.5));
+    ins = swSort(pi);
+  }
+  put(swBB(GB), sv, ins);
+  for (const [x, y] of [[29, 127], [47, 127], [29, 147], [47, 147]]) put([[x - .8, y - .8, TZ], [x + .8, y + .8, 74]], swBx([x - .8, y - .8, TZ, x + .8, y + .8, 74], DARK, .5));
+  // knobs and button on the panel, and the test leads' plugs
+  { const a = (-135 + 270*st.fq/FMAX)*Math.PI/180, KN = { l:'#fbf6e6', m:'#e8dcc0', d:'#bfb08c' };
+    let d = cylX(48, 50, DIAL[0], DIAL[1], DIAL[2], KN, toneI, 1, 24);
+    if (facing([1,0,0])) d += ink(pd([[50.05, DIAL[0], DIAL[1]], [50.05, DIAL[0] - 2.1*Math.sin(a), DIAL[1] + 2.1*Math.cos(a)]], false), 1);
+    put([[48, DIAL[0] - DIAL[2], DIAL[1] - DIAL[2]], [50, DIAL[0] + DIAL[2], DIAL[1] + DIAL[2]]], act('dial', d)); }
+  put([[48, 128.3, 80.3], [49.3, 130.5, 82.5]], cylX(48, 49.3, 129.4, 81.4, 1.1, matOf('#fbf6e6'), toneI, .8, 18));
+  put([[48, 143.3, 75.5], [49, 145.5, 77.7]], act('start', cylX(48, 49, 144.4, 76.6, 1.1, matOf(st.on ? '#e2483d' : '#43c25c'), toneI, .8, 18)));
+  for (const [y, c] of [[128.4, '#e2483d'], [130.8, '#2b2725']]) put([[48, y - .5, 76.1], [49.4, y + .5, 77.1]], cylX(48, 49.4, y, 76.6, .5, matOf(c), toneI, .6, 12));
+  for (const [y, c] of [[114.5, '#e2483d'], [119.5, '#2b2725']]) put([[31, y - .5, 77], [32.4, y + .5, 78]], cylX(31, 32.4, y, 77.5, .5, matOf(c), toneI, .6, 12));
+}
+
+function swStrobeLamp(st, k, put){
+  const flash = st.strobe && ((st.tt*7.3) % 1 < .45 || !swLoopOn);
+  let sv = swBx(SB, DARK, 1.1);
+  if (facing([0,1,0])) sv += txY(11, 48.03, 76.4, 'STROBE', 1.6, '#f2efe7', 800);
+  if (facing([0,0,1])){ sv += shape(on(PZ(83.02), rectUV(8, 36, 12.4, 41.4)), '#1d2a26', .6);
+    sv += txT(10.6, 38.7, 83.04, st.strobe ? st.fq.toFixed(1) : '--.-', 1.3, '#8af0ae', 800); }
+  if (facing([-1,0,0])) sv += shape(on(PX(5.97), ellUV(41, 77, .7, .7, 12)), '#1a1715', .5);
+  let ins = '';
+  if (k > 0){
+    const pi = [], tube = flash ? matOf('#fffbe0') : matOf('#d6e6ea');
+    pi.push({ box: [[7, 35, 74], [15, 47, 74.4]], svg: swBx([7, 35, 74, 15, 47, 74.4], PCBM, .5) });
+    pi.push({ box: [[7.8, 36.1, 74.4], [11.2, 39.5, 80]], svg: cyl(9.5, 37.8, 74.4, 80, 1.7, matOf('#3f62b5'), toneI, .7, 18) });
+    pi.push({ box: [[9, 43, 74.4], [11.2, 45.4, 76.6]], svg: swBx([9, 43, 74.4, 11.2, 45.4, 76.6], COPM, .5) });
+    pi.push({ box: [[9.2, 43.7, 80.6], [10.8, 45.3, 83]], svg: cyl(10, 44.5, 80.6, 83, .8, STEELM, toneI, .5, 12) });
+    pi.push({ box: [[14, 38, 75.5], [15.2, 44, 81.5]], svg: cylX(14, 15.2, 41, 78.5, 3, METAL, toneI, .7, 22) });
+    pi.push({ box: [[15.3, 38.4, 78], [16, 43.6, 79]], svg: rod([15.7, 38.4, 78.5], [15.7, 43.6, 78.5], .4, tube, toneI, .5) });
+    pi.push(...swWire([[15.7, 38.2, 78.5], [14.6, 37.4, 76], [14.2, 37.4, 74.4]], '#d8a24a', .25, 1.5));
+    pi.push(...swWire([[15.7, 43.8, 78.5], [14.6, 44.6, 76], [13.6, 45, 74.4]], '#d8a24a', .25, 1.5));
+    ins = swSort(pi);
+  }
+  put(swBB(SB), act('strobe', sv), ins);
+  for (const [x, y] of [[7, 35], [15, 35], [7, 47], [15, 47]]) put([[x - .7, y - .7, TZ], [x + .7, y + .7, 74]], swBx([x - .7, y - .7, TZ, x + .7, y + .7, 74], DARK, .5));
+  // bezel and window on the front, rate dial on top
+  { let b = cylX(16, 16.7, 41, 78.5, 3.6, STEELM, toneI, .9, 26);
+    if (facing([1,0,0])){ b += shape(on(PX(16.72), ellUV(41, 78.5, 2.9, 2.9, 24)), flash ? '#fffbe0' : '#9fb9c0', .6);
+      if (!flash) b += `<path d="${pd([[16.74, 42.6, 80.3], [16.74, 40.6, 76.9]], false)}" stroke="#ffffff" stroke-width=".9" opacity=".45"/>`; }
+    put([[16, 37.4, 74.9], [16.7, 44.6, 82.1]], act('strobe', b)); }
+  { let d = cyl(10, 44.5, 83, 84.2, 1.3, matOf('#e2483d'), toneI, .8, 18);
+    put([[8.7, 43.2, 83], [11.3, 45.8, 84.2]], act('strobe', d)); }
+  return flash; }
+
+// the clamp's lower half (under the bench top): bottom arm, the screw up to its pad, the T-handle
+const swClampUnder = () => [
+  { box: [[22, -1, 66], [28, 4, 67.4]], svg: swBx([22, -1, 66, 28, 4, 67.4], STEELM, .9) },
+  { box: [[24.1, 1.1, 67.4], [25.9, 2.9, 70]], svg: rod([25, 2, 67.4], [25, 2, 69.4], .4, STEELM, toneI, .6) + cyl(25, 2, 69.4, 70, .9, STEELM, toneI, .6, 14) },
+  { box: [[22.5, 1.5, 60.8], [27.5, 2.5, 66]], svg: rod([25, 2, 61.5], [25, 2, 66], .4, STEELM, toneI, .6) + rod([22.6, 2, 61.5], [27.4, 2, 61.5], .35, STEELM, toneI, .6) } ];
+function swPulley(st, md, items, put){
+  // G-clamp on the bench end: frame outside the end, top jaw on the bench top (its lower half is under the bench)
+  put([[22, -4.2, 66], [28, -1, 75]], swBx([22, -4.2, 66, 28, -1, 75], STEELM, .9));
+  put([[22, -1, 73], [28, 4, 75]], swBx([22, -1, 73, 28, 4, 75], STEELM, .9));
+  // rod, fork, axle stubs, wheel: one part, painted far cheek, wheel, near cheek (the boxes interlock too tightly to sort)
+  { const cheek = x0 => swBx([x0, -4.2, 82, x0 + .5, -1.8, 88.3], STEELM, .6), stub = (a, b) => cylX(a, b, -3, PCZ, .4, BRASSM, toneI, .5, 10);
+    const fx = facing([1,0,0]), far = fx ? cheek(23.7) + stub(23.3, 23.7) : cheek(25.8) + stub(26.3, 26.7), near = fx ? cheek(25.8) + stub(26.3, 26.7) : cheek(23.7) + stub(23.3, 23.7);
+    let w = cyl(25, -3, 75, 81.4, .45, STEELM, toneI, .7, 12) + swBx([23.7, -4.2, 81.4, 26.3, -1.8, 82], STEELM, .6) + far + cylX(24.4, 25.6, PYT, PCZ, PR, matOf('#e7e1d2'), toneI, .9, 28);
+    const cx = facing([1,0,0]) ? 25.62 : facing([-1,0,0]) ? 24.38 : null;
+    if (cx != null){ w += shape(on(PX(cx), ellUV(PYT, PCZ, .8, .8, 12)), BRASSM.m, .5);
+      for (const a of [0, 120, 240]){ const t = a*Math.PI/180; w += ink(pd([[cx, PYT + .8*Math.cos(t), PCZ + .8*Math.sin(t)], [cx, PYT + 2.1*Math.cos(t), PCZ + 2.1*Math.sin(t)]], false), .6); } }
+    // the cord over the wheel: level from the band's end to the top, then round a quarter of the rim
+    const ph = swPhase(st, md), pts = [];
+    for (let i = 0; i <= 4; i++){ const y = -.5 - 2.5*i/4; pts.push([XS, y, ZS + swRe(swDisp(st, md, swS(y)), ph)]); }
+    for (let i = 1; i <= 6; i++){ const t = Math.PI/2 + Math.PI/2*i/6; pts.push([XS, PYT + PR*Math.cos(t), PCZ + PR*Math.sin(t)]); }
+    w += swStroke(pts, CORD, .55);
+    w += near;
+    put([[23.3, -5.5, 75], [26.7, -.5, 90]], w); }
+}
+
+function swHanger(st, items, put){
+  const nH = st.slots.filter(p => p === 'h').length, top = HZ0 + nH*SLOT_T;
+  // the cord down from the wheel to a loop on the hook; the hook and stem above the stack
+  put([[XS - .3, HY - .25, 61], [XS + .3, HY, PCZ]], swStroke([[XS, HY, PCZ], [XS, HY, 61.6]], CORD, .55)
+    + swStroke([[XS, HY, 61.6], [XS, HY + .5, 61.1], [XS, HY + .2, 60.6], [XS, HY - .3, 61]], CORD, .45));
+  put([[XS - .3, HY - .3, top], [XS + .3, HY + 1.2, 61.4]], act('weights', rod([XS, HY, top], [XS, HY, 59.6], .25, STEELM, toneI, .5)
+    + swStroke([[XS, HY, 59.6], [XS, HY, 60.6], [XS, HY + .4, 61.2], [XS, HY + .9, 60.9], [XS, HY + 1, 60.3]], STEELM.m, .45)));
+  put([[XS - 2.4, HY - 2.4, HZ0 - 1.2], [XS + 2.4, HY + 2.4, HZ0]], act('weights', cyl(XS, HY, HZ0 - 1.2, HZ0, 2.4, STEELM, toneI, .9, 22)));
+  // slotted masses: the slot runs from the centre to the +y edge
+  for (let i = 0; i < 4; i++){
+    const c = swSlotPos(st, i), z0 = c[2], z1 = c[2] + SLOT_T;
+    let d = cyl(c[0], c[1], z0, z1, SLOT_R, SLOTM, toneI, .8, 22);
+    d += shape(on(PZ(z1 + .02), rectUV(c[0] - .32, c[1], c[0] + .32, c[1] + SLOT_R - .05)), '#3a3632', .4);
+    if (facing([0,1,0]) && Math.abs(Dv(0,1,0)[0]) > .2) d += shape(on(PY(c[1] + SLOT_R + .02), rectUV(c[0] - .32, z0, c[0] + .32, z1)), '#3a3632', .3);
+    put([[c[0] - SLOT_R, c[1] - SLOT_R, z0], [c[0] + SLOT_R, c[1] + SLOT_R, z1]], act('weights', d));
+  }
+  return top; }
+
+function swBench(st, put, under){
+  // legs, rails and the clamp's lower half all sit under the top, so they go first and the top over them, as one part
+  const u = [...under];
+  for (const [x, y] of [[2, 3], [44, 3], [2, 143], [44, 143]]) u.push({ box: [[x, y, 0], [x + 4, y + 4, BZ0]], svg: swBx([x, y, 0, x + 4, y + 4, BZ0], LEGM, 1.1) });
+  for (const b of [[3, 7, 64, 5, 143, 70], [45, 7, 64, 47, 143, 70], [6, 4, 64, 44, 6, 70], [6, 144, 64, 44, 146, 70]]) u.push({ box: swBB(b), svg: swBx(b, LEGM, .9) });
+  put([[0, 0, BZ0], [BX, BY, TZ]], swSort(u) + swBx([0, 0, BZ0, BX, BY, TZ], BENCHM, 1.2) + swShadows(st));
+  // power strip on the back edge: four sockets on its front, its own cord down the back to the floor
+  { let p = swBx([0.5, 62, TZ, 4.5, 96, 76.5], matOf('#efeee8'), .9);
+    if (facing([1,0,0])) for (const y of [66, 75, 84, 92]) p += shape(on(PX(4.52), rrUV(y - 1.6, 73.6, y + 1.6, 75.9, .5, 3)), '#d9d6cc', .5)
+      + shape(on(PX(4.54), ellUV(y - .6, 74.75, .25, .25, 8)), INK, 0) + shape(on(PX(4.54), ellUV(y + .6, 74.75, .25, .25, 8)), INK, 0);
+    put([[0.5, 62, TZ], [4.5, 96, 76.5]], p); }
+}
+
+const swWires = () => [
+  ...swWire([[49.4, 128.4, 76.6], [49.7, 128, 74.6], [49.3, 126.5, 73.7], [41, 121, 73.7], [33.6, 114.6, 73.7], [32.6, 114.5, 75.6], [32.4, 114.5, 77.5]], '#e2483d', .5),
+  ...swWire([[49.4, 130.8, 76.6], [49.7, 130.4, 74.6], [49.3, 128.4, 73.7], [42, 123.6, 73.7], [34.6, 120, 73.7], [32.6, 119.5, 75.6], [32.4, 119.5, 77.5]], '#2b2725', .5),
+  // generator's mains cord: out of the back, along the back of the bench to the strip
+  ...swWire([[28, 142.2, 77], [26.8, 142.2, 75.6], [26, 141.8, 73.7], [9, 140, 73.7], [6.5, 120, 73.7], [6.5, 99, 73.7], [5.8, 92, 74.4], [4.6, 92, 74.8]], '#2b2725', .6, 4),
+  // strobe's mains cord: out of its back, behind it, to the strip
+  ...swWire([[6, 41, 77], [4.6, 41.5, 75.6], [4.2, 44, 73.7], [5.2, 52, 73.7], [6.2, 60, 73.7], [6.4, 66, 74.4], [4.6, 66, 74.8]], '#2b2725', .6, 3),
+  // the strip's cord: over the back edge and down to the floor (to the wall socket)
+  ...swWire([[0.5, 79, 74.5], [-.6, 79, 73.5], [-.6, 79, 30], [-.6, 79.5, .5], [-14, 82, .5]], '#2b2725', .6, 6),
+];
+
+/* ---------- scene ---------- */
+// xrCallouts from core.js, changed for a long bench: the right column starts under the stats panel and the
+// See-through / Labels switches (the pulley end sits up in that corner); both columns are always used, and when one
+// has more labels than fit above the bottom edge its innermost ones cross to the other
+function swCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0])), cx = (xmin + xmax)/2;
+  // on a phone (LBL_U = drawing units per screen px) each label is a numbered badge and the names go in a legend under the figure
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 1.5*k);
+  const L = [], R = [];
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, btn = document.getElementById('btns'), M = svgEl.getScreenCTM();
+  let s = '';
+  let top = { [-1]: fs, [1]: fs + 30*k };
+  if (btn && M){ const r = btn.getBoundingClientRect(), q = new DOMPoint(r.right, r.bottom + 30).matrixTransform(M.inverse());
+    if (q.y > 0) top[-1] = q.y + hgt; }
+  // the lower of the stats panel and the switches, when they sit beside the figure (on a phone they are above / under it)
+  for (const el of [document.getElementById('stats'), document.querySelector('.vset')]) if (el && M && !u){
+    const r = el.getBoundingClientRect(), q = new DOMPoint(r.left, r.bottom + 8).matrixTransform(M.inverse());
+    if (q.y > 0 && q.y < vb.y + vb.height*.6) top[1] = Math.max(top[1], q.y + hgt/2); }
+  for (const it of items){ const [X, Y] = P(...it.at); (X < cx ? L : R).push({ ...it, X, Y }); }
+  const bot = vb.y + vb.height - (u ? hgt/2 : 2.4*hgt), cap = side => Math.max(1, Math.floor((bot - top[side])/gap) + 1);   // bot: clear of the zoom control
+  L.sort((a, b) => a.X - b.X); R.sort((a, b) => a.X - b.X);
+  while (L.length > cap(-1) && R.length < cap(1)) R.unshift(L.pop());
+  while (R.length > cap(1) && L.length < cap(-1)) L.push(R.shift());
+  for (const [col, side] of [[L, -1], [R, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    const shift = col.length ? Math.max(0, col.reduce((a, c) => a + c.py - c.Y, 0) / col.length) : 0;
+    const room = col.length ? col[0].py - top[side] : 0; for (const c of col) c.py -= Math.min(shift, room);
+    { let y = bot; for (let j = col.length - 1; j >= 0; j--){ col[j].py = Math.min(col[j].py, y); y = col[j].py - gap; } }   // and none below the bottom edge
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+
+function scene(st, m){
+  const k = ease(st.xr || 0), items = [], md = swModel(st);
+  const put = (b, svg, inside = '') => items.push({ box: b, svg: k > 0 && inside ? `<g opacity="${f(1 - .8*k)}">${svg}</g><g opacity="${f(k)}">${inside}</g>` : svg });
+  // floor shadow: the bench and the hanging masses
+  let s = castShadow([...swCorners([0, 0, BZ0, BX, BY, TZ]), ...[[2, 3], [48, 3], [2, 147], [48, 147]].map(([x, y]) => [x, y, 0])]);
+  s += castShadow([...on(PZ(HZ0 - 1.2), ellUV(XS, HY, 2.4, 2.4, 12)), [XS, HY, 61], [XS + .3, HY + .3, 61], ...on(PZ(HZ0 + 3.2), ellUV(XS, HY, 2.2, 2.2, 12))]);
+
+  swBench(st, put, swClampUnder());
+  swVibrator(st, m, k, items, put);
+  swGenerator(st, k, put);
+  const flash = swStrobeLamp(st, k, put);
+  swPulley(st, md, items, put);
+  swHanger(st, items, put);
+  items.push(...swWires());
+  // the cord in two pieces: beside the vibrator it is above the case, along the rest it is past its end
+  items.push(swCord(st, md, k, -.5, 110.8, 150), swCord(st, md, k, 110.8, 116.2, 8));
+  s += swSort(items);
+
+  // strobe light falling on the cord
+  if (flash) s += `<path d="${pd([[16.7, 41, 81.5], [XS, 18, ZS + 4], [XS, 70, ZS + 4], [XS, 70, ZS - 4], [16.7, 41, 75.5]])}" fill="#fff6c8" opacity=".22"/>`;
+
+  // ---- see-through overlays: the two travelling waves, nodes and antinodes
+  const n = swHarm(st, md), lbl = [];
+  const ph = swPhase(st, md), sc = md.absB > 1e-9 ? st.Am/md.absB : 0;
+  if (k > 0 && st.Am > .12){
+    const inc = [], ref = [];
+    for (let i = 0; i <= 150; i++){ const y = -.5 + 116.7*i/150, x = swS(y), ek = Math.exp(md.kap*x);
+      const a = md.kk*x, bi = md.B[1]/2*sc, br = md.B[0]/2*sc;
+      // B/(2i) e^(i(ph + k~ s)) and -B/(2i) e^(i(ph - k~ s))
+      inc.push([XS, y, ZS + ek*(bi*Math.cos(ph + a) + br*Math.sin(ph + a))]);
+      ref.push([XS, y, ZS - (1/ek)*(bi*Math.cos(ph - a) + br*Math.sin(ph - a))]); }
+    let ov = `<path d="${pd(inc, false)}" fill="none" stroke="${COL.inc}" stroke-width="1" stroke-dasharray="2.2 1.4"/>`
+      + `<path d="${pd(ref, false)}" fill="none" stroke="${COL.ref}" stroke-width="1" stroke-dasharray="2.2 1.4"/>`;
+    const hi = st.Am/2 + 2.5;
+    ov += swArrow([XS, 64, ZS + hi + 3], [XS, 46, ZS + hi + 3], COL.inc) + swArrow([XS, 46, ZS - hi - 3], [XS, 64, ZS - hi - 3], COL.ref);
+    lbl.push({ at: [XS, 52, ZS + hi + 3], text: 'WAVE TO PULLEY', on: true }, { at: [XS, 58, ZS - hi - 3], text: 'REFLECTED WAVE', on: true });
+    s += `<g opacity="${f(k)}">${ov}</g>`;
+  }
+  if (n){
+    let ov = '';
+    for (let j = 0; j <= n; j++){ const y = PYT + 100*j*Math.PI/md.kk, [X, Y] = P(XS, y, ZS);
+      ov += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(.9*CAM_K)}" fill="${COL.node}" stroke="${INK}" stroke-width=".9"/>`; }
+    for (let j = 0; j < n; j++){ const y = PYT + 100*(j + .5)*Math.PI/md.kk, e = Math.hypot(...swDisp(st, md, swS(y)));
+      ov += `<path d="${pd([[XS, y, ZS - e], [XS, y, ZS + e]], false)}" fill="none" stroke="${INK}" stroke-width=".7" stroke-dasharray="1 1"/>`
+        + [ZS - e, ZS + e].map(z => { const [X, Y] = P(XS, y, z); return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(.55*CAM_K)}" fill="${CORD}" stroke="${INK}" stroke-width=".7"/>`; }).join(''); }
+    s += `<g opacity="${f(Math.max(k, st.strobe ? 1 : 0))}">${ov}</g>`;
+    const jn = n === 1 ? 0 : Math.floor(n/2), ja = Math.floor((n - 1)/2), ya = PYT + 100*(ja + .5)*Math.PI/md.kk;
+    lbl.push({ at: [XS, PYT + 100*jn*Math.PI/md.kk, ZS], text: 'NODE', on: true },
+      { at: [XS, ya, ZS + Math.hypot(...swDisp(st, md, swS(ya)))], text: 'ANTINODE', on: true });
+  }
+
+  // ---- labels
+  const B = [0, BX, 0, BY, 0, 92], nH = st.slots.filter(p => p === 'h').length, moving = st.mv.length > 0, drive = st.on;
+  if (k > .6){
+    lbl.push(
+      { at: [31, 112, 84], text: 'VIBRATOR', on: drive },
+      { at: [25, 117, 87], text: 'DRIVE SHAFT', on: drive },
+      { at: [25.8, 117.8, 90.8], text: 'STRING CLIP', on: false },
+      { at: [26.9, 117, 81], text: 'VOICE COIL', on: drive },
+      { at: [28.6, 117, 76], text: 'PERMANENT MAGNET', on: false },
+      { at: [26.5, 121, 83.3], text: 'LEAF SPRING', on: drive },
+      { at: [48, 147, 84], text: 'SIGNAL GENERATOR', on: drive },
+      { at: [50, DIAL[0], DIAL[1] + 1.5], text: 'FREQUENCY DIAL', on: st.fp < 1 },
+      { at: [46.5, DIAL[0], DIAL[1] - 1.5], text: 'POTENTIOMETER', on: st.fp < 1 },
+      { at: [41.5, 133, 75.5], text: 'OSCILLATOR CHIP', on: drive },
+      { at: [32, 128.6, 79.5], text: 'POWER AMPLIFIER', on: drive },
+      { at: [33, 145, 80.5], text: 'TRANSFORMER', on: false },
+      { at: [29, 147, 74.9], text: 'CIRCUIT BOARD', on: false },
+      { at: [XS, 92, ZS], text: 'STRING', on: drive },
+      { at: [25.6, PYT - 1, PCZ + 1], text: 'PULLEY WHEEL', on: false },
+      { at: [26.7, -3, PCZ], text: 'AXLE', on: false },
+      { at: [28, -1, 70], text: 'BENCH CLAMP', on: false },
+      { at: [27.4, 2, 61.5], text: 'CLAMP SCREW', on: false },
+      { at: [XS + 2.4, HY, HZ0 - .6], text: 'WEIGHT HANGER', on: moving },
+      { at: [XS + SLOT_R, HY, HZ0 + Math.max(1, nH)*SLOT_T - .4], text: 'SLOTTED MASSES', on: moving },
+      { at: [16, 41, 81.5], text: 'STROBE LAMP', on: st.strobe },
+      { at: [15.7, 43.6, 78.5], text: 'XENON FLASH TUBE', on: flash },
+      { at: [14.6, 38.5, 80.5], text: 'REFLECTOR', on: flash },
+      { at: [9.5, 36.1, 79], text: 'FLASH CAPACITOR', on: st.strobe },
+      { at: [10, 45.8, 84.2], text: 'RATE DIAL', on: st.strobe },
+      { at: [4.5, 84, 76.5], text: 'POWER STRIP', on: false });
+    s += swCallouts(lbl, B);
+  } else if (k === 0){
+    s += swCallouts([...lbl,
+      { at: [31, 112, 84], text: 'VIBRATOR', on: drive },
+      { at: [48, 147, 84], text: 'SIGNAL GENERATOR', on: drive },
+      { at: [50, DIAL[0], DIAL[1] + 1.5], text: 'FREQUENCY DIAL', on: st.fp < 1 },
+      { at: [XS, 92, ZS], text: 'STRING', on: drive },
+      { at: [25.6, PYT - 1, PCZ + 1], text: 'PULLEY', on: false },
+      { at: [XS + 2.4, HY, HZ0 - .6], text: 'WEIGHT HANGER', on: moving },
+      { at: [SPARE[0] + SLOT_R, SPARE[1], TZ + 1], text: 'SPARE MASSES', on: moving },
+      { at: [16, 41, 81.5], text: 'STROBE LAMP', on: st.strobe } ], B);
+  }
+  return s;
+}
+
+const swF0 = swF1(100);
+ui = mountFigure({
+  fig:'P2', turn:'full', title:'Standing waves',
+  size:[BX + 50, BY + 12, 96], center:[BX/2, (BY - 12)/2], palette:'cobalt',
+  state:{ on:false, fq:swF0, fFrom:swF0, fT:swF0, fp:1, fDur:1, nSel:1, slots:['h', 's', 's', 's'], mv:[], retune:0, Am:0, ph:.6, tt:0, strobe:false },
+  scene,
+  stats: st => { const md = swModel(st), n = swHarm(st, md);
+    return [ { label:'Frequency', value: st.fq.toFixed(1) + ' Hz' },
+      { label:'Loops', value: n ? String(n) : '–', small:true },
+      { label:'Tension', value: md.T.toFixed(2) + ' N', small:true },
+      { label:'Wave speed', value: md.v.toFixed(1) + ' m/s', small:true } ]; },
+  buttons:[
+    { label:'Start / stop', onClick: st => swStartStop(st) },
+    { label:'Frequency', choices: st => [1, 2, 3].map(n => { const t = n*swF1(swMass(st));
+      return { label: `${['1st', '2nd', '3rd'][n - 1]} harmonic ${t.toFixed(1)} Hz`, current: st.on && st.fp >= 1 && Math.abs(st.fq - t) < .05,
+        onClick: s => { if (!s.on) s.on = true; swTune(s, n); } }; }) },
+    { label:'Add weight', onClick: st => swAddWeight(st) },
+    { label:'Strobe', onClick: st => swStrobe(st) },
+  ],
+  acts:{ start: st => swStartStop(st), dial: st => { if (!st.on) st.on = true; swTune(st, st.nSel % 3 + 1); },
+    weights: st => swAddWeight(st), strobe: st => swStrobe(st) },
+  params:(st, q) => {
+    if (q.has('m')){ const n = Math.max(0, Math.min(3, Math.round((+q.get('m') - 100)/50))); for (let i = 1; i <= 3; i++) st.slots[i] = i <= n ? 'h' : 's'; }
+    if (q.has('n')){ st.nSel = Math.max(1, Math.min(3, +q.get('n') | 0)); st.fq = st.fT = st.fFrom = st.nSel*swF1(swMass(st)); }
+    else st.fq = st.fT = st.fFrom = swF1(swMass(st));
+    if (q.has('fq')) st.fq = st.fT = st.fFrom = +q.get('fq');
+    if (q.get('strobe') === '1') st.strobe = true;
+    if (q.has('ph')) st.ph = +q.get('ph');
+    if (q.get('on') === '1'){ st.on = true; st.Am = swModel(st).absB; }
+  },
+});
+if (new URLSearchParams(location.search).get('go') === '1') swRun();
+addEventListener('keydown', e => { if (e.key !== ' ' || /input|textarea|button/i.test(e.target.tagName)) return; e.preventDefault(); swStartStop(ui.st); ui.render(); });
+xrMount(() => ui, () => '');
+</script></body></html>
