@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The pendulum</title></head><body>
+<script src="core.js"></script>
+<script>
+/* ---------- Truth first: a school pendulum on a wooden stand ----------
+   1. At rest the bob hangs straight under the pivot (the lower edge of the split chuck's jaws). The string's tension
+      balances the bob's weight. The light gate sits level with the bob's centre, its infrared beam across the bottom of
+      the swing.
+   2. Start: the bob is drawn aside along its arc to the start angle (read on the protractor behind the string) and let
+      go. Gravity's share along the arc (mg sin a) pulls it back down; the tension, always along the string toward the
+      pivot, only bends its path into the arc. It speeds up to the bottom, where all the potential energy has become
+      kinetic, cuts the beam, climbs the other side, stops and comes back.
+   3. The timer counts beam breaks; every second break is one full period. For small swings T = 2 pi root(L/g).
+   4. Length: loosen the clamp screw on the chuck, turn the crank of the spool on the top arm to wind string in (or let it
+      out), tighten again. The string runs from the spool drum along the top of the arm, down the guide hole drilled
+      through the arm, between the chuck's jaws, and down to the S-hook. The light gate's boss clamp slides along the
+      stand rod to the bob's new height.
+   5. Bob: lift the bob's screw eye off the S-hook, set it in its cup in the bob tray, hang another. All three bobs are the
+      same 6 cm ball (same drag), only the metal differs: weight and inertia both grow with mass, so T does not change.
+   6. Wider: a bigger start angle makes T a little longer, about T0 (1 + a0^2/16): +0.2 % at 10 deg, +1.7 % at 30 deg.
+      Air drag slowly drains the swing, and drains a light bob faster (same drag, less mass).
+   Parts (each is held by another):
+   FRAME   base board . upright post on two screws up through the base . top arm on a dowel in the post . diagonal brace
+           and its two screws . metre scale on the post's front . spirit level on the base
+   PIVOT   steel L-bracket screwed under the arm end . split chuck: two brass jaws hung from it . clamp screw through both
+           jaws . guide hole through the arm . protractor plate screwed to the bracket's back flange (two screws)
+   STRING  spool drum with the wound string . two steel cheeks screwed to the arm top . axle . friction washer . crank
+           and knob . the string over the arm top, down the guide hole, through the jaws, down to the S-hook
+   BOB     S-hook . screw eye with its threaded shank in the bob . the bob (brass 961 g, aluminium 305 g, beech 81 g) .
+           bob tray with three cups on the base, holding the two spares
+   GATE    heavy foot on the base . stand rod . boss clamp and its thumbscrew . gate arm . U-housing (bridge + two prongs)
+           . IR LED in the front prong . phototransistor in the back prong . sensor board in the bridge . beam-break
+           indicator on top . cable along the arm, down the rod, over the base to the timer's socket
+   TIMER   sloped case . LCD window and LCD module . circuit board on four standoffs . microcontroller . crystal . 9 V
+           battery and clip . mode and reset buttons . gate socket on the back with the cable's plug
+   OVERLAYS (see-through) gravity, tension and velocity arrows on the bob . the swing's arc . the IR beam . an energy
+           bar sharing the swing's energy between kinetic, potential and what air drag has taken */
+
+/* ---------- geometry (x = depth, y = width, z = up; 1 unit = 1 cm) ---------- */
+const BW = 50, BD = 90, BH = 3, YC = 45;
+const PX0 = 36, PZ0 = 100, O3 = [PX0, YC, PZ0];                 // the pivot: where the string leaves the jaws
+const ARMB = [4, 42.5, 104, 40, 47.5, 109], POSTB = [4, 42.5, BH, 9, 47.5, 104];
+const BOB_R = 3, LENS = [20, 40, 60, 80], AMPS = [10, 20, 30];
+const GRAV = 9.81, DRAG = .5*1.2*.47*Math.PI*.03*.03;          // half rho Cd A for a 6 cm ball in air, kg/m
+const BOBS = {
+  brass:{ name:'Brass', g:961, M:matOf('#dcb455') },
+  alu:  { name:'Aluminium', g:305, M:matOf('#d3d9dc') },
+  wood: { name:'Beech', g:81, M:matOf('#f0cf98') } };
+const TRAY = { brass:[43, 25, 8.3], alu:[43, 18, 8.3], wood:[43, 11, 8.3] };
+const ROD = [22, 45], ROD_TOP = 82;
+const TP = [[34,3],[48,3],[48,7],[37,12],[34,12]], TY = [64, 86], SLEN = Math.hypot(11, 5), SLN = [5/SLEN, 0, 11/SLEN];
+const SPX = 14, SPZ = 111.5;                                      // spool axle
+const FRAMEM = { l:'#efc98f', m:'#d3a263', d:'#9c6e3a' }, BRASSM = matOf('#d8b25a'), STEELM = { l:'#dfe3e4', m:'#b4bcbf', d:'#7d878b' };
+const PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, BOSSM = matOf('#5b6670'), STRC = '#f6efdc';
+const COL = { grav:'#7b4bd1', ten:'#e2483d', vel:'#2fa35b', ke:'#ef7a3c', pe:'#4f86d8', lost:'#cfc8b8', beam:'#ff3b2f' };
+
+/* ---------- small helpers ---------- */
+const pnLerp = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const pnAdd = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], pnScl = (a, s) => a.map(v => v*s);
+const pnBoxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const pnBx = (x0, y0, z0, x1, y1, z1, M, w = .8) => box(x0, y0, z0, x1, y1, z1, M, toneI, w);
+const pnDir = th => [0, Math.sin(th), -Math.cos(th)];             // down the string
+const pnTan = th => [0, Math.cos(th), Math.sin(th)];              // along the arc, toward +angle
+const pnAt = (st, s) => pnAdd(O3, pnScl(pnDir(st.th), s));
+const pnStroke = (pts, col, w, close = false) => { const d = pd(pts, close);
+  return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(w + .9)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(w)}" stroke-linecap="round" stroke-linejoin="round"/>`; };
+// a ring of radius r around c in the plane of unit vectors a and b
+const pnRing = (c, a, b, r, n = 14) => Array.from({length:n}, (_, i) => { const t = i/n*2*Math.PI; return pnAdd(c, pnAdd(pnScl(a, r*Math.cos(t)), pnScl(b, r*Math.sin(t)))); });
+// a prism: a convex profile in (x, z) swept along y, every visible face inked
+function pnPrismY(prof, y0, y1, M, w = .9){
+  const A = on(PY(y0), prof), B = on(PY(y1), prof), cen = avg(A.concat(B)); let s = '';
+  for (let i = 0; i < prof.length; i++){ const j = (i + 1) % prof.length, q = [A[i], A[j], B[j], B[i]];
+    let nr = norm(cross(sub(q[1], q[0]), sub(q[3], q[0]))); if (dot(nr, sub(avg(q), cen)) < 0) nr = nr.map(v => -v);
+    if (vis(nr)) s += shape(q, toneI(nr, M), w); }
+  if (vis([0,1,0])) s += shape(B, toneI([0,1,0], M), w);
+  if (vis([0,-1,0])) s += shape(A, toneI([0,-1,0], M), w);
+  return s + hullInk([...A, ...B], 1.8); }
+// a ball, seen as a circle (an orthographic sphere): dark rim, mid body, lit cap toward the light, a glint
+function pnBall(c, r, M){ const [X, Y] = P(...c), R = r*CAM_K;
+  const circ = (dx, dy, rr, col, ex = '') => `<circle cx="${f(X + dx*R)}" cy="${f(Y + dy*R)}" r="${f(rr*R)}" fill="${col}" ${ex}/>`;
+  return circ(0, 0, 1, M.d) + circ(.08, -.08, .88, M.m) + circ(.24, -.27, .55, M.l) + circ(.36, -.42, .14, '#ffffff', 'opacity=".75"')
+    + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="none" stroke="${INK}" stroke-width="1.3"/>`; }
+// a cable cut into short pieces (each with its own box) so it sorts with the solids it passes
+function pnWire(pts, col, w = .7, seg = 3){
+  const q = [pts[0]];
+  for (let i = 1; i < pts.length; i++){ const a = pts[i-1], b = pts[i], n = Math.max(1, Math.ceil(Math.hypot(...sub(b, a)) / seg));
+    for (let j = 1; j <= n; j++) q.push(pnLerp(a, b, j/n)); }
+  const out = [];
+  for (let i = 0; i < q.length - 1; i++) out.push({ box: pnBoxOf([q[i], q[i+1]]), svg: pnStroke([q[i], q[i+1]], col, w) });
+  return out; }
+// text lying on the timer's sloped face, reading left to right for someone in front of it
+const pnSlope = (y, s, off = .05) => [48 - 11*s/SLEN + SLN[0]*off, y, 7 + 5*s/SLEN + SLN[2]*off];
+const pnTxS = (y, s, str, size, col = INK, weight = 700) => `<text transform="${txM(P(...pnSlope(y, s, .08)), Dv(0,-1,0), Dv(11/SLEN, 0, -5/SLEN))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+// screen offset (dx, dy) from a 3D point, as a 3D point (labels for things drawn flat on the screen)
+const pnUnP = (p, dx, dy) => pnAdd(p, pnAdd(pnScl(CAM_R, dx/CAM_K), pnScl(CAM_D, dy/CAM_K)));
+function pnArrow(a, b, col){
+  const A = P(...a), B = P(...b), dx = B[0] - A[0], dy = B[1] - A[1], len = Math.hypot(dx, dy);
+  if (len < 1) return '';
+  const ux = dx/len, uy = dy/len, hl = Math.min(len*.5, 4.4), hw = hl*.5, E = [B[0] - ux*hl*.85, B[1] - uy*hl*.85];
+  const head = `M${f(B[0])} ${f(B[1])}L${f(B[0] - ux*hl - uy*hw)} ${f(B[1] - uy*hl + ux*hw)}L${f(B[0] - ux*hl + uy*hw)} ${f(B[1] - uy*hl - ux*hw)}Z`;
+  const ln = `M${f(A[0])} ${f(A[1])}L${f(E[0])} ${f(E[1])}`;
+  return `<path d="${ln}" fill="none" stroke="${INK}" stroke-width="4.6" stroke-linecap="round"/><path d="${ln}" fill="none" stroke="${col}" stroke-width="2.8" stroke-linecap="round"/>`
+    + `<path d="${head}" fill="${col}" stroke="${INK}" stroke-width="1.1" stroke-linejoin="round"/>`; }
+
+// byDepth's sort compares pairs in an order of its own choosing, and the box rule is not transitive, so with ~70 parts a
+// far part can end up over a near one. Here every separated pair is an edge, then the parts go out farthest-first.
+function pnSort(items){
+  items = items.filter(Boolean); const n = items.length, out = Array.from({length:n}, () => []), deg = new Array(n).fill(0);
+  const dep = items.map(p => depthOf(p.at || boxMid(p.box))), done = new Array(n).fill(false);
+  // only parts that overlap on screen are ordered (constraints between parts far apart on screen make cycles)
+  const R = items.map(p => { if (!p.box) return null; const xs = [], ys = [];
+    for (const x of [0, 1]) for (const y of [0, 1]) for (const z of [0, 1]){ const q = P(p.box[x][0], p.box[y][1], p.box[z][2]); xs.push(q[0]); ys.push(q[1]); }
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; });
+  const hit = (a, b) => a && b && a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++){ const o = hit(R[i], R[j]) ? sepOrder(items[i], items[j]) : 0;
+    if (o < 0){ out[i].push(j); deg[j]++; } else if (o > 0){ out[j].push(i); deg[i]++; } }
+  let svg = '';
+  for (let c = 0; c < n; c++){ let best = -1;
+    for (let i = 0; i < n; i++) if (!done[i] && (best < 0 || (deg[i] === 0) > (deg[best] === 0) || ((deg[i] === 0) === (deg[best] === 0) && dep[i] < dep[best]))) best = i;
+    done[best] = true; svg += items[best].svg; for (const j of out[best]) deg[j]--; }
+  return svg; }
+
+/* ---------- physics ---------- */
+const pnMass = st => BOBS[st.bob].g / 1000;
+function pnEnergy(st){ const m = pnMass(st), Lm = st.L/100;
+  return { pe: m*GRAV*Lm*(1 - Math.cos(st.th)), ke: .5*m*(Lm*st.om)**2 }; }
+function pnAmpNow(st){ const e = pnEnergy(st), c = 1 - (e.pe + e.ke)/(pnMass(st)*GRAV*st.L/100);
+  return Math.acos(Math.max(-1, Math.min(1, c))) * 180/Math.PI; }
+// one step of the real (large-angle) pendulum with air drag, RK4 in small substeps; the gate sees every pass of the bottom
+function pnSim(st, dt){
+  const Lm = st.L/100, kd = DRAG / pnMass(st), acc = (th, om) => -(GRAV/Lm)*Math.sin(th) - kd*Lm*om*Math.abs(om);
+  const n = Math.max(1, Math.ceil(dt/.002)), h = dt/n;
+  for (let i = 0; i < n; i++){
+    const th = st.th, om = st.om;
+    const k1t = om, k1o = acc(th, om);
+    const k2t = om + h/2*k1o, k2o = acc(th + h/2*k1t, om + h/2*k1o);
+    const k3t = om + h/2*k2o, k3o = acc(th + h/2*k2t, om + h/2*k2o);
+    const k4t = om + h*k3o, k4o = acc(th + h*k3t, om + h*k3o);
+    const nth = th + h/6*(k1t + 2*k2t + 2*k3t + k4t), nom = om + h/6*(k1o + 2*k2o + 2*k3o + k4o);
+    st.ts += h;
+    if (th !== 0 && nth !== 0 && Math.sign(nth) !== Math.sign(th)){
+      st.cross.push(st.ts - h + h*th/(th - nth)); st.nc++;
+      const c = st.cross; if (c.length >= 3) st.per = c[c.length - 1] - c[c.length - 3];
+      st.n = Math.max(0, Math.floor((st.nc - 1)/2)); if (c.length > 4) c.shift(); }
+    st.th = nth; st.om = nom;
+  }
+}
+const pnMoving = st => st.phase === 'swing' || st.phase === 'pull';
+function pnStep(st, dt){
+  if (st.phase === 'pull'){ st.pt += dt/.7; const e = ease(Math.min(1, st.pt)); st.th = st.thFrom + (st.th0 - st.thFrom)*e; st.om = 0;
+    if (st.pt >= 1) pnRelease(st); }
+  else if (st.phase === 'swing') pnSim(st, dt);
+  else if (st.phase === 'catch'){ st.pt += dt/.55; const e = ease(Math.min(1, st.pt)); st.th = st.thFrom*(1 - e); st.om = 0; if (st.pt >= 1) pnDone(st); }
+  else if (st.phase === 'adjust'){ st.pt += dt/1.3; const e = ease(Math.min(1, st.pt)); st.L = st.Lfrom + (st.Lto - st.Lfrom)*e; if (st.pt >= 1){ st.L = st.Lto; pnDone(st); } }
+  else if (st.phase === 'swap'){ st.pt += dt/.9; if (st.pt >= 1 && !st.swapped){ st.swapped = true; st.bob = st.bobTo; } if (st.pt >= 2) pnDone(st); }
+}
+function pnRelease(st){ st.phase = 'swing'; st.th = st.th0; st.om = 0; st.ts = 0; st.cross = []; st.nc = 0; st.per = 0; st.n = 0;
+  const e = pnEnergy(st); st.E0 = e.pe; }
+function pnDone(st){ st.phase = 'rest'; st.th = 0; st.om = 0; st.E0 = 0; const nx = st.next; st.next = null; if (nx) nx(st); }
+
+/* ---------- actions ---------- */
+let ui, pnLoopOn = false;
+function pnRun(){ if (pnLoopOn) return; pnLoopOn = true;
+  ui.animate(dt => { const st = ui.st; pnStep(st, dt); if (st.phase === 'rest'){ pnLoopOn = false; return false; } return true; }); }
+function pnCatch(st, next = null){ if (st.phase !== 'catch'){ st.phase = 'catch'; st.pt = 0; st.thFrom = st.th; } st.next = next; pnRun(); }
+// do fn once the bob hangs still (catching it first if it swings)
+function pnWhenStill(st, fn){
+  if (st.phase === 'adjust' || st.phase === 'swap') return ui.flash('One moment');
+  if (pnMoving(st) || st.phase === 'catch') return pnCatch(st, fn);
+  fn(st); }
+function pnPull(st){ st.phase = 'pull'; st.pt = 0; st.thFrom = st.th; st.th0 = st.amp*Math.PI/180; st.per = 0; st.n = 0; st.nc = 0; pnRun(); }
+function pnStartStop(st){
+  if (pnMoving(st)) return pnCatch(st);
+  if (st.phase === 'catch') return;
+  if (st.phase !== 'rest') return ui.flash('One moment');
+  pnPull(st); }
+function pnSetLen(st, L){ const was = pnMoving(st);
+  pnWhenStill(st, s => { s.phase = 'adjust'; s.pt = 0; s.Lfrom = s.L; s.Lto = L; s.next = was ? pnPull : null; pnRun(); }); }
+function pnSwap(st, key){ const was = pnMoving(st);
+  pnWhenStill(st, s => { s.phase = 'swap'; s.pt = 0; s.bobTo = key; s.swapped = false; s.next = was ? pnPull : null; pnRun(); }); }
+function pnSetAmp(st, a){ st.amp = a; pnWhenStill(st, pnPull); }
+
+/* ---------- where each bob is ---------- */
+// out of the gate along -y first, then up and over into its cup
+const pnPath = (A, B, s) => { s = Math.max(0, Math.min(1, s)); const A1 = [A[0], A[1] - 9, A[2] + 1.5];
+  if (s < .3) return pnLerp(A, A1, ease(s/.3));
+  const u = ease((s - .3)/.7), p = pnLerp(A1, B, u); p[2] += 6*Math.sin(Math.PI*u); return p; };
+function pnBobPos(st, key){
+  const hook = pnAt(st, st.L);
+  if (st.phase === 'swap' && key === st.bob) return pnPath(hook, TRAY[key], st.swapped ? 2 - st.pt : st.pt);
+  return key === st.bob ? hook : TRAY[key]; }
+const pnOnHook = st => st.phase !== 'swap';
+
+/* ---------- the parts ---------- */
+function pnShadows(st, gz){
+  const bx = (x0, y0, z0, x1, y1, z1) => { const o = []; for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) o.push([x, y, z]); return o; };
+  const ps = [bx(...POSTB), bx(...ARMB), bx(ROD[0] - .6, ROD[1] - .6, BH, ROD[0] + .6, ROD[1] + .6, ROD_TOP),
+    bx(30.5, 43, gz - 6.5, 41.5, 47, gz + 2.5), bx(23.4, 44.3, gz - 6.5, 30.5, 45.7, gz - 5.3),
+    [...on(PY(TY[0]), TP), ...on(PY(TY[1]), TP)], bx(38, 6, BH, 48, 30, 6.5), bx(9, 44, 84.5, 25, 46, 104)];
+  for (const key in BOBS){ const c = pnBobPos(st, key); ps.push([...on(PZ(c[2]), ellUV(c[0], c[1], BOB_R, BOB_R, 12)), [c[0], c[1], c[2] + BOB_R], [c[0], c[1], c[2] - BOB_R]]); }
+  const b = pnAt(st, st.L - BOB_R); ps.push([O3, b, pnAdd(O3, [.25, .25, 0]), pnAdd(b, [.25, .25, 0])]);
+  return clipTo(boardTop(0, 0, BW, BD, BH, 4), ps.map(p => castShadow(p, BH)).join('')); }
+
+// the metre scale on the post's front: 0 at the pivot, so the bob's centre sits on the string length
+function pnScale(){
+  const xf = POSTB[3] + .05; let s = shape(on(PX(xf), rectUV(43.2, 18.5, 46.8, 101)), '#f6e7a8', .8), tk = '';
+  for (let n = 0; n <= 80; n += 5){ const z = PZ0 - n; tk += pd([[xf + .02, 43.2, z], [xf + .02, n % 10 ? 44.2 : 44.9, z]], false); }
+  s += `<path d="${tk}" fill="none" stroke="${INK}" stroke-width=".7"/>`;
+  for (let n = 0; n <= 80; n += 10) s += tx(xf + .04, 45.9, PZ0 - n - .65, String(n), 1.7, INK, 800);
+  return s; }
+
+function pnProtractor(){
+  const x0 = 32.6, x1 = 33, pts = [], a0 = 180 - Math.asin(3/13.5)*180/Math.PI, a1 = 360 + Math.asin(3/13.5)*180/Math.PI;
+  for (let i = 0; i <= 26; i++){ const a = (a0 + (a1 - a0)*i/26)*Math.PI/180; pts.push([YC + 13.5*Math.cos(a), PZ0 + 13.5*Math.sin(a)]); }
+  const A = on(PX(x0), pts), B = on(PX(x1), pts);
+  let s = loft(A, B, n => toneI(n, CERAMIC));
+  if (facing([1,0,0])){
+    s += shape(B, '#fbf8ee', .9);
+    let tk = '';
+    for (let a = -40; a <= 40; a += 5){ const r0 = a % 10 ? 11.6 : 10.6, t = a*Math.PI/180;
+      tk += pd([[x1 + .03, YC + r0*Math.sin(t), PZ0 - r0*Math.cos(t)], [x1 + .03, YC + 13.1*Math.sin(t), PZ0 - 13.1*Math.cos(t)]], false); }
+    s += `<path d="${tk}" fill="none" stroke="${INK}" stroke-width=".6"/>`;
+    for (const a of [-30, -20, -10, 0, 10, 20, 30]){ const t = a*Math.PI/180; s += tx(x1 + .05, YC + 8.9*Math.sin(t), PZ0 - 8.9*Math.cos(t) - .5, String(Math.abs(a)), 1.4, INK, 800); }
+  } else if (facing([-1,0,0])) s += shape(A, '#ece6d4', .9);
+  return s + hullInk([...A, ...B], 1.3); }
+
+function pnTimer(st, m, k){
+  let s = pnPrismY(TP, TY[0], TY[1], m, 1);
+  const lcdQ = (off) => [pnSlope(67, 1.4, off), pnSlope(83, 1.4, off), pnSlope(83, 7.6, off), pnSlope(67, 7.6, off)];
+  if (vis(SLN)){
+    s += shape(lcdQ(.04), '#1d2a26', 1);
+    const per = (st.per || 0).toFixed(3);
+    s += pnTxS(76, 2.6, per, 3.4, '#8af0ae', 800) + pnTxS(69.3, 2.6, 's', 2, '#8af0ae', 700);
+    s += pnTxS(79, 6.1, 'PERIOD', 1.3, '#8af0ae', 700) + pnTxS(71, 6.1, 'N ' + st.n, 1.5, '#8af0ae', 800);
+    for (const [y, lab] of [[70, 'MODE'], [76, 'RESET']]){ const a = pnSlope(y, 9.9, 0), b = pnSlope(y, 9.9, .6);
+      s += act('timer', rod(a, b, .95, y === 76 ? matOf('#e2483d') : DARK, toneI, .8)) + pnTxS(y, 11.5, lab, 1, INK, 800); }
+    s += pnTxS(81.5, 10.6, 'TIMER', 1.4, mix(m.d, '#000000', .2), 800);
+  }
+  if (!(k > 0)) return [s, ''];
+  // inside: board on standoffs, chip, crystal, battery, LCD module, socket wiring
+  let ins = '';
+  for (const [x, y] of [[35.6, 66], [46.4, 66], [35.6, 84], [46.4, 84]]) ins += cyl(x, y, BH, 4.2, .35, STEELM, toneI, .5, 8);
+  ins += pnBx(35, 65, 4.2, 47, 85, 4.5, PCBM, .7);
+  ins += pnBx(40, 70, 4.5, 43.4, 73.4, 5.1, DARK, .6);
+  ins += rod([44.6, 72, 4.9], [44.6, 74.4, 4.9], .4, STEELM, toneI, .5);
+  ins += pnBx(35.4, 78.6, 4.5, 37.2, 84.2, 7.1, matOf('#3f4a8a'), .7) + pnBx(36, 79, 7.1, 36.6, 79.9, 7.5, STEELM, .5) + pnBx(36, 82.9, 7.1, 36.6, 83.8, 7.5, STEELM, .5);
+  ins += shape(lcdQ(-.5), '#3c4a44', .7);
+  ins += pnStroke([[34.6, 72, 7], [38, 72, 6], [40, 71.7, 5.1]], '#d8a24a', .5);
+  ins += pnStroke([[36.3, 79, 7.4], [37.6, 76, 5.4], [40, 73, 5.1]], '#e2483d', .4) + pnStroke([[36.3, 83.8, 7.4], [38.4, 80, 5], [41, 73.4, 5.1]], '#333333', .4);
+  ins += pnStroke([[42, 70, 4.6], [44, 68.6, 4.8], [45.5, 67.2, 9]], '#d8a24a', .4);
+  return [s, ins]; }
+
+function scene(st, m){
+  const k = ease(st.xr || 0), items = [];
+  const put = (b, svg, inside = '') => items.push({ box: b, svg: k > 0 && inside ? `<g opacity="${f(1 - .8*k)}">${svg}</g><g opacity="${f(k)}">${inside}</g>` : svg });
+  const gz = PZ0 - st.L, bz0 = gz - 7.5, bz1 = gz - 4.3;
+  const lit = pnMoving(st) || st.phase === 'catch';
+  const bobC = pnAt(st, st.L), blocked = pnOnHook(st) && Math.hypot(bobC[1] - YC, bobC[2] - gz) < BOB_R;
+  let s = castShadow([...on(PZ(0), rectUV(0, 0, BW, BD)), ...on(PZ(BH), rectUV(0, 0, BW, BD))]);
+  s += board(0, 0, BW, BD, BH, 4, WOOD);
+  s += pnShadows(st, gz);
+
+  // ---- frame: post (scale on its front), top arm, brace
+  { let sv = pnBx(...POSTB, FRAMEM, 1.1); if (facing([1,0,0])) sv += pnScale();
+    let ins = '';
+    for (const y of [43.8, 46.2]) ins += rod([6.5, y, .3], [6.5, y, 10], .35, STEELM, toneI, .5) + cyl(6.5, y, .1, .4, .8, STEELM, toneI, .5, 10);
+    ins += cyl(6.5, 45, 100, 104, .8, matOf('#f3dcae'), toneI, .6, 12);
+    if (facing([1,0,0])) ins += pnScale();
+    put([[4, 42.5, BH], [9, 47.5, 104]], sv, ins); }
+  { let sv = pnBx(...ARMB, FRAMEM, 1.1) + pnStroke([[PX0, YC, 109.05], [SPX, YC, SPZ + 1.4 + .3*(80 - st.L)/60]], STRC, .45);   // the string over the arm to the drum
+    if (facing([0,0,1])) sv += shape(on(PZ(109.02), ellUV(PX0, YC, .55, .55, 10)), '#2b2523', .5);
+    let ins = cyl(6.5, 45, 104, 107, .8, matOf('#f3dcae'), toneI, .6, 12);
+    ins += cyl(PX0, YC, 104, 109, .55, matOf('#5a4a3a'), toneI, .4, 10) + pnStroke([[PX0, YC, 104], [PX0, YC, 109]], STRC, .5);
+    for (const y of [42.8, 47.2]) for (const x of [12.6, 15.4]) ins += rod([x, y, 109], [x, y, 106.4], .22, STEELM, toneI, .4);
+    for (const y of [41.2, 48.8]) ins += rod([36, y, 103.4], [36, y, 103.4], .1, STEELM);
+    for (const x of [34.4, 37.6]) ins += rod([x, YC, 104], [x, YC, 106.6], .25, STEELM, toneI, .4);
+    ins += rod([23.2, 45, 104], [23.2, 45, 107], .25, STEELM, toneI, .4);
+    put([[4, 42.5, 104], [40, 47.5, 109]], sv, ins); }
+  put([[9, 44, 84.5], [25, 46, 104]], pnPrismY([[9, 84.5], [9, 88], [21.5, 104], [25, 104]], 44, 46, FRAMEM, 1),
+    pnPrismY([[9, 84.5], [9, 88], [21.5, 104], [25, 104]], 44, 46, FRAMEM, .6) + rod([12.4, 45, 87.4], [6.6, 45, 87.4], .25, STEELM, toneI, .4) + rod([23.2, 45, 101.5], [23.2, 45, 104], .25, STEELM, toneI, .4));
+
+  // ---- pivot: bracket under the arm end, protractor on its back flange, split chuck hanging from it
+  put([[33, 39, 103.4], [39, 51, 104]], pnBx(33, 39, 103.4, 39, 51, 104, STEELM, .8));
+  put([[33, 39, 100], [33.6, 51, 103.4]], pnBx(33, 39, 100, 33.6, 51, 103.4, STEELM, .8) + (facing([1,0,0]) ? [40.5, 49.5].map(y => shape(on(PX(33.64), ellUV(y, 101.7, .55, .55, 10)), STEELM.l, .5)).join('') : ''));
+  put([[32.6, 31.5, 86.5], [33, 58.5, 103]], pnProtractor());
+  { const near = facing([0,1,0]), jaw = (y0, y1) => pnBx(34, y0, 100, 38, y1, 103.4, BRASSM, .9);
+    const screw = rod([37, 47, 101.7], [37, 48.9, 101.7], 1.15, STEELM, toneI, .9, 1.15, 14) + (near ? line([[37, 49, 101.7 - .8], [37, 49, 101.7 + .8]], .7) : '');
+    const sv = near ? jaw(43, 45) + jaw(45, 47) + screw : screw + jaw(45, 47) + jaw(43, 45);
+    const ins = rod([37, 43.3, 101.7], [37, 47, 101.7], .4, STEELM, toneI, .5) + pnStroke([[PX0, YC, 100], [PX0, YC, 103.4]], STRC, .5) + (near ? screw : '');
+    put([[34, 43, 100], [38, 49, 103.4]], act('chuck', sv), ins); }
+
+  // ---- spool on the arm top: cheeks, drum with the wound string, axle, friction washer, crank
+  { const rw = 1.4 + .3*(80 - st.L)/60, phi = (80 - st.L)/1.6 + .6, top = SPZ + rw;
+    const cheek = (y0, y1) => pnBx(12, y0, 109, 16, y1, 113.8, STEELM, .8);
+    put([[12, 42.5, 109], [16, 43.1, 113.8]], cheek(42.5, 43.1));
+    put([[12, 46.9, 109], [16, 47.5, 113.8]], cheek(46.9, 47.5));
+    put([[SPX - .4, 41.9, SPZ - .4], [SPX + .4, 42.5, SPZ + .4]], rod([SPX, 41.9, SPZ], [SPX, 42.5, SPZ], .3, STEELM, toneI, .5));
+    put([[SPX - rw, 43.1, SPZ - rw], [SPX + rw, 46.9, SPZ + rw]], rod([SPX, 43.1, SPZ], [SPX, 46.9, SPZ], rw, { l:'#fbf6e6', m:'#e8dcc0', d:'#bfb08c' }, toneI, .8, rw, 18));
+    const kb = [SPX + 2.4*Math.cos(phi), 49.3, SPZ + 2.4*Math.sin(phi)];
+    put([[SPX - 3, 47.5, SPZ - 3], [SPX + 3, 51.2, SPZ + 3]], act('crank', rod([SPX, 47.5, SPZ], [SPX, 47.9, SPZ], 1.1, STEELM, toneI, .6, 1.1, 14)
+      + rod([SPX, 47.9, SPZ], [SPX, 49.3, SPZ], .3, STEELM, toneI, .5) + rod([SPX, 49.3, SPZ], kb, .4, STEELM, toneI, .6) + rod(kb, pnAdd(kb, [0, 1.9, 0]), .65, m, toneI, .8)));
+  }
+
+  // ---- the pendulum: string, S-hook, the bob's screw eye, the bob
+  { const d = pnDir(st.th), e = pnTan(st.th), at = sv => pnAt(st, sv), Lh = st.L;
+    let sv = pnStroke([O3, at(Lh - 5.2)], STRC, .45);
+    sv += pnStroke([at(Lh - 5.2), at(Lh - 4.6), pnAdd(at(Lh - 4.25), pnScl(e, .35)), pnAdd(at(Lh - 4.5), pnScl(e, .8)), pnAdd(at(Lh - 4.95), pnScl(e, .8))], STEELM.m, .45);
+    let ins = '';
+    const pts = [O3, at(Lh - 5)];
+    if (pnOnHook(st)){
+      const M = BOBS[st.bob].M;
+      sv += pnStroke(pnRing(at(Lh - 3.75), d, [1,0,0], .55), BRASSM.m, .4, true) + pnStroke([at(Lh - 3.2), at(Lh - 3)], BRASSM.m, .45);
+      const ball = pnBall(bobC, BOB_R, M);
+      sv += act('bob', ball);
+      ins = act('bob', `<g opacity=".8">${ball}</g>`) + pnStroke([at(Lh - 3), at(Lh - .9)], STEELM.d, .7);
+      const cm = P(...bobC); ins += `<circle cx="${f(cm[0])}" cy="${f(cm[1])}" r="${f(.55*CAM_K)}" fill="#ffffff" stroke="${INK}" stroke-width=".8"/>`;
+      pts.push(pnAdd(bobC, [BOB_R, BOB_R, BOB_R]), pnAdd(bobC, [-BOB_R, -BOB_R, -BOB_R]));
+    }
+    const bx = pnBoxOf(pts); bx[0][0] = PX0 - BOB_R; bx[1][0] = PX0 + BOB_R;
+    // the in-front-of / behind ink of a sphere: draw its eye after the ball only when the eye is nearer (handled by the box sort)
+    if (k > 0 && ins) items.push({ box: bx, svg: sv.replace(/<g data-act="bob"[\s\S]*$/, '') + ins });
+    else items.push({ box: bx, svg: sv }); }
+
+  // ---- bob tray and the bobs not on the hook (one may be travelling)
+  { let sv = pnBx(38, 6, BH, 48, 30, 6.5, FRAMEM, 1);
+    if (facing([0,0,1])) for (const key in TRAY){ const c = TRAY[key]; sv += shape(on(PZ(6.52), ellUV(c[0], c[1], 2.4, 2.4, 16)), '#5a3e22', .7); }
+    put([[38, 6, BH], [48, 30, 6.5]], sv); }
+  for (const key in BOBS){
+    if (key === st.bob && pnOnHook(st)) continue;
+    const c = pnBobPos(st, key), M = BOBS[key].M, up = [0, 0, 1];
+    let sv = pnStroke([pnAdd(c, [0, 0, BOB_R]), pnAdd(c, [0, 0, BOB_R + .2])], BRASSM.m, .45) + pnStroke(pnRing(pnAdd(c, [0, 0, BOB_R + .75]), up, [1,0,0], .55), BRASSM.m, .4, true);
+    const ball = pnBall(c, BOB_R, M);
+    sv = ball + sv;
+    const ins = k > 0 ? `<g opacity=".8">${ball}</g>` + pnStroke([pnAdd(c, [0, 0, BOB_R]), pnAdd(c, [0, 0, .9])], STEELM.d, .7) : '';
+    items.push({ box: [[c[0] - BOB_R, c[1] - BOB_R, c[2] - BOB_R + 1.3], [c[0] + BOB_R, c[1] + BOB_R, c[2] + BOB_R + 1.4]], svg: act('spare', k > 0 ? ins + sv.slice(ball.length) : sv, `data-k="${key}"`) });
+  }
+
+  // ---- light gate on its stand
+  put([[19, 42, BH], [25, 48, 4.6]], cyl(ROD[0], ROD[1], BH, 4.6, 3, DARK, toneI, 1, 24));
+  put([[21.4, 44.4, 4.6], [22.6, 45.6, bz0]], cyl(ROD[0], ROD[1], 4.6, bz0, .6, STEELM, toneI, .8, 12));
+  put([[21.4, 44.4, bz1], [22.6, 45.6, ROD_TOP]], cyl(ROD[0], ROD[1], bz1, ROD_TOP, .6, STEELM, toneI, .8, 12));
+  { const bm = (bz0 + bz1)/2, near = facing([0,1,0]);
+    const scr = rod([22, 46.4, bm], [22, 48, bm], .3, STEELM, toneI, .5) + rod([22, 48, bm], [22, 48.9, bm], .95, DARK, toneI, .8, .95, 14);
+    const body = pnBx(20.6, 43.6, bz0, 23.4, 46.4, bz1, BOSSM, .9);
+    put([[20.6, 43.6, bz0], [23.4, 48.9, bz1]], near ? body + scr : scr + body); }
+  put([[23.4, 44.3, gz - 6.5], [30.5, 45.7, gz - 5.3]], pnBx(23.4, 44.3, gz - 6.5, 30.5, 45.7, gz - 5.3, STEELM, .8));
+  put([[30.5, 43, gz - 6.5], [41.5, 47, gz - 5]], pnBx(30.5, 43, gz - 6.5, 41.5, 47, gz - 5, m, 1),
+    pnBx(32, 43.6, gz - 6.2, 40, 46.4, gz - 5.8, PCBM, .6) + pnStroke([[31.2, 45, gz - 5.9], [31.2, 45, gz - .5]], '#d8a24a', .35) + pnStroke([[40.8, 45, gz - 5.9], [40.8, 45, gz - .5]], '#d8a24a', .35));
+  { let sv = pnBx(30.5, 43, gz - 5, 32, 47, gz + 2.5, m, 1);
+    if (facing([1,0,0])) sv += shape(on(PX(32.03), rectUV(44.4, gz - .6, 45.6, gz + .6)), '#241f1a', .6);
+    put([[30.5, 43, gz - 5], [32, 47, gz + 2.5]], sv, rod([31.1, 45, gz], [31.95, 45, gz], .5, DARK, toneI, .6) + pnBx(30.8, 44.4, gz - .7, 31.1, 45.6, gz + .7, PCBM, .4)); }
+  { let sv = pnBx(40, 43, gz - 5, 41.5, 47, gz + 2.5, m, 1);
+    if (facing([-1,0,0])) sv += shape(on(PX(39.97), rectUV(44.4, gz - .6, 45.6, gz + .6)), '#241f1a', .6);
+    sv += cyl(40.75, 45, gz + 2.5, gz + 2.95, .45, blocked ? matOf('#ff5a3a') : matOf('#8d4a40'), toneI, .5, 10);
+    put([[40, 43, gz - 5], [41.5, 47, gz + 2.95]], sv, rod([40.9, 45, gz], [40.05, 45, gz], .5, matOf('#cfe2f0'), toneI, .6) + pnBx(40.9, 44.4, gz - .7, 41.2, 45.6, gz + .7, PCBM, .4)); }
+  items.push(...pnWire([[30.5, 46.1, gz - 6.1], [23.6, 46.1, gz - 6.1], [22.4, 46.1, gz - 7.6], [22.4, 46.1, 5.1], [22.6, 48.6, 4.8], [23.2, 49.2, 3.4], [30, 71.6, 3.4], [31, 72, 5.4], [31.6, 72, 7]], '#2e2b28', .6));
+
+  // ---- timer on the base, its gate socket and the cable's plug
+  { const [sv, ins] = pnTimer(st, m, k); put([[34, TY[0], BH], [48, TY[1], 12]], sv, ins); }
+  put([[31.6, 71.2, 6.2], [34, 72.8, 7.8]], cylX(33.2, 34, 72, 7, .8, STEELM, toneI, .7, 14) + cylX(31.6, 33.2, 72, 7, .6, DARK, toneI, .7, 12));
+  // ---- spirit level
+  { let sv = cyl(45, 54, BH, 4.2, 2, STEELM, toneI, .9, 20);
+    if (facing([0,0,1])) sv += shape(on(PZ(4.22), ellUV(45, 54, 1.5, 1.5, 18)), '#cfe9a8', .6) + shape(on(PZ(4.24), ellUV(45.1, 53.9, .5, .5, 10)), '#f4fbe6', .4) + ink(pd(on(PZ(4.24), ellUV(45, 54, .85, .85, 14))), .4);
+    put([[43, 52, BH], [47, 56, 4.3]], sv); }
+
+  s += pnSort(items);
+
+  // ---- see-through overlays: arc, beam, forces, velocity, energy
+  let lbl = [];
+  if (k > 0){
+    let ov = '';
+    const amp = st.phase === 'pull' ? st.th0 : st.phase === 'swing' ? pnAmpNow(st)*Math.PI/180 : 0;
+    if (amp > .01){ const arc = []; for (let i = 0; i <= 40; i++){ const t = -amp + 2*amp*i/40; arc.push(pnAdd(O3, pnScl(pnDir(t), st.L))); }
+      ov += `<path d="${pd(arc, false)}" fill="none" stroke="#41538f" stroke-width="1" stroke-dasharray="2 2" opacity=".8"/>`; }
+    ov += `<path d="${pd([O3, pnAdd(O3, [0, 0, -st.L - 4])], false)}" fill="none" stroke="#41538f" stroke-width=".7" stroke-dasharray="1 2" opacity=".6"/>`;
+    // the IR beam from the LED (front prong) to the phototransistor (back prong), cut short by the bob
+    const bx1 = blocked ? PX0 + Math.sqrt(Math.max(0, BOB_R*BOB_R - (bobC[1] - YC)**2 - (bobC[2] - gz)**2)) : 32;
+    ov += `<path d="${pd([[40, YC, gz], [bx1, YC, gz]], false)}" fill="none" stroke="${COL.beam}" stroke-width="1.4" stroke-dasharray="1.6 1" stroke-linecap="round"/>`;
+    const m_ = pnMass(st), Lm = st.L/100, Wt = m_*GRAV, Tn = m_*(GRAV*Math.cos(st.th) + Lm*st.om*st.om), v = Lm*st.om, U = 14;
+    if (pnOnHook(st)){
+      const gEnd = pnAdd(bobC, [0, 0, -U]), tEnd = pnAdd(bobC, pnScl(pnDir(st.th), -U*Tn/Wt));
+      ov += pnArrow(bobC, gEnd, COL.grav) + pnArrow(bobC, tEnd, COL.ten);
+      lbl.push({ at: pnLerp(bobC, gEnd, .8), text: `GRAVITY ${Wt.toFixed(2)} N`, on: true }, { at: pnLerp(bobC, tEnd, .75), text: `TENSION ${Tn.toFixed(2)} N`, on: true });
+      if (Math.abs(v) > .02){ const vEnd = pnAdd(bobC, pnScl(pnTan(st.th), 11*v)); ov += pnArrow(bobC, vEnd, COL.vel);
+        lbl.push({ at: pnLerp(bobC, vEnd, .8), text: `VELOCITY ${Math.abs(v).toFixed(2)} M/S`, on: true }); }
+    }
+    // energy bar, drawn flat on the screen beside the pivot, on the side away from the top arm
+    const EB = pnUnP(O3, Dv(-1, 0, 0)[0] > 0 ? -32 : 32, -6), a = P(...EB), w = 7, h = 36, x0 = a[0] - w/2, yb = a[1] + h/2;
+    const e = pnEnergy(st), ref = st.phase === 'pull' ? m_*GRAV*Lm*(1 - Math.cos(st.th0)) : (st.E0 || 0);
+    const fk = ref > 1e-9 ? Math.min(1, e.ke/ref) : 0, fp = ref > 1e-9 ? Math.min(1, e.pe/ref) : 0, fl = ref > 1e-9 && st.phase === 'swing' ? Math.max(0, 1 - fk - fp) : 0;
+    const seg = (from, frac, col) => frac > .002 ? `<rect x="${f(x0)}" y="${f(yb - (from + frac)*h)}" width="${f(w)}" height="${f(frac*h)}" fill="${col}" stroke="${INK}" stroke-width=".8"/>` : '';
+    ov += `<rect x="${f(x0 - 1)}" y="${f(yb - h - 1)}" width="${f(w + 2)}" height="${f(h + 2)}" rx="1.5" fill="#fff8e6" stroke="${INK}" stroke-width="1.4"/>`
+      + seg(0, fk, COL.ke) + seg(fk, fp, COL.pe) + seg(fk + fp, fl, COL.lost)
+      + `<text x="${f(a[0])}" y="${f(yb + 4.6)}" font-size="3" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">E</text>`;
+    lbl.push({ at: pnUnP(EB, w/2, h/2 - Math.max(fk, .04)*h/2), text: 'KINETIC ENERGY', on: fk > .05 },
+      { at: pnUnP(EB, w/2, h/2 - (fk + Math.max(fp, .04)/2)*h), text: 'POTENTIAL ENERGY', on: fp > .05 });
+    if (fl > .01) lbl.push({ at: pnUnP(EB, w/2, h/2 - (fk + fp + fl/2)*h), text: 'LOST TO AIR DRAG', on: false });
+    s += `<g opacity="${f(k)}">${ov}</g>`;
+  }
+
+  // ---- labels
+  if (k > .6){
+    const L = st.L, rw = 1.4 + .3*(80 - L)/60;
+    lbl.push(
+      { at: O3, text: 'PIVOT', on: pnMoving(st) },
+      { at: [36, 43, 102.5], text: 'SPLIT CHUCK', on: st.phase === 'adjust' },
+      { at: [37, 48.9, 101.7], text: 'CLAMP SCREW', on: st.phase === 'adjust' },
+      { at: [33.6, 39.5, 101], text: 'STEEL BRACKET', on: false },
+      { at: [33, 54, 92], text: 'PROTRACTOR', on: st.phase === 'pull' },
+      { at: pnAt(st, L*.55), text: 'STRING', on: st.phase === 'adjust' },
+      { at: pnAt(st, L - 4.6), text: 'S-HOOK', on: st.phase === 'swap' },
+      ...(pnOnHook(st) ? [{ at: pnAt(st, L - 3.75), text: 'SCREW EYE', on: false }, { at: bobC, text: 'CENTRE OF MASS', on: false },
+        { at: pnAdd(bobC, [0, BOB_R*.7, BOB_R*.7]), text: `${BOBS[st.bob].name.toUpperCase()} BOB ${BOBS[st.bob].g} G`, on: pnMoving(st) }] : []),
+      { at: [SPX, 45, SPZ + rw], text: 'SPOOL', on: st.phase === 'adjust' },
+      { at: [SPX, 51, SPZ], text: 'CRANK', on: st.phase === 'adjust' },
+      { at: [PX0, YC, 106.5], text: 'GUIDE HOLE', on: st.phase === 'adjust' },
+      { at: [22, 47.5, 109], text: 'TOP ARM', on: false },
+      { at: [6.5, 42.5, 40], text: 'UPRIGHT POST', on: false },
+      { at: [17, 45, 95], text: 'BRACE', on: false },
+      { at: [9.1, 44, 70], text: 'METRE SCALE', on: st.phase === 'adjust' },
+      { at: [6.5, 43.8, 1.5], text: 'BASE SCREWS', on: false },
+      { at: [22, 45, (bz1 + ROD_TOP)/2 + 2], text: 'STAND ROD', on: false },
+      { at: [22, 48.9, (bz0 + bz1)/2], text: 'BOSS CLAMP', on: st.phase === 'adjust' },
+      { at: [41.5, 47, gz - 5], text: 'LIGHT GATE', on: blocked },
+      { at: [40.5, 45, gz], text: 'IR LED', on: true },
+      { at: [31.5, 45, gz], text: 'PHOTOTRANSISTOR', on: blocked },
+      { at: [36, 43.6, gz - 6], text: 'SENSOR BOARD', on: blocked },
+      { at: [26, 60, 3.4], text: 'GATE CABLE', on: blocked },
+      { at: [48, 64, 5], text: 'PERIOD TIMER', on: st.phase === 'swing' },
+      { at: pnSlope(83, 4.5), text: 'LCD', on: st.per > 0 },
+      { at: [41.7, 71.7, 5.1], text: 'MICROCONTROLLER', on: st.phase === 'swing' },
+      { at: [44.6, 73.2, 4.9], text: 'CRYSTAL', on: st.phase === 'swing' },
+      { at: [36.3, 82, 7.1], text: '9V BATTERY', on: false },
+      { at: [43, 6, 5], text: 'BOB TRAY', on: st.phase === 'swap' },
+      { at: [45, 54, 4.2], text: 'SPIRIT LEVEL', on: false });
+    s += xrCallouts(lbl, [0, BW, -2, BD + 2, 0, 115]);
+  } else if (k === 0){
+    s += xrCallouts([
+      { at: [36, 43, 102.5], text: 'SPLIT CHUCK', on: st.phase === 'adjust' },
+      { at: [33, 54, 92], text: 'PROTRACTOR', on: false },
+      { at: [SPX, 51, SPZ], text: 'SPOOL', on: st.phase === 'adjust' },
+      { at: pnAt(st, st.L*.55), text: 'STRING', on: false },
+      ...(pnOnHook(st) ? [{ at: bobC, text: 'BOB', on: pnMoving(st) }] : []),
+      { at: [41.5, 47, gz - 5], text: 'LIGHT GATE', on: blocked },
+      { at: [48, 64, 5], text: 'PERIOD TIMER', on: st.phase === 'swing' },
+      { at: [9.1, 44, 70], text: 'METRE SCALE', on: false },
+      { at: [43, 6, 5], text: 'BOB TRAY', on: st.phase === 'swap' } ], [0, BW, -2, BD + 2, 0, 115]);
+  }
+  return s;
+}
+
+ui = mountFigure({
+  fig:'P1', turn:'full', title:'The pendulum',
+  size:[BW, BD, 115], palette:'cobalt',
+  state:{ phase:'rest', L:60, Lto:60, bob:'brass', amp:20, th:0, om:0, th0:0, thFrom:0, pt:0, ts:0, cross:[], nc:0, n:0, per:0, E0:0, next:null },
+  scene,
+  stats: st => { const amp = st.phase === 'swing' ? pnAmpNow(st) : st.amp;
+    return [ { label:'Period', value: st.per ? st.per.toFixed(3) + ' s' : '–' },
+      { label:'String', value: Math.round(st.L) + ' cm', small:true },
+      { label:'Bob', value: BOBS[st.bob].g + ' g', small:true },
+      { label:'Swing', value: Math.round(amp) + '°', small:true } ]; },
+  buttons:[
+    { label:'Start / stop', onClick: st => pnStartStop(st) },
+    { label:'String length', choices: st => LENS.map(L => ({ label: L + ' cm', current: st.Lto === L && st.phase !== 'adjust' && Math.round(st.L) === L, onClick: s => { s.Lto = L; pnSetLen(s, L); } })) },
+    { label:'Swap the bob', choices: st => Object.keys(BOBS).map(key => ({ label: `${BOBS[key].name} ${BOBS[key].g} g`, current: st.bob === key && st.phase !== 'swap', onClick: s => pnSwap(s, key) })) },
+    { label:'Swing angle', choices: st => AMPS.map(a => ({ label: a + '°', onClick: s => pnSetAmp(s, a) })) },
+  ],
+  acts:{ bob:(st) => pnStartStop(st), crank:(st) => { const i = (LENS.indexOf(st.Lto) + 1) % LENS.length; st.Lto = LENS[i]; pnSetLen(st, LENS[i]); },
+    spare:(st, el) => pnSwap(st, el.dataset.k), timer:(st) => { st.per = 0; st.n = 0; st.nc = 0; st.cross = []; } },
+  params:(st, q) => {
+    if (LENS.includes(+q.get('L'))) st.L = st.Lto = +q.get('L');
+    if (BOBS[q.get('bob')]) st.bob = q.get('bob');
+    if (AMPS.includes(+q.get('amp'))) st.amp = +q.get('amp');
+    if (q.has('th')){ const a0 = st.amp*Math.PI/180, th = Math.max(-a0, Math.min(a0, +q.get('th')*Math.PI/180)), Lm = st.L/100;
+      st.phase = 'swing'; st.th = th; st.th0 = a0; st.om = (q.get('dir') === '-1' ? -1 : 1)*Math.sqrt(Math.max(0, 2*GRAV/Lm*(Math.cos(th) - Math.cos(a0))));
+      st.E0 = pnMass(st)*GRAV*Lm*(1 - Math.cos(a0)); if (q.has('per')) st.per = +q.get('per'); if (q.has('n')) st.n = +q.get('n'); }
+  },
+});
+if (new URLSearchParams(location.search).get('go') === '1') pnPull(ui.st);
+addEventListener('keydown', e => { if (e.key !== ' ' || /input|textarea|button/i.test(e.target.tagName)) return; e.preventDefault(); pnStartStop(ui.st); ui.render(); });
+xrMount(() => ui, () => '');
+</script></body></html>
