@@ -37,7 +37,7 @@
 /* ---------- geometry ---------- */
 const PW = 170, KY = 42, PD = 167, PH = 12;              // pavement x 0..PW, y KY..PD, top at PH; road y 0..KY
 const POX = 110, POY = 70, POR = 5.5, POT = 302;         // pole
-const VXB = 117, VXH = 118.5, VXF = 140, VVIS = 12;      // vehicle head: backboard back, housing back, front, visor length
+const VXB = 117, VXH = 118.5, VXF = 140, VVIS = 8;      // vehicle head: backboard back, housing back, front, visor length
 const VY0 = POY - 14, VY1 = POY + 14, VZ0 = 206, VZ1 = 290;
 const BBY0 = POY - 22, BBY1 = POY + 22, BBZ0 = 197, BBZ1 = 299;
 const LENS_R = 9.5;
@@ -311,12 +311,12 @@ function cabParts(st){
   bx(18, 96, 26, 28, 106, 44, BAKE, .8, FX ? shape(on(PX(28.05), rectUV(99, 37, 103, 41)), '#d8402f', .4) : '');
   bx(18, 96, 62, 25, 106, 74, WHITEM, .7, sq(25.05, 99, 70, '#3a3632', .9) + sq(25.05, 103, 70, '#3a3632', .9) + sq(25.05, 101, 65, '#e8c45a', .7));
   bx(18, 96, 82, 26, 106, 96, matOf('#e6e2d6'), .7);
-  put(tlB(26, 98.4, 86.4, 29, 103.6, 91.6), rod([26, 101, 89], [28.6, 101, 89], 2.6, matOf('#d8d2c2'), toneI, .7, 2.6, 16) + rod([28.6, 101, 89], [28.6 + .01, 101, 89], 0, REDM)
+  put(tlB(26, 98.4, 86.4, 29, 103.6, 91.6), rod([26, 101, 89], [28.6, 101, 89], 2.6, matOf('#d8d2c2'), toneI, .7, 2.6, 16)
     + (FX ? shape(on(PX(28.7), rectUV(100.2, 86.6, 101.8, 91.4)), '#d8402f', .5) : ''));
   bx(18, 96, 104, 30, 106, 120, matOf('#7c8389'), .8, sq(30.05, 98.5, 116.5, st.sig ? '#43c25c' : '#e2483d', .8));
   put(tlB(30, 100, 109, 33, 102, 115), act('panel', rod([30, 101, 112], [32.6, 101, 112 + (st.sig ? 2.6 : -2.6)], .8, METAL, toneI, .7, .6, 10)));
   // card rack: side plates, shelves, backplane, cards
-  bx(17, 110, 68, 44.5, 111.5, 112, RACKM, .6); bx(17, 156.5, 68, 44.5, 158, 112, RACKM, .6);
+  for (const y of [110, 156.5]) for (const x of [17, 42.5]) bx(x, y, 66.5, x + 2, y + 1.5, 113.5, RACKM, .6);   // rack posts
   bx(17, 111.5, 66.5, 44.5, 156.5, 68, RACKM, .6); bx(17, 111.5, 112, 44.5, 156.5, 113.5, RACKM, .6);
   bx(17, 111.5, 68, 19, 156.5, 112, PCBM, .6);
   const blink = Math.floor((st.clock || 0)*2) % 2 === 0;
@@ -371,7 +371,7 @@ function mech(st){
   bx(119.5, POY - 10, 208, 125, POY + 10, 212.5, TERMM, .6);
   ASP.forEach((a, i) => { const on1 = lit.has(a.k);
     bx(127, POY - 8, a.z - 7, 134, POY + 8, a.z + 7, PCBM, .6);
-    let mod = rod([136, POY, a.z], [138.5, POY, a.z], 9, PCBM, toneI, .7, 9, 24);
+    let mod = rod([136, POY, a.z], [138.5, POY, a.z], 9, HEADM, toneI, .7, 9, 24);
     if (facing([1,0,0])) mod += tlDots(PX(138.55), LEDS.map(([u, v]) => [POY + u, a.z + v]), 1, on1 ? a.on : mix(a.off, '#ffffff', .15))
       + (on1 ? fill(pd(on(PX(138.6), ellUV(POY, a.z, 8, 8, 24))), a.on, 'opacity=".3"') : '');
     put(tlB(136, POY - 9, a.z - 9, 138.6, POY + 9, a.z + 9), mod);
@@ -485,7 +485,7 @@ function tlStep(st, dt){
 function tlRun(){
   if (tlLoop || tlUI.st.freeze) return; tlLoop = true;
   tlUI.animate(dt => { const st = tlUI.st; tlStep(st, dt);
-    const busy = (st.sig && st.ph !== 'green') || st.pulse >= 0 || st.hold > 0 || st.btnT > 0 || st.door !== st.doorT || (st.door > 0 && st.sig) || st.xr > 0;
+    const busy = (st.sig && st.ph !== 'green') || st.pulse >= 0 || st.hold > 0 || st.btnT > 0 || st.door !== st.doorT;
     if (!busy) tlLoop = false; return busy; });
 }
 function tlPress(st, ui){
@@ -506,7 +506,7 @@ function tlSig(st, ui){
 
 tlUI = mountFigure({
   fig:'21', title:'Traffic light',
-  size:[PW, PD, POT + 14], palette:'mint',
+  size:[PW, PD, POT + 14], palette:'mint', turn:'full',
   state:{ ph:'green', t:0, beat:-1, wait:false, pulse:-1, hold:0, btnT:0, door:0, doorT:0, sig:true, cone:0, clock:0 },
   scene,
   buttons:[
