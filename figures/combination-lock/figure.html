@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Combination padlock</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Combination padlock: a dial padlock (the classic 40-number kind) modelled large, 2 units = 1 mm.
+   x = depth (back cover at x = 0, front face at x = 44), y = width (96), z = up (case 0..100, shackle above).
+
+   How it really works:
+   0. Locked: the shackle's long leg (heel) has a notch cut round it. A lever inside, on a pivot pin, has a latch tip that
+      sits in that notch, so the shackle can't come up. The same lever carries a fence: a bar lying across the rims of the
+      three wheels, just clear of them. A spring keeps the latch in the notch.
+   1. The dial turns a spindle that is keyed to the drive cam (the third wheel). The cam carries a drive pin; wheel 2 has
+      a fly the pin catches after almost a full turn, and wheel 2 carries a pin that catches wheel 1's fly the same way
+      (lost motion, ~337 degrees each). So: right 3 turns picks up all wheels and leaves wheel 1 at the first number;
+      left once past it picks up wheel 2 only and leaves it at the second; right straight to the third moves only the cam.
+   2. Each wheel has one notch (gate) in its rim. With the right code all three gates sit under the fence.
+   3. Pull the shackle: the notch's ramped edge pushes the latch tip out, which swings the lever, which lowers the fence.
+      If all gates are under it the fence drops in, the tip slips out, the shackle spring pops the shackle up until its
+      stop collar meets the top wall, and the toe clears the case so the shackle swivels.
+      Wrong code: the fence lands on a rim after a fraction of a millimetre, the lever can't swing, the tip stays in the
+      notch: the shackle only rattles.
+   4. Reset: push the shackle down (its chamfered end pushes the tip aside, the tip snaps back into the notch), spin the
+      dial: the gates scatter.
+
+   Parts (each held by another):
+   CASE      shell (sides, top wall with heel and toe holes) . stainless front plate with index mark . rear cover crimped
+             into the shell . combination label on the back
+   DIAL      dial (knurled rim, 40 graduations) . dial hub cap . spindle . spindle bushing in the front wall . dial spring
+             (leaf on the front wall pressing the cam rim)
+   WHEELS    drive cam / wheel 3 (keyed to the spindle) with its gate and drive pin . wheel 2 with gate, fly and drive pin .
+             wheel 1 with gate and fly . wheel post fixed to the rear cover . spacer washer . E-clip on the post .
+             tension (wave) washer
+   LOCKING   lever . fence (part of the lever) . latch tip . lever pivot pin in the rear cover . lever torsion spring .
+             spring stud
+   SHACKLE   shackle . heel . toe . heel notch . stop collar . shackle spring . spring seat bracket on the rear cover */
+
+const LW = 44, LD = 96, LH = 100;                  // case: depth, width, height
+const OUT = rrUV(0, 0, LD, LH, 16);
+const DYc = 48, DZc = 46;                          // dial / wheel axis (y, z)
+const DR = 30, DX0 = LW, DX1 = LW + 6, HUBX = DX1 + 2.5;
+const WR = 19, GDEP = 4.3;                         // wheel radius, gate depth
+const WHEELS = [                                   // wheel 1 (back), wheel 2, drive cam (front)
+  { x0: 24, x1: 27, name: 'WHEEL 1' }, { x0: 30, x1: 33, name: 'WHEEL 2' }, { x0: 36, x1: 40, name: 'DRIVE CAM' } ];
+const GAP = 168.5;                                 // lost motion each side between neighbours (deg)
+const CODE = [18, 30, 6];
+const CODES = [ { label: 'Right code 18-30-6', code: [18, 30, 6] }, { label: 'Wrong code 18-26-6', code: [18, 26, 6] }, { label: 'Wrong code 25-30-6', code: [25, 30, 6] } ];
+const GC = [9*CODE[0] + 2*GAP, 9*CODE[1] - GAP, 9*CODE[2]];   // each gate's place on its wheel: under the fence at the code
+const HX = 22, HY = 21, TY = 75, SPAN = TY - HY, SR = 7;      // shackle: heel and toe axes, bar radius
+const LIFT = 21.5;                                 // stop collar top (76) up to the top wall underside (97.5)
+const PIV = [36, 66.5];                            // lever pivot (y, z)
+const LVP = [[25, 84.2], [25, 87.8], [28.5, 90.3], [39.5, 70.8], [50.4, 70.3], [50.4, 66.5], [36.5, 62.6], [32.5, 64.5], [27, 83.6]];
+const FENCE = [[47.2, 65.3], [50.4, 65.3], [50.4, 70.3], [47.2, 70.3]];
+const LVX = [18, 21], FX = [18, 40];
+const TH_FULL = .23, TH_WRONG = .3/12.8;           // lever swing: fence fully in the gates / fence resting on a rim
+const STEEL = { l:'#dfe3e5', m:'#aeb6ba', d:'#6f787d' }, BRASS = { l:'#f4d684', m:'#dcb04e', d:'#9a742c' };
+const CAMM = { l:'#c9ced2', m:'#959ea3', d:'#5c6469' }, CREAM = '#fff4d6', HOLE = '#2b2523';
+const rad = a => a*Math.PI/180;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const wrap180 = a => ((a % 360) + 540) % 360 - 180;
+const md = v => ((v % 360) + 360) % 360;
+const it = (b, svg) => ({ box: b, svg });
+const boxOf = (pts, e = .05) => [[0, 1, 2].map(i => Math.min(...pts.map(p => p[i])) - e), [0, 1, 2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const mw = w => `style="stroke-width:${w.toFixed(2)}"`;
+// a point on a wheel face: radius r, angle th clockwise from the top as seen from the front
+const wpt = (x, r, th) => [x, DYc - r*Math.sin(rad(th)), DZc + r*Math.cos(rad(th))];
+const wuv = (r, th) => [DYc - r*Math.sin(rad(th)), DZc + r*Math.cos(rad(th))];
+
+/* ---------- the mechanism's state ---------- */
+const reading = st => ((Math.round(-st.phi/9) % 40) + 40) % 40;
+const wAng = st => [st.w1, st.w2, st.phi];
+const gateAt = (st, i) => wAng(st)[i] + GC[i];
+const aligned = (st, i) => Math.abs(wrap180(gateAt(st, i))) < 2;
+const nAligned = st => [0, 1, 2].filter(i => aligned(st, i)).length;
+function setDial(st, phi){
+  const w2 = clamp(st.w2, phi - GAP, phi + GAP), w1 = clamp(st.w1, w2 - GAP, w2 + GAP);
+  st.mv = [Math.abs(w1 - st.w1) > 1e-6, Math.abs(w2 - st.w2) > 1e-6, Math.abs(phi - st.phi) > 1e-6];
+  st.phi = phi; st.w2 = w2; st.w1 = w1;
+}
+// heel radius at height zz (shackle frame: locked, zz = z): chamfered end, stop collar, notch with ramped edges
+const hr = zz => zz < 72 ? 0 : zz < 74 ? 4 + 2*(zz - 72) : zz < 76 ? 8 : zz < 77 ? 8 - (zz - 76) : zz < 80 ? 7 : zz < 82 ? 7 - 1.5*(zz - 80) : zz < 90 ? 4 : zz < 91 ? 4 + 3*(zz - 90) : 7;
+// how far the lever must swing for the latch tip (z 84..88, resting at y = 25) to clear the heel at lift s
+const needTh = s => { let m = 0; for (let z = 84; z <= 88.001; z += .5) m = Math.max(m, hr(z - s)); return Math.max(0, HY + m - 25) / 19.5; };
+const allowTh = st => nAligned(st) === 3 ? TH_FULL : TH_WRONG;
+const leverTh = st => Math.min(needTh(st.s), allowTh(st));
+function sMax(st){ const a = allowTh(st); for (let s = 0; s <= LIFT; s += .05) if (needTh(s) > a + 1e-9) return Math.max(0, s - .05); return LIFT; }
+const rotLv = ([y, z], th) => { const c = Math.cos(-th), sn = Math.sin(-th), dy = y - PIV[0], dz = z - PIV[1]; return [PIV[0] + dy*c - dz*sn, PIV[1] + dy*sn + dz*c]; };
+
+/* ---------- drawing helpers ---------- */
+// a flat part: a profile in (y, z), any shape (concave too), swept along x from x0 to x1
+function prismX(poly, x0, x1, M, w = .8){
+  let a = 0; poly.forEach((p, i) => { const q = poly[(i + 1) % poly.length]; a += p[0]*q[1] - q[0]*p[1]; });
+  if (a < 0) poly = poly.slice().reverse();
+  const n = poly.length, nearX = vis([1, 0, 0]) ? x1 : vis([-1, 0, 0]) ? x0 : null, farX = nearX === x1 ? x0 : x1;
+  const ns = poly.map((p, i) => { const q = poly[(i + 1) % n], du = q[0] - p[0], dv = q[1] - p[1], l = Math.hypot(du, dv) || 1; return [0, dv/l, -du/l]; });
+  const vs = ns.map(nr => vis(nr));
+  let s = nearX != null ? ink(pd(on(PX(farX), poly)), w) : '';
+  const strips = [];
+  for (let i = 0; i < n; i++) if (vs[i]){ const p = poly[i], q = poly[(i + 1) % n];
+    strips.push({ at: [(x0 + x1)/2, (p[0] + q[0])/2, (p[1] + q[1])/2], svg: face(pd([[x0, ...p], [x1, ...p], [x1, ...q], [x0, ...q]]), toneI(ns[i], M)) }); }
+  s += byDepth(strips);
+  for (let i = 0; i < n; i++) if (vs[i] !== vs[(i - 1 + n) % n]) s += ink(pd([[x0, ...poly[i]], [x1, ...poly[i]]], false), w);
+  if (nearX != null) s += fill(pd(on(PX(nearX), poly)), toneI([nearX === x1 ? 1 : -1, 0, 0], M)) + ink(pd(on(PX(nearX), poly)), w);
+  return s;
+}
+// a wheel's rim with its gate (a notch with sloping sides) centred at angle g
+function wheelPoly(g, r = WR, dep = GDEP){
+  const hw = 15, bw = 10, pts = [];
+  for (let t = g + hw; t <= g + 360 - hw + .01; t += (360 - 2*hw)/44) pts.push(wuv(r, t));
+  pts.push(wuv(r - dep, g - bw), wuv(r - dep, g + bw));
+  return pts;
+}
+// a round bar along a flat path: rings across the path, the strips between them shaded, two ink lines down its sides.
+// Returns sortable pieces; e1 = the path plane's normal (no twist).
+function tubeItems(pts, rs, e1, M, w = 1.1, n = 14){
+  if (pts.length < 2) return [];
+  const N = pts.length, tan = pts.map((p, i) => norm(sub(pts[Math.min(i + 1, N - 1)], pts[Math.max(i - 1, 0)])));
+  const rings = pts.map((p, i) => { const e2 = cross(tan[i], e1);
+    return Array.from({ length: n }, (_, j) => { const a = j/n*2*Math.PI, c = Math.cos(a)*rs[i], sn = Math.sin(a)*rs[i]; return [0, 1, 2].map(k => p[k] + e1[k]*c + e2[k]*sn); }); });
+  const sil = pts.map((p, i) => { const d = norm(cross(tan[i], CAM_V)); return [-1, 1].map(sg => P(...p.map((v, k) => v + sg*rs[i]*d[k]))); });
+  const out = [];
+  for (let i = 0; i < N - 1; i++){
+    let svg = '';
+    const startCap = i === 0, endCap = i === N - 2, c0 = tan[0].map(v => -v), c1 = tan[N - 1];
+    if (startCap && !vis(c0)) svg += ink(pd(rings[0]), w*.8);
+    if (endCap && !vis(c1)) svg += ink(pd(rings[N - 1]), w*.8);
+    svg += loft(rings[i], rings[i + 1], nr => toneI(nr, M));
+    for (const k of [0, 1]) svg += ink(`M${f(sil[i][k][0])} ${f(sil[i][k][1])}L${f(sil[i + 1][k][0])} ${f(sil[i + 1][k][1])}`, w);
+    if (startCap && vis(c0)) svg += fill(pd(rings[0]), toneI(c0, M)) + ink(pd(rings[0]), w*.8);
+    if (endCap && vis(c1)) svg += fill(pd(rings[N - 1]), toneI(c1, M)) + ink(pd(rings[N - 1]), w*.8);
+    out.push(it(boxOf([...rings[i], ...rings[i + 1]]), svg));
+  }
+  return out;
+}
+// a coil spring between two points (a helix of radius r with `turns` turns), as one stroked path
+function coil(a, b, r, turns, col = STEEL.l, w = .7){
+  const ax = norm(sub(b, a)), u = norm(cross(ax, Math.abs(ax[2]) < .9 ? [0, 0, 1] : [1, 0, 0])), v = cross(ax, u), pts = [], m = turns*18;
+  for (let i = 0; i <= m; i++){ const t = i/m, th = t*turns*2*Math.PI; pts.push([0, 1, 2].map(k => a[k] + (b[k] - a[k])*t + r*(u[k]*Math.cos(th) + v[k]*Math.sin(th)))); }
+  const d = pd(pts, false);
+  return { box: boxOf([...pts]), svg: `<path d="${d}" fill="none" stroke="${INK}" ${mw(2*w + 1.1)} stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" ${mw(2*w)} stroke-linejoin="round"/>` };
+}
+const strip = (pts, col, w = .6) => { const d = pd(pts, false); return `<path d="${d}" fill="none" stroke="${INK}" ${mw(2*w + 1)} stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" ${mw(2*w)} stroke-linecap="round" stroke-linejoin="round"/>`; };
+const txB = (x, y, z, str, size, col = INK, weight = 700) => `<text transform="${txM(P(x, y, z), Dv(0, 1, 0), Dv(0, 0, -1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+// text on the dial face, standing on a radius (feet toward the centre), at angle th
+function dialTxt(x, r, th, str, size, col){ const t = rad(th);
+  return `<text transform="${txM(P(...wpt(x, r, th)), Dv(0, -Math.cos(t), -Math.sin(t)), Dv(0, Math.sin(t), -Math.cos(t)))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800">${str}</text>`; }
+
+/* ---------- the shackle: one bar from the heel's end, up, over and down to the toe's end ---------- */
+function shackleGeo(st){
+  const a = rad(st.al), d = [Math.sin(a), Math.cos(a), 0], e1 = [Math.cos(a), -Math.sin(a), 0], s = st.s;
+  const pts = [], rs = [];
+  const heelZ = [72, 74, 76, 77, 80, 82, 90, 91, 95, 99, 103, 107, 111, 115, 119, 123, 128];
+  for (const zz of heelZ){ pts.push([HX, HY, zz + s]); rs.push(Math.max(4, hr(zz + .001))); }
+  const cx = HX + SPAN/2*d[0], cy = HY + SPAN/2*d[1], R = SPAN/2;
+  for (let i = 1; i < 18; i++){ const t = i/18*Math.PI; pts.push([cx - R*Math.cos(t)*d[0], cy - R*Math.cos(t)*d[1], 128 + s + R*Math.sin(t)]); rs.push(SR); }
+  for (const zz of [128, 123, 118, 113, 108, 103, 99, 95, 91, 89, 88]){ pts.push([HX + SPAN*d[0], HY + SPAN*d[1], zz + s]); rs.push(zz === 88 ? 5.5 : SR); }
+  return { pts, rs, e1 };
+}
+// cut the bar's path into runs above / below z = zc (the case top), interpolating the crossing
+function splitRuns(pts, rs, zc, above){
+  const runs = []; let cur = null;
+  const keep = p => above ? p[2] >= zc : p[2] < zc;
+  for (let i = 0; i < pts.length; i++){
+    const p = pts[i], k = keep(p);
+    if (i > 0 && keep(pts[i - 1]) !== k){ const q = pts[i - 1], t = (zc - q[2])/(p[2] - q[2]), x = q.map((v, j) => v + (p[j] - v)*t), r = rs[i - 1] + (rs[i] - rs[i - 1])*t;
+      if (cur){ cur.pts.push(x); cur.rs.push(r); runs.push(cur); cur = null; } else cur = { pts: [x], rs: [r] }; }
+    if (k){ if (!cur) cur = { pts: [], rs: [] }; cur.pts.push(p); cur.rs.push(rs[i]); }
+  }
+  if (cur) runs.push(cur);
+  return runs.filter(r => r.pts.length > 1);
+}
+const shackleItems = (st, above) => { const g = shackleGeo(st); return splitRuns(g.pts, g.rs, LH, above).flatMap(r => tubeItems(r.pts, r.rs, g.e1, STEEL, 1.2)); };
+
+/* ---------- the closed case ---------- */
+function bodySvg(st, m){
+  const FRONT = facing([1, 0, 0]), BACK = facing([-1, 0, 0]);
+  let s = '';
+  if (FRONT){
+    s += fill(pd(on(PX(LW), OUT)), tone([1, 0, 0], m));
+    s += shape(on(PX(LW + .15), rrUV(5, 5, LD - 5, LH - 5, 12)), tone([1, 0, 0], STEEL), 1.2);
+    s += ink(pd(on(PX(LW + .2), ellUV(DYc, DZc, DR + 2.2, DR + 2.2, 40))), .8);
+    s += shape(on(PX(LW + .3), [[DYc - 2.8, DZc + DR + 7.5], [DYc + 2.8, DZc + DR + 7.5], [DYc, DZc + DR + 3]]), '#e2483d', .7);
+    s += tx(LW + .3, DYc, 89.5, 'COMBINATION', 4.6, INK, 800);
+  }
+  if (BACK){
+    s += fill(pd(on(PX(0), OUT)), tone([-1, 0, 0], m));
+    s += shape(on(PX(-.15), rrUV(7, 7, LD - 7, LH - 7, 10)), tone([-1, 0, 0], STEEL), 1.2) + ink(pd(on(PX(-.2), rrUV(10, 10, LD - 10, LH - 10, 8))), .6);
+    s += shape(on(PX(-.25), rrUV(24, 34, 72, 66, 3)), CREAM, .9);
+    s += txB(-.3, 48, 51, CODE.join('-'), 8.5, INK, 800) + txB(-.3, 48, 41, 'YOUR CODE', 3.6, INK, 700);
+  }
+  s += extrude(OUT, 0, LW, m);
+  // the two holes in the top wall (heel and toe)
+  for (const y of [HY, TY]) s += shape(on(PZ(LH + .05), ellUV(HX, y, SR + .6, SR + .6, 20)), HOLE, .9);
+  if (FRONT) s += ink(pd(on(PX(LW), OUT)), 2.2);
+  if (BACK) s += ink(pd(on(PX(0), OUT)), 2.2);
+  s += hullInk([...on(PX(0), OUT), ...on(PX(LW), OUT)], 2.8);
+  return s;
+}
+function dialSvg(st){
+  const FRONT = facing([1, 0, 0]);
+  let s = cylX(DX0, DX1, DYc, DZc, DR, DARK, toneI, 1.4, 48);
+  // knurled rim
+  let kn = ''; for (let t = 0; t < 360; t += 7.5){ const th = t + st.phi; if (vis([0, -Math.sin(rad(th)), Math.cos(rad(th))])) kn += pd([wpt(DX0 + .6, DR + .05, th), wpt(DX1 - .6, DR + .05, th)], false); }
+  s += `<path d="${kn}" fill="none" stroke="${INK}" stroke-width=".6" opacity=".8"/>`;
+  if (FRONT){
+    const xf = DX1 + .1;
+    s += ink(pd(on(PX(xf), ellUV(DYc, DZc, DR - 2.5, DR - 2.5, 40))), .5);
+    let tk = '', tkL = '';
+    for (let n = 0; n < 40; n++){ const th = 9*n + st.phi, long = n % 5 === 0;
+      (long ? (tkL += pd([wpt(xf, DR - 1, th), wpt(xf, DR - 5.2, th)], false)) : (tk += pd([wpt(xf, DR - 1, th), wpt(xf, DR - 3.4, th)], false))); }
+    s += `<path d="${tk}" fill="none" stroke="${CREAM}" stroke-width=".7"/><path d="${tkL}" fill="none" stroke="${CREAM}" stroke-width="1.2"/>`;
+    for (let n = 0; n < 40; n += 5) s += dialTxt(xf, DR - 12.6, 9*n + st.phi, String(n), 5.6, CREAM);
+    s += cylX(DX1, HUBX, DYc, DZc, 10, STEEL, toneI, 1, 32);
+    s += ink(pd(on(PX(HUBX + .1), ellUV(DYc, DZc, 6, 6, 24))), .5);
+  } else s = cylX(DX1, HUBX, DYc, DZc, 10, STEEL, toneI, 1, 32) + s;
+  return act('dial', s);
+}
+
+/* ---------- see-through: the works ---------- */
+function mechSvg(st){
+  const items = [], th = leverTh(st), FRONT = facing([1, 0, 0]);
+  const cx = (x0, x1, y, z, r, M, w = .7, n = 18) => items.push(it([[x0, y - r, z - r], [x1, y + r, z + r]], cylX(x0, x1, y, z, r, M, toneI, w, n)));
+  const bx = (x0, y0, z0, x1, y1, z1, M, w = .7) => items.push(it([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, M, toneI, w)));
+  const ang = wAng(st);
+  // wheels and the drive cam, each with its gate
+  WHEELS.forEach((wh, i) => {
+    const g = gateAt(st, i), M = i === 2 ? CAMM : BRASS, ok = aligned(st, i);
+    let s = prismX(wheelPoly(g), wh.x0, wh.x1, M, .8);
+    const xc = FRONT ? wh.x1 + .1 : wh.x0 - .1;
+    if (FRONT || facing([-1, 0, 0])){
+      s += shape(on(PX(xc), ellUV(DYc, DZc, i === 2 ? 3 : 3.2, i === 2 ? 3 : 3.2, 16)), i === 2 ? HOLE : STEEL.l, .5);
+      if (ok) s += `<path d="${pd([wpt(xc, WR - GDEP + .1, g - 10), wpt(xc, WR - GDEP + .1, g + 10)], false)}" fill="none" stroke="#43c25c" stroke-width="1.8" stroke-linecap="round"/>`;
+    }
+    items.push(it([[wh.x0, DYc - WR, DZc - WR], [wh.x1, DYc + WR, DZc + WR]], s));
+  });
+  // drive pin on the cam's back, the flies and wheel 2's drive pin (13 from the axis)
+  const pin = (x0, x1, a, M) => { const [, y, z] = wpt(0, 13, a); cx(x0, x1, y, z, 1.3, M, .6, 10); };
+  pin(33.8, 36, ang[2], STEEL); pin(33, 35.2, ang[1] + 180, BRASS); pin(27.8, 30, ang[1] + 180, BRASS); pin(27, 29.2, ang[0], BRASS);
+  // wheel post from the rear cover, spacer, E-clip, tension washer; spindle and its bushing
+  cx(2.5, 21.5, DYc, DZc, 3.2, STEEL); cx(27, 30, DYc, DZc, 5.5, STEEL); cx(33, 34.2, DYc, DZc, 4.6, CAMM);
+  { const s = cylX(21.5, 24, DYc, DZc, 8, STEEL, toneI, .7, 24);
+    let wv = ''; for (let t = 0; t <= 360; t += 10){ const th = t, n = [0, -Math.sin(rad(th)), Math.cos(rad(th))]; if (vis(n)) wv += (wv ? 'L' : 'M') + P(...wpt(22.75 + .8*Math.sin(rad(4*t)), 8.05, th)).map(f).join(' '); else if (wv && !wv.endsWith('|')) wv += '|'; }
+    items.push(it([[21.5, DYc - 8, DZc - 8], [24, DYc + 8, DZc + 8]], s + `<path d="${wv.replace(/\|/g, '').replace(/\|M/g, 'M')}" fill="none" stroke="${INK}" stroke-width=".5"/>`)); }
+  cx(40, DX0, DYc, DZc, 2.6, STEEL); cx(41.5, DX0, DYc, DZc, 5, BRASS);
+  cx(40, 41.4, DYc, DZc, 5.5, CAMM);
+  // dial spring: a leaf riveted to the front wall, its end pressing the cam's rim from below
+  items.push(it([[37.5, 44, 20.5], [41.5, 56, 27.3]], strip([[41.4, 55, 21], [40.4, 52, 23.6], [38.6, 49.5, 26.3], [37.6, 48, 26.9]], STEEL.l, .8)
+    + shape(on(PX(41.3), ellUV(55, 21, 1.4, 1.4, 10)), STEEL.m, .4)));
+  // lever: plate on its pivot pin, latch tip in the heel notch, fence across the three rims
+  const lv = LVP.map(p => rotLv(p, th)), fc = FENCE.map(p => rotLv(p, th));
+  items.push(it([[LVX[0], 24.5, 61], [LVX[1], 51, 91]], prismX(lv, LVX[0], LVX[1], STEEL, .8)));
+  items.push(it([[FX[0] + 3, 46, 65.01], [FX[1], 51, 71]], prismX(fc, LVX[1], FX[1], STEEL, .8)));
+  cx(2.5, LVX[0], PIV[0], PIV[1], 1.6, CAMM); cx(LVX[1], LVX[1] + 1.2, PIV[0], PIV[1], 2.4, CAMM);
+  // lever spring: torsion coil on the pin, one leg on the stud, the other under the lever's fence arm
+  items.push(coil([8, PIV[0], PIV[1]], [16, PIV[0], PIV[1]], 3.2, 7));
+  cx(2.5, 10, 29, 57, 1.5, CAMM);
+  { const tipArm = rotLv([46, 66.4], th);
+    items.push(it([[8, 28, 56], [10, 37, 64]], strip([[8, PIV[0] - 3, PIV[1] - .5], [8.5, 29.8, 57.6]], STEEL.l, .45)));
+    items.push(it([[16, 38, 63], [LVX[0], 47, 68]], strip([[16, PIV[0] + 3, PIV[1]], [17.6, tipArm[0], tipArm[1] - .6]], STEEL.l, .45))); }
+  // shackle inside the case, its spring and the spring seat
+  items.push(...shackleItems(st, false));
+  bx(2.5, 13, 29, 30, 28.5, 32, CAMM);
+  items.push(coil([HX, HY, 32], [HX, HY, 72 + st.s], 5, 8));
+  return byDepth(items);
+}
+
+/* ---------- labels ---------- */
+function labelItems(st, k){
+  const th = leverTh(st), out = [], dialing = st.cur && st.cur.kind === 'dial', ang = wAng(st), s = st.s;
+  const g = shackleGeo(st), top = g.pts[17 + 8];
+  if (k <= .6){
+    if (facing([1, 0, 0])) out.push({ at: wpt(DX1, DR - 1, 210), text: 'DIAL', on: dialing }, { at: [LW + .3, DYc, DZc + DR + 5.5], text: 'INDEX MARK', on: false });
+    if (facing([-1, 0, 0])) out.push({ at: [-.3, 30, 60], text: 'COMBINATION LABEL', on: false });
+    out.push({ at: top, text: 'SHACKLE', on: s > .5 }, { at: [LW, 8, 30], text: 'CASE', on: false });
+    if (s > 5) out.push({ at: [HX, TY, LH], text: 'TOE HOLE', on: false });
+    return out;
+  }
+  const fT = rotLv([48.8, 67.8], th), lT = rotLv([42, 70], th), tip = rotLv([25.5, 86], th);
+  out.push(
+    { at: wpt(DX1, DR, 150), text: 'DIAL', on: dialing }, { at: [HUBX, DYc + 6, DZc + 5], text: 'DIAL HUB', on: false },
+    { at: [LW + .3, DYc, DZc + DR + 5.5], text: 'INDEX MARK', on: false },
+    { at: [40.7, DYc, DZc + 2.6], text: 'SPINDLE', on: dialing }, { at: [43, DYc - 3.5, DZc + 3.5], text: 'SPINDLE BUSHING', on: false },
+    { at: wpt(40, WR, ang[2] + 120), text: 'DRIVE CAM (WHEEL 3)', on: st.mv && st.mv[2] && dialing },
+    { at: wpt(40, WR - 2, gateAt(st, 2)), text: 'CAM GATE', on: aligned(st, 2) },
+    { at: wpt(34.5, 13, ang[2]), text: 'CAM DRIVE PIN', on: false },
+    { at: wpt(33, WR, ang[1] + 60), text: 'WHEEL 2', on: st.mv && st.mv[1] && dialing },
+    { at: wpt(33, WR - 2, gateAt(st, 1)), text: 'WHEEL 2 GATE', on: aligned(st, 1) },
+    { at: wpt(34.6, 13, ang[1] + 180), text: 'WHEEL 2 FLY', on: false }, { at: wpt(28.4, 13, ang[1] + 180), text: 'WHEEL 2 DRIVE PIN', on: false },
+    { at: wpt(27, WR, ang[0] + 230), text: 'WHEEL 1', on: st.mv && st.mv[0] && dialing },
+    { at: wpt(27, WR - 2, gateAt(st, 0)), text: 'WHEEL 1 GATE', on: aligned(st, 0) },
+    { at: wpt(28.6, 13, ang[0]), text: 'WHEEL 1 FLY', on: false },
+    { at: wpt(28.5, 5.5, 200), text: 'SPACER WASHER', on: false }, { at: wpt(22.7, 8, 230), text: 'TENSION WASHER', on: false },
+    { at: [10, DYc, DZc - 3.2], text: 'WHEEL POST', on: false }, { at: wpt(34.2, 4.6, 160), text: 'E-CLIP', on: false },
+    { at: [30, fT[0], fT[1]], text: 'FENCE', on: th > .02 }, { at: [LVX[1], lT[0], lT[1]], text: 'LEVER', on: th > .02 },
+    { at: [LVX[1] + 1.2, PIV[0], PIV[1]], text: 'LEVER PIVOT', on: false }, { at: [12, PIV[0], PIV[1] + 3.2], text: 'LEVER SPRING', on: false },
+    { at: [6, 29, 58.5], text: 'SPRING STUD', on: false }, { at: [LVX[1], tip[0], tip[1]], text: 'LATCH TIP', on: th > .02 },
+    { at: top, text: 'SHACKLE', on: s > .5 }, { at: [HX, HY - 7, 96 + s], text: 'HEEL', on: false },
+    { at: [HX, TY + SR, 104], text: 'TOE', on: false }, { at: [HX, HY - 4, 86 + s], text: 'HEEL NOTCH', on: th > .02 },
+    { at: [HX, HY - 8, 75 + s], text: 'STOP COLLAR', on: s > LIFT - .5 }, { at: [HX, HY - 5, 50 + s/2], text: 'SHACKLE SPRING', on: s > 3 && s < LIFT },
+    { at: [16, 13, 31], text: 'SPRING SEAT', on: false }, { at: [39, 55, 22], text: 'DIAL SPRING', on: dialing },
+    { at: [LW, 8, 30], text: 'CASE', on: false }, { at: [0, 10, 88], text: 'REAR COVER', on: false });
+  return out;
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0), FRONT = facing([1, 0, 0]);
+  const g = shackleGeo(st);
+  let s = castShadow([...on(PX(0), OUT), ...on(PX(DX1), OUT), ...g.pts.filter(p => p[2] > LH)]);
+  let body = bodySvg(st, m), dial = dialSvg(st);
+  if (k > 0){ body = xrGhost(body, `<g opacity="${f(k)}">${mechSvg(st)}</g>`, k, OUT, 0, LW, m); dial = `<g opacity="${f(1 - .7*k)}">${dial}</g>`; }
+  s += FRONT ? body + dial : dial + body;
+  s += act('shackle', byDepth(shackleItems(st, true)));
+  return s + lkCallouts(labelItems(st, k), [0, LW + 8, 0, LD, 0, 162]);
+}
+// labels in two columns (from the pin tumbler lock): fills the height, keeps clear of the buttons and switches
+function lkCallouts(items, B){
+  const svgEl = document.getElementById('fig'), M = svgEl.getScreenCTM(), btn = document.getElementById('btns'), vs = document.querySelector('.vset');
+  if ((window.LBL_U && LBL_U()) || !M || !btn || !vs) return xrCallouts(items, B);
+  const vb = svgEl.viewBox.baseVal, inv = M.inverse(), k = INK_K, fs = 8.6*k, hgt = fs*1.8, gap0 = hgt + 3*k;
+  const yAt = py => new DOMPoint(0, py).matrixTransform(inv).y;
+  const bx = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) bx.push(P(x, y, z)[0]);
+  const xmin = Math.min(...bx), xmax = Math.max(...bx), cx = (xmin + xmax)/2;
+  const t0 = vb.y + hgt/2 + 2*k, tL = Math.max(t0, yAt(btn.getBoundingClientRect().bottom + 40) + hgt/2);
+  const fr = svgEl.getBoundingClientRect(), over = [vs, document.getElementById('stats')].filter(Boolean).map(el => el.getBoundingClientRect())
+    .filter(r => r.height && r.right > fr.left + fr.width/2 && r.top < fr.top + fr.height/2).map(r => r.bottom);
+  const top = { [-1]: tL, [1]: over.length ? Math.max(t0, yAt(Math.max(...over) + 10) + hgt/2) : tL }, zc = document.querySelector('.zchip');
+  const bot0 = vb.y + vb.height - hgt/2 - 2*k, bot = { [-1]: bot0, [1]: zc ? Math.min(bot0, yAt(zc.getBoundingClientRect().top - 6) - hgt/2) : bot0 - 2*hgt };
+  const its = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  const cap = side => Math.floor((bot[side] - top[side])/gap0) + 1;
+  const nL = Math.min(cap(-1), Math.max(its.length - cap(1), its.filter(c => c.X < cx).length));
+  let s = '';
+  for (const [col, side] of [[its.slice(0, nL), -1], [its.slice(nL), 1]]){
+    if (!col.length) continue;
+    col.sort((a, b) => a.Y - b.Y);
+    const n = col.length, gap = n > 1 ? Math.min(gap0, (bot[side] - top[side])/(n - 1)) : gap0;
+    let y = -1e9; col.forEach(c => { c.py = y = Math.max(c.Y, y + gap, top[side]); });
+    col.forEach((c, i) => { c.py = Math.min(c.py, bot[side] - (n - 1 - i)*gap); });
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+
+/* ---------- behaviour: one queue of timed steps ---------- */
+let ui, plLoop = false;
+function tick(st, dt){
+  for (;;){
+    if (!st.cur){ if (!st.q.length) return false;
+      const c = st.cur = { ...st.q.shift(), t: 0 };
+      if (c.msg) ui.flash(c.msg, c.ms || 1900);
+      if (c.kind === 'fn'){ c.fn(st); st.cur = null; continue; }
+      c.from = c.kind === 'dial' ? st.phi : c.kind === 'lift' ? st.s : c.kind === 'swivel' ? st.al : 0; }
+    const c = st.cur; c.t = Math.min(1, c.t + dt/c.dur); const e = (c.ease || ease)(c.t), v = c.from + (c.to - c.from)*e;
+    if (c.kind === 'dial') setDial(st, v); else if (c.kind === 'lift') st.s = v; else if (c.kind === 'swivel') st.al = v;
+    if (c.t >= 1){ st.cur = null; if (c.kind === 'dial') st.mv = [false, false, false]; }
+    return true;
+  }
+}
+function run(st, steps){
+  st.q = steps; st.cur = null;
+  if (!plLoop){ plLoop = true; ui.animate(dt => { const go = tick(ui.st, dt); if (!go) plLoop = false; return go; }); }
+}
+// right 3 turns to the first number, left once past it to the second, right straight to the third
+function dialPlan(phi0, code){
+  const [a, b, c] = code.map(n => -9*n);
+  const p1 = phi0 + 1080 + md(a - phi0), p2 = p1 - 360 - md(p1 - b), p3 = p2 + md(c - p2);
+  return [p1, p2, p3];
+}
+const dur = d => .3 + Math.abs(d)/800;
+function dialCode(st, code){
+  if (st.s > 5) return ui.flash('Close the shackle first: press Reset');
+  const [p1, p2, p3] = dialPlan(st.phi, code), pre = st.s > 0 ? [{ kind: 'lift', to: 0, dur: .2 }] : [];
+  run(st, [...pre,
+    { kind: 'dial', to: p1, dur: dur(p1 - st.phi), msg: `Right 3 turns, stop at ${code[0]}`, ms: 2400 }, { kind: 'wait', dur: .35 },
+    { kind: 'dial', to: p2, dur: dur(p2 - p1), msg: `Left once past ${code[0]}, stop at ${code[1]}`, ms: 1800 }, { kind: 'wait', dur: .35 },
+    { kind: 'dial', to: p3, dur: dur(p3 - p2), msg: `Right to ${code[2]}`, ms: 1500 },
+    { kind: 'fn', fn: st => ui.flash(nAligned(st) === 3 ? 'All three gates are under the fence' : `${nAligned(st)} of 3 gates under the fence`, 2000) } ]);
+}
+const popOut = t => 1 - Math.pow(1 - t, 3);
+function pull(st){
+  if (st.s > 5) return ui.flash('Already open');
+  if (nAligned(st) === 3) run(st, [
+    { kind: 'lift', to: 3, dur: .3, msg: 'The fence drops into the gates and the latch slips out', ms: 2200 },
+    { kind: 'lift', to: LIFT, dur: .35, ease: popOut }, { kind: 'swivel', to: 90, dur: .6 } ]);
+  else { const m = sMax(st); run(st, [
+    { kind: 'lift', to: m, dur: .15, msg: 'Wrong code: the fence lands on a wheel rim, the latch stays in', ms: 2400 },
+    { kind: 'wait', dur: .25 }, { kind: 'lift', to: 0, dur: .15 }, { kind: 'lift', to: m, dur: .12 }, { kind: 'lift', to: 0, dur: .15 } ]); }
+}
+function reset(st){
+  const spin = st.phi + 720 + 99;
+  const steps = st.s > 5 ? [{ kind: 'swivel', to: 0, dur: .45, msg: 'Shackle pushed shut, dial spun: the gates scatter', ms: 2200 }, { kind: 'lift', to: 0, dur: .45 }]
+    : [{ kind: 'lift', to: 0, dur: .15, msg: 'Dial spun: the gates scatter', ms: 1800 }];
+  run(st, [...steps, { kind: 'wait', dur: .2 }, { kind: 'dial', to: spin, dur: dur(spin - st.phi) }]);
+}
+
+ui = mountFigure({
+  fig:'48', turn:'full', title:'Combination padlock', palette:'cobalt',
+  size:[56, LD, 186], center:[26, LD/2],
+  state:{ phi:0, w2:60, w1:-80, s:0, al:0, q:[], cur:null, mv:[false, false, false] },
+  scene,
+  readout: st => st.s > 5 ? 'open' : 'locked',
+  stats: st => [{ label:'Dial', value: String(reading(st)).padStart(2, '0') }, { label:'Gates lined up', value: `${nAligned(st)}/3`, small:true }],
+  buttons:[
+    { label:'Dial a code', choices: st => CODES.map(c => ({ label: c.label, onClick: st => dialCode(st, c.code) })) },
+    { label:'Pull shackle', onClick: st => pull(st) },
+    { label:'Reset', onClick: st => reset(st) },
+  ],
+  acts:{ shackle: st => st.s > 5 ? reset(st) : pull(st), dial: st => { if (st.s > 5) return ui.flash('Close the shackle first: press Reset'); run(st, [{ kind: 'dial', to: st.phi - 9, dur: .2 }]); } },
+  params:(st, q) => {
+    const c = CODES.find(c => c.label.toLowerCase().startsWith((q.get('code') || '-').toLowerCase()));
+    if (c) for (const p of dialPlan(st.phi, c.code)) setDial(st, p);
+    if (q.has('dial')) setDial(st, st.phi - 9*(+q.get('dial') - reading(st)));
+    if (q.get('open') === '1' && nAligned(st) === 3){ st.s = LIFT; st.al = 90; }
+    if (q.has('s')) st.s = clamp(+q.get('s'), 0, LIFT);
+    if (q.has('al')) st.al = +q.get('al');
+    st.mv = [false, false, false];
+  },
+});
+addEventListener('keydown', e => {
+  if (/input|textarea|button/i.test(e.target.tagName)) return;
+  const kk = e.key.toLowerCase(), st = ui.st;
+  if (kk === 'd') dialCode(st, CODE); else if (kk === ' ' || kk === 'p') pull(st); else if (kk === 'r') reset(st); else return;
+  e.preventDefault(); ui.render();
+});
+xrMount(() => ui, () => '');
+</script></body></html>
