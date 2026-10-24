@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Acid-base titration</title></head><body>
+<script src="core.js"></script>
+<script>
+/* ---------- Truth first: a school acid-base titration with a pH meter ----------
+   1. Set up: 25.0 mL of 0.100 M hydrochloric acid is pipetted into a 250 mL conical flask, 100 mL of deionised water
+      is added from the wash bottle so the pH electrode's bulb and junction are covered, then three drops of
+      phenolphthalein. A PTFE stir bar lies on the flask's floor; the flask stands on the magnetic stirrer's top plate.
+      The 50 mL burette, clamped to the retort stand, is filled from the 0.100 M sodium hydroxide bottle to 0.00 mL;
+      its jet tip sits inside the flask's neck. The pH electrode hangs from its holder arm through the neck beside it,
+      its cable running down the holder post to the meter's BNC socket.
+   2. Stirrer on: the motor spins the drive magnet under the top plate; the stir bar's magnet follows it, swirling the
+      flask. Starting pH: [H+] = 2.5 mmol / 125 mL = 0.020 M, pH 1.70.
+   3. Open the tap: turning the PTFE key lines its bore up with the burette, NaOH runs down the jet into the flask.
+      Each OH- meets an H+ and they join into water (H+ + OH- -> H2O); Na+ and Cl- stay as spectators. Where the
+      stream lands the liquid is briefly basic, so a pink plume flashes and is swirled away while acid is in excess.
+   4. pH creeps: 24.00 mL -> pH 3.17, 24.95 mL -> 4.48. Close to the end the pink flashes linger; finish drop by drop
+      (one drop = 0.05 mL). The drop that passes 25.00 mL takes the pH from about 4.5 to 9.5: the indicator
+      (colourless below pH 8.2) turns pale pink and stays pink: the endpoint. Titre = 25.05 mL.
+   5. Overshoot: excess OH- builds up: 26 mL -> pH 10.8 deep pink, 30 mL -> 11.5 magenta-purple.
+   6. Reset: the flask is emptied and refilled with fresh acid, the burette refilled from the bottle to 0.00 mL.
+   pH: d = (nHCl - nNaOH) / Vtotal; [H+] = (d + sqrt(d^2 + 4 Kw)) / 2.
+   Parts (each is held by another):
+   STAND    retort base on the bench . threaded foot . stand rod screwed into it . boss head clamped on the rod with
+            two thumbscrews . burette clamp arm held in the boss . clamp body . two spring jaws . cork pads on the burette
+   BURETTE  50 mL glass tube, 0-50 mL graduations, NaOH column with its meniscus, stopcock barrel, PTFE key and its
+            handle, retaining nut, jet tip inside the flask's neck, drops / stream
+   FLASK    250 mL conical flask on the top plate . acid + indicator solution . PTFE stir bar on the floor
+   STIRRER  case on the retort base . ceramic top plate . motor on a mounting plate . drive magnet on its shaft .
+            control board . speed potentiometer behind the knob . speed knob . rocker switch . power LED .
+            mains inlet on the back with its cord
+   PH       glass electrode in its holder ring . holder arm . sleeve and thumbscrew . holder post on a heavy foot .
+            glass bulb . inner Ag/AgCl wire in its inner tube . KCl reference fill . ceramic junction . cap .
+            coax cable down the post to the BNC socket on the meter's back
+   METER    sloped case on the bench . LCD . CAL / MEAS keys . board on standoffs . high-impedance amplifier . MCU .
+            9 V battery . BNC socket
+   BENCH    bench board . NaOH bottle (polyethylene: NaOH etches glass) . wash bottle of deionised water
+   SEE-THROUGH overlays: a magnifier into the liquid with H+, OH-, H2O, Na+, Cl-; the live pH-against-volume curve */
+
+/* ---------- geometry (x = depth, y = width, z = up; 1 unit = 1 cm) ---------- */
+const BW = 42, BD = 67, BH = 2;
+const RX = 6, RY = 31.2, ROD_T = 90;                          // stand rod
+const SB = [2, 22, BH, 30, 42, BH + 1.4];                     // retort base
+const SZ0 = SB[5], SZ1 = SZ0 + 7;                             // stirrer case bottom / top
+const STB = [10.8, 24.6, 28.8, 42.6];                         // stirrer footprint x0, y0, x1, y1
+const FX = 19.8, FY = 33.6, FZ = SZ1 + .05;                   // flask centre and floor
+const FZ_IN = FZ + .25, FR_IN = 4.0, FN_IN = 2.1, FCONE = 10.25;   // inside: floor height, floor radius, neck radius, cone height
+const FTOP = FZ + 14.5;
+const BXc = 19.3, BYc = 33.0;                                 // burette axis
+const TIP_Z = 22, SC_Z = 27.3, TUBE_Z0 = 28.6, TUBE_Z1 = 86, BR = .75, BRI = .6;
+const Z0ML = 80, ZPERML = .92;                                // 0 mL mark, cm per mL
+const CL_Z = 58;                                              // burette clamp height
+const EX = 20.2, EY = 35.0, EBOT = 11.8, ESH = 30.5;          // electrode axis, bulb bottom, top of glass shaft
+const POST = [24.5, 47.5], POST_T = 34, HOLD_Z = 29.5;
+const MY0 = 51, MY1 = 65, MP = [[26, BH], [40, BH], [40, 4.5], [29, 9.5], [26, 9.5]], MSL = Math.hypot(11, 5), MSN = [5/MSL, 0, 11/MSL];
+const BOT = [30, 10], WASH = [36, 20];
+const NA0 = 2.5, VW = 125, CB = .1, KW = 1e-14, DROP = .05, FLOW = 1.6, VMAX = 50;
+const STANDM = matOf('#5f6e76'), STEELM = { l:'#e3e6e7', m:'#b4bcbf', d:'#7d878b' }, PTFE = { l:'#fbfaf5', m:'#e6e3d8', d:'#bcb7a6' };
+const PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, CORK = matOf('#c99a62'), CAPM = matOf('#2f6fb8');
+const NAOHC = '#d6ecf3';
+
+/* ---------- small helpers ---------- */
+const tiLerp = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const tiAdd = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], tiScl = (a, s) => a.map(v => v*s);
+const tiClamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const tiBoxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const tiBx = (x0, y0, z0, x1, y1, z1, M, w = .8) => box(x0, y0, z0, x1, y1, z1, M, toneI, w);
+const tiStroke = (pts, col, w, close = false) => { const d = pd(pts, close);
+  return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(w + .9)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(w)}" stroke-linecap="round" stroke-linejoin="round"/>`; };
+const tiRingZ = (cx, cy, z, r, n = 20) => on(PZ(z), ellUV(cx, cy, r, r, n));
+// a prism: a convex profile in (x, z) swept along y, every visible face inked
+function tiPrismY(prof, y0, y1, M, w = .9){
+  const A = on(PY(y0), prof), B = on(PY(y1), prof), cen = avg(A.concat(B)); let s = '';
+  for (let i = 0; i < prof.length; i++){ const j = (i + 1) % prof.length, q = [A[i], A[j], B[j], B[i]];
+    let nr = norm(cross(sub(q[1], q[0]), sub(q[3], q[0]))); if (dot(nr, sub(avg(q), cen)) < 0) nr = nr.map(v => -v);
+    if (vis(nr)) s += shape(q, toneI(nr, M), w); }
+  if (vis([0,1,0])) s += shape(B, toneI([0,1,0], M), w);
+  if (vis([0,-1,0])) s += shape(A, toneI([0,-1,0], M), w);
+  return s + hullInk([...A, ...B], 1.6); }
+// a cable cut into short pieces (each with its own box) so it sorts with the solids it passes
+function tiWire(pts, col, w = .5, seg = 2.5){
+  const q = [pts[0]];
+  for (let i = 1; i < pts.length; i++){ const a = pts[i-1], b = pts[i], n = Math.max(1, Math.ceil(Math.hypot(...sub(b, a)) / seg));
+    for (let j = 1; j <= n; j++) q.push(tiLerp(a, b, j/n)); }
+  const out = [];
+  for (let i = 0; i < q.length - 1; i++) out.push({ box: tiBoxOf([q[i], q[i+1]]), svg: tiStroke([q[i], q[i+1]], col, w) });
+  return out; }
+// a ball seen as a circle
+function tiBall(c, r, M, wk = 1){ const [X, Y] = P(...c), R = r*CAM_K;
+  return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="${M.m}"/><circle cx="${f(X + .25*R)}" cy="${f(Y - .3*R)}" r="${f(.45*R)}" fill="${M.l}"/>`
+    + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="none" stroke="${INK}" stroke-width="${f(wk)}"/>`; }
+// screen offset (dx, dy) from a 3D point, as a 3D point (labels for things drawn flat on the screen)
+const tiUnP = (p, dx, dy) => tiAdd(p, tiAdd(tiScl(CAM_R, dx/CAM_K), tiScl(CAM_D, dy/CAM_K)));
+// the two side lines of an upright round part (its silhouette), no ink across the ends where sections join
+const tiSides = (cx, cy, za, zb, r, w) => { let s = ''; for (const a of nearHalf()){ const t = a*Math.PI/180, x = cx + r*Math.cos(t), y = cy + r*Math.sin(t); s += line([[x, y, za], [x, y, zb]], w); } return s; };
+// a vertical glass tube section: far wall, contents, near wall, side lines
+function tiGlass(cx, cy, za, zb, r, inner = '', w = .8){
+  const A = tiRingZ(cx, cy, za, r), B = tiRingZ(cx, cy, zb, r);
+  const t = (YAW + 35)*Math.PI/180, sx = cx + r*.8*Math.cos(t), sy = cy + r*.8*Math.sin(t);
+  return `<g opacity=".45">${loft(A, B, () => mix(CLEAR.m, '#ffffff', .2), true)}</g>` + inner
+    + `<g opacity=".3">${loft(A, B, n => toneI(n, CLEAR))}</g>`
+    + `<path d="${pd([[sx, sy, za + .2], [sx, sy, zb - .2]], false)}" stroke="#ffffff" stroke-width=".5" opacity=".6"/>` + tiSides(cx, cy, za, zb, r, w); }
+// a liquid column inside an upright tube, with its surface when the top is inside [za, zb]
+function tiLiquid(cx, cy, za, zb, r, col, op = .6, top = true){
+  if (zb <= za) return '';
+  const A = tiRingZ(cx, cy, za, r), B = tiRingZ(cx, cy, zb, r);
+  return `<g opacity="${op}">${loft(A, B, n => mix(col, '#7fa9b5', vis(n) ? .15 : 0))}${top ? fill(pd(B), mix(col, '#ffffff', .35)) : ''}</g>`; }
+
+// byDepth's sort compares pairs in an order of its own choosing, and the box rule is not transitive, so with many parts a
+// far part can end up over a near one. Here every separated pair that overlaps on screen is an edge, then farthest-first.
+function tiSort(items){
+  items = items.filter(Boolean); const n = items.length, out = Array.from({length:n}, () => []), deg = new Array(n).fill(0);
+  const dep = items.map(p => depthOf(p.at || boxMid(p.box))), done = new Array(n).fill(false);
+  const R = items.map(p => { if (!p.box) return null; const xs = [], ys = [];
+    for (const x of [0, 1]) for (const y of [0, 1]) for (const z of [0, 1]){ const q = P(p.box[x][0], p.box[y][1], p.box[z][2]); xs.push(q[0]); ys.push(q[1]); }
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; });
+  const hit = (a, b) => a && b && a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++){ const o = hit(R[i], R[j]) ? sepOrder(items[i], items[j]) : 0;
+    if (o < 0){ out[i].push(j); deg[j]++; } else if (o > 0){ out[j].push(i); deg[i]++; } }
+  let svg = '';
+  for (let c = 0; c < n; c++){ let best = -1;
+    for (let i = 0; i < n; i++) if (!done[i] && (best < 0 || (deg[i] === 0) > (deg[best] === 0) || ((deg[i] === 0) === (deg[best] === 0) && dep[i] < dep[best]))) best = i;
+    done[best] = true; svg += items[best].svg; for (const j of out[best]) deg[j]--; }
+  return svg; }
+
+/* ---------- chemistry ---------- */
+function tiPH(V){ const d = (NA0 - CB*V) / (VW + V); return -Math.log10((d + Math.sqrt(d*d + 4*KW)) / 2); }
+const tiSm = (a, b, x) => { const t = tiClamp((x - a)/(b - a)); return t*t*(3 - 2*t); };
+// phenolphthalein: colourless below 8.2, pale pink, pink, then a deep magenta-purple when well overshot
+function tiInd(pH){
+  let c = '#e4f1f4', a = .38;
+  const s1 = tiSm(8.2, 9.2, pH), s2 = tiSm(9.4, 10.9, pH), s3 = tiSm(11.0, 11.8, pH);
+  if (s1 > 0){ c = mix(c, '#f7bcd8', s1); a += .2*s1; }
+  if (s2 > 0){ c = mix(c, '#df4f98', s2); a += .2*s2; }
+  if (s3 > 0){ c = mix(c, '#8c2d9a', s3); a += .1*s3; }
+  return { c, a }; }
+const tiIndName = pH => pH < 8.2 ? 'colourless' : pH < 9.6 ? 'pale pink' : pH < 11.1 ? 'pink' : 'purple';
+// liquid height above the flask floor for a volume in mL (the inside is a cone frustum)
+const tiRin = h => FR_IN - (FR_IN - FN_IN)*h/FCONE;
+function tiLevel(vol){ let lo = 0, hi = FCONE;
+  for (let i = 0; i < 24; i++){ const h = (lo + hi)/2, r = tiRin(h), v = Math.PI*h*(FR_IN*FR_IN + FR_IN*r + r*r)/3; if (v < vol) lo = h; else hi = h; }
+  return (lo + hi)/2; }
+const tiBurZ = Vb => Z0ML - ZPERML*Vb;          // the NaOH level in the burette
+
+/* ---------- the parts ---------- */
+const ST_PROF = rrUV(STB[1], SZ0, STB[3], SZ1, 1.4);
+function tiStirrer(st, m, k){
+  const FRONT = facing([1,0,0]), BACK = facing([-1,0,0]);
+  let s = '';
+  if (BACK) s += fill(pd(on(PX(STB[0]), ST_PROF)), tone([-1,0,0], m));
+  if (FRONT) s += fill(pd(on(PX(STB[2]), ST_PROF)), tone([1,0,0], m));
+  s += extrude(ST_PROF, STB[0], STB[2], m);
+  if (facing([0,0,1])){ const tp = on(PZ(SZ1 + .02), rrUV(STB[0] + .8, STB[1] + .8, STB[2] - .8, STB[3] - .8, 1));
+    s += shape(tp, CERAMIC.l, 1) + ink(pd(on(PZ(SZ1 + .03), ellUV(FX, FY, 5.2, 5.2, 28))), .5); }
+  if (FRONT){
+    s += ink(pd(on(PX(STB[2]), ST_PROF)), 1.6);
+    for (let i = 0; i <= 6; i++){ const a = (-135 + 45*i)*Math.PI/180; s += shape(on(PX(STB[2] + .03), ellUV(29.5 + 2*Math.sin(a), 6.9 + 2*Math.cos(a), .16, .16, 8)), INK, 0); }
+    s += tx(STB[2] + .04, 29.5, 4.2, 'SPEED', .75, INK, 800) + tx(STB[2] + .04, 37.8, 4.2, 'POWER', .75, INK, 800);
+    s += shape(on(PX(STB[2] + .03), ellUV(35.2, 8.4, .32, .32, 10)), st.stir ? '#43c25c' : '#2f3a33', .4);
+    s += tx(STB[2] + .04, 33.4, 4.6, 'MAGSTIR', 1.1, mix(m.d, '#000000', .2), 800);
+  }
+  if (BACK){ s += ink(pd(on(PX(STB[0]), ST_PROF)), 1.6) + shape(on(PX(STB[0] - .05), rrUV(37.6, 5, 40.4, 7.2, .3)), '#2b2725', .6); }
+  s += hullInk([...on(PX(STB[0]), ST_PROF), ...on(PX(STB[2]), ST_PROF)], 2.4);
+  if (!(k > 0)) return [s, ''];
+  // inside: motor on its plate, drive magnet on the shaft, board, pot, switch, LED, mains inlet
+  const a = st.spin, ca = Math.cos(a)*2.4, sa = Math.sin(a)*2.4, mz = SZ1 - 1.3;
+  const parts = [];
+  parts.push({ box: [[14.8, 28.6, SZ0], [24.8, 38.6, SZ0 + .5]], svg: tiBx(14.8, 28.6, SZ0, 24.8, 38.6, SZ0 + .5, STEELM, .6) });
+  parts.push({ box: [[FX - 1.8, FY - 1.8, SZ0 + .5], [FX + 1.8, FY + 1.8, SZ0 + 4.2]], svg: cyl(FX, FY, SZ0 + .5, SZ0 + 4.2, 1.8, DARK, toneI, .8, 20) });
+  parts.push({ box: [[FX - .2, FY - .2, SZ0 + 4.2], [FX + .2, FY + .2, mz - .4]], svg: cyl(FX, FY, SZ0 + 4.2, mz - .4, .2, STEELM, toneI, .5, 8) });
+  parts.push({ box: [[FX - 2.5, FY - 2.5, mz - .45], [FX + 2.5, FY + 2.5, mz + .45]],
+    svg: (depthOf([ca, sa, 0]) > 0 ? rod([FX - ca, FY - sa, mz], [FX, FY, mz], .45, matOf('#4f86d8'), toneI, .6) + rod([FX, FY, mz], [FX + ca, FY + sa, mz], .45, matOf('#e2483d'), toneI, .6)
+      : rod([FX + ca, FY + sa, mz], [FX, FY, mz], .45, matOf('#e2483d'), toneI, .6) + rod([FX, FY, mz], [FX - ca, FY - sa, mz], .45, matOf('#4f86d8'), toneI, .6)) });
+  parts.push({ box: [[22.4, 26.2, SZ0 + .4], [28, 33, SZ0 + .9]], svg: tiBx(22.4, 26.2, SZ0 + .4, 28, 33, SZ0 + .7, PCBM, .6) + tiBx(24, 28, SZ0 + .7, 25.4, 29.4, SZ0 + 1.1, DARK, .4) + tiBx(26, 30.6, SZ0 + .7, 26.8, 31.4, SZ0 + 1.6, matOf('#3f4a8a'), .4) });
+  parts.push({ box: [[27.2, 28.7, 6.1], [28.8, 30.3, 7.7]], svg: cylX(27.2, 28.8, 29.5, 6.9, .8, STEELM, toneI, .6, 14) });
+  parts.push({ box: [[27.2, 36.9, 6.1], [28.8, 38.7, 7.7]], svg: tiBx(27.2, 36.9, 6.1, 28.8, 38.7, 7.7, DARK, .6) });
+  parts.push({ box: [[27.8, 34.9, 8.1], [28.8, 35.5, 8.7]], svg: cylX(27.8, 28.8, 35.2, 8.4, .3, matOf('#43c25c'), toneI, .4, 8) });
+  parts.push({ box: [[10.8, 37.6, 5], [12.2, 40.4, 7.2]], svg: tiBx(10.8, 37.6, 5, 12.2, 40.4, 7.2, DARK, .6) });
+  parts.push(...tiWire([[22.6, 29, SZ0 + .7], [21.6, 31.4, SZ0 + 1.6], [FX + 1.4, FY - .8, SZ0 + 2.4]], '#e2483d', .3, 1.2));
+  parts.push(...tiWire([[12.2, 39, 6], [16, 39, SZ0 + .7], [22.6, 32.4, SZ0 + .7]], '#3a3632', .3, 1.2));
+  parts.push(...tiWire([[27.4, 29.5, 6.2], [27.4, 29.5, SZ0 + 1.2], [27.6, 29.8, SZ0 + .7]], '#d8a24a', .25, 1.2));
+  parts.push(...tiWire([[27.4, 37.8, 6.1], [27.4, 34, SZ0 + 1.2], [27.6, 32.6, SZ0 + .7]], '#d8a24a', .25, 1.2));
+  return [s, tiSort(parts)]; }
+
+function tiMeter(st, m, k, pH){
+  const slope = (y, s, off = .05) => [40 - 11*s/MSL + MSN[0]*off, y, 4.5 + 5*s/MSL + MSN[2]*off];
+  const txS = (y, s, str, size, col = INK, weight = 700) => `<text transform="${txM(P(...slope(y, s, .08)), Dv(0,-1,0), Dv(11/MSL, 0, -5/MSL))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+  let s = tiPrismY(MP, MY0, MY1, m, 1);
+  const lcd = off => [slope(53.5, 4.6, off), slope(62.5, 4.6, off), slope(62.5, 10.6, off), slope(53.5, 10.6, off)];
+  if (vis(MSN)){
+    s += shape(lcd(.04), '#1d2a26', 1);
+    s += txS(57.4, 6.3, pH.toFixed(2), 2.6, '#8af0ae', 800) + txS(61.3, 6.3, 'pH', 1.2, '#8af0ae', 700) + txS(58, 9.4, '25.0 C  MEAS', .8, '#8af0ae', 700);
+    for (const [y, lab, M] of [[55, 'CAL', DARK], [58, 'MEAS', DARK], [61.5, 'ON', matOf('#e2483d')]]){ const a = slope(y, 2.2, 0), b = slope(y, 2.2, .45);
+      s += rod(a, b, .7, M, toneI, .7) + txS(y, 1, lab, .62, INK, 800); }
+    s += txS(58, 11.6, 'PH METER', .9, mix(m.d, '#000000', .2), 800);
+  }
+  if (facing([-1,0,0])) s += shape(on(PX(25.97), rectUV(55, 3.4, 57.6, 4.6)), '#f3f0e6', .5);
+  if (!(k > 0)) return [s, ''];
+  let ins = '';
+  for (const [x, y] of [[29, 53], [38.5, 53], [29, 63], [38.5, 63]]) ins += cyl(x, y, BH, 2.6, .3, STEELM, toneI, .4, 8);
+  ins += tiBx(28.4, 52.4, 2.6, 39, 63.6, 2.9, PCBM, .6);
+  ins += tiBx(30, 58.6, 2.9, 31.6, 60.6, 3.4, DARK, .5) + tiBx(33.5, 55, 2.9, 36, 57.5, 3.3, DARK, .5);
+  ins += tiBx(30.5, 53, 2.9, 33.2, 57.2, 4.6, matOf('#3f4a8a'), .6);
+  ins += shape(lcd(-.6), '#3c4a44', .6);
+  ins += tiStroke([[26.4, 60, 6], [28, 60, 4], [30, 59.8, 3]], '#d8a24a', .35);
+  return [s, ins]; }
+
+// the electrode's glass shaft between two heights, its insides drawn faintly through the glass
+function tiElectrode(za, zb, k){
+  const wire = `<path d="${pd([[EX, EY, Math.max(za, 12.6)], [EX, EY, zb]], false)}" stroke="#c9ced0" stroke-width=".35"/>`;
+  const tube = zb > 12.6 ? tiLiquid(EX, EY, Math.max(za, 12.6), zb, .22, '#f2f6f6', .5 + .3*k, false) : '';
+  const kcl = zb > 12.8 ? tiLiquid(EX, EY, Math.max(za, 12.8), Math.min(zb, 27), .55, '#f6eab8', .35 + .35*k, zb > 27 && za < 27) : '';
+  return tiGlass(EX, EY, za, zb, .6, kcl + tube + wire, .7); }
+
+function tiFlask(st, k, pH){
+  const ind = tiInd(pH), h = tiLevel(VW + st.V), zs = FZ_IN + h, rs = tiRin(h);
+  const rings = [[FZ, 3.95], [FZ + .4, 4.25], [FZ + 10.5, 2.25], [FZ + 14, 2.25], [FZ + 14, 2.5], [FZ + 14.5, 2.5]].map(([z, r]) => [z, r, tiRingZ(FX, FY, z, r, 28)]);
+  let far = '', near = '';
+  for (let i = 0; i < rings.length - 1; i++){ const A = rings[i][2], B = rings[i+1][2];
+    far += loft(A, B, () => mix(CLEAR.m, '#ffffff', .25), true); near += loft(A, B, n => toneI(n, CLEAR)); }
+  let s = `<g opacity=".5">${far}</g>`;
+  // stir bar on the floor, turning with the drive magnet
+  const a = st.spin, ca = Math.cos(a)*1.5, sa = Math.sin(a)*1.5, bz = FZ_IN + .4;
+  const pa = [FX - ca, FY - sa, bz], pb = [FX + ca, FY + sa, bz];
+  s += rod(depthOf(sub(pb, pa)) > 0 ? pa : pb, depthOf(sub(pb, pa)) > 0 ? pb : pa, .4, PTFE, toneI, .7) + tiBall(depthOf(sub(pb, pa)) > 0 ? pa : pb, .4, PTFE, .6);
+  s += tiBall([FX, FY, bz + .38], .12, PTFE, .3);
+  // electrode under the surface (glass bulb and the bottom of the shaft)
+  const bulb = tiBall([EX, EY, EBOT + .5], .5, { l:'#f4fafb', m:'#dbecef' }, .6);
+  s += tiElectrode(12.5, zs, k) + bulb + tiBall([EX + .6*Math.cos(YAW*Math.PI/180), EY + .6*Math.sin(YAW*Math.PI/180), 13], .14, PTFE, .3);
+  // the solution: a translucent body and its surface, coloured by the indicator
+  const A = tiRingZ(FX, FY, FZ_IN, FR_IN, 28), B = tiRingZ(FX, FY, zs, rs, 28);
+  s += `<g opacity="${f(ind.a)}">${loft(A, B, () => ind.c)}${fill(pd(B), mix(ind.c, '#ffffff', .3))}</g>` + ink(pd(B), .45);
+  // swirl lines on the surface while stirring
+  if (st.w > .05){ let sw = '';
+    for (let j = 0; j < 3; j++){ const pts = []; for (let i = 0; i <= 8; i++){ const t = st.spin*.5 + j*2.1 + i*.16, r = rs*(.35 + .18*j); pts.push([FX + r*Math.cos(t), FY + r*Math.sin(t), zs + .02]); } sw += pd(pts, false); }
+    s += `<path d="${sw}" fill="none" stroke="#ffffff" stroke-width=".5" opacity="${f(.7*st.w)}" stroke-linecap="round"/>`; }
+  // pink plumes where the NaOH lands, swirled round the flask and fading as it mixes
+  for (const p of st.plumes){ const r = Math.min(rs*.9, .5 + p.r), t = st.spin*.5 - p.sp, dx = BXc - FX, dy = BYc - FY;
+    const cx = FX + dx*Math.cos(t) - dy*Math.sin(t), cy = FY + dx*Math.sin(t) + dy*Math.cos(t);
+    s += fill(pd(on(PZ(zs + .03), ellUV(cx, cy, r, r*.8, 16))), '#e2569f', `opacity="${f(.75*p.i)}"`); }
+  // above the surface: the rest of the electrode in the neck, the jet tip, the stream or a drop
+  const tops = [];
+  tops.push({ box: [[EX - .6, EY - .6, zs], [EX + .6, EY + .6, FTOP]], svg: tiElectrode(zs, FTOP, k) });
+  let tip = rod([BXc, BYc, FTOP], [BXc, BYc, TIP_Z], .3, CLEAR, toneI, .6, .18);
+  if (st.form > 0) tip += tiBall([BXc, BYc, TIP_Z - .2*st.form], .25*st.form, { l:'#ffffff', m:NAOHC }, .5);
+  tops.push({ box: [[BXc - .35, BYc - .35, TIP_Z - .4], [BXc + .35, BYc + .35, FTOP]], svg: tip });
+  if (st.tapA > .6 && st.Vb < VMAX){ const w = .1 + .12*(st.tapA - .6)/.4;
+    tops.push({ box: [[BXc - .2, BYc - .2, zs], [BXc + .2, BYc + .2, TIP_Z]], svg: tiStroke([[BXc, BYc, TIP_Z], [BXc, BYc, zs]], mix(NAOHC, '#ffffff', .3), w*2) }); }
+  for (const d of st.drops) tops.push({ box: [[BXc - .25, BYc - .25, d.z - .25], [BXc + .25, BYc + .25, d.z + .25]], svg: tiBall([BXc, BYc, d.z], .24, { l:'#ffffff', m:NAOHC }, .5) });
+  s += tiSort(tops);
+  // the near glass, a streak and the outline
+  s += `<g opacity=".28">${near}</g>`;
+  const t1 = (YAW + 30)*Math.PI/180;
+  s += `<path d="${pd([[FX + 3.3*Math.cos(t1), FY + 3.3*Math.sin(t1), FZ + 1.5], [FX + 2.35*Math.cos(t1), FY + 2.35*Math.sin(t1), FZ + 8.8]], false)}" stroke="#ffffff" stroke-width=".8" opacity=".7" stroke-linecap="round"/>`;
+  for (const a2 of nearHalf()){ const t = a2*Math.PI/180, c = Math.cos(t), sn = Math.sin(t);
+    s += line(rings.slice(0, 4).map(([z, r]) => [FX + r*c, FY + sn*r, z]), 1.1); }
+  { const [h0, h1] = nearHalf(), arc = []; for (let i = 0; i <= 16; i++){ const t = (h0 + (h1 - h0)*i/16)*Math.PI/180; arc.push([FX + 3.95*Math.cos(t), FY + 3.95*Math.sin(t), FZ]); } s += line(arc, 1.1); }
+  s += fill(pd(rings[5][2]) + pd(tiRingZ(FX, FY, FTOP, 2.1, 28)), mix(CLEAR.l, '#ffffff', .3), 'fill-rule="evenodd" opacity=".8"') + ink(pd(rings[5][2]), .9) + ink(pd(tiRingZ(FX, FY, FTOP, 2.1, 28)), .6);
+  return { svg: s, zs, rs }; }
+
+/* ---------- see-through overlays: the magnifier and the pH curve ---------- */
+const MOLS = 5;
+const tiSeed = i => { const x = Math.sin(i*127.1 + 3.7)*43758.5453; return x - Math.floor(x); };
+function tiMol(kind, X, Y, R, op){
+  if (op < .02) return '';
+  const c = (dx, dy, r, col, txt = '') => `<circle cx="${f(X + dx*R)}" cy="${f(Y + dy*R)}" r="${f(r*R)}" fill="${col}" stroke="${INK}" stroke-width="${f(.09*R)}"/>` + (txt ? `<text x="${f(X + dx*R)}" y="${f(Y + dy*R + .32*R)}" font-size="${f(.9*R)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">${txt}</text>` : '');
+  const ch = (dx, dy, txt) => `<text x="${f(X + dx*R)}" y="${f(Y + dy*R)}" font-size="${f(.95*R)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="900" fill="${INK}">${txt}</text>`;
+  let s = '';
+  if (kind === 'H') s = c(0, 0, .55, '#ffffff', 'H') + ch(.75, -.5, '+');
+  else if (kind === 'OH') s = c(.55, -.35, .5, '#ffffff') + c(0, 0, .8, '#e2483d', 'O') + ch(-.9, -.6, '-');
+  else if (kind === 'W') s = c(-.7, .45, .5, '#ffffff') + c(.7, .45, .5, '#ffffff') + c(0, 0, .8, '#e2483d', 'O');
+  else if (kind === 'Na') s = c(0, 0, .75, '#a77be0', 'Na') + ch(.95, -.55, '+');
+  else if (kind === 'Cl') s = c(0, 0, .9, '#6cc56a', 'Cl') + ch(1.1, -.6, '-');
+  return `<g opacity="${f(op)}">${s}</g>`; }
+function tiMagnifier(st, k, at, cx, cy){
+  const u = INK_K, R = 50*u, rr = 8*u, [fx, fy] = P(...at), x = st.V / (NA0/CB);
+  const ind = tiInd(tiPH(st.V));
+  let s = '';
+  // the magnifier's cone from the spot in the flask to the circle
+  const d = Math.hypot(cx - fx, cy - fy), nx = (cx - fx)/d, ny = (cy - fy)/d;
+  for (const sg of [-1, 1]) s += `<path d="M${f(fx - ny*sg*2*u)} ${f(fy + nx*sg*2*u)}L${f(cx - ny*sg*R)} ${f(cy + nx*sg*R)}" stroke="${INK}" stroke-width=".8" stroke-dasharray="2 2" fill="none" opacity=".7"/>`;
+  s += `<circle cx="${f(fx)}" cy="${f(fy)}" r="${f(2*u)}" fill="none" stroke="${INK}" stroke-width="1"/>`;
+  const id = 'mag' + (++_clipN);
+  s += `<clipPath id="${id}"><circle cx="${f(cx)}" cy="${f(cy)}" r="${f(R)}"/></clipPath>`;
+  let mol = `<circle cx="${f(cx)}" cy="${f(cy)}" r="${f(R)}" fill="${mix(ind.c, '#fbf8ee', .35)}"/>`;
+  const t = st.t, rot = st.spin*.08;
+  const pos = (i, ring) => { const a = tiSeed(i + ring*17)*Math.PI*2 + rot + .35*Math.sin(t*.9 + i), r = (.25 + .62*tiSeed(i*3.1 + ring*5.3))*R;
+    return [cx + r*Math.cos(a) + 1.6*u*Math.sin(t*1.7 + i*2.3), cy + r*Math.sin(a) + 1.6*u*Math.cos(t*1.3 + i*1.9)]; };
+  // H+ slots turn into water as the OH- arrives; past the endpoint OH- builds up; Na+ grows with the base added
+  for (let i = 0; i < MOLS; i++){ const hA = tiClamp(MOLS*(1 - x) - i), [X, Y] = pos(i, 0);
+    mol += tiMol('W', X, Y, rr, 1 - hA) + tiMol('H', X, Y, rr, hA);
+    if (hA > 0 && hA < 1){ const q = hA, ox = X + q*(cx + R*.7 - X), oy = Y + q*(cy - R*.7 - Y); mol += tiMol('OH', ox, oy, rr, Math.min(1, 3*q)); } }
+  for (let i = 0; i < MOLS; i++){ const [X, Y] = pos(i, 1); mol += tiMol('OH', X, Y, rr, tiClamp(MOLS*(x - 1)*2 - i)); }
+  for (let i = 0; i < MOLS*2; i++){ const [X, Y] = pos(i, 2); mol += tiMol('Na', X, Y, rr*.85, tiClamp(MOLS*x - i)); }
+  for (let i = 0; i < MOLS; i++){ const [X, Y] = pos(i, 3); mol += tiMol('Cl', X, Y, rr*.85, 1); }
+  s += `<g clip-path="url(#${id})">${mol}</g><circle cx="${f(cx)}" cy="${f(cy)}" r="${f(R)}" fill="none" stroke="${INK}" stroke-width="2.2"/>`;
+  s += `<circle cx="${f(cx)}" cy="${f(cy)}" r="${f(R + 2.4*u)}" fill="none" stroke="${INK}" stroke-width="1" opacity=".5"/>`;
+  // legend under the circle
+  const lg = [['H', 'H+'], ['OH', 'OH-'], ['W', 'H2O'], ['Na', 'Na+'], ['Cl', 'Cl-']];
+  lg.forEach(([kd, nm], i) => { const lx = cx - R + (i + .5)*(2*R/lg.length), ly = cy + R + 11*u;
+    s += tiMol(kd, lx, ly, 4.8*u, 1) + `<text x="${f(lx)}" y="${f(ly + 12*u)}" font-size="${f(6.6*u)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">${nm}</text>`; });
+  s += `<text x="${f(cx)}" y="${f(cy - R - 6*u)}" font-size="${f(6.6*u)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">H+ + OH- = H2O</text>`;
+  return s; }
+let TI_CURVE = null;
+function tiCurve(st, x0, y0){
+  const u = INK_K, w = 118*u, h = 90*u;
+  const px0 = x0 + 16*u, px1 = x0 + w - 6*u, py0 = y0 + h - 14*u, py1 = y0 + 10*u;
+  const X = v => px0 + (px1 - px0)*v/VMAX, Y = p => py0 - (py0 - py1)*p/14;
+  const txt = (x, y, str, sz = 5.6, anc = 'middle', col = INK) => `<text x="${f(x)}" y="${f(y)}" font-size="${f(sz*u)}" text-anchor="${anc}" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${col}">${str}</text>`;
+  let s = `<rect x="${f(x0)}" y="${f(y0)}" width="${f(w)}" height="${f(h)}" rx="${f(4*u)}" fill="#fff8e6" stroke="${INK}" stroke-width="1.4"/>`;
+  s += `<rect x="${f(px0)}" y="${f(Y(10))}" width="${f(px1 - px0)}" height="${f(Y(8.2) - Y(10))}" fill="#f7bcd8" opacity=".6"/>`;
+  s += `<path d="M${f(X(25))} ${f(py0)}L${f(X(25))} ${f(py1)}M${f(px0)} ${f(Y(7))}L${f(px1)} ${f(Y(7))}" stroke="${INK}" stroke-width=".6" stroke-dasharray="1.5 1.5" fill="none" opacity=".6"/>`;
+  if (!TI_CURVE){ const pts = []; for (let v = 0; v <= VMAX; v += v > 23 && v < 27 ? .02 : .25) pts.push([v, tiPH(v)]); TI_CURVE = pts; }
+  s += `<path d="M${TI_CURVE.map(([v, p]) => f(X(v)) + ' ' + f(Y(p))).join('L')}" stroke="#8f989b" stroke-width=".7" stroke-dasharray="1.2 1.2" fill="none"/>`;
+  const tr = st.trace.concat([[st.V, tiPH(st.V)]]);
+  s += `<path d="M${tr.map(([v, p]) => f(X(v)) + ' ' + f(Y(p))).join('L')}" stroke="${INK}" stroke-width="2.6" fill="none" stroke-linejoin="round" stroke-linecap="round"/>`;
+  s += `<path d="M${tr.map(([v, p]) => f(X(v)) + ' ' + f(Y(p))).join('L')}" stroke="#4f86d8" stroke-width="1.3" fill="none" stroke-linejoin="round" stroke-linecap="round"/>`;
+  const ind = tiInd(tiPH(st.V));
+  s += `<circle cx="${f(X(st.V))}" cy="${f(Y(tiPH(st.V)))}" r="${f(3*u)}" fill="${mix(ind.c, '#ffffff', .1)}" stroke="${INK}" stroke-width="1"/>`;
+  s += `<path d="M${f(px0)} ${f(py1)}L${f(px0)} ${f(py0)}L${f(px1)} ${f(py0)}" stroke="${INK}" stroke-width="1" fill="none"/>`;
+  for (const v of [0, 10, 20, 30, 40, 50]) s += txt(X(v), py0 + 6.4*u, v);
+  for (const p of [0, 7, 14]) s += txt(px0 - 2.4*u, Y(p) + 2*u, p, 5.6, 'end');
+  s += txt((px0 + px1)/2, py0 + 12.4*u, 'NAOH ADDED (ML)', 5.2) + txt(px0 + 3*u, py1 + 1*u, 'PH', 5.6, 'start') + txt(X(25) + 2*u, py1 + 7*u, 'EQUIVALENCE', 4.6, 'start');
+  s += txt(px1 - 2*u, Y(9.1) + 1.8*u, 'PINK', 4.6, 'end', '#a0306f');
+  return s; }
+
+// the engine's xrCallouts splits labels at the board's centre, and nearly every part stands left of it: here the split
+// is at the median of the anchors, so each column gets half (same pills, same leaders)
+// the page's own controls over the figure (buttons, stats, the See-through switches, the zoom chip), in drawing units
+let TI_PANELS = [];
+function tiBlocks(){
+  const svgEl = document.getElementById('fig'), M = svgEl && svgEl.getScreenCTM(); if (!M) return null;
+  const iv = M.inverse(), out = [];
+  for (const el of document.querySelectorAll('#btns, #stats, .vset, .zchip')){ const r = el.getBoundingClientRect(); if (!r.width || !r.height) continue;
+    const a = new DOMPoint(r.left, r.top).matrixTransform(iv), b = new DOMPoint(r.right, r.bottom).matrixTransform(iv); out.push([a.x, a.y, b.x, b.y]); }
+  return out; }
+const tiHit = (bx, B, m) => B.some(o => bx[0] < o[2] + m && bx[2] > o[0] - m && bx[1] < o[3] + m && bx[3] > o[1] - m);
+function tiCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0]));
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0; let fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 3*k);
+  const Lc = [], Rc = [], svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, btn = document.getElementById('btns');
+  let s = '';
+  // each column runs from below whatever sits over its strip (buttons, stats, switches, the two panels) to above whatever
+  // sits under it (the zoom chip); the left column takes its share of the anchors, in x order, by the room it has
+  const wMax = u ? hgt*1.3 : Math.max(...items.map(it => it.text.length))*fs*.62 + fs*1.5, Bk = (tiBlocks() || []).concat(TI_PANELS), midY = vb.y + vb.height/2;
+  const top = { [-1]: vb.y + hgt, [1]: vb.y + hgt }, bot = { [-1]: vb.y + vb.height - hgt, [1]: vb.y + vb.height - hgt };
+  for (const side of [-1, 1]){ const x0 = side < 0 ? Math.max(vb.x, xmin - 10*k - wMax) : xmax + 10*k, x1 = side < 0 ? xmin - 10*k : Math.min(vb.x + vb.width, xmax + 10*k + wMax);
+    for (const o of Bk) if (o[0] < x1 && o[2] > x0){ if ((o[1] + o[3])/2 < midY) top[side] = Math.max(top[side], o[3] + hgt/2 + 4*k); else bot[side] = Math.min(bot[side], o[1] - hgt/2 - 4*k); } }
+  const all = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  const cL = Math.max(0, bot[-1] - top[-1]), cR = Math.max(0, bot[1] - top[1]), n = all.length;
+  // crowded (a tall stats block, a short window): the pills shrink, down to three quarters, until the slots suffice
+  const slots = g => [Math.floor(cL/g) + 1, Math.floor(cR/g) + 1];
+  let sc = 1; while (sc > .76 && slots(gap*sc)[0] + slots(gap*sc)[1] < n) sc -= .05;
+  if (sc < 1){ fs *= sc; hgt *= sc; gap *= sc; }
+  const [sL, sR] = slots(gap), nL = Math.max(n - sR, Math.min(sL, Math.round(n*cL/(cL + cR || 1))));
+  all.forEach((c, i) => (i < nL ? Lc : Rc).push(c));
+  for (const [col, side] of [[Lc, -1], [Rc, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    const gp = col.length > 1 ? Math.max(hgt + k, Math.min(gap, (bot[side] - top[side])/(col.length - 1))) : gap;
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gp, top[side]); y = c.py; }
+    let yb = bot[side] + gp; for (let i = col.length - 1; i >= 0; i--){ col[i].py = Math.min(col[i].py, yb - gp); yb = col[i].py; }   // back up from the bottom limit
+    const shift = col.length ? Math.max(0, col.reduce((a, c) => a + c.py - c.Y, 0) / col.length) : 0;
+    const room = col.length ? col[0].py - top[side] : 0; for (const c of col) c.py -= Math.min(shift, room);
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s; }
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0), items = [], pH = tiPH(st.V);
+  const put = (b, svg, inside = '') => items.push({ box: b, svg: k > 0 && inside ? `<g opacity="${f(1 - .8*k)}">${svg}</g><g opacity="${f(k)}">${inside}</g>` : svg });
+  let s = castShadow([...on(PZ(0), rectUV(0, 0, BW, BD)), ...on(PZ(BH), rectUV(0, 0, BW, BD))]);
+  s += board(0, 0, BW, BD, BH, 4, WOOD);
+  // cast shadows on the bench
+  { const bx = (x0, y0, z0, x1, y1, z1) => { const o = []; for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) o.push([x, y, z]); return o; };
+    const ps = [bx(...SB), bx(RX - .6, RY - .6, BH, RX + .6, RY + .6, ROD_T), bx(STB[0], STB[1], SZ0, STB[2], STB[3], SZ1),
+      [...tiRingZ(FX, FY, FZ, 4.25, 14), ...tiRingZ(FX, FY, FTOP, 2.5, 10)], bx(BXc - BR, BYc - BR, TIP_Z, BXc + BR, BYc + BR, TUBE_Z1),
+      bx(RX, CL_Z - .5, CL_Z - .5, 20, CL_Z + .5, CL_Z + .5).map(([x, y, z]) => [x, y < CL_Z ? 32.6 : 33.4, z]),
+      [...on(PY(MY0), MP), ...on(PY(MY1), MP)], bx(POST[0] - .5, POST[1] - .5, BH, POST[0] + .5, POST[1] + .5, POST_T), [[POST[0], POST[1], HOLD_Z], [EX, EY, HOLD_Z], [POST[0], POST[1] + .4, HOLD_Z], [EX, EY + .4, HOLD_Z]],
+      [...tiRingZ(BOT[0], BOT[1], BH, 3, 12), ...tiRingZ(BOT[0], BOT[1], 17, 1.3, 8), ...tiRingZ(BOT[0], BOT[1], 14, 3, 12)],
+      [...tiRingZ(WASH[0], WASH[1], BH, 2.4, 12), ...tiRingZ(WASH[0], WASH[1], 12, 2.4, 12), [WASH[0], WASH[1] - 3.4, 16.6]]];
+    s += clipTo(boardTop(0, 0, BW, BD, BH, 4), ps.map(p => castShadow(p, BH)).join('')); }
+
+  // ---- retort stand: base, foot, rod (in sections either side of the boss), boss head, clamp arm, clamp
+  put([[SB[0], SB[1], SB[2]], [SB[3], SB[4], SB[5]]], tiBx(...SB, STANDM, 1.2));
+  put([[RX - 1, RY - 1, SZ0], [RX + 1, RY + 1, SZ0 + .8]], cyl(RX, RY, SZ0, SZ0 + .8, 1, STANDM, toneI, .8, 16));
+  put([[RX - .6, RY - .6, SZ0 + .8], [RX + .6, RY + .6, CL_Z - 1.2]], cyl(RX, RY, SZ0 + .8, CL_Z - 1.2, .6, STEELM, toneI, .9, 14));
+  put([[RX - .6, RY - .6, CL_Z + 1.2], [RX + .6, RY + .6, ROD_T]], cyl(RX, RY, CL_Z + 1.2, ROD_T, .6, STEELM, toneI, .9, 14));
+  { const bz0 = CL_Z - 1.2, bz1 = CL_Z + 1.2, near = facing([0,-1,0]), up = facing([0,0,1]);
+    const body = tiBx(RX - 1.2, RY - 1.1, bz0, RX + 1.4, BYc + .8, bz1, matOf('#8a9399'), .9);
+    const scr1 = rod([RX, RY - 1.1, CL_Z - .4], [RX, RY - 2.2, CL_Z - .4], .25, STEELM, toneI, .5) + rod([RX, RY - 2.2, CL_Z - .4], [RX, RY - 2.7, CL_Z - .4], .7, DARK, toneI, .7);
+    const scr2 = rod([RX + .3, BYc, bz1], [RX + .3, BYc, bz1 + 1], .25, STEELM, toneI, .5) + rod([RX + .3, BYc, bz1 + 1], [RX + .3, BYc, bz1 + 1.5], .7, DARK, toneI, .7);
+    put([[RX - 1.2, RY - 2.7, bz0], [RX + 1.4, BYc + .8, bz1 + 1.5]], (near ? body + scr1 : scr1 + body) + (up ? scr2 : '')); }
+  put([[RX + 1.4, BYc - .35, CL_Z - .35], [16.4, BYc + .35, CL_Z + .35]], rod([RX + 1.4, BYc, CL_Z], [16.4, BYc, CL_Z], .35, STEELM, toneI, .7));
+  put([[16.4, BYc - .7, CL_Z - .6], [17.8, BYc + .7, CL_Z + .6]], tiBx(16.4, BYc - .7, CL_Z - .6, 17.8, BYc + .7, CL_Z + .6, matOf('#8a9399'), .8));
+  for (const sg of [-1, 1]){ const y0 = BYc + sg*(BR + .15), y1 = BYc + sg*(BR + .45), ya = Math.min(y0, y1), yb = Math.max(y0, y1);
+    put([[17.8, ya, CL_Z - .5], [20.4, yb, CL_Z + .5]], tiBx(17.8, ya, CL_Z - .5, 20.4, yb, CL_Z + .5, STEELM, .7));
+    const pa = Math.min(BYc + sg*BR, BYc + sg*(BR + .15)), pb = Math.max(BYc + sg*BR, BYc + sg*(BR + .15));
+    put([[18.6, pa, CL_Z - .45], [20, pb, CL_Z + .45]], tiBx(18.6, pa, CL_Z - .45, 20, pb, CL_Z + .45, CORK, .5)); }
+
+  // ---- the burette: glass tube in sections, NaOH column, graduations, stopcock, jet
+  { const lvl = tiBurZ(st.Vb), FRONT = facing([1,0,0]);
+    const grad = (za, zb) => { if (!FRONT) return ''; let tk = '', num = '';
+      for (let v = 0; v <= 50; v++){ const z = Z0ML - ZPERML*v; if (z < za || z > zb) continue; const span = v % 5 ? 30 : 55, pts = [];
+        for (let a = -span; a <= span; a += 10){ const t = a*Math.PI/180; if (Math.cos(t - YAW*Math.PI/180) <= 0) continue; pts.push([BXc + BR*Math.cos(t) + .01, BYc + BR*Math.sin(t), z]); }
+        if (pts.length > 1) tk += pd(pts, false);
+        if (v % 10 === 0) num += tx(BXc + BR + .02, BYc - .05, z + .12, String(v), .62, INK, 800); }
+      return `<path d="${tk}" fill="none" stroke="${INK}" stroke-width=".35"/>` + num; };
+    const sec = (za, zb) => { const liq = tiLiquid(BXc, BYc, za, Math.min(zb, lvl), BRI, NAOHC, .65, lvl > za && lvl <= zb);
+      // the meniscus: the surface curves up the glass, its bottom (where the burette is read) a little lower
+      const [a0, a1] = nearHalf(), mp = [];
+      for (let i = 0; i <= 10; i++){ const t = (a0 + (a1 - a0)*i/10)*Math.PI/180; mp.push([BXc + BRI*Math.cos(t), BYc + BRI*Math.sin(t), lvl - .25 + .25*Math.abs(2*i/10 - 1)]); }
+      const men = lvl > za && lvl <= zb ? ink(pd(mp, false), .5) : '';
+      return tiGlass(BXc, BYc, za, zb, BR, liq + men) + grad(za, zb); };
+    put([[BXc - BR, BYc - BR, TUBE_Z0], [BXc + BR, BYc + BR, CL_Z - .5]], sec(TUBE_Z0, CL_Z - .5));
+    put([[BXc - BR, BYc - BR, CL_Z - .5], [BXc + BR, BYc + BR, CL_Z + .5]], sec(CL_Z - .5, CL_Z + .5));
+    put([[BXc - BR, BYc - BR, CL_Z + .5], [BXc + BR, BYc + BR, TUBE_Z1]], sec(CL_Z + .5, TUBE_Z1)
+      + (facing([0,0,1]) ? ink(pd(tiRingZ(BXc, BYc, TUBE_Z1, BR)), .7) + ink(pd(tiRingZ(BXc, BYc, TUBE_Z1, BRI)), .5) : ''));
+    // the stopcock: glass body round the PTFE key, the key's handle (turned by the tap), its retaining nut
+    const th = st.tapA*Math.PI/2, hd = [Math.cos(th), 0, Math.sin(th)];
+    put([[BXc - .55, BYc - .55, FTOP], [BXc + .55, BYc + .55, TUBE_Z0]], tiGlass(BXc, BYc, FTOP, TUBE_Z0, .55, tiLiquid(BXc, BYc, FTOP, TUBE_Z0, .3, NAOHC, .65, false)));
+    const keyIn = rod([BXc, 31.7, SC_Z], [BXc, 34.3, SC_Z], .36, PTFE, toneI, .5);
+    const bore = k > 0 ? `<g opacity="${f(k)}">${line([tiAdd([BXc, BYc, SC_Z], tiScl(hd, -.36)), tiAdd([BXc, BYc, SC_Z], tiScl(hd, .36))], 1.4)}</g>` : '';
+    put([[BXc - .55, 31.9, SC_Z - .55], [BXc + .55, 34.1, SC_Z + .55]], keyIn + bore + `<g opacity=".55">${rod([BXc, 31.9, SC_Z], [BXc, 34.1, SC_Z], .55, CLEAR, toneI, .7)}</g>`);
+    const hp = [[-.35, -1.5], [.35, -1.5], [.35, 1.5], [-.35, 1.5]].map(([a, b]) => [BXc + b*hd[0] + a*(-hd[2]), SC_Z + b*hd[2] + a*hd[0]]);
+    put([[BXc - 1.6, 31.1, SC_Z - 1.6], [BXc + 1.6, 31.7, SC_Z + 1.6]], act('tap', tiPrismY(hp, 31.1, 31.7, PTFE, .7)));
+    put([[BXc - .45, 34.3, SC_Z - .45], [BXc + .45, 34.7, SC_Z + .45]], rod([BXc, 34.3, SC_Z], [BXc, 34.7, SC_Z], .45, PTFE, toneI, .6, .45, 6));
+  }
+
+  // ---- stirrer on the base, the flask on its top plate
+  { const [sv, ins] = tiStirrer(st, m, k);
+    put([[STB[0], STB[1], SZ0], [STB[2], STB[3], SZ1]], sv, ins);
+    const near = facing([1,0,0]);
+    put([[STB[2], 28.4, 5.8], [STB[2] + 1.2, 30.6, 8]], act('knob', cylX(STB[2], STB[2] + 1.2, 29.5, 6.9, 1.1, DARK, toneI, .8, 18)
+      + (near ? line([[STB[2] + 1.22, 29.5, 6.9], [STB[2] + 1.22, 29.5 - .8*Math.sin(st.stir ? .9 : -1.6), 6.9 + .8*Math.cos(st.stir ? .9 : -1.6)]], .6) : '')));
+    const rk = st.stir ? .25 : -.25;
+    put([[STB[2], 37, 6.1], [STB[2] + .5, 38.6, 7.7]], act('knob', tiPrismY([[STB[2], 6.1], [STB[2] + .25 + rk*.6, 6.1], [STB[2] + .25 - rk*.6, 7.7], [STB[2], 7.7]].map(([x, z]) => [x, z]), 37, 38.6, st.stir ? matOf('#e2483d') : DARK, .6))); }
+  const fl = tiFlask(st, k, pH);
+  put([[FX - 4.3, FY - 4.3, FZ], [FX + 4.3, FY + 4.3, FTOP]], fl.svg);
+  put([[STB[0] - .6, 38.6, BH], [STB[0], 39.4, SZ0 + 3.8]], tiBx(STB[0] - .6, 38.6, 5.2, STB[0], 39.4, 7, DARK, .6));
+  items.push(...tiWire([[STB[0] - .6, 39, 6], [9.2, 39, 4.6], [8.4, 39, SZ0 + .3], [2.6, 39.4, SZ0 + .3], [1.8, 39.6, BH + .3], [.3, 40.2, BH + .3]], '#2e2b28', .5));
+
+  // ---- pH electrode above the neck, its holder ring, arm, post and foot, the cable to the meter
+  put([[EX - .6, EY - .6, FTOP], [EX + .6, EY + .6, HOLD_Z - .4]], tiElectrode(FTOP, HOLD_Z - .4, k));
+  put([[EX - .6, EY - .6, HOLD_Z + .4], [EX + .6, EY + .6, ESH]], tiElectrode(HOLD_Z + .4, ESH, k));
+  put([[EX - .7, EY - .7, ESH], [EX + .7, EY + .7, ESH + 2]], cyl(EX, EY, ESH, ESH + 2, .7, DARK, toneI, .8, 14));
+  put([[EX - .95, EY - .95, HOLD_Z - .4], [EX + .95, EY + .95, HOLD_Z + .4]], cyl(EX, EY, HOLD_Z - .4, HOLD_Z + .4, .95, DARK, toneI, .8, 18));
+  { const dv = norm([POST[0] - EX, POST[1] - EY, 0]), a0 = [EX + dv[0]*.95, EY + dv[1]*.95, HOLD_Z], a1 = [POST[0] - dv[0]*.9, POST[1] - dv[1]*.9, HOLD_Z];
+    const segs = 4; for (let i = 0; i < segs; i++){ const p = tiLerp(a0, a1, i/segs), q = tiLerp(a0, a1, (i + 1)/segs);
+      items.push({ box: tiBoxOf([p, q], .35), svg: rod(p, q, .32, DARK, toneI, .6) }); } }
+  put([[POST[0] - 3, POST[1] - 3, BH], [POST[0] + 3, POST[1] + 3, BH + 1.2]], cyl(POST[0], POST[1], BH, BH + 1.2, 3, STANDM, toneI, 1, 24));
+  put([[POST[0] - .5, POST[1] - .5, BH + 1.2], [POST[0] + .5, POST[1] + .5, HOLD_Z - .9]], cyl(POST[0], POST[1], BH + 1.2, HOLD_Z - .9, .5, STEELM, toneI, .8, 12));
+  put([[POST[0] - .9, POST[1] - .9, HOLD_Z - .9], [POST[0] + .9, POST[1] + .9, HOLD_Z + .9]], cyl(POST[0], POST[1], HOLD_Z - .9, HOLD_Z + .9, .9, DARK, toneI, .8, 16)
+    + rod([POST[0] + .9, POST[1], HOLD_Z], [POST[0] + 1.8, POST[1], HOLD_Z], .45, DARK, toneI, .6));
+  put([[POST[0] - .5, POST[1] - .5, HOLD_Z + .9], [POST[0] + .5, POST[1] + .5, POST_T]], cyl(POST[0], POST[1], HOLD_Z + .9, POST_T, .5, STEELM, toneI, .8, 12));
+  items.push(...tiWire([[EX, EY, ESH + 2], [EX, EY, ESH + 3.2], [EX + .8, EY + 3, ESH + 4], [POST[0] - 1.2, POST[1] - 2.5, ESH + 3.8], [POST[0] - .6, POST[1], POST_T - .3], [POST[0] - .6, POST[1], HOLD_Z + 1], [POST[0] - 1, POST[1], HOLD_Z - 1],
+    [POST[0] - .6, POST[1], BH + 1.5], [POST[0] - .6, POST[1] + 3.2, BH + 1.25], [POST[0] - .6, POST[1] + 3.8, BH + .3], [POST[0] - .6, 60, BH + .3], [POST[0] - .4, 60, 5], [24.8, 60, 6]], '#2e2b28', .45));
+  put([[24.8, 59.4, 5.4], [26, 60.6, 6.6]], cylX(25.4, 26, 60, 6, .5, STEELM, toneI, .6, 12) + cylX(24.6, 25.4, 60, 6, .42, DARK, toneI, .6, 12));
+
+  // ---- pH meter
+  { const [sv, ins] = tiMeter(st, m, k, pH); put([[26, MY0, BH], [40, MY1, 9.5]], sv, ins); }
+
+  // ---- NaOH bottle (polyethylene) and the wash bottle
+  { const [x, y] = BOT, A = tiRingZ(x, y, 14, 3, 24), B = tiRingZ(x, y, 15.4, 1.3, 16);
+    let sv = cyl(x, y, BH, 14, 3, CERAMIC, toneI, 1.2, 24) + loft(A, tiRingZ(x, y, 15.4, 1.3, 24), n => toneI(n, CERAMIC)) + cyl(x, y, 15.4, 17, 1.4, CAPM, toneI, .9, 16);
+    const band = (za, zb) => loft(tiRingZ(x, y, za, 3.02, 24), tiRingZ(x, y, zb, 3.02, 24), n => toneI(n, { l:'#ffffff', m:'#efece2', d:'#d2cdbd' }));
+    sv += band(6, 11) + ink(pd(tiRingZ(x, y, 6, 3.02, 24).filter(p => depthOf(sub(p, [x, y, 6])) > 0), false), .5) + ink(pd(tiRingZ(x, y, 11, 3.02, 24).filter(p => depthOf(sub(p, [x, y, 11])) > 0), false), .5);
+    if (facing([1,0,0])) sv += tx(x + 3.05, y, 9.2, 'NaOH', 1.3, INK, 800) + tx(x + 3.05, y, 7.3, '0.100 M', .95, '#c0392b', 800);
+    sv += hullInk([...tiRingZ(x, y, BH, 3, 16), ...tiRingZ(x, y, 14, 3, 16), ...B, [x, y, 17]], 1.4);
+    put([[x - 3, y - 3, BH], [x + 3, y + 3, 17]], sv); }
+  { const [x, y] = WASH, wm = { l:'#f6f8f8', m:'#dfe6e8', d:'#b9c4c7' };
+    let sv = cyl(x, y, BH, 11, 2.4, wm, toneI, 1.1, 20) + loft(tiRingZ(x, y, 11, 2.4, 20), tiRingZ(x, y, 12.2, 1.1, 20), n => toneI(n, wm)) + cyl(x, y, 12.2, 13.2, 1.15, matOf('#e2483d'), toneI, .8, 14);
+    if (facing([1,0,0])) sv += tx(x + 2.45, y, 7, 'DI H2O', .9, INK, 800);
+    const nz = [[x, y, 13.2], [x, y, 15.6], [x, y - .6, 16.5], [x, y - 2.6, 16.8], [x, y - 3.4, 16.4]];
+    sv += tiStroke(nz, '#f2f4f4', .5);
+    put([[x - 2.4, y - 3.6, BH], [x + 2.4, y + 2.4, 17]], sv); }
+
+  s += tiSort(items);
+
+  // ---- see-through overlays
+  const lbl = []; TI_PANELS = [];
+  if (k > 0){
+    // the two panels go in the empty space up top, either side of the rod and burette tops, each as high as it can sit
+    // clear of the page's own controls; with no room (a phone, or before layout) they flank the stand lower down
+    const u = INK_K, MW = 104*u, MH = 140*u, CW = 118*u, CH = 90*u, g = 8*u, Bk = tiBlocks(), vb = document.getElementById('fig').viewBox.baseVal;
+    const xa = Math.min(P(RX, RY, ROD_T)[0], P(BXc, BYc, TUBE_Z1)[0]) - g, xb = Math.max(P(RX, RY, ROD_T)[0], P(BXc, BYc, TUBE_Z1)[0]) + g, yLim = P(RX, RY, 44)[1];
+    const fit = (x0, w, h) => { if (!Bk || x0 < vb.x || x0 + w > vb.x + vb.width) return null;
+      for (let y = vb.y + 4*u; y + h <= yLim; y += 3*u) if (!tiHit([x0, y, x0 + w, y + h], Bk, g)) return y; return null; };
+    let mx, my, cx0, cy0, best = null;
+    for (const curveL of [true, false]){
+      const c = curveL ? [xa - CW, fit(xa - CW, CW, CH)] : [xb, fit(xb, CW, CH)], m = curveL ? [xb, fit(xb, MW, MH)] : [xa - MW, fit(xa - MW, MW, MH)];
+      if (c[1] != null && m[1] != null && (!best || Math.max(c[1], m[1]) < best.y)) best = { y: Math.max(c[1], m[1]), c, m }; }
+    if (best){ [cx0, cy0] = best.c; mx = best.m[0] + MW/2; my = best.m[1] + 62*u; TI_PANELS = [[cx0, cy0, cx0 + CW, cy0 + CH], [best.m[0], best.m[1], best.m[0] + MW, best.m[1] + MH]]; }
+    else { const [bx, by] = P(BXc, BYc, 54), sd = P(RX, RY, 66)[0] <= bx ? -1 : 1; mx = bx + sd*72*u; my = by; cx0 = bx - sd*22*u - (sd > 0 ? CW : 0); cy0 = by + 30*u; }
+    const spot = [FX, FY, FZ_IN + tiLevel(VW + st.V)*.5];
+    s += `<g opacity="${f(k)}">${tiMagnifier(st, k, spot, mx, my)}${tiCurve(st, cx0, cy0)}</g>`;
+  }
+  const lv = tiBurZ(st.Vb), zs = fl.zs, live = st.tapA > .6 || st.form > 0 || st.drops.length > 0;
+  if (k > .6){
+    lbl.push(
+      { at: [BXc - BR*CAM_V[0], BYc, 78], text: 'BURETTE 50 ML', on: false },
+      { at: [BXc, BYc, Math.min(lv, 74) - 6], text: 'NAOH 0.100 M', on: live },
+      { at: [BXc, BYc + BRI, lv], text: 'MENISCUS', on: live },
+      { at: [BXc + BR, BYc, Z0ML - ZPERML*40], text: 'GRADUATIONS', on: false },
+      { at: [BXc, 32.2, SC_Z], text: 'STOPCOCK', on: st.tapA > .05 },
+      { at: [BXc, 31.4, SC_Z + 1.2], text: 'PTFE KEY', on: st.tapA > .05 },
+      { at: [BXc, BYc, TIP_Z + .5], text: 'JET TIP', on: live },
+      { at: [19.2, BYc + 1.2, CL_Z], text: 'BURETTE CLAMP', on: false },
+      { at: [RX, RY - 1.1, CL_Z + 1], text: 'BOSS HEAD', on: false },
+      { at: [RX, RY, 80], text: 'STAND ROD', on: false },
+      { at: [SB[0] + 2, SB[1], SB[5]], text: 'RETORT BASE', on: false },
+      { at: [FX + 3.2, FY, FZ + 6], text: 'CONICAL FLASK', on: false },
+      { at: [FX, FY - 2.4, zs - .6], text: pH < 8.2 ? 'HCL + INDICATOR' : 'PINK: ENDPOINT', on: pH >= 8.2 },
+      { at: [FX, FY, FZ_IN + .4], text: 'STIR BAR', on: st.w > .1 },
+      { at: [FX + 2, FY, SZ1 - 1.3], text: 'DRIVE MAGNET', on: st.w > .1 },
+      { at: [FX + 1.8, FY, SZ0 + 2.5], text: 'MOTOR', on: st.w > .1 },
+      { at: [25, 28, SZ0 + .7], text: 'CONTROL BOARD', on: st.stir },
+      { at: [STB[2] + 1.2, 29.5, 6.9], text: 'SPEED KNOB', on: st.stir },
+      { at: [STB[2] + .3, 37.8, 7.7], text: 'POWER SWITCH', on: st.stir },
+      { at: [EX, EY, 22], text: 'PH ELECTRODE', on: true },
+      { at: [EX, EY, EBOT + .3], text: 'GLASS BULB', on: true },
+      { at: [EX, EY, 20], text: 'AG/AGCL WIRE', on: false },
+      { at: [EX + .5, EY, 26], text: 'KCL FILL', on: false },
+      { at: [(EX + POST[0])/2, (EY + POST[1])/2, HOLD_Z + .3], text: 'ELECTRODE HOLDER', on: false },
+      { at: [25.4, 60, 6.5], text: 'BNC SOCKET', on: false },
+      { at: [33, 55, 3.3], text: 'AMPLIFIER', on: true },
+      { at: [31.8, 53, 4.6], text: '9V BATTERY', on: false },
+      { at: [35.5, MY0 + 1, 7], text: 'PH METER', on: true },
+      { at: [BOT[0], BOT[1] + 3, 12], text: 'NAOH BOTTLE', on: false },
+      { at: [WASH[0], WASH[1] - 2.4, 9], text: 'WASH BOTTLE', on: false });
+    if (st.drops.length) lbl.push({ at: [BXc, BYc, st.drops[0].z], text: 'DROP 0.05 ML', on: true });
+    s += tiCallouts(lbl, [0, BW, 0, BD, 0, ROD_T]);
+  } else if (k === 0){
+    s += tiCallouts([
+      { at: [BXc, BYc, 70], text: 'BURETTE', on: false },
+      { at: [BXc, 31.4, SC_Z], text: 'STOPCOCK', on: st.tapA > .05 },
+      { at: [19.2, BYc + 1.2, CL_Z], text: 'BURETTE CLAMP', on: false },
+      { at: [RX, RY, 80], text: 'STAND ROD', on: false },
+      { at: [FX + 3.2, FY, FZ + 6], text: 'CONICAL FLASK', on: pH >= 8.2 },
+      { at: [STB[2], 33, SZ0 + 4], text: 'MAGNETIC STIRRER', on: st.stir },
+      { at: [EX, EY, 27], text: 'PH ELECTRODE', on: false },
+      { at: [35.5, MY0 + 1, 7], text: 'PH METER', on: true },
+      { at: [BOT[0], BOT[1] + 3, 12], text: 'NAOH BOTTLE', on: false },
+      { at: [WASH[0], WASH[1] - 2.4, 9], text: 'WASH BOTTLE', on: false } ], [0, BW, 0, BD, 0, ROD_T]);
+  }
+  return s;
+}
+
+/* ---------- behaviour (one state object, one loop) ---------- */
+let ui, tiLoopOn = false;
+const tiBusy = st => st.stir || st.w > 0 || st.tap || st.tapA > 0 || st.drops.length || st.dropQ > 0 || st.form > 0 || st.plumes.length || st.phase === 'reset';
+function tiRecord(st){ const lt = st.trace[st.trace.length - 1], p = tiPH(st.V);
+  if (!lt || Math.abs(st.V - lt[0]) > .04 || Math.abs(p - lt[1]) > .08) st.trace.push([st.V, p]);
+  if (st.endV == null && p >= 8.2) st.endV = Math.round(st.V/DROP)*DROP; }
+function tiPlume(st, n = 1){ for (let i = 0; i < n; i++) st.plumes.push({ i: 1, r: 0, sp: st.spin*.5 }); if (st.plumes.length > 10) st.plumes.splice(0, st.plumes.length - 10); }
+function tiStep(st, dt){
+  st.t += dt;
+  st.w = tiClamp(st.w + (st.stir ? 1 : -1)*dt/.8); st.spin += st.w*2.2*2*Math.PI*dt;
+  const tgt = st.tap ? 1 : st.dropQ > 0 || st.form > 0 ? .3 : 0;
+  st.tapA = st.tapA < tgt ? Math.min(tgt, st.tapA + dt/.3) : Math.max(tgt, st.tapA - dt/.3);
+  if (st.phase === 'reset'){ st.rt += dt/1.4; const e = ease(Math.min(1, st.rt)); st.V = st.Vfrom*(1 - e); st.Vb = st.Vbfrom*(1 - e);
+    if (st.rt >= 1){ st.phase = 'idle'; st.V = st.Vb = 0; st.trace = [[0, tiPH(0)]]; st.endV = null; } return; }
+  // stream: the open tap runs NaOH straight into the flask
+  if (st.tapA > .6){ const dv = Math.min(VMAX - st.Vb, FLOW*(st.tapA - .6)/.4*dt);
+    if (dv > 0){ st.Vb += dv; st.V += dv; st.pt = (st.pt || 0) + dt; if (st.pt > .12){ st.pt = 0; tiPlume(st); } tiRecord(st); }
+    if (st.Vb >= VMAX - 1e-6 && st.tap){ st.tap = 0; ui.flash('The burette is empty: press Reset'); } }
+  // drop by drop: the key cracked open, a drop swells on the jet, lets go and falls
+  if (!st.tap && st.dropQ > 0 && st.tapA >= .29){ st.form = Math.min(1, st.form + dt/.35);
+    if (st.form >= 1){ st.form = 0; st.dropQ--; st.Vb = Math.min(VMAX, st.Vb + DROP); st.drops.push({ z: TIP_Z - .3, vz: 0 }); } }
+  const zs = FZ_IN + tiLevel(VW + st.V);
+  for (const d of st.drops){ d.vz += 300*dt; d.z -= d.vz*dt; }
+  for (const d of st.drops.filter(d => d.z <= zs)){ st.V = Math.min(st.Vb, st.V + DROP); tiPlume(st); tiRecord(st); }
+  st.drops = st.drops.filter(d => d.z > zs);
+  // a plume fades as the swirl mixes it in; close to the end the pink lingers (few H+ left to use up the OH-)
+  const near = 1 + 7*Math.exp(-Math.max(0, NA0/CB - st.V)/.5), tau = (st.w > .5 ? .35 : 2.6)*near;
+  for (const p of st.plumes){ p.i *= Math.exp(-dt/tau); p.r += dt*(st.w > .5 ? 4 : .8); }
+  st.plumes = st.plumes.filter(p => p.i > .03);
+}
+function tiRun(){ if (tiLoopOn) return; tiLoopOn = true;
+  ui.animate(dt => { const st = ui.st; tiStep(st, dt); if (!tiBusy(st)){ tiLoopOn = false; return false; } return true; }); }
+function tiStir(st){ st.stir = !st.stir; tiRun(); }
+function tiNeedStir(st){ if (!st.stir){ st.stir = true; ui.flash('Stirrer on: the flask must be swirled as the base goes in'); } }
+function tiTap(st){
+  if (st.phase === 'reset') return ui.flash('One moment: refilling');
+  if (st.tap){ st.tap = 0; tiRun(); return; }
+  if (st.Vb >= VMAX - 1e-6) return ui.flash('The burette is empty: press Reset');
+  tiNeedStir(st); st.tap = 1; st.dropQ = 0; tiRun(); }
+function tiDrop(st){
+  if (st.phase === 'reset') return ui.flash('One moment: refilling');
+  if (st.tap) return ui.flash('Close the tap first, then add drop by drop');
+  if (st.Vb + DROP*(st.dropQ + 1) > VMAX + 1e-6) return ui.flash('The burette is empty: press Reset');
+  tiNeedStir(st); st.dropQ = Math.min(st.dropQ + 1, 6); tiRun(); }
+function tiReset(st){ st.tap = 0; st.dropQ = 0; st.form = 0; st.drops = []; st.plumes = []; st.phase = 'reset'; st.rt = 0; st.Vfrom = st.V; st.Vbfrom = st.Vb; tiRun(); }
+
+ui = mountFigure({
+  fig:'C1', title:'Acid-base titration', turn:'full',
+  size:[BW, BD, ROD_T], palette:'mint',
+  state:{ phase:'idle', V:0, Vb:0, tap:0, tapA:0, dropQ:0, form:0, drops:[], plumes:[], stir:false, w:0, spin:.6, t:0, trace:[[0, tiPH(0)]], endV:null, rt:0, Vfrom:0, Vbfrom:0 },
+  scene,
+  stats: st => { const p = tiPH(st.V);
+    return [ { label:'pH', value: p.toFixed(2) },
+      { label:'NaOH added', value: st.Vb.toFixed(2) + ' mL', small:true },
+      { label:'Indicator', value: tiIndName(p), small:true },
+      st.endV != null ? { label:'Endpoint', value: st.endV.toFixed(2) + ' mL', small:true } : null ]; },
+  buttons:[
+    { label:'Stirrer on / off', onClick: st => tiStir(st) },
+    { label:'Open / close tap', onClick: st => tiTap(st) },
+    { label:'Add a drop', onClick: st => tiDrop(st) },
+    { label:'Reset', onClick: st => tiReset(st) },
+  ],
+  acts:{ tap: st => tiTap(st), knob: st => tiStir(st) },
+  params:(st, q) => {
+    if (q.has('V')){ const v = tiClamp(+q.get('V') || 0, 0, VMAX); st.V = st.Vb = v; st.trace = [];
+      for (let x = 0; x < v; x += x > 23 && x < 26 ? .05 : .5) st.trace.push([x, tiPH(x)]); st.trace.push([v, tiPH(v)]); if (tiPH(v) >= 8.2) st.endV = 25.05; }
+    if (q.get('stir') === '1'){ st.stir = true; st.w = 1; }
+    if (q.get('tap') === '1'){ st.tap = 1; st.tapA = 1; }
+    if (q.has('drop')){ st.tapA = .3; st.drops = [{ z: +q.get('drop') || 18, vz: 0 }]; }
+    if (q.get('plume') === '1') st.plumes = [{ i: .9, r: .6, sp: 0 }];
+    if (q.has('spin')) st.spin = +q.get('spin');
+  },
+});
+xrMount(() => ui, () => '');
+// the panels and label columns steer round the page's controls, some of which (the switches, the zoom chip) arrive and
+// settle after the first draw: draw again whenever the figure or the stats change size, and once the page has loaded
+new ResizeObserver(() => ui.render()).observe(document.getElementById('fig'));
+new ResizeObserver(() => ui.render()).observe(document.getElementById('stats'));
+addEventListener('load', () => { for (const t of [0, 450, 1200]) setTimeout(() => ui.render(), t); });   // after the page's own fit-to-window
+</script></body></html>

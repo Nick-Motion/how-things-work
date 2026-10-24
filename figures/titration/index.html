@@ -1,0 +1,1379 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Acid-base titration</title><style>.mcap{display:none!important}@media (max-width:560px){.stat .v{font-size:20px!important}.stats{align-items:flex-end}}@media (min-width:561px){.vset{top:4px!important}#stats{top:var(--vset-h,44px)!important}}</style><style>@media (max-width:560px){body > header{display:none}}</style><script>window.FIG_A = () => innerWidth <= 560 ? 1.1 : .75;</script><script>window.LBL_U = () => { if (innerWidth > 560) return 0; const s = document.getElementById("fig"); return s && s.clientWidth && s.viewBox.baseVal.width ? s.viewBox.baseVal.width / s.clientWidth : 0; };</script></head><body>
+<script>
+/* ============================================================
+   Colorfigures core: projection, shapes, shading, ink, labels, page shell.
+   A figure page includes this file (scripts/build.py inlines it), then calls mountFigure({...}).
+   See SKILL.md for the drawing contract and conventions.
+   One fixed view (front-left-top) and one fixed light (from above, behind the viewer's right shoulder: the front is lit,
+   the left side is in shade, and cast shadows fall toward the lower left of the screen).
+   ============================================================ */
+
+/* ---------- palettes ---------- */
+const PALS = {
+  mustard: { l:'#f4b829', m:'#d49c1f', d:'#4e4a18' },
+  tomato:  { l:'#ef6a4c', m:'#cf5038', d:'#4a2219' },
+  mint:    { l:'#93d3b0', m:'#71b693', d:'#1f4034' },
+  cobalt:  { l:'#76a0e2', m:'#5a82c6', d:'#1c2948' },
+  blush:   { l:'#f3a6bb', m:'#d8869c', d:'#4b2430' },
+};
+const METAL   = { l:'#eef0f0', m:'#c6ccce', d:'#8f989b' };
+const CLEAR   = { l:'#e4f2f4', m:'#c4dfe4', d:'#97b9c0' };
+const CERAMIC = { l:'#fbfaf3', m:'#e3e0d2', d:'#bdb8a6' };
+const DARK    = { l:'#55504a', m:'#3d3935', d:'#272421' };
+const INK = '#231e16';
+const SHADOW = '#41538f';
+
+/* ---------- projection (x = depth toward viewer-right, y = toward viewer-left, z = up) ---------- */
+const C = Math.cos(Math.PI/6), S = Math.sin(Math.PI/6);
+let OX = 0, OY = 0;
+/* Free orthographic camera (internal names start with CAM_ / cam so they never clash with a figure's own names). YAW turns the viewer around the vertical axis (45° = the classic front-left view),
+   PITCH is how far it looks down (35.26° = true isometric). At the defaults P() is exactly the old isometric
+   projection, so every figure drawn for it still lines up. Drag the figure to orbit; double-click to reset.
+   rotV(n) maps a world direction into the default view's frame, so vis / tone / any "sum of rotV > 0" test keep
+   working at every angle: the viewer is always (1,1,1) and the light stays put relative to the viewer. */
+let VIEW = 0, RC = [0, 0], RCZ = 0;
+const VIEW_NAMES = ['front', 'left side', 'back', 'right side'];
+const TURNS = [0, 2];
+const YAW0 = 45, PITCH0 = Math.atan(1/Math.SQRT2) * 180/Math.PI, CAM_K = Math.sqrt(1.5);
+let YAW = YAW0, PITCH = PITCH0, CAM_R, CAM_U, CAM_V, CAM_D;                       // right, up, toward viewer, screen-down
+const camBasis = (yaw, pitch) => { const t = yaw*Math.PI/180, p = pitch*Math.PI/180, ct = Math.cos(t), st = Math.sin(t), cp = Math.cos(p), sp2 = Math.sin(p);
+  return { R:[st,-ct,0], U:[-sp2*ct,-sp2*st,cp], V:[cp*ct,cp*st,sp2] }; };
+const CAM_B0 = camBasis(YAW0, PITCH0);
+// CAM_LIM: how far (deg) the camera may turn either side of the front view; null = all the way round (set per figure)
+let CAM_LIM = null;
+function setCam(yaw, pitch){ YAW = CAM_LIM == null ? yaw : Math.max(YAW0 - CAM_LIM, Math.min(YAW0 + CAM_LIM, yaw));
+  PITCH = CAM_LIM == null ? Math.max(6, Math.min(78, pitch)) : Math.max(15, Math.min(62, pitch)); const b = camBasis(YAW, PITCH); CAM_R = b.R; CAM_U = b.U; CAM_V = b.V; CAM_D = CAM_U.map(v => -v); }
+setCam(YAW0, PITCH0);
+const camDot = (a,b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const rotV = n => { const r = camDot(n,CAM_R), u = camDot(n,CAM_U), v = camDot(n,CAM_V); return [0,1,2].map(i => CAM_B0.R[i]*r + CAM_B0.U[i]*u + CAM_B0.V[i]*v); };
+// the light's ground direction turns with the viewer's yaw only (shadows always fall toward the lower left of the screen)
+const yawTurn = ([x,y]) => { const t = (YAW - YAW0)*Math.PI/180, c = Math.cos(t), s = Math.sin(t); return [x*c - y*s, x*s + y*c]; };
+const rotXY = (x,y) => [x, y];                                                // kept for old callers
+const P0 = (x,y,z) => [(x-y)*C + OX, (x+y)*S - z + OY];                       // raw iso
+const P  = (x,y,z) => { const q = [x-RC[0], y-RC[1], z-RCZ];
+  return [CAM_K*camDot(q,CAM_R) + (RC[0]-RC[1])*C + OX, CAM_K*camDot(q,CAM_D) + (RC[0]+RC[1])*S - RCZ + OY]; };
+const Dv = (x,y,z) => [CAM_K*camDot([x,y,z],CAM_R), CAM_K*camDot([x,y,z],CAM_D)];
+// distance toward the viewer: draw parts with smaller depth first
+const depthOf = p => camDot(p, CAM_V);
+// sort [{at:[x,y,z], svg}] back-to-front for the current camera. A part may also give box:[[x0,y0,z0],[x1,y1,z1]]:
+// when two boxes are separated along x, y or z, the one on the viewer's side goes last (a centre point alone gets long
+// or wrapping parts wrong: a pole beside a row of keys, a spout reaching past a cup).
+const boxMid = b => [0,1,2].map(k => (b[0][k] + b[1][k]) / 2);
+const sepOrder = (p, q) => { if (!p.box || !q.box) return 0;
+  for (let k = 0; k < 3; k++){ if (p.box[1][k] <= q.box[0][k] + 1e-6) return CAM_V[k] >= 0 ? -1 : 1; if (q.box[1][k] <= p.box[0][k] + 1e-6) return CAM_V[k] >= 0 ? 1 : -1; }
+  return 0; };
+const byDepth = parts => parts.filter(Boolean).sort((p,q) => sepOrder(p,q) || (depthOf(p.at || boxMid(p.box)) - depthOf(q.at || boxMid(q.box)))).map(p => p.svg).join('');
+// the half of a vertical ring that faces the viewer / is turned away, as [from, to] angles in degrees (0 = +x, 90 = +y)
+const nearHalf = () => [YAW - 90, YAW + 90], farHalf = () => [YAW + 90, YAW + 270];
+// an open container (cup, bin, cone, drum) between two rings: far inner wall, then its contents, then the near outer wall
+const openShell = (A, B, colour, contents = '') => loft(A, B, colour, true) + contents + loft(A, B, colour);
+const f  = v => v.toFixed(1);
+const pd = (pts, close=true) => 'M' + pts.map(p => { const q = P(p[0],p[1],p[2]); return f(q[0])+' '+f(q[1]); }).join('L') + (close ? 'Z' : '');
+const sp = pts => 'M' + pts.map(q => f(q[0])+' '+f(q[1])).join('L') + 'Z';
+
+/* ---------- 2D shapes in a plane's (u,v) coords (v up), mapped to 3D by a plane ---------- */
+const arcUV  = (cu,cv,r,a0,a1,n=7) => { const o=[]; for (let i=0;i<=n;i++){ const a=(a0+(a1-a0)*i/n)*Math.PI/180; o.push([cu+r*Math.cos(a), cv+r*Math.sin(a)]); } return o; };
+const rrUV   = (u0,v0,u1,v1,r,n=7) => r <= 0 ? rectUV(u0,v0,u1,v1) : [...arcUV(u1-r,v0+r,r,-90,0,n), ...arcUV(u1-r,v1-r,r,0,90,n), ...arcUV(u0+r,v1-r,r,90,180,n), ...arcUV(u0+r,v0+r,r,180,270,n)];
+const rectUV = (u0,v0,u1,v1) => [[u0,v0],[u1,v0],[u1,v1],[u0,v1]];
+const ellUV  = (cu,cv,ru,rv,n=24) => Array.from({length:n}, (_,i) => { const a=i/n*2*Math.PI; return [cu+ru*Math.cos(a), cv+rv*Math.sin(a)]; });
+const PX = x => ([u,v]) => [x,u,v];      // front-facing plane x = const   (u = y, v = z)
+const PY = y => ([u,v]) => [u,y,v];      // side plane y = const           (u = x, v = z)
+const PZ = z => ([u,v]) => [u,v,z];      // horizontal plane z = const     (u = x, v = y)
+const on = (plane, uv) => uv.map(plane);
+
+/* ---------- vectors + shading ---------- */
+const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]], dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const norm=a=>{ const l=Math.hypot(...a)||1; return a.map(v=>v/l); };
+const avg=ps=>ps.reduce((s,p)=>[s[0]+p[0]/ps.length,s[1]+p[1]/ps.length,s[2]+p[2]/ps.length],[0,0,0]);
+const vis = n => { const r = rotV(n); return r[0]+r[1]+r[2] > 1e-6; };   // viewer looks from (+1,+1,+1) after the turn
+const facing = vis;                                                       // readable alias: is this face toward the viewer?
+const SHADOW_K = 0.85, AZ_MIN = 20, AZ_MAX = 160;
+// cast shadows are drawn shorter than the shading light implies (0.45 × height instead of 0.85 ×): long shadows of tall
+// parts on thin supports (a lamp shade, a fan head) land far from the object and read as separate blobs
+const SHADOW_LEN = 0.45;
+let L = [0,0,1], SH = [0,0];
+function setLight(deg){ const a=deg*Math.PI/180; SH=[SHADOW_K*Math.cos(a), SHADOW_K*Math.sin(a)]; L=norm([-SH[0],-SH[1],1]); }
+const LIN = norm([.6,.2,1]);                       // fixed light for interiors / small props
+// Three flat tones, but blended across a narrow band at each step, so a face that turns past a threshold while the
+// figure rotates fades between tones instead of snapping (at rest almost every face still sits on a pure tone).
+const SOFT = .18;
+const step3 = (d, hi, lo, m) => { const ss = (a, b, x) => { const k = Math.min(1, Math.max(0, (x - a)/(b - a))); return k*k*(3 - 2*k); };
+  const a = ss(hi - SOFT, hi + SOFT, d), b = ss(lo - SOFT, lo + SOFT, d);
+  return a >= 1 ? m.l : b <= 0 ? m.d : a > 0 ? mix(m.m, m.l, a) : b < 1 ? mix(m.d, m.m, b) : m.m; };
+const tone  = (n,m) => step3(dot(rotV(n),L),   -.15, -.45, m);   // exterior, follows the sun
+const toneI = (n,m) => step3(dot(rotV(n),LIN),  .6,   .05, m);   // interior / props
+const mix = (a,b,t) => '#' + [1,3,5].map(i => Math.round(parseInt(a.substr(i,2),16)*(1-t) + parseInt(b.substr(i,2),16)*t).toString(16).padStart(2,'0')).join('');
+const matOf = hex => ({ l:hex, m:mix(hex,'#000000',.16), d:mix(hex,'#000000',.42) });
+const ease = t => t<.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2;
+
+/* ---------- drawing primitives (all return SVG strings) ---------- */
+const ink   = (d,w=1.0) => `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${w}" stroke-linejoin="round" stroke-linecap="round"/>`;
+const fill  = (d,c,extra='') => `<path d="${d}" fill="${c}" ${extra}/>`;
+const face  = (d,c) => `<path d="${d}" fill="${c}" stroke="${c}" stroke-width=".7" stroke-linejoin="round"/>`;
+const shape = (pts,c,w=.9) => fill(pd(pts),c) + (w ? ink(pd(pts),w) : '');
+const line  = (pts,w=.9) => ink(pd(pts,false),w);
+// Loft between two rings of equal length (closed). colour(n) picks each strip's fill; flip = seen from inside.
+function loft(A, B, colour, flip=false){
+  const n=A.length, cen=avg(A.concat(B)); let s='';
+  for (let i=0;i<n;i++){
+    const a0=A[i], a1=A[(i+1)%n], b1=B[(i+1)%n], b0=B[i];
+    let nr = norm(cross(sub(a1,a0), sub(b0,a0)));
+    if (!isFinite(nr[0])) continue;
+    if (dot(nr, sub(avg([a0,a1,b1,b0]), cen)) < 0) nr = nr.map(v=>-v);
+    if (flip) nr = nr.map(v=>-v);
+    if (vis(nr)) s += face(pd([a0,a1,b1,b0]), colour(nr));
+  }
+  return s;
+}
+function hull(pts){
+  pts = pts.slice().sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+  const cr=(o,a,b)=>(a[0]-o[0])*(b[1]-o[1])-(a[1]-o[1])*(b[0]-o[0]); const lo=[], up=[];
+  for (const p of pts){ while(lo.length>=2 && cr(lo[lo.length-2],lo[lo.length-1],p)<=0) lo.pop(); lo.push(p); }
+  for (const p of pts.reverse()){ while(up.length>=2 && cr(up[up.length-2],up[up.length-1],p)<=0) up.pop(); up.push(p); }
+  lo.pop(); up.pop(); return lo.concat(up);
+}
+// Silhouette ink, weighted by how thick the part is on screen (like a hand inker): the w you pass is the most it gets.
+// Thickness = 2 × area / perimeter of the outline (a rod's diameter, about half a box's width), as a share of the
+// frame width. A long thin rod, a handle or a knob stays light (~1–1.5); a grinder, kettle or machine body gets the
+// heavy ~2.4–2.8. Thin parts stay thin and parts keep air between them.
+const hullInk = (pts3, w=1.4) => { const h = hull(pts3.map(p=>P(...p))); let a = 0, per = 0;
+  for (let i = 0; i < h.length; i++){ const p = h[i], q = h[(i+1) % h.length]; a += p[0]*q[1] - q[0]*p[1]; per += Math.hypot(q[0]-p[0], q[1]-p[1]); }
+  const thick = per ? Math.abs(a) / per / (INK_K * INK_REF_VB) : 0;
+  return ink(sp(h), Math.min(w, .9 + 20*thick)); };
+// Axis-aligned box: three visible faces, shaded, each outlined. shade = tone (sunlit) or toneI (interior).
+function box(x0,y0,z0,x1,y1,z1,m,shade=toneI,w=.9){
+  // all six faces, drawn only when they face the viewer (sides first, then top) — correct in every VIEW
+  const F = [
+    [[0,1,0],  [[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]]],
+    [[1,0,0],  [[x1,y0,z0],[x1,y1,z0],[x1,y1,z1],[x1,y0,z1]]],
+    [[0,-1,0], [[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1]]],
+    [[-1,0,0], [[x0,y0,z0],[x0,y1,z0],[x0,y1,z1],[x0,y0,z1]]],
+    [[0,0,1],  [[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]]] ];
+  return F.filter(([n]) => vis(n)).map(([n,q]) => shape(q, shade(n,m), w)).join('');
+}
+// Rounded-profile extrusion: profile (u=y, v=z) swept along x from x0 to x1. Body of most machines.
+function extrude(profileUV, x0, x1, m, shade=tone){ return loft(on(PX(x0),profileUV), on(PX(x1),profileUV), n=>shade(n,m)); }
+// Vertical cylinder (axis z) centred (x,y), radius r from z0 to z1, with top cap.
+function cyl(x,y,z0,z1,r,m,shade=toneI,w=1.2,n=24){
+  const A=on(PZ(z0),ellUV(x,y,r,r,n)), B=on(PZ(z1),ellUV(x,y,r,r,n));
+  return loft(A,B,nr=>shade(nr,m)) + fill(pd(B),shade([0,0,1],m)) + hullInk([...A,...B],w) + ink(pd(B),w*.8);
+}
+// Cylinder lying along x (e.g. a knob or dial sticking out of a front face): centred (y,z), from x0 to x1.
+function cylX(x0,x1,y,z,r,m,shade=toneI,w=1.1,n=20){
+  const A=on(PX(x0),ellUV(y,z,r,r,n)), B=on(PX(x1),ellUV(y,z,r,r,n));
+  // cap on whichever end faces the viewer (the +x end in VIEW 0)
+  const capB = vis([1,0,0]), cap = capB ? B : A, cn = capB ? [1,0,0] : [-1,0,0];
+  return loft(A,B,nr=>shade(nr,m)) + (vis(cn) ? fill(pd(cap),shade(cn,m)) : '') + hullInk([...A,...B],w) + (vis(cn) ? ink(pd(cap),w*.8) : '');
+}
+// Cylinder between any two 3D points a and b (a lamp arm, a rod, a pipe at an angle, a handle bar), radius r.
+// The end facing the viewer gets a cap. For a tapered part (a cone, a lamp shade) pass r1 for the radius at b.
+function rod(a, b, r, m, shade=toneI, w=1, r1=r, n=16){
+  const d = norm(sub(b, a)), u = norm(cross(d, Math.abs(d[2]) < .9 ? [0,0,1] : [1,0,0])), v = cross(d, u);
+  const ring = (p, rr) => Array.from({length:n}, (_,i) => { const t = i/n*2*Math.PI, c = Math.cos(t)*rr, s2 = Math.sin(t)*rr;
+    return [p[0] + u[0]*c + v[0]*s2, p[1] + u[1]*c + v[1]*s2, p[2] + u[2]*c + v[2]*s2]; });
+  const A = ring(a, r), B = ring(b, r1), capB = vis(d), cap = capB ? B : A, cn = capB ? d : d.map(x => -x);
+  return loft(A, B, nr => shade(nr, m)) + (Math.max(r, r1) > 0 ? fill(pd(cap), shade(cn, m)) + ink(pd(cap), w*.8) : '') + hullInk([...A, ...B], w);
+}
+// Text lying flat on a front plane x = const, centred at (y,z) baseline; reads left-to-right on screen.
+// text sits on a face: if its reading direction comes out mirrored (or edge-on), that face is turned away, so the text is hidden
+const txM = (o, U, V) => (U[0]*V[1] - U[1]*V[0]) <= .02 * Math.hypot(...U) * Math.hypot(...V) ? `matrix(0 0 0 0 ${f(o[0])} ${f(o[1])})` : `matrix(${U[0].toFixed(4)} ${U[1].toFixed(4)} ${V[0].toFixed(4)} ${V[1].toFixed(4)} ${f(o[0])} ${f(o[1])})`;
+const tx = (x,y,z,str,size,col=INK,weight=700) => { const o=P(x,y,z);
+  return `<text transform="${txM(o, Dv(0,-1,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`; };
+// Text on a side plane y = const, centred at (x,z).
+const txY = (x,y,z,str,size,col=INK,weight=700) => { const o=P(x,y,z);
+  return `<text transform="${txM(o, Dv(1,0,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`; };
+// Cast shadow of a set of 3D points (any outline of the object), pushed along the light onto z = 0.
+// the light stays put relative to the viewer, so the shadow is cast in turned coordinates
+// z0: the surface it falls on (a board, a counter); clip it to that surface with clipTo(...) if it could spill off.
+// clip: the 3D outline of the surface it falls on (e.g. boardTop(...)), so it can't spill over the edge.
+const castShadow = (pts3, z0=0, clip=null) => { const k = SHADOW_LEN / SHADOW_K, [sx, sy] = yawTurn(SH);
+  const s = fill(sp(hull(pts3.map(([x,y,z]) => P(x+(z-z0)*sx*k, y+(z-z0)*sy*k, z0)))), SHADOW);
+  return clip ? clipTo(clip, s) : s; };
+// A board for the object to stand on (a tray, a desk top, a counter): a rounded slab from (x0,y0) to (x1,y1), h thick.
+// Draw it first; then castShadow(points, h, boardTop(x0,y0,x1,y1,h,r)) so shadows lie on it and stop at its edge.
+const BOARD = { l:'#e6e1d4', m:'#cfc8b8', d:'#aaa293' }, WOOD = { l:'#d9a86c', m:'#bf8a4f', d:'#8e6236' };
+const boardTop = (x0,y0,x1,y1,h=3,r=5) => on(PZ(h), rrUV(x0,y0,x1,y1,r));
+function board(x0,y0,x1,y1,h=3,r=5,m=BOARD){
+  const A = on(PZ(0), rrUV(x0,y0,x1,y1,r)), B = boardTop(x0,y0,x1,y1,h,r);
+  return loft(A, B, n => toneI(n, m)) + fill(pd(B), m.l) + ink(pd(B), 1) + hullInk([...A, ...B], 1.8);
+}
+// Group helpers: clickable target, clip to an opening.
+const act  = (name, inner, data='') => `<g data-act="${name}" ${data}>${inner}</g>`;
+let _clipN = 0;
+// Part label (for "how does it work" figures): a cream pill with a leader line to a 3D point on the part.
+// dx, dy = where the pill sits, in screen units at the reference zoom (they scale with the figure like stroke widths).
+// on = that part is working right now (the pill turns the accent colour). Labels can be hidden with the Labels switch.
+function tag(p3, dx, dy, text, on=false){
+  // on a phone (LBL_U = drawing units per screen px) the pill is a numbered badge and the names go in a legend under the figure
+  const u = window.LBL_U ? LBL_U() : 0, n = ((window.__ln || (window.__ln = {}))[text] || (__ln[text] = Object.keys(__ln).length + 1));
+  const k = INK_K, [X,Y] = P(...p3), fs = u ? 10*u : 8.6*k, h = u ? 17*u : fs*1.8, w = u ? h*(n > 9 ? 1.3 : 1) : text.length*fs*.62 + fs*1.5, cx = X + dx*k, cy = Y + dy*k;
+  return `<g class="tag${on ? ' on' : ''}" data-n="${n}" data-t="${text}"><path d="M${f(X)} ${f(Y)}L${f(cx)} ${f(cy)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+    + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(1.3*k)}" fill="${INK}"/>`
+    + `<rect x="${f(cx-w/2)}" y="${f(cy-h/2)}" width="${f(w)}" height="${f(h)}" rx="${f(h/2)}" fill="${on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+    + `<text x="${f(cx)}" y="${f(cy+fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? n : text}</text></g>`;
+}
+const clipTo = (pts3, inner) => { const id = 'k' + (++_clipN); return `<clipPath id="${id}"><path d="${pd(pts3)}"/></clipPath><g clip-path="url(#${id})">${inner}</g>`; };
+
+/* ---------- constant on-screen line weight ----------
+   Stroke widths are written in model units, and each figure is zoomed to fill the frame, so a small
+   object would get fat lines. INK_K rescales every stroke-width (and the wobble/grain filter) so all
+   figures match the reference zoom of the booth / vending machine (viewBox ≈ 585 units wide). */
+const INK_REF_VB = 585;
+let INK_K = 1;
+const inkScale = svg => INK_K === 1 ? svg : svg.replace(/stroke-width="([\d.]+)"/g, (_, w) => `stroke-width="${(+w * INK_K).toFixed(2)}"`);
+
+/* ---------- page shell ---------- */
+const CORE_CSS = `
+  :root{--paper:#f2efe7;--ink:#231e16;--muted:#857d6e;--rule:#ddd6c8}
+  *{box-sizing:border-box} html,body{margin:0;height:100%}
+  body{background-color:var(--paper);
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='320' height='320'><filter id='p'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .42  0 0 0 0 .39  0 0 0 0 .33  .16 0 0 0 0'/></filter><rect width='100%' height='100%' filter='url(%23p)'/></svg>");
+    overflow-x:hidden;color:var(--ink);font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;display:flex;flex-direction:column;align-items:center;padding:24px 16px 32px}
+  header{width:100%;max-width:760px;display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+  header h1{font-size:13px;font-weight:600;margin:0;letter-spacing:.02em} header span{color:var(--muted)}
+  #fig{width:100%;max-width:760px;height:auto;display:block;margin:4px 0 8px;user-select:none;overflow:visible}
+  #fig{cursor:grab;touch-action:pan-y} #fig.drag{cursor:grabbing} #fig [data-act]{cursor:pointer}
+  #readout, .idea{display:none}   /* status line + big idea are off: the buttons and motion tell the story */
+  .idea{width:100%;max-width:760px;margin:-6px 0 16px;font-size:12.5px;line-height:1.5;text-align:center;color:var(--ink)}
+  .idea strong{letter-spacing:.12em;text-transform:uppercase;font-size:11px;margin-right:8px}
+  #readout{position:relative;min-height:1.4em;letter-spacing:.08em;text-transform:uppercase;margin-bottom:14px;text-align:center;text-shadow:0 0 3px var(--paper),0 0 6px var(--paper),0 0 10px var(--paper)}
+  .stage{position:relative;width:100%;max-width:760px}
+  .actions{position:absolute;top:4px;left:0;display:flex;flex-direction:column;align-items:flex-start;gap:8px;z-index:2;max-width:220px}
+  .actions .cap{color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin:0 0 2px}
+  html.nolabels #fig .tag{display:none}
+  .ctl[hidden]{display:none}
+  /* ui.flash(text): a short note under the buttons ("the can is empty — refill it"); the status line itself stays hidden */
+  .toast{position:absolute;left:0;z-index:3;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;background:var(--paper);
+    border:1.5px solid var(--ink);border-radius:8px;padding:4px 9px;box-shadow:2px 2px 0 var(--ink);opacity:0;transition:opacity .2s;pointer-events:none;max-width:240px}
+  .toast.show{opacity:1}
+  .made-with{width:100%;max-width:760px;margin-top:18px;text-align:right;font-size:11px;letter-spacing:.1em;text-transform:uppercase}
+  .made-with a{color:var(--muted);text-decoration:none} .made-with a:hover{color:var(--ink)}
+  .stats{position:absolute;top:4px;right:0;display:flex;flex-direction:column;align-items:flex-end;gap:10px;z-index:2;text-align:right}
+  .stat .k{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .stat .v{font-size:34px;font-weight:800;line-height:1.05;letter-spacing:-.01em;font-variant-numeric:tabular-nums;color:var(--ink)}
+  .stat.small .v{font-size:20px}
+  .stat .v.bump{animation:bump .35s ease-out}
+  @keyframes bump{0%{transform:scale(1.18)}100%{transform:none}}
+  .stepwrap{position:relative;display:flex;align-items:center;gap:8px}
+  .act{font:inherit;color:var(--ink);background:var(--paper);border:1.5px solid var(--ink);border-radius:999px;padding:5px 14px;cursor:pointer;white-space:nowrap}
+  .act:hover{background:color-mix(in srgb,var(--paper) 92%,var(--ink))}
+  .act .car{margin-left:6px;font-size:10px}
+  .act:focus-visible{outline:2px solid var(--ink);outline-offset:3px}
+  .chips{display:none;flex-wrap:wrap;gap:6px;background:var(--paper);border:2px solid var(--ink);border-radius:12px;box-shadow:3px 3px 0 var(--ink);
+    padding:8px;width:max-content;max-width:min(300px,62vw);position:absolute;left:calc(100% + 10px);top:-4px;z-index:3}
+  .stepwrap.open .chips{display:flex}
+  .chip{white-space:nowrap;font:inherit;font-size:11.5px;font-weight:700;color:var(--ink);background:var(--paper);border:1.5px solid var(--ink);border-radius:8px;padding:4px 8px;cursor:pointer;box-shadow:2px 2px 0 var(--ink)}
+  .chip:hover{background:var(--accent,#f4b829);transform:translate(-1px,-1px)}
+  .chip.current{background:var(--ink);color:var(--paper)} .chip.current:hover{background:var(--ink);transform:none}
+  .chip.off{opacity:.45} .chip.off:hover{transform:none;background:var(--paper)}
+  
+  @media (max-width:560px){body{padding:14px 12px 24px}header span,.actions .cap{display:none}.actions{flex-direction:row;flex-wrap:wrap;gap:6px}.act{font-size:12px;padding:4px 11px}.stats{position:static;flex-direction:row;justify-content:flex-end;gap:18px;margin-bottom:4px}.actions{position:static;max-width:none;margin:6px 0 4px}.chips{left:0;top:calc(100% + 8px)}}
+  .controls{width:100%;max-width:760px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px 28px;border-top:1px solid var(--rule);padding-top:16px}
+  .ctl{display:flex;flex-direction:column;gap:6px}
+  .ctl label{color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+  input[type=range]{width:100%;accent-color:var(--ink)}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  button{font:inherit;color:var(--ink);background:transparent;border:1.5px solid var(--ink);border-radius:999px;padding:5px 14px;cursor:pointer}
+  button:hover{background:#0000000d}
+  button[aria-pressed=true]:not(.sw){background:var(--ink);color:var(--paper)}
+  .sw{width:26px;height:26px;padding:0;border-radius:50%} .sw[aria-pressed=true]{outline:2px solid var(--ink);outline-offset:2px}`;
+
+const filterFor = k => `<filter id="hand" x="-3%" y="-3%" width="106%" height="106%" color-interpolation-filters="sRGB">
+  <feTurbulence type="fractalNoise" baseFrequency="${(0.045/k).toFixed(4)}" numOctaves="2" seed="4" result="warp"/>
+  <feDisplacementMap id="wob" in="SourceGraphic" in2="warp" scale="${(2.4*k).toFixed(2)}" xChannelSelector="R" yChannelSelector="G" result="wob"/>
+  <feTurbulence type="fractalNoise" baseFrequency="${(0.9/k).toFixed(4)}" numOctaves="3" seed="11" result="n1"/>
+  <feColorMatrix in="n1" type="matrix" values=".3 0 0 0 .84  .3 0 0 0 .84  .3 0 0 0 .84  0 0 0 0 1" result="grain"/>
+  <feTurbulence type="fractalNoise" baseFrequency="${(0.012/k).toFixed(4)}" numOctaves="2" seed="7" result="n2"/>
+  <feColorMatrix in="n2" type="matrix" values=".3 0 0 0 .85  .3 0 0 0 .85  .3 0 0 0 .85  0 0 0 0 1" result="blot"/>
+  <feBlend in="wob" in2="grain" mode="multiply" result="g1"/><feBlend in="g1" in2="blot" mode="multiply" result="g2"/>
+  <feComposite in="g2" in2="wob" operator="in"/></filter>`;
+
+/* mountFigure({
+     fig:'03', title:'Photo booth', hint:'click the curtain…',
+     size:[W,D,H],                 // bounding box, used to frame the view (shadow range included)
+     palette:'mustard',            // default PALS key
+     state:{...},                  // figure state (st.pal is built in)
+     scene: (st, m) => svgString,  // m = current palette {l,m,d}
+     readout: st => 'text',        // status line under the figure
+     buttons: [{label, onClick(st, ui)}      // listed in the order the user should do them
+               | {label, choices: st => [{label, onClick(st,ui), current?, disabled?, why?}]}],   // opens a picker
+     stats: st => [{label, value, small?}],   // optional: big numbers top-right (credit, change, score)
+     credit: false,                // optional: hide the small "Made with Colorfigures" link
+     acts: { name(st, el, ui){} },  // clicks on act(name, …) groups; el has dataset
+     params(st, q){}               // optional: read URLSearchParams for screenshot states
+   })  -> ui = { st, render, animate(stepFn), flash(text,ms) }
+   animate(step): calls step(dt seconds) every frame and re-renders until step returns false. */
+addEventListener('error', e => { document.documentElement.dataset.errors = (document.documentElement.dataset.errors || '') + ' ' + e.message + ';'; });
+/* The hand-drawn filter's noise never changes, but browsers recompute every feTurbulence each time the drawing changes
+   (on phones SVG filters run on the CPU, so this is most of the cost of a frame). bakeNoise renders each noise layer once
+   into an image and swaps it in: coarse layers as one small image over the whole view (they are smooth, so scaling up
+   is invisible), fine grain as a seamless tile. If anything fails (an old browser), the live filter simply stays. */
+function bakeNoise(svg){
+  const fl = document.getElementById('hand'); if (!fl || typeof Image === 'undefined') return;
+  const NS = 'http://www.w3.org/2000/svg', vb = svg.viewBox.baseVal;
+  const x0 = vb.x - vb.width*.35, y0 = vb.y - vb.height*.35, w0 = vb.width*1.7, h0 = vb.height*1.7;
+  for (const t of [...fl.querySelectorAll('feTurbulence')]){
+    const fq = parseFloat(t.getAttribute('baseFrequency')), oct = +(t.getAttribute('numOctaves') || 1);
+    if (!(fq > 0)) continue;
+    const fine = fq * Math.max(w0, h0) > 80;
+    if (fine) continue;   // fine grain stays live: a repeated tile leaves faint seams on some GPUs
+    const rx = fine ? 0 : x0, ry = fine ? 0 : y0, rw = fine ? 48 / fq : w0, rh = fine ? 48 / fq : h0;
+    const ppu = fq * (fine ? 7 : 5) * Math.pow(2, Math.max(0, oct - 1) * .5), PW = Math.ceil(rw * ppu), PH = Math.ceil(rh * ppu);
+    if (PW * PH > 1200 * 1200) continue;
+    const tb = t.cloneNode(); tb.removeAttribute('result'); if (fine) tb.setAttribute('stitchTiles', 'stitch');
+    const src = `<svg xmlns="${NS}" width="${PW}" height="${PH}" viewBox="${rx} ${ry} ${rw} ${rh}"><filter id="n" filterUnits="userSpaceOnUse" x="${rx}" y="${ry}" width="${rw}" height="${rh}" color-interpolation-filters="sRGB">${tb.outerHTML}</filter><rect x="${rx}" y="${ry}" width="${rw}" height="${rh}" filter="url(#n)"/></svg>`;
+    const img = new Image();
+    img.onload = () => { try {
+      const c = document.createElement('canvas'); c.width = PW; c.height = PH; const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+      // store the noise's colour values fully opaque: the filter reads its colour channels, and an image with
+      // see-through pixels would be read premultiplied (darker) by some browsers
+      const px = g.getImageData(0, 0, PW, PH); for (let i = 3; i < px.data.length; i += 4) px.data[i] = 255; g.putImageData(px, 0, 0);
+      const url = c.toDataURL('image/png'), res = t.getAttribute('result');
+      const im = document.createElementNS(NS, 'feImage');
+      // a tile must sit inside the filter's region (the drawing's box) or it gets clipped: anchor it at the drawing's
+      // centre, snapped to whole tiles so the grain keeps the same phase as the live noise would
+      let ox = rx, oy = ry;
+      if (fine){ const bb = svg.getElementById ? document.getElementById('art').getBBox() : { x: 0, y: 0, width: 0, height: 0 };
+        ox = Math.floor((bb.x + bb.width/2) / rw) * rw; oy = Math.floor((bb.y + bb.height/2) / rh) * rh; }
+      for (const [k, v] of [['x', ox], ['y', oy], ['width', rw], ['height', rh], ['preserveAspectRatio', 'none']]) im.setAttribute(k, v);
+      im.setAttribute('href', url); im.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', url);
+      if (!t.isConnected) return;
+      if (fine){ im.setAttribute('result', res + '_tile'); const tl = document.createElementNS(NS, 'feTile'); tl.setAttribute('in', res + '_tile'); tl.setAttribute('result', res); t.replaceWith(im, tl); }
+      else { im.setAttribute('result', res); t.replaceWith(im); }
+    } catch (e) {} };
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(src);
+  }
+}
+function mountFigure(cfg){
+  document.title = cfg.title;
+  const style = document.createElement('style'); style.textContent = CORE_CSS; document.head.appendChild(style);
+  document.body.innerHTML = `
+    <header><h1>Fig. ${cfg.fig} — ${cfg.title}</h1></header>
+    <div class="stage">
+      ${cfg.buttons && cfg.buttons.length ? `<div class="actions" id="btns"></div>` : ''}
+      ${cfg.stats ? '<div class="stats" id="stats"></div>' : ''}
+      <div class="toast" id="toast" role="status"></div>
+      <svg id="fig" role="img" aria-label="${cfg.title}"><defs id="fdefs"></defs><g id="art" filter="url(#hand)"></g></svg>
+    </div>
+    <div id="readout"></div>
+    ${cfg.idea ? `<p class="idea"><strong>The big idea</strong>${cfg.idea}</p>` : ''}
+    <div class="controls">
+      <div class="ctl"><label for="wb">Hand-drawn wobble</label><input id="wb" type="range" min="0" max="7" step="0.1" value="2.4"></div>
+      <div class="ctl"><label>Colour</label><div class="row" id="pals"></div></div>
+      <div class="ctl"><label>View</label><div class="row"><button id="vreset">Front view</button><button id="vspin" aria-pressed="false">Turntable</button></div></div>
+      <div class="ctl" id="lblctl" hidden><label>Labels</label><div class="row"><button id="lbl" aria-pressed="true">On</button></div></div>
+    </div>
+    ${cfg.credit === false ? '' : '<footer class="made-with"><a href="https://april-zhu.com/colorfigures" target="_blank" rel="noopener">Made with Colorfigures ↗</a></footer>'}`;
+  const st = cfg.state || {};            // kept as the same object, so a figure may hold on to it
+  if (!st.pal) st.pal = cfg.palette || 'mustard';
+  if (st.az == null) st.az = 105;
+  const q = new URLSearchParams(location.search);
+  // a figure turns all the way round only once it has been checked from every side (turn:'full'); otherwise it turns
+  // +-60 deg around the front, where it was drawn. ?free=1 unlocks it for testing.
+  CAM_LIM = cfg.turn === 'full' || q.get('free') === '1' ? null : 60;
+  if (PALS[q.get('pal')]) st.pal = q.get('pal');
+  if (cfg.params) cfg.params(st, q);
+
+  // frame on the object itself: centred, filling ~60% of the width / ~78% of the height of a 4:3 view.
+  // The cast shadow is allowed to spill outside the frame (svg overflow is visible).
+  const [W,D,H] = cfg.size, pts = [];
+  OX = OY = 0; RC = cfg.center || [W/2, D/2]; RCZ = H/2;
+  VIEW = 0; setCam(YAW0, PITCH0);
+  for (const x of [0,W]) for (const y of [0,D]) for (const z of [0,H]) pts.push(P(x,y,z));
+  const xs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]);
+  const bw = Math.max(...xs)-Math.min(...xs), bh = Math.max(...ys)-Math.min(...ys);
+  // the object fills ~74% of the width / ~88% of the height, nudged right of centre so the buttons (top left) stay clear
+  // on a phone (FIG_A, from the gallery) the frame grows taller than 4:3, as far as the object needs, so tall machines fill it;
+  // the spare height goes mostly below; the object stays centred (its shadow may run off the edge, by the owner's call)
+  const PA = window.FIG_A ? FIG_A() : .75, A = PA === .75 ? .75 : Math.min(PA, Math.max(.75, bh/.88/(bw/.74)*1.08)), vbW = Math.max(bw/.74, bh/.88/A), vbH = vbW*A;
+  OX = (vbW-bw)/2 + (PA === .75 ? vbW*.06 : 0) - Math.min(...xs); OY = (PA === .75 ? vbH*.04 : (vbH - bh)*.3) - Math.min(...ys);   // sit a little high: shadows fall downward
+  const svg = document.getElementById('fig');
+  svg.setAttribute('viewBox', `0 0 ${f(vbW)} ${f(vbH)}`);
+  INK_K = vbW / INK_REF_VB;
+  document.getElementById('fdefs').innerHTML = filterFor(INK_K);
+  bakeNoise(svg);
+
+  const art = document.getElementById('art'), readout = document.getElementById('readout');
+  const ui = { st };
+  ui.render = () => { _clipN = 0; document.documentElement.style.setProperty('--accent', PALS[st.pal].l); art.innerHTML = inkScale(cfg.scene(st, PALS[st.pal])); if (!ui._flash) readout.textContent = cfg.readout ? cfg.readout(st) : ''; if (ui.drawStats) ui.drawStats(); };
+  // big numbers in the top-right corner (credit, change, score…); a value that changes gets a little bump
+  const statsEl = document.getElementById('stats'), prevStats = {};
+  ui.drawStats = () => { if (!statsEl) return;
+    const list = cfg.stats(st).filter(Boolean), html = list.map(x => `<div class="stat${x.small ? ' small' : ''}"><div class="k">${x.label}</div><div class="v" data-k="${x.label}">${x.value}</div></div>`).join('');
+    if (statsEl._html !== html){ statsEl._html = html; statsEl.innerHTML = html;
+      statsEl.querySelectorAll('.v').forEach(v => { if (prevStats[v.dataset.k] != null && prevStats[v.dataset.k] !== v.textContent) v.classList.add('bump'); prevStats[v.dataset.k] = v.textContent; }); } };
+  let flashT = 0;
+  const toast = document.getElementById('toast');
+  ui.flash = (text, ms=1600) => { ui._flash = true; readout.textContent = text; toast.textContent = text;
+    toast.style.top = ((document.getElementById('btns') ? document.getElementById('btns').offsetTop + document.getElementById('btns').offsetHeight : 0) + 8) + 'px'; toast.classList.add('show');
+    clearTimeout(flashT); flashT = setTimeout(() => { ui._flash = false; toast.classList.remove('show'); ui.render(); }, ms); };
+  // One frame driver for every running animation: each frame runs all the steps, then draws once (two animations at
+  // the same time no longer draw twice). It follows the screen's frames, with a timer fallback for when frames don't
+  // come (headless shots, a hidden tab). ui.invalidate() asks for one redraw on the next frame (used while dragging).
+  const steps = new Set(); let driving = false, lastT = 0, fbT = 0;
+  const frame = () => { if (!driving) return; driving = false; clearTimeout(fbT);
+    const now = performance.now(), dt = Math.max(0, Math.min(.05, (now - lastT) / 1000)); lastT = now;
+    for (const s of [...steps]) if (s(dt) === false) steps.delete(s);
+    ui.render(); if (steps.size) drive(); };
+  const drive = () => { if (driving) return; driving = true; requestAnimationFrame(frame); fbT = setTimeout(frame, 60); };
+  ui.animate = step => { if (!steps.size && !driving) lastT = performance.now(); steps.add(step); drive(); };
+  ui.invalidate = () => drive();
+
+  // clickable parts react on press, not on click: while something animates, the scene is redrawn every frame, so the
+  // element under the pointer is replaced between press and release and a 'click' would never fire
+  svg.addEventListener('pointerdown', e => { if (e.button) return; const a = e.target.closest('[data-act]'); if (!a || !cfg.acts || !cfg.acts[a.dataset.act]) return;
+    e.preventDefault(); cfg.acts[a.dataset.act](st, a, ui); ui.render(); });
+  // orbit: drag anywhere that is not a clickable part (the machine turns the way the finger moves); arrow keys nudge; double-click eases back to the front view
+  let drag = null, spin = false, camAnim = 0;
+  const camTo = (y, p, ms=700) => { const y0 = YAW, p0 = PITCH, dy = ((y - y0 + 540) % 360) - 180, id = ++camAnim; let t = 0;
+    ui.animate(dt => { if (id !== camAnim) return false; t += dt*1000; const k = Math.min(1, t / ms), e = ease(k); setCam(y0 + dy*e, p0 + (p - p0)*e); return k < 1; }); };
+  ui.camTo = camTo;
+  svg.addEventListener('pointerdown', e => { if (e.button || e.target.closest('[data-act]')) return;
+    camAnim++; drag = { x:e.clientX, y:e.clientY, yaw:YAW, pitch:PITCH }; svg.classList.add("drag"); try { svg.setPointerCapture(e.pointerId); } catch {} });
+  svg.addEventListener('pointermove', e => { if (!drag) return; const k = 300 / svg.getBoundingClientRect().width;
+    setCam(drag.yaw + (e.clientX - drag.x)*.55*k, drag.pitch + (e.clientY - drag.y)*.35*k); ui.invalidate(); });
+  const endDrag = () => { drag = null; svg.classList.remove('drag'); };
+  svg.addEventListener('pointerup', endDrag); svg.addEventListener('pointercancel', endDrag);
+  svg.addEventListener('dblclick', e => { if (!e.target.closest('[data-act]')) camTo(YAW0, PITCH0); });
+  addEventListener('keydown', e => { const k = { ArrowLeft:[-15,0], ArrowRight:[15,0], ArrowUp:[0,8], ArrowDown:[0,-8] }[e.key];
+    if (!k || window.GAME_KEYS || /input|textarea/i.test(e.target.tagName)) return; e.preventDefault(); camTo(YAW + k[0], PITCH + k[1], 260); });   // a game figure keeps the arrows for play
+  document.getElementById('vreset').onclick = () => { spin = false; vsp.setAttribute('aria-pressed', false); camTo(YAW0, PITCH0); };
+  const vsp = document.getElementById('vspin');
+  vsp.onclick = () => { spin = !spin; vsp.setAttribute('aria-pressed', spin); camAnim++;
+    let dir = 1;   // with a turning limit, the turntable swings back and forth inside it
+    if (spin) ui.animate(dt => { if (!spin) return false; if (!drag){ let y = YAW + dir*dt*18;
+      if (CAM_LIM != null && Math.abs(y - YAW0) >= CAM_LIM - .5){ dir = -dir; y = YAW + dir*dt*18; } setCam(y, PITCH); } return true; }); };
+  if (q.has('yaw') || q.has('pitch')) setCam(+(q.get('yaw') ?? YAW0), +(q.get('pitch') ?? PITCH0));
+  const btns = document.getElementById('btns');
+  const stepEls = [];
+  if (btns) cfg.buttons.forEach((b, i) => {
+    const wrap = document.createElement('div'); wrap.className = 'stepwrap';
+    const el = document.createElement('button'); el.className = 'act';
+    el.innerHTML = `${b.label}${b.choices ? '<span class="car">▾</span>' : ''}`;
+    wrap.appendChild(el); btns.appendChild(wrap); stepEls.push(el);
+    if (!b.choices){ el.onclick = () => { closeChips(); b.onClick(st, ui); ui.render(); }; return; }
+    const chips = document.createElement('div'); chips.className = 'chips'; wrap.appendChild(chips);
+    el.onclick = e => { e.stopPropagation(); const open = !wrap.classList.contains('open'); closeChips();
+      if (!open) return;
+      chips.innerHTML = '';
+      // every choice stays clickable, so nothing silently ignores a press:
+      //   current:true  = the one in use (shown selected); a press just says so
+      //   disabled:true = not possible right now (shown faded); a press says why (c.why, or a generic note)
+      for (const c of b.choices(st)){ const ch = document.createElement('button'); ch.className = 'chip' + (c.current ? ' current' : c.disabled ? ' off' : ''); ch.textContent = c.label;
+        if (c.current) ch.setAttribute('aria-pressed', 'true');
+        ch.onclick = ev => { ev.stopPropagation(); closeChips();
+          if (c.current) return ui.flash(`${c.label} — already set`);
+          if (c.disabled) return ui.flash(c.why || `${c.label} isn't possible right now`);
+          c.onClick(st, ui); ui.render(); }; chips.appendChild(ch); }
+      wrap.classList.add('open'); };
+  });
+  function closeChips(){ document.querySelectorAll('.stepwrap.open').forEach(w => w.classList.remove('open')); }
+  document.addEventListener('click', closeChips);
+
+  document.getElementById('wb').oninput = e => document.getElementById('wob').setAttribute('scale', (e.target.value * INK_K).toFixed(2));
+  const pals = document.getElementById('pals');
+  for (const [k,p] of Object.entries(PALS)){
+    const b = document.createElement('button'); b.className='sw'; b.title=k; b.style.background=p.l; b.setAttribute('aria-pressed', k===st.pal);
+    b.onclick = () => { st.pal=k; [...pals.children].forEach(c=>c.setAttribute('aria-pressed', c===b)); ui.render(); };
+    pals.appendChild(b);
+  }
+  // labels: the switch appears when the figure draws any tag(); ?labels=0 starts with them hidden
+  const lblctl = document.getElementById('lblctl'), lbl = document.getElementById('lbl');
+  const setLabels = on => { document.documentElement.classList.toggle('nolabels', !on); lbl.textContent = on ? 'On' : 'Off'; lbl.setAttribute('aria-pressed', on); };
+  lbl.onclick = () => setLabels(document.documentElement.classList.contains('nolabels'));
+  if (q.get('labels') === '0') setLabels(false);
+  // testing: ?press=Label@ms,Label@ms clicks the buttons whose text starts with Label at those times after load
+  // (any order, repeats allowed); Label>Choice picks a choice from a picker button (?press=Speed>3@300).
+  // Script errors and unknown labels are recorded on <html data-errors="…">
+  window.__st = st;
+  const noteErr = m => { document.documentElement.dataset.errors = (document.documentElement.dataset.errors || '') + ' ' + m + ';'; };
+  const starts = (el, t) => el.textContent.trim().toLowerCase().startsWith(t.trim().toLowerCase());
+  if (q.has('press')) q.get('press').split(',').forEach(item => { const [what, ms] = item.split('@'), [label, choice] = what.split('>');
+    setTimeout(() => { const b = [...document.querySelectorAll('.act')].find(b => starts(b, label));
+      if (!b) return noteErr(`no button "${label}"`);
+      b.click(); if (choice == null) return;
+      const c = [...b.parentElement.querySelectorAll('.chip')].find(c => starts(c, choice));
+      if (c && !c.disabled) c.click(); else noteErr(`no choice "${choice}" in "${label}"`); }, +ms || 0); });
+  setLight(st.az); ui.render();
+  if (art.querySelector('.tag')) lblctl.hidden = false;
+  return ui;
+}
+
+/* ---------- see-through + labels kit (shared; the figure supplies its own working parts) ----------
+   xrCallouts(items, B): pills in two columns either side of the object, sorted top to bottom so leaders never cross.
+     items: [{ at:[x,y,z], text, on }], B: the object's bounds [x0, x1, y0, y1, z0, z1].
+   xrGhost(body, mech, k, OUTp, x0, x1, m): far walls faintly, the working parts, then the case as a ghost over them.
+   xrMount(getUI, caption): the See-through / Labels switches (top right), the caption under the figure, label hiding. */
+function xrCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0])), cx = (xmin + xmax)/2;
+  // on a phone (LBL_U = drawing units per screen px) each label is a numbered badge and the names go in a legend under the figure
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 3*k);
+  const L = [], R = [];
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, btn = document.getElementById('btns');
+  const wMax = u ? hgt*1.3 + 12*k : Math.max(...items.map(it => it.text.length))*fs*.62 + fs*1.5 + 12*k;
+  const roomL = xmin - vb.x >= wMax, roomR = vb.x + vb.width - xmax >= wMax;
+  for (const it of items){ const [X, Y] = P(...it.at); ((X < cx && roomL) || !roomR ? L : R).push({ ...it, X, Y }); }
+  let s = '';
+  let top = { [-1]: fs, [1]: fs + 30*k };
+  if (btn && svgEl.getScreenCTM()){ const r = btn.getBoundingClientRect(), q = new DOMPoint(r.right, r.bottom + 50).matrixTransform(svgEl.getScreenCTM().inverse());
+    if (q.y > 0) top[-1] = q.y + hgt; }
+  for (const [col, side] of [[L, -1], [R, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    const shift = col.length ? Math.max(0, col.reduce((a, c) => a + c.py - c.Y, 0) / col.length) : 0;
+    const room = col.length ? col[0].py - top[side] : 0; for (const c of col) c.py -= Math.min(shift, room);
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+function xrGhost(body, mech, k, OUTp, x0, x1, m){
+  const fF = facing([1,0,0]), fB = facing([-1,0,0]);
+  const far = `<g opacity="${f(.5*k)}">` + loft(on(PX(x0), OUTp), on(PX(x1), OUTp), n => mix(toneI(n.map(v => -v), m), '#f2efe7', .55), true)
+    + (fF ? fill(pd(on(PX(x0), OUTp)), mix(m.d, '#f2efe7', .5)) : '') + (fB ? fill(pd(on(PX(x1), OUTp)), mix(m.d, '#f2efe7', .5)) : '') + `</g>`;
+  return far + mech + `<g opacity="${f(1 - .8*k)}">${body}</g>` + `<g opacity="${f(.6*k)}">` + hullInk([...on(PX(x0), OUTp), ...on(PX(x1), OUTp)], 2.8) + `</g>`;
+}
+function xrMount(getUI, caption, opt = {}){   // opt.labelsOnly: only the Labels switch (the insides are on show already)
+  const ui = getUI(), q = new URLSearchParams(location.search), html = document.documentElement;
+  if (q.get('labels') !== '1') html.classList.add('nolabels');
+  if (ui.st.xr == null){ ui.st.xr = 0; ui.st.xrT = 0; }
+  if (q.get('xr') === '1') ui.st.xr = ui.st.xrT = 1;
+  const old = document.getElementById('lblctl'); if (old) old.style.display = 'none';
+  const vset = document.createElement('div'); vset.className = 'vset';
+  vset.innerHTML = '<div class="vrow">' + (opt.labelsOnly ? '' : '<button class="act" id="xrb" aria-pressed="false">See-through</button>') + '<button class="act" id="lblb" aria-pressed="false">Labels</button></div>';
+  document.querySelector('.stage').appendChild(vset);
+  // pages with a stats panel in the top right: the switches go just under it
+  const place = () => { const sp = document.getElementById('stats'); vset.style.top = sp ? (sp.offsetTop + sp.offsetHeight + 10) + 'px' : ''; };
+  place(); new ResizeObserver(place).observe(document.getElementById('stats') || vset);
+  const xrb = document.getElementById('xrb'), lblb = document.getElementById('lblb');
+  const sync = () => { if (xrb) xrb.setAttribute('aria-pressed', !!getUI().st.xrT); lblb.setAttribute('aria-pressed', !html.classList.contains('nolabels')); };
+  if (xrb) xrb.onclick = () => { const u = getUI(), st = u.st; st.xr = st.xr || 0; st.xrT = st.xrT ? 0 : 1; sync();
+    u.animate(dt => { const g = Math.sign(st.xrT - st.xr); st.xr = Math.min(1, Math.max(0, st.xr + g*dt/.7)); return st.xr !== st.xrT; }); };
+  lblb.onclick = () => { html.classList.toggle('nolabels'); sync(); };
+  sync();
+  const cap = document.createElement('p'); cap.className = 'mcap'; document.querySelector('.stage').after(cap);
+  const css = document.createElement('style');
+  css.textContent = '.vset{position:absolute;top:4px;right:0;z-index:2}.vrow{display:flex;gap:6px}.vset .act[aria-pressed=true]{background:var(--ink);color:var(--paper)}'
+    + 'html.nolabels #fig .tag{display:none}.mcap{width:100%;max-width:760px;min-height:3em;margin:0 0 14px;font-size:12.5px;line-height:1.5;text-align:center;transition:opacity .3s}'
+    + '@media (max-width:560px){.vset{position:static;margin:4px 0}}';
+  document.head.appendChild(css);
+  const r0 = ui.render; ui.render = () => { r0(); const st = getUI().st; cap.style.opacity = st.xr > .5 ? 1 : 0; cap.textContent = caption(st); };
+  ui.render();
+}
+// same, for a body lofted between two horizontal rings A (bottom) and B (top)
+function xrGhostRings(body, mech, k, A, B, m){
+  const far = `<g opacity="${f(.5*k)}">` + loft(A, B, n => mix(toneI(n.map(v => -v), m), '#f2efe7', .55), true) + fill(pd(A), mix(m.d, '#f2efe7', .5)) + `</g>`;
+  return far + mech + `<g opacity="${f(1 - .8*k)}">${body}</g>` + `<g opacity="${f(.6*k)}">` + hullInk([...A, ...B], 2.8) + `</g>`;
+}
+// generic see-through for any figure: the whole drawing fades back and the inside parts show over it.
+//   opts: { mech(st, k) -> svg, inside(st) -> label items, surface(st) -> label items (optional), B: bounds, getSt() }
+// washer-style ghost for an object without a single box case: its inside parts first, then the object pale over them
+const xrUnder = (svg, mech, k) => `<g opacity="${f(k)}">${mech}</g><g opacity="${f(1 - .62*k)}">${svg}</g>`;
+function xrWrap(sceneFn, opts){
+  return function(){
+    let s = sceneFn.apply(this, arguments);
+    const st = opts.getSt(), k = ease(st.xr || 0);
+    if (k > 0 && opts.under) s = xrUnder(s, opts.mech(st, k), k);   // the whole drawing is the object
+    else if (k > 0 && !opts.inline) s = `<g opacity="${f(1 - .5*k)}">${s}</g><g opacity="${f(k)}">${opts.mech(st, k)}</g>`;   // inline: the figure ghosts its own case
+    const items = k > .6 ? opts.inside(st) : opts.surface ? opts.surface(st) : [];
+    return s + (items.length ? xrCallouts(items, opts.B) : '');
+  };
+}
+
+/* ---------- game keypad: mountKeypad({ rows, hub:[col,row], action:'DROP', keys:[{ key:'ArrowLeft', glyph:'\u25c0', name, at:[col,row] }] })
+   An inked pad under the buttons that sends the same keyboard events as the arrows and space (set window.GAME_KEYS = true
+   so the arrows play instead of turning the camera). ---------- */
+function mountKeypad(spec){
+  const host = document.getElementById('btns'); if (!host) return;
+  const css = document.createElement('style');
+  css.textContent = `.kpad{display:flex;align-items:center;gap:16px;margin-top:6px;padding:10px 12px;border:1.5px solid var(--ink);border-radius:14px;
+      background:var(--paper);box-shadow:0 3px 0 var(--ink);touch-action:none;user-select:none;-webkit-user-select:none}
+    .kpad .dp{display:grid;grid-template-columns:repeat(3,34px);grid-template-rows:repeat(var(--rows),34px);gap:3px}
+    .kpad .k{all:unset;box-sizing:border-box;display:flex;align-items:center;justify-content:center;width:34px;height:34px;cursor:pointer;
+      background:#fbf7ea;border:1.5px solid var(--ink);border-radius:7px;box-shadow:0 3px 0 var(--ink);color:var(--ink);font:700 13px ui-monospace,Menlo,monospace;
+      transition:transform .05s,box-shadow .05s,background .05s}
+    .kpad .hub{width:34px;height:34px;display:flex;align-items:center;justify-content:center}
+    .kpad .hub i{width:12px;height:12px;border-radius:50%;border:1.5px solid var(--ink);background:#e6e0d1}
+    .kpad .go{all:unset;box-sizing:border-box;width:62px;height:62px;border-radius:50%;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;
+      background:#e2483d;border:1.5px solid var(--ink);box-shadow:0 4px 0 var(--ink),inset 0 -5px 0 rgba(0,0,0,.18);color:#fff;font:800 12px ui-monospace,Menlo,monospace;letter-spacing:.06em;
+      transition:transform .05s,box-shadow .05s}
+    .kpad .go small{font:700 8px ui-monospace,Menlo,monospace;opacity:.85;letter-spacing:.08em;margin-top:2px}
+    .kpad .down{transform:translateY(2px);box-shadow:0 1px 0 var(--ink)}
+    .kpad .k.down{background:var(--accent,#f4b829)}
+    .kpad .go.down{transform:translateY(3px);box-shadow:0 1px 0 var(--ink),inset 0 -3px 0 rgba(0,0,0,.18)}
+    @media (max-width:560px){.kpad{gap:22px;padding:10px 16px}.kpad .dp{grid-template-columns:repeat(3,44px);grid-template-rows:repeat(var(--rows),44px)}
+      .kpad .k,.kpad .hub{width:44px;height:44px;font-size:15px}.kpad .go{width:74px;height:74px}}`;
+  document.head.appendChild(css);
+  const pad = document.createElement('div'); pad.className = 'kpad'; pad.setAttribute('role', 'group'); pad.setAttribute('aria-label', 'Keypad');
+  const dp = document.createElement('div'); dp.className = 'dp'; dp.style.setProperty('--rows', spec.rows);
+  const els = {};
+  for (const k of spec.keys){
+    const b = document.createElement('button'); b.className = 'k'; b.textContent = k.glyph; b.setAttribute('aria-label', k.name);
+    b.style.gridColumn = k.at[0] + 1; b.style.gridRow = k.at[1] + 1; dp.appendChild(b); els[k.key] = b; }
+  if (spec.hub){ const h = document.createElement('div'); h.className = 'hub'; h.innerHTML = '<i></i>'; h.style.gridColumn = spec.hub[0] + 1; h.style.gridRow = spec.hub[1] + 1; dp.appendChild(h); }
+  const go = document.createElement('button'); go.className = 'go'; go.innerHTML = `${spec.action}<small>SPACE</small>`; go.setAttribute('aria-label', spec.action);
+  els[' '] = go;
+  pad.append(dp, go); host.appendChild(pad);
+  const send = (type, key) => dispatchEvent(new KeyboardEvent(type, { key, bubbles: true }));
+  for (const [key, el] of Object.entries(els)){
+    let held = null;
+    el.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); if (held != null) return; held = e.pointerId;
+      try { el.setPointerCapture(e.pointerId); } catch (_) {} send('keydown', key); });
+    const release = e => { if (held == null || (e && e.pointerId !== held)) return; held = null; send('keyup', key); };
+    el.addEventListener('pointerup', release); el.addEventListener('pointercancel', release); el.addEventListener('lostpointercapture', release);
+    el.addEventListener('click', e => e.preventDefault());
+    el.addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); send('keydown', key); setTimeout(() => send('keyup', key), 120); } });
+  }
+  // space belongs to the game: a button that still has the focus from a click must not be pressed by it too
+  addEventListener('keydown', e => { if (e.key === ' ' && e.target && e.target.closest && e.target.closest('button')) e.preventDefault(); }, true);
+  addEventListener('keyup', e => { if (e.key === ' ' && e.target && e.target.closest && e.target.closest('button')) e.preventDefault(); }, true);
+  // light the keys for real key presses too (and for the pad's own, which arrive the same way)
+  addEventListener('keydown', e => { const el = els[e.key]; if (el) el.classList.add('down'); });
+  addEventListener('keyup', e => { const el = els[e.key]; if (el) el.classList.remove('down'); });
+  addEventListener('blur', () => Object.values(els).forEach(el => el.classList.remove('down')));
+}
+
+</script>
+<script>
+/* ---------- Truth first: a school acid-base titration with a pH meter ----------
+   1. Set up: 25.0 mL of 0.100 M hydrochloric acid is pipetted into a 250 mL conical flask, 100 mL of deionised water
+      is added from the wash bottle so the pH electrode's bulb and junction are covered, then three drops of
+      phenolphthalein. A PTFE stir bar lies on the flask's floor; the flask stands on the magnetic stirrer's top plate.
+      The 50 mL burette, clamped to the retort stand, is filled from the 0.100 M sodium hydroxide bottle to 0.00 mL;
+      its jet tip sits inside the flask's neck. The pH electrode hangs from its holder arm through the neck beside it,
+      its cable running down the holder post to the meter's BNC socket.
+   2. Stirrer on: the motor spins the drive magnet under the top plate; the stir bar's magnet follows it, swirling the
+      flask. Starting pH: [H+] = 2.5 mmol / 125 mL = 0.020 M, pH 1.70.
+   3. Open the tap: turning the PTFE key lines its bore up with the burette, NaOH runs down the jet into the flask.
+      Each OH- meets an H+ and they join into water (H+ + OH- -> H2O); Na+ and Cl- stay as spectators. Where the
+      stream lands the liquid is briefly basic, so a pink plume flashes and is swirled away while acid is in excess.
+   4. pH creeps: 24.00 mL -> pH 3.17, 24.95 mL -> 4.48. Close to the end the pink flashes linger; finish drop by drop
+      (one drop = 0.05 mL). The drop that passes 25.00 mL takes the pH from about 4.5 to 9.5: the indicator
+      (colourless below pH 8.2) turns pale pink and stays pink: the endpoint. Titre = 25.05 mL.
+   5. Overshoot: excess OH- builds up: 26 mL -> pH 10.8 deep pink, 30 mL -> 11.5 magenta-purple.
+   6. Reset: the flask is emptied and refilled with fresh acid, the burette refilled from the bottle to 0.00 mL.
+   pH: d = (nHCl - nNaOH) / Vtotal; [H+] = (d + sqrt(d^2 + 4 Kw)) / 2.
+   Parts (each is held by another):
+   STAND    retort base on the bench . threaded foot . stand rod screwed into it . boss head clamped on the rod with
+            two thumbscrews . burette clamp arm held in the boss . clamp body . two spring jaws . cork pads on the burette
+   BURETTE  50 mL glass tube, 0-50 mL graduations, NaOH column with its meniscus, stopcock barrel, PTFE key and its
+            handle, retaining nut, jet tip inside the flask's neck, drops / stream
+   FLASK    250 mL conical flask on the top plate . acid + indicator solution . PTFE stir bar on the floor
+   STIRRER  case on the retort base . ceramic top plate . motor on a mounting plate . drive magnet on its shaft .
+            control board . speed potentiometer behind the knob . speed knob . rocker switch . power LED .
+            mains inlet on the back with its cord
+   PH       glass electrode in its holder ring . holder arm . sleeve and thumbscrew . holder post on a heavy foot .
+            glass bulb . inner Ag/AgCl wire in its inner tube . KCl reference fill . ceramic junction . cap .
+            coax cable down the post to the BNC socket on the meter's back
+   METER    sloped case on the bench . LCD . CAL / MEAS keys . board on standoffs . high-impedance amplifier . MCU .
+            9 V battery . BNC socket
+   BENCH    bench board . NaOH bottle (polyethylene: NaOH etches glass) . wash bottle of deionised water
+   SEE-THROUGH overlays: a magnifier into the liquid with H+, OH-, H2O, Na+, Cl-; the live pH-against-volume curve */
+
+/* ---------- geometry (x = depth, y = width, z = up; 1 unit = 1 cm) ---------- */
+const BW = 42, BD = 67, BH = 2;
+const RX = 6, RY = 31.2, ROD_T = 90;                          // stand rod
+const SB = [2, 22, BH, 30, 42, BH + 1.4];                     // retort base
+const SZ0 = SB[5], SZ1 = SZ0 + 7;                             // stirrer case bottom / top
+const STB = [10.8, 24.6, 28.8, 42.6];                         // stirrer footprint x0, y0, x1, y1
+const FX = 19.8, FY = 33.6, FZ = SZ1 + .05;                   // flask centre and floor
+const FZ_IN = FZ + .25, FR_IN = 4.0, FN_IN = 2.1, FCONE = 10.25;   // inside: floor height, floor radius, neck radius, cone height
+const FTOP = FZ + 14.5;
+const BXc = 19.3, BYc = 33.0;                                 // burette axis
+const TIP_Z = 22, SC_Z = 27.3, TUBE_Z0 = 28.6, TUBE_Z1 = 86, BR = .75, BRI = .6;
+const Z0ML = 80, ZPERML = .92;                                // 0 mL mark, cm per mL
+const CL_Z = 58;                                              // burette clamp height
+const EX = 20.2, EY = 35.0, EBOT = 11.8, ESH = 30.5;          // electrode axis, bulb bottom, top of glass shaft
+const POST = [24.5, 47.5], POST_T = 34, HOLD_Z = 29.5;
+const MY0 = 51, MY1 = 65, MP = [[26, BH], [40, BH], [40, 4.5], [29, 9.5], [26, 9.5]], MSL = Math.hypot(11, 5), MSN = [5/MSL, 0, 11/MSL];
+const BOT = [30, 10], WASH = [36, 20];
+const NA0 = 2.5, VW = 125, CB = .1, KW = 1e-14, DROP = .05, FLOW = 1.6, VMAX = 50;
+const STANDM = matOf('#5f6e76'), STEELM = { l:'#e3e6e7', m:'#b4bcbf', d:'#7d878b' }, PTFE = { l:'#fbfaf5', m:'#e6e3d8', d:'#bcb7a6' };
+const PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, CORK = matOf('#c99a62'), CAPM = matOf('#2f6fb8');
+const NAOHC = '#d6ecf3';
+
+/* ---------- small helpers ---------- */
+const tiLerp = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const tiAdd = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], tiScl = (a, s) => a.map(v => v*s);
+const tiClamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const tiBoxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const tiBx = (x0, y0, z0, x1, y1, z1, M, w = .8) => box(x0, y0, z0, x1, y1, z1, M, toneI, w);
+const tiStroke = (pts, col, w, close = false) => { const d = pd(pts, close);
+  return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(w + .9)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(w)}" stroke-linecap="round" stroke-linejoin="round"/>`; };
+const tiRingZ = (cx, cy, z, r, n = 20) => on(PZ(z), ellUV(cx, cy, r, r, n));
+// a prism: a convex profile in (x, z) swept along y, every visible face inked
+function tiPrismY(prof, y0, y1, M, w = .9){
+  const A = on(PY(y0), prof), B = on(PY(y1), prof), cen = avg(A.concat(B)); let s = '';
+  for (let i = 0; i < prof.length; i++){ const j = (i + 1) % prof.length, q = [A[i], A[j], B[j], B[i]];
+    let nr = norm(cross(sub(q[1], q[0]), sub(q[3], q[0]))); if (dot(nr, sub(avg(q), cen)) < 0) nr = nr.map(v => -v);
+    if (vis(nr)) s += shape(q, toneI(nr, M), w); }
+  if (vis([0,1,0])) s += shape(B, toneI([0,1,0], M), w);
+  if (vis([0,-1,0])) s += shape(A, toneI([0,-1,0], M), w);
+  return s + hullInk([...A, ...B], 1.6); }
+// a cable cut into short pieces (each with its own box) so it sorts with the solids it passes
+function tiWire(pts, col, w = .5, seg = 2.5){
+  const q = [pts[0]];
+  for (let i = 1; i < pts.length; i++){ const a = pts[i-1], b = pts[i], n = Math.max(1, Math.ceil(Math.hypot(...sub(b, a)) / seg));
+    for (let j = 1; j <= n; j++) q.push(tiLerp(a, b, j/n)); }
+  const out = [];
+  for (let i = 0; i < q.length - 1; i++) out.push({ box: tiBoxOf([q[i], q[i+1]]), svg: tiStroke([q[i], q[i+1]], col, w) });
+  return out; }
+// a ball seen as a circle
+function tiBall(c, r, M, wk = 1){ const [X, Y] = P(...c), R = r*CAM_K;
+  return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="${M.m}"/><circle cx="${f(X + .25*R)}" cy="${f(Y - .3*R)}" r="${f(.45*R)}" fill="${M.l}"/>`
+    + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="none" stroke="${INK}" stroke-width="${f(wk)}"/>`; }
+// screen offset (dx, dy) from a 3D point, as a 3D point (labels for things drawn flat on the screen)
+const tiUnP = (p, dx, dy) => tiAdd(p, tiAdd(tiScl(CAM_R, dx/CAM_K), tiScl(CAM_D, dy/CAM_K)));
+// the two side lines of an upright round part (its silhouette), no ink across the ends where sections join
+const tiSides = (cx, cy, za, zb, r, w) => { let s = ''; for (const a of nearHalf()){ const t = a*Math.PI/180, x = cx + r*Math.cos(t), y = cy + r*Math.sin(t); s += line([[x, y, za], [x, y, zb]], w); } return s; };
+// a vertical glass tube section: far wall, contents, near wall, side lines
+function tiGlass(cx, cy, za, zb, r, inner = '', w = .8){
+  const A = tiRingZ(cx, cy, za, r), B = tiRingZ(cx, cy, zb, r);
+  const t = (YAW + 35)*Math.PI/180, sx = cx + r*.8*Math.cos(t), sy = cy + r*.8*Math.sin(t);
+  return `<g opacity=".45">${loft(A, B, () => mix(CLEAR.m, '#ffffff', .2), true)}</g>` + inner
+    + `<g opacity=".3">${loft(A, B, n => toneI(n, CLEAR))}</g>`
+    + `<path d="${pd([[sx, sy, za + .2], [sx, sy, zb - .2]], false)}" stroke="#ffffff" stroke-width=".5" opacity=".6"/>` + tiSides(cx, cy, za, zb, r, w); }
+// a liquid column inside an upright tube, with its surface when the top is inside [za, zb]
+function tiLiquid(cx, cy, za, zb, r, col, op = .6, top = true){
+  if (zb <= za) return '';
+  const A = tiRingZ(cx, cy, za, r), B = tiRingZ(cx, cy, zb, r);
+  return `<g opacity="${op}">${loft(A, B, n => mix(col, '#7fa9b5', vis(n) ? .15 : 0))}${top ? fill(pd(B), mix(col, '#ffffff', .35)) : ''}</g>`; }
+
+// byDepth's sort compares pairs in an order of its own choosing, and the box rule is not transitive, so with many parts a
+// far part can end up over a near one. Here every separated pair that overlaps on screen is an edge, then farthest-first.
+function tiSort(items){
+  items = items.filter(Boolean); const n = items.length, out = Array.from({length:n}, () => []), deg = new Array(n).fill(0);
+  const dep = items.map(p => depthOf(p.at || boxMid(p.box))), done = new Array(n).fill(false);
+  const R = items.map(p => { if (!p.box) return null; const xs = [], ys = [];
+    for (const x of [0, 1]) for (const y of [0, 1]) for (const z of [0, 1]){ const q = P(p.box[x][0], p.box[y][1], p.box[z][2]); xs.push(q[0]); ys.push(q[1]); }
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; });
+  const hit = (a, b) => a && b && a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++){ const o = hit(R[i], R[j]) ? sepOrder(items[i], items[j]) : 0;
+    if (o < 0){ out[i].push(j); deg[j]++; } else if (o > 0){ out[j].push(i); deg[i]++; } }
+  let svg = '';
+  for (let c = 0; c < n; c++){ let best = -1;
+    for (let i = 0; i < n; i++) if (!done[i] && (best < 0 || (deg[i] === 0) > (deg[best] === 0) || ((deg[i] === 0) === (deg[best] === 0) && dep[i] < dep[best]))) best = i;
+    done[best] = true; svg += items[best].svg; for (const j of out[best]) deg[j]--; }
+  return svg; }
+
+/* ---------- chemistry ---------- */
+function tiPH(V){ const d = (NA0 - CB*V) / (VW + V); return -Math.log10((d + Math.sqrt(d*d + 4*KW)) / 2); }
+const tiSm = (a, b, x) => { const t = tiClamp((x - a)/(b - a)); return t*t*(3 - 2*t); };
+// phenolphthalein: colourless below 8.2, pale pink, pink, then a deep magenta-purple when well overshot
+function tiInd(pH){
+  let c = '#e4f1f4', a = .38;
+  const s1 = tiSm(8.2, 9.2, pH), s2 = tiSm(9.4, 10.9, pH), s3 = tiSm(11.0, 11.8, pH);
+  if (s1 > 0){ c = mix(c, '#f7bcd8', s1); a += .2*s1; }
+  if (s2 > 0){ c = mix(c, '#df4f98', s2); a += .2*s2; }
+  if (s3 > 0){ c = mix(c, '#8c2d9a', s3); a += .1*s3; }
+  return { c, a }; }
+const tiIndName = pH => pH < 8.2 ? 'colourless' : pH < 9.6 ? 'pale pink' : pH < 11.1 ? 'pink' : 'purple';
+// liquid height above the flask floor for a volume in mL (the inside is a cone frustum)
+const tiRin = h => FR_IN - (FR_IN - FN_IN)*h/FCONE;
+function tiLevel(vol){ let lo = 0, hi = FCONE;
+  for (let i = 0; i < 24; i++){ const h = (lo + hi)/2, r = tiRin(h), v = Math.PI*h*(FR_IN*FR_IN + FR_IN*r + r*r)/3; if (v < vol) lo = h; else hi = h; }
+  return (lo + hi)/2; }
+const tiBurZ = Vb => Z0ML - ZPERML*Vb;          // the NaOH level in the burette
+
+/* ---------- the parts ---------- */
+const ST_PROF = rrUV(STB[1], SZ0, STB[3], SZ1, 1.4);
+function tiStirrer(st, m, k){
+  const FRONT = facing([1,0,0]), BACK = facing([-1,0,0]);
+  let s = '';
+  if (BACK) s += fill(pd(on(PX(STB[0]), ST_PROF)), tone([-1,0,0], m));
+  if (FRONT) s += fill(pd(on(PX(STB[2]), ST_PROF)), tone([1,0,0], m));
+  s += extrude(ST_PROF, STB[0], STB[2], m);
+  if (facing([0,0,1])){ const tp = on(PZ(SZ1 + .02), rrUV(STB[0] + .8, STB[1] + .8, STB[2] - .8, STB[3] - .8, 1));
+    s += shape(tp, CERAMIC.l, 1) + ink(pd(on(PZ(SZ1 + .03), ellUV(FX, FY, 5.2, 5.2, 28))), .5); }
+  if (FRONT){
+    s += ink(pd(on(PX(STB[2]), ST_PROF)), 1.6);
+    for (let i = 0; i <= 6; i++){ const a = (-135 + 45*i)*Math.PI/180; s += shape(on(PX(STB[2] + .03), ellUV(29.5 + 2*Math.sin(a), 6.9 + 2*Math.cos(a), .16, .16, 8)), INK, 0); }
+    s += tx(STB[2] + .04, 29.5, 4.2, 'SPEED', .75, INK, 800) + tx(STB[2] + .04, 37.8, 4.2, 'POWER', .75, INK, 800);
+    s += shape(on(PX(STB[2] + .03), ellUV(35.2, 8.4, .32, .32, 10)), st.stir ? '#43c25c' : '#2f3a33', .4);
+    s += tx(STB[2] + .04, 33.4, 4.6, 'MAGSTIR', 1.1, mix(m.d, '#000000', .2), 800);
+  }
+  if (BACK){ s += ink(pd(on(PX(STB[0]), ST_PROF)), 1.6) + shape(on(PX(STB[0] - .05), rrUV(37.6, 5, 40.4, 7.2, .3)), '#2b2725', .6); }
+  s += hullInk([...on(PX(STB[0]), ST_PROF), ...on(PX(STB[2]), ST_PROF)], 2.4);
+  if (!(k > 0)) return [s, ''];
+  // inside: motor on its plate, drive magnet on the shaft, board, pot, switch, LED, mains inlet
+  const a = st.spin, ca = Math.cos(a)*2.4, sa = Math.sin(a)*2.4, mz = SZ1 - 1.3;
+  const parts = [];
+  parts.push({ box: [[14.8, 28.6, SZ0], [24.8, 38.6, SZ0 + .5]], svg: tiBx(14.8, 28.6, SZ0, 24.8, 38.6, SZ0 + .5, STEELM, .6) });
+  parts.push({ box: [[FX - 1.8, FY - 1.8, SZ0 + .5], [FX + 1.8, FY + 1.8, SZ0 + 4.2]], svg: cyl(FX, FY, SZ0 + .5, SZ0 + 4.2, 1.8, DARK, toneI, .8, 20) });
+  parts.push({ box: [[FX - .2, FY - .2, SZ0 + 4.2], [FX + .2, FY + .2, mz - .4]], svg: cyl(FX, FY, SZ0 + 4.2, mz - .4, .2, STEELM, toneI, .5, 8) });
+  parts.push({ box: [[FX - 2.5, FY - 2.5, mz - .45], [FX + 2.5, FY + 2.5, mz + .45]],
+    svg: (depthOf([ca, sa, 0]) > 0 ? rod([FX - ca, FY - sa, mz], [FX, FY, mz], .45, matOf('#4f86d8'), toneI, .6) + rod([FX, FY, mz], [FX + ca, FY + sa, mz], .45, matOf('#e2483d'), toneI, .6)
+      : rod([FX + ca, FY + sa, mz], [FX, FY, mz], .45, matOf('#e2483d'), toneI, .6) + rod([FX, FY, mz], [FX - ca, FY - sa, mz], .45, matOf('#4f86d8'), toneI, .6)) });
+  parts.push({ box: [[22.4, 26.2, SZ0 + .4], [28, 33, SZ0 + .9]], svg: tiBx(22.4, 26.2, SZ0 + .4, 28, 33, SZ0 + .7, PCBM, .6) + tiBx(24, 28, SZ0 + .7, 25.4, 29.4, SZ0 + 1.1, DARK, .4) + tiBx(26, 30.6, SZ0 + .7, 26.8, 31.4, SZ0 + 1.6, matOf('#3f4a8a'), .4) });
+  parts.push({ box: [[27.2, 28.7, 6.1], [28.8, 30.3, 7.7]], svg: cylX(27.2, 28.8, 29.5, 6.9, .8, STEELM, toneI, .6, 14) });
+  parts.push({ box: [[27.2, 36.9, 6.1], [28.8, 38.7, 7.7]], svg: tiBx(27.2, 36.9, 6.1, 28.8, 38.7, 7.7, DARK, .6) });
+  parts.push({ box: [[27.8, 34.9, 8.1], [28.8, 35.5, 8.7]], svg: cylX(27.8, 28.8, 35.2, 8.4, .3, matOf('#43c25c'), toneI, .4, 8) });
+  parts.push({ box: [[10.8, 37.6, 5], [12.2, 40.4, 7.2]], svg: tiBx(10.8, 37.6, 5, 12.2, 40.4, 7.2, DARK, .6) });
+  parts.push(...tiWire([[22.6, 29, SZ0 + .7], [21.6, 31.4, SZ0 + 1.6], [FX + 1.4, FY - .8, SZ0 + 2.4]], '#e2483d', .3, 1.2));
+  parts.push(...tiWire([[12.2, 39, 6], [16, 39, SZ0 + .7], [22.6, 32.4, SZ0 + .7]], '#3a3632', .3, 1.2));
+  parts.push(...tiWire([[27.4, 29.5, 6.2], [27.4, 29.5, SZ0 + 1.2], [27.6, 29.8, SZ0 + .7]], '#d8a24a', .25, 1.2));
+  parts.push(...tiWire([[27.4, 37.8, 6.1], [27.4, 34, SZ0 + 1.2], [27.6, 32.6, SZ0 + .7]], '#d8a24a', .25, 1.2));
+  return [s, tiSort(parts)]; }
+
+function tiMeter(st, m, k, pH){
+  const slope = (y, s, off = .05) => [40 - 11*s/MSL + MSN[0]*off, y, 4.5 + 5*s/MSL + MSN[2]*off];
+  const txS = (y, s, str, size, col = INK, weight = 700) => `<text transform="${txM(P(...slope(y, s, .08)), Dv(0,-1,0), Dv(11/MSL, 0, -5/MSL))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+  let s = tiPrismY(MP, MY0, MY1, m, 1);
+  const lcd = off => [slope(53.5, 4.6, off), slope(62.5, 4.6, off), slope(62.5, 10.6, off), slope(53.5, 10.6, off)];
+  if (vis(MSN)){
+    s += shape(lcd(.04), '#1d2a26', 1);
+    s += txS(57.4, 6.3, pH.toFixed(2), 2.6, '#8af0ae', 800) + txS(61.3, 6.3, 'pH', 1.2, '#8af0ae', 700) + txS(58, 9.4, '25.0 C  MEAS', .8, '#8af0ae', 700);
+    for (const [y, lab, M] of [[55, 'CAL', DARK], [58, 'MEAS', DARK], [61.5, 'ON', matOf('#e2483d')]]){ const a = slope(y, 2.2, 0), b = slope(y, 2.2, .45);
+      s += rod(a, b, .7, M, toneI, .7) + txS(y, 1, lab, .62, INK, 800); }
+    s += txS(58, 11.6, 'PH METER', .9, mix(m.d, '#000000', .2), 800);
+  }
+  if (facing([-1,0,0])) s += shape(on(PX(25.97), rectUV(55, 3.4, 57.6, 4.6)), '#f3f0e6', .5);
+  if (!(k > 0)) return [s, ''];
+  let ins = '';
+  for (const [x, y] of [[29, 53], [38.5, 53], [29, 63], [38.5, 63]]) ins += cyl(x, y, BH, 2.6, .3, STEELM, toneI, .4, 8);
+  ins += tiBx(28.4, 52.4, 2.6, 39, 63.6, 2.9, PCBM, .6);
+  ins += tiBx(30, 58.6, 2.9, 31.6, 60.6, 3.4, DARK, .5) + tiBx(33.5, 55, 2.9, 36, 57.5, 3.3, DARK, .5);
+  ins += tiBx(30.5, 53, 2.9, 33.2, 57.2, 4.6, matOf('#3f4a8a'), .6);
+  ins += shape(lcd(-.6), '#3c4a44', .6);
+  ins += tiStroke([[26.4, 60, 6], [28, 60, 4], [30, 59.8, 3]], '#d8a24a', .35);
+  return [s, ins]; }
+
+// the electrode's glass shaft between two heights, its insides drawn faintly through the glass
+function tiElectrode(za, zb, k){
+  const wire = `<path d="${pd([[EX, EY, Math.max(za, 12.6)], [EX, EY, zb]], false)}" stroke="#c9ced0" stroke-width=".35"/>`;
+  const tube = zb > 12.6 ? tiLiquid(EX, EY, Math.max(za, 12.6), zb, .22, '#f2f6f6', .5 + .3*k, false) : '';
+  const kcl = zb > 12.8 ? tiLiquid(EX, EY, Math.max(za, 12.8), Math.min(zb, 27), .55, '#f6eab8', .35 + .35*k, zb > 27 && za < 27) : '';
+  return tiGlass(EX, EY, za, zb, .6, kcl + tube + wire, .7); }
+
+function tiFlask(st, k, pH){
+  const ind = tiInd(pH), h = tiLevel(VW + st.V), zs = FZ_IN + h, rs = tiRin(h);
+  const rings = [[FZ, 3.95], [FZ + .4, 4.25], [FZ + 10.5, 2.25], [FZ + 14, 2.25], [FZ + 14, 2.5], [FZ + 14.5, 2.5]].map(([z, r]) => [z, r, tiRingZ(FX, FY, z, r, 28)]);
+  let far = '', near = '';
+  for (let i = 0; i < rings.length - 1; i++){ const A = rings[i][2], B = rings[i+1][2];
+    far += loft(A, B, () => mix(CLEAR.m, '#ffffff', .25), true); near += loft(A, B, n => toneI(n, CLEAR)); }
+  let s = `<g opacity=".5">${far}</g>`;
+  // stir bar on the floor, turning with the drive magnet
+  const a = st.spin, ca = Math.cos(a)*1.5, sa = Math.sin(a)*1.5, bz = FZ_IN + .4;
+  const pa = [FX - ca, FY - sa, bz], pb = [FX + ca, FY + sa, bz];
+  s += rod(depthOf(sub(pb, pa)) > 0 ? pa : pb, depthOf(sub(pb, pa)) > 0 ? pb : pa, .4, PTFE, toneI, .7) + tiBall(depthOf(sub(pb, pa)) > 0 ? pa : pb, .4, PTFE, .6);
+  s += tiBall([FX, FY, bz + .38], .12, PTFE, .3);
+  // electrode under the surface (glass bulb and the bottom of the shaft)
+  const bulb = tiBall([EX, EY, EBOT + .5], .5, { l:'#f4fafb', m:'#dbecef' }, .6);
+  s += tiElectrode(12.5, zs, k) + bulb + tiBall([EX + .6*Math.cos(YAW*Math.PI/180), EY + .6*Math.sin(YAW*Math.PI/180), 13], .14, PTFE, .3);
+  // the solution: a translucent body and its surface, coloured by the indicator
+  const A = tiRingZ(FX, FY, FZ_IN, FR_IN, 28), B = tiRingZ(FX, FY, zs, rs, 28);
+  s += `<g opacity="${f(ind.a)}">${loft(A, B, () => ind.c)}${fill(pd(B), mix(ind.c, '#ffffff', .3))}</g>` + ink(pd(B), .45);
+  // swirl lines on the surface while stirring
+  if (st.w > .05){ let sw = '';
+    for (let j = 0; j < 3; j++){ const pts = []; for (let i = 0; i <= 8; i++){ const t = st.spin*.5 + j*2.1 + i*.16, r = rs*(.35 + .18*j); pts.push([FX + r*Math.cos(t), FY + r*Math.sin(t), zs + .02]); } sw += pd(pts, false); }
+    s += `<path d="${sw}" fill="none" stroke="#ffffff" stroke-width=".5" opacity="${f(.7*st.w)}" stroke-linecap="round"/>`; }
+  // pink plumes where the NaOH lands, swirled round the flask and fading as it mixes
+  for (const p of st.plumes){ const r = Math.min(rs*.9, .5 + p.r), t = st.spin*.5 - p.sp, dx = BXc - FX, dy = BYc - FY;
+    const cx = FX + dx*Math.cos(t) - dy*Math.sin(t), cy = FY + dx*Math.sin(t) + dy*Math.cos(t);
+    s += fill(pd(on(PZ(zs + .03), ellUV(cx, cy, r, r*.8, 16))), '#e2569f', `opacity="${f(.75*p.i)}"`); }
+  // above the surface: the rest of the electrode in the neck, the jet tip, the stream or a drop
+  const tops = [];
+  tops.push({ box: [[EX - .6, EY - .6, zs], [EX + .6, EY + .6, FTOP]], svg: tiElectrode(zs, FTOP, k) });
+  let tip = rod([BXc, BYc, FTOP], [BXc, BYc, TIP_Z], .3, CLEAR, toneI, .6, .18);
+  if (st.form > 0) tip += tiBall([BXc, BYc, TIP_Z - .2*st.form], .25*st.form, { l:'#ffffff', m:NAOHC }, .5);
+  tops.push({ box: [[BXc - .35, BYc - .35, TIP_Z - .4], [BXc + .35, BYc + .35, FTOP]], svg: tip });
+  if (st.tapA > .6 && st.Vb < VMAX){ const w = .1 + .12*(st.tapA - .6)/.4;
+    tops.push({ box: [[BXc - .2, BYc - .2, zs], [BXc + .2, BYc + .2, TIP_Z]], svg: tiStroke([[BXc, BYc, TIP_Z], [BXc, BYc, zs]], mix(NAOHC, '#ffffff', .3), w*2) }); }
+  for (const d of st.drops) tops.push({ box: [[BXc - .25, BYc - .25, d.z - .25], [BXc + .25, BYc + .25, d.z + .25]], svg: tiBall([BXc, BYc, d.z], .24, { l:'#ffffff', m:NAOHC }, .5) });
+  s += tiSort(tops);
+  // the near glass, a streak and the outline
+  s += `<g opacity=".28">${near}</g>`;
+  const t1 = (YAW + 30)*Math.PI/180;
+  s += `<path d="${pd([[FX + 3.3*Math.cos(t1), FY + 3.3*Math.sin(t1), FZ + 1.5], [FX + 2.35*Math.cos(t1), FY + 2.35*Math.sin(t1), FZ + 8.8]], false)}" stroke="#ffffff" stroke-width=".8" opacity=".7" stroke-linecap="round"/>`;
+  for (const a2 of nearHalf()){ const t = a2*Math.PI/180, c = Math.cos(t), sn = Math.sin(t);
+    s += line(rings.slice(0, 4).map(([z, r]) => [FX + r*c, FY + sn*r, z]), 1.1); }
+  { const [h0, h1] = nearHalf(), arc = []; for (let i = 0; i <= 16; i++){ const t = (h0 + (h1 - h0)*i/16)*Math.PI/180; arc.push([FX + 3.95*Math.cos(t), FY + 3.95*Math.sin(t), FZ]); } s += line(arc, 1.1); }
+  s += fill(pd(rings[5][2]) + pd(tiRingZ(FX, FY, FTOP, 2.1, 28)), mix(CLEAR.l, '#ffffff', .3), 'fill-rule="evenodd" opacity=".8"') + ink(pd(rings[5][2]), .9) + ink(pd(tiRingZ(FX, FY, FTOP, 2.1, 28)), .6);
+  return { svg: s, zs, rs }; }
+
+/* ---------- see-through overlays: the magnifier and the pH curve ---------- */
+const MOLS = 5;
+const tiSeed = i => { const x = Math.sin(i*127.1 + 3.7)*43758.5453; return x - Math.floor(x); };
+function tiMol(kind, X, Y, R, op){
+  if (op < .02) return '';
+  const c = (dx, dy, r, col, txt = '') => `<circle cx="${f(X + dx*R)}" cy="${f(Y + dy*R)}" r="${f(r*R)}" fill="${col}" stroke="${INK}" stroke-width="${f(.09*R)}"/>` + (txt ? `<text x="${f(X + dx*R)}" y="${f(Y + dy*R + .32*R)}" font-size="${f(.9*R)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">${txt}</text>` : '');
+  const ch = (dx, dy, txt) => `<text x="${f(X + dx*R)}" y="${f(Y + dy*R)}" font-size="${f(.95*R)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="900" fill="${INK}">${txt}</text>`;
+  let s = '';
+  if (kind === 'H') s = c(0, 0, .55, '#ffffff', 'H') + ch(.75, -.5, '+');
+  else if (kind === 'OH') s = c(.55, -.35, .5, '#ffffff') + c(0, 0, .8, '#e2483d', 'O') + ch(-.9, -.6, '-');
+  else if (kind === 'W') s = c(-.7, .45, .5, '#ffffff') + c(.7, .45, .5, '#ffffff') + c(0, 0, .8, '#e2483d', 'O');
+  else if (kind === 'Na') s = c(0, 0, .75, '#a77be0', 'Na') + ch(.95, -.55, '+');
+  else if (kind === 'Cl') s = c(0, 0, .9, '#6cc56a', 'Cl') + ch(1.1, -.6, '-');
+  return `<g opacity="${f(op)}">${s}</g>`; }
+function tiMagnifier(st, k, at, cx, cy){
+  const u = INK_K, R = 50*u, rr = 8*u, [fx, fy] = P(...at), x = st.V / (NA0/CB);
+  const ind = tiInd(tiPH(st.V));
+  let s = '';
+  // the magnifier's cone from the spot in the flask to the circle
+  const d = Math.hypot(cx - fx, cy - fy), nx = (cx - fx)/d, ny = (cy - fy)/d;
+  for (const sg of [-1, 1]) s += `<path d="M${f(fx - ny*sg*2*u)} ${f(fy + nx*sg*2*u)}L${f(cx - ny*sg*R)} ${f(cy + nx*sg*R)}" stroke="${INK}" stroke-width=".8" stroke-dasharray="2 2" fill="none" opacity=".7"/>`;
+  s += `<circle cx="${f(fx)}" cy="${f(fy)}" r="${f(2*u)}" fill="none" stroke="${INK}" stroke-width="1"/>`;
+  const id = 'mag' + (++_clipN);
+  s += `<clipPath id="${id}"><circle cx="${f(cx)}" cy="${f(cy)}" r="${f(R)}"/></clipPath>`;
+  let mol = `<circle cx="${f(cx)}" cy="${f(cy)}" r="${f(R)}" fill="${mix(ind.c, '#fbf8ee', .35)}"/>`;
+  const t = st.t, rot = st.spin*.08;
+  const pos = (i, ring) => { const a = tiSeed(i + ring*17)*Math.PI*2 + rot + .35*Math.sin(t*.9 + i), r = (.25 + .62*tiSeed(i*3.1 + ring*5.3))*R;
+    return [cx + r*Math.cos(a) + 1.6*u*Math.sin(t*1.7 + i*2.3), cy + r*Math.sin(a) + 1.6*u*Math.cos(t*1.3 + i*1.9)]; };
+  // H+ slots turn into water as the OH- arrives; past the endpoint OH- builds up; Na+ grows with the base added
+  for (let i = 0; i < MOLS; i++){ const hA = tiClamp(MOLS*(1 - x) - i), [X, Y] = pos(i, 0);
+    mol += tiMol('W', X, Y, rr, 1 - hA) + tiMol('H', X, Y, rr, hA);
+    if (hA > 0 && hA < 1){ const q = hA, ox = X + q*(cx + R*.7 - X), oy = Y + q*(cy - R*.7 - Y); mol += tiMol('OH', ox, oy, rr, Math.min(1, 3*q)); } }
+  for (let i = 0; i < MOLS; i++){ const [X, Y] = pos(i, 1); mol += tiMol('OH', X, Y, rr, tiClamp(MOLS*(x - 1)*2 - i)); }
+  for (let i = 0; i < MOLS*2; i++){ const [X, Y] = pos(i, 2); mol += tiMol('Na', X, Y, rr*.85, tiClamp(MOLS*x - i)); }
+  for (let i = 0; i < MOLS; i++){ const [X, Y] = pos(i, 3); mol += tiMol('Cl', X, Y, rr*.85, 1); }
+  s += `<g clip-path="url(#${id})">${mol}</g><circle cx="${f(cx)}" cy="${f(cy)}" r="${f(R)}" fill="none" stroke="${INK}" stroke-width="2.2"/>`;
+  s += `<circle cx="${f(cx)}" cy="${f(cy)}" r="${f(R + 2.4*u)}" fill="none" stroke="${INK}" stroke-width="1" opacity=".5"/>`;
+  // legend under the circle
+  const lg = [['H', 'H+'], ['OH', 'OH-'], ['W', 'H2O'], ['Na', 'Na+'], ['Cl', 'Cl-']];
+  lg.forEach(([kd, nm], i) => { const lx = cx - R + (i + .5)*(2*R/lg.length), ly = cy + R + 11*u;
+    s += tiMol(kd, lx, ly, 4.8*u, 1) + `<text x="${f(lx)}" y="${f(ly + 12*u)}" font-size="${f(6.6*u)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">${nm}</text>`; });
+  s += `<text x="${f(cx)}" y="${f(cy - R - 6*u)}" font-size="${f(6.6*u)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">H+ + OH- = H2O</text>`;
+  return s; }
+let TI_CURVE = null;
+function tiCurve(st, x0, y0){
+  const u = INK_K, w = 118*u, h = 90*u;
+  const px0 = x0 + 16*u, px1 = x0 + w - 6*u, py0 = y0 + h - 14*u, py1 = y0 + 10*u;
+  const X = v => px0 + (px1 - px0)*v/VMAX, Y = p => py0 - (py0 - py1)*p/14;
+  const txt = (x, y, str, sz = 5.6, anc = 'middle', col = INK) => `<text x="${f(x)}" y="${f(y)}" font-size="${f(sz*u)}" text-anchor="${anc}" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${col}">${str}</text>`;
+  let s = `<rect x="${f(x0)}" y="${f(y0)}" width="${f(w)}" height="${f(h)}" rx="${f(4*u)}" fill="#fff8e6" stroke="${INK}" stroke-width="1.4"/>`;
+  s += `<rect x="${f(px0)}" y="${f(Y(10))}" width="${f(px1 - px0)}" height="${f(Y(8.2) - Y(10))}" fill="#f7bcd8" opacity=".6"/>`;
+  s += `<path d="M${f(X(25))} ${f(py0)}L${f(X(25))} ${f(py1)}M${f(px0)} ${f(Y(7))}L${f(px1)} ${f(Y(7))}" stroke="${INK}" stroke-width=".6" stroke-dasharray="1.5 1.5" fill="none" opacity=".6"/>`;
+  if (!TI_CURVE){ const pts = []; for (let v = 0; v <= VMAX; v += v > 23 && v < 27 ? .02 : .25) pts.push([v, tiPH(v)]); TI_CURVE = pts; }
+  s += `<path d="M${TI_CURVE.map(([v, p]) => f(X(v)) + ' ' + f(Y(p))).join('L')}" stroke="#8f989b" stroke-width=".7" stroke-dasharray="1.2 1.2" fill="none"/>`;
+  const tr = st.trace.concat([[st.V, tiPH(st.V)]]);
+  s += `<path d="M${tr.map(([v, p]) => f(X(v)) + ' ' + f(Y(p))).join('L')}" stroke="${INK}" stroke-width="2.6" fill="none" stroke-linejoin="round" stroke-linecap="round"/>`;
+  s += `<path d="M${tr.map(([v, p]) => f(X(v)) + ' ' + f(Y(p))).join('L')}" stroke="#4f86d8" stroke-width="1.3" fill="none" stroke-linejoin="round" stroke-linecap="round"/>`;
+  const ind = tiInd(tiPH(st.V));
+  s += `<circle cx="${f(X(st.V))}" cy="${f(Y(tiPH(st.V)))}" r="${f(3*u)}" fill="${mix(ind.c, '#ffffff', .1)}" stroke="${INK}" stroke-width="1"/>`;
+  s += `<path d="M${f(px0)} ${f(py1)}L${f(px0)} ${f(py0)}L${f(px1)} ${f(py0)}" stroke="${INK}" stroke-width="1" fill="none"/>`;
+  for (const v of [0, 10, 20, 30, 40, 50]) s += txt(X(v), py0 + 6.4*u, v);
+  for (const p of [0, 7, 14]) s += txt(px0 - 2.4*u, Y(p) + 2*u, p, 5.6, 'end');
+  s += txt((px0 + px1)/2, py0 + 12.4*u, 'NAOH ADDED (ML)', 5.2) + txt(px0 + 3*u, py1 + 1*u, 'PH', 5.6, 'start') + txt(X(25) + 2*u, py1 + 7*u, 'EQUIVALENCE', 4.6, 'start');
+  s += txt(px1 - 2*u, Y(9.1) + 1.8*u, 'PINK', 4.6, 'end', '#a0306f');
+  return s; }
+
+// the engine's xrCallouts splits labels at the board's centre, and nearly every part stands left of it: here the split
+// is at the median of the anchors, so each column gets half (same pills, same leaders)
+// the page's own controls over the figure (buttons, stats, the See-through switches, the zoom chip), in drawing units
+let TI_PANELS = [];
+function tiBlocks(){
+  const svgEl = document.getElementById('fig'), M = svgEl && svgEl.getScreenCTM(); if (!M) return null;
+  const iv = M.inverse(), out = [];
+  for (const el of document.querySelectorAll('#btns, #stats, .vset, .zchip')){ const r = el.getBoundingClientRect(); if (!r.width || !r.height) continue;
+    const a = new DOMPoint(r.left, r.top).matrixTransform(iv), b = new DOMPoint(r.right, r.bottom).matrixTransform(iv); out.push([a.x, a.y, b.x, b.y]); }
+  return out; }
+const tiHit = (bx, B, m) => B.some(o => bx[0] < o[2] + m && bx[2] > o[0] - m && bx[1] < o[3] + m && bx[3] > o[1] - m);
+function tiCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0]));
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0; let fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 3*k);
+  const Lc = [], Rc = [], svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, btn = document.getElementById('btns');
+  let s = '';
+  // each column runs from below whatever sits over its strip (buttons, stats, switches, the two panels) to above whatever
+  // sits under it (the zoom chip); the left column takes its share of the anchors, in x order, by the room it has
+  const wMax = u ? hgt*1.3 : Math.max(...items.map(it => it.text.length))*fs*.62 + fs*1.5, Bk = (tiBlocks() || []).concat(TI_PANELS), midY = vb.y + vb.height/2;
+  const top = { [-1]: vb.y + hgt, [1]: vb.y + hgt }, bot = { [-1]: vb.y + vb.height - hgt, [1]: vb.y + vb.height - hgt };
+  for (const side of [-1, 1]){ const x0 = side < 0 ? Math.max(vb.x, xmin - 10*k - wMax) : xmax + 10*k, x1 = side < 0 ? xmin - 10*k : Math.min(vb.x + vb.width, xmax + 10*k + wMax);
+    for (const o of Bk) if (o[0] < x1 && o[2] > x0){ if ((o[1] + o[3])/2 < midY) top[side] = Math.max(top[side], o[3] + hgt/2 + 4*k); else bot[side] = Math.min(bot[side], o[1] - hgt/2 - 4*k); } }
+  const all = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  const cL = Math.max(0, bot[-1] - top[-1]), cR = Math.max(0, bot[1] - top[1]), n = all.length;
+  // crowded (a tall stats block, a short window): the pills shrink, down to three quarters, until the slots suffice
+  const slots = g => [Math.floor(cL/g) + 1, Math.floor(cR/g) + 1];
+  let sc = 1; while (sc > .76 && slots(gap*sc)[0] + slots(gap*sc)[1] < n) sc -= .05;
+  if (sc < 1){ fs *= sc; hgt *= sc; gap *= sc; }
+  const [sL, sR] = slots(gap), nL = Math.max(n - sR, Math.min(sL, Math.round(n*cL/(cL + cR || 1))));
+  all.forEach((c, i) => (i < nL ? Lc : Rc).push(c));
+  for (const [col, side] of [[Lc, -1], [Rc, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    const gp = col.length > 1 ? Math.max(hgt + k, Math.min(gap, (bot[side] - top[side])/(col.length - 1))) : gap;
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gp, top[side]); y = c.py; }
+    let yb = bot[side] + gp; for (let i = col.length - 1; i >= 0; i--){ col[i].py = Math.min(col[i].py, yb - gp); yb = col[i].py; }   // back up from the bottom limit
+    const shift = col.length ? Math.max(0, col.reduce((a, c) => a + c.py - c.Y, 0) / col.length) : 0;
+    const room = col.length ? col[0].py - top[side] : 0; for (const c of col) c.py -= Math.min(shift, room);
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s; }
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0), items = [], pH = tiPH(st.V);
+  const put = (b, svg, inside = '') => items.push({ box: b, svg: k > 0 && inside ? `<g opacity="${f(1 - .8*k)}">${svg}</g><g opacity="${f(k)}">${inside}</g>` : svg });
+  let s = castShadow([...on(PZ(0), rectUV(0, 0, BW, BD)), ...on(PZ(BH), rectUV(0, 0, BW, BD))]);
+  s += board(0, 0, BW, BD, BH, 4, WOOD);
+  // cast shadows on the bench
+  { const bx = (x0, y0, z0, x1, y1, z1) => { const o = []; for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) o.push([x, y, z]); return o; };
+    const ps = [bx(...SB), bx(RX - .6, RY - .6, BH, RX + .6, RY + .6, ROD_T), bx(STB[0], STB[1], SZ0, STB[2], STB[3], SZ1),
+      [...tiRingZ(FX, FY, FZ, 4.25, 14), ...tiRingZ(FX, FY, FTOP, 2.5, 10)], bx(BXc - BR, BYc - BR, TIP_Z, BXc + BR, BYc + BR, TUBE_Z1),
+      bx(RX, CL_Z - .5, CL_Z - .5, 20, CL_Z + .5, CL_Z + .5).map(([x, y, z]) => [x, y < CL_Z ? 32.6 : 33.4, z]),
+      [...on(PY(MY0), MP), ...on(PY(MY1), MP)], bx(POST[0] - .5, POST[1] - .5, BH, POST[0] + .5, POST[1] + .5, POST_T), [[POST[0], POST[1], HOLD_Z], [EX, EY, HOLD_Z], [POST[0], POST[1] + .4, HOLD_Z], [EX, EY + .4, HOLD_Z]],
+      [...tiRingZ(BOT[0], BOT[1], BH, 3, 12), ...tiRingZ(BOT[0], BOT[1], 17, 1.3, 8), ...tiRingZ(BOT[0], BOT[1], 14, 3, 12)],
+      [...tiRingZ(WASH[0], WASH[1], BH, 2.4, 12), ...tiRingZ(WASH[0], WASH[1], 12, 2.4, 12), [WASH[0], WASH[1] - 3.4, 16.6]]];
+    s += clipTo(boardTop(0, 0, BW, BD, BH, 4), ps.map(p => castShadow(p, BH)).join('')); }
+
+  // ---- retort stand: base, foot, rod (in sections either side of the boss), boss head, clamp arm, clamp
+  put([[SB[0], SB[1], SB[2]], [SB[3], SB[4], SB[5]]], tiBx(...SB, STANDM, 1.2));
+  put([[RX - 1, RY - 1, SZ0], [RX + 1, RY + 1, SZ0 + .8]], cyl(RX, RY, SZ0, SZ0 + .8, 1, STANDM, toneI, .8, 16));
+  put([[RX - .6, RY - .6, SZ0 + .8], [RX + .6, RY + .6, CL_Z - 1.2]], cyl(RX, RY, SZ0 + .8, CL_Z - 1.2, .6, STEELM, toneI, .9, 14));
+  put([[RX - .6, RY - .6, CL_Z + 1.2], [RX + .6, RY + .6, ROD_T]], cyl(RX, RY, CL_Z + 1.2, ROD_T, .6, STEELM, toneI, .9, 14));
+  { const bz0 = CL_Z - 1.2, bz1 = CL_Z + 1.2, near = facing([0,-1,0]), up = facing([0,0,1]);
+    const body = tiBx(RX - 1.2, RY - 1.1, bz0, RX + 1.4, BYc + .8, bz1, matOf('#8a9399'), .9);
+    const scr1 = rod([RX, RY - 1.1, CL_Z - .4], [RX, RY - 2.2, CL_Z - .4], .25, STEELM, toneI, .5) + rod([RX, RY - 2.2, CL_Z - .4], [RX, RY - 2.7, CL_Z - .4], .7, DARK, toneI, .7);
+    const scr2 = rod([RX + .3, BYc, bz1], [RX + .3, BYc, bz1 + 1], .25, STEELM, toneI, .5) + rod([RX + .3, BYc, bz1 + 1], [RX + .3, BYc, bz1 + 1.5], .7, DARK, toneI, .7);
+    put([[RX - 1.2, RY - 2.7, bz0], [RX + 1.4, BYc + .8, bz1 + 1.5]], (near ? body + scr1 : scr1 + body) + (up ? scr2 : '')); }
+  put([[RX + 1.4, BYc - .35, CL_Z - .35], [16.4, BYc + .35, CL_Z + .35]], rod([RX + 1.4, BYc, CL_Z], [16.4, BYc, CL_Z], .35, STEELM, toneI, .7));
+  put([[16.4, BYc - .7, CL_Z - .6], [17.8, BYc + .7, CL_Z + .6]], tiBx(16.4, BYc - .7, CL_Z - .6, 17.8, BYc + .7, CL_Z + .6, matOf('#8a9399'), .8));
+  for (const sg of [-1, 1]){ const y0 = BYc + sg*(BR + .15), y1 = BYc + sg*(BR + .45), ya = Math.min(y0, y1), yb = Math.max(y0, y1);
+    put([[17.8, ya, CL_Z - .5], [20.4, yb, CL_Z + .5]], tiBx(17.8, ya, CL_Z - .5, 20.4, yb, CL_Z + .5, STEELM, .7));
+    const pa = Math.min(BYc + sg*BR, BYc + sg*(BR + .15)), pb = Math.max(BYc + sg*BR, BYc + sg*(BR + .15));
+    put([[18.6, pa, CL_Z - .45], [20, pb, CL_Z + .45]], tiBx(18.6, pa, CL_Z - .45, 20, pb, CL_Z + .45, CORK, .5)); }
+
+  // ---- the burette: glass tube in sections, NaOH column, graduations, stopcock, jet
+  { const lvl = tiBurZ(st.Vb), FRONT = facing([1,0,0]);
+    const grad = (za, zb) => { if (!FRONT) return ''; let tk = '', num = '';
+      for (let v = 0; v <= 50; v++){ const z = Z0ML - ZPERML*v; if (z < za || z > zb) continue; const span = v % 5 ? 30 : 55, pts = [];
+        for (let a = -span; a <= span; a += 10){ const t = a*Math.PI/180; if (Math.cos(t - YAW*Math.PI/180) <= 0) continue; pts.push([BXc + BR*Math.cos(t) + .01, BYc + BR*Math.sin(t), z]); }
+        if (pts.length > 1) tk += pd(pts, false);
+        if (v % 10 === 0) num += tx(BXc + BR + .02, BYc - .05, z + .12, String(v), .62, INK, 800); }
+      return `<path d="${tk}" fill="none" stroke="${INK}" stroke-width=".35"/>` + num; };
+    const sec = (za, zb) => { const liq = tiLiquid(BXc, BYc, za, Math.min(zb, lvl), BRI, NAOHC, .65, lvl > za && lvl <= zb);
+      // the meniscus: the surface curves up the glass, its bottom (where the burette is read) a little lower
+      const [a0, a1] = nearHalf(), mp = [];
+      for (let i = 0; i <= 10; i++){ const t = (a0 + (a1 - a0)*i/10)*Math.PI/180; mp.push([BXc + BRI*Math.cos(t), BYc + BRI*Math.sin(t), lvl - .25 + .25*Math.abs(2*i/10 - 1)]); }
+      const men = lvl > za && lvl <= zb ? ink(pd(mp, false), .5) : '';
+      return tiGlass(BXc, BYc, za, zb, BR, liq + men) + grad(za, zb); };
+    put([[BXc - BR, BYc - BR, TUBE_Z0], [BXc + BR, BYc + BR, CL_Z - .5]], sec(TUBE_Z0, CL_Z - .5));
+    put([[BXc - BR, BYc - BR, CL_Z - .5], [BXc + BR, BYc + BR, CL_Z + .5]], sec(CL_Z - .5, CL_Z + .5));
+    put([[BXc - BR, BYc - BR, CL_Z + .5], [BXc + BR, BYc + BR, TUBE_Z1]], sec(CL_Z + .5, TUBE_Z1)
+      + (facing([0,0,1]) ? ink(pd(tiRingZ(BXc, BYc, TUBE_Z1, BR)), .7) + ink(pd(tiRingZ(BXc, BYc, TUBE_Z1, BRI)), .5) : ''));
+    // the stopcock: glass body round the PTFE key, the key's handle (turned by the tap), its retaining nut
+    const th = st.tapA*Math.PI/2, hd = [Math.cos(th), 0, Math.sin(th)];
+    put([[BXc - .55, BYc - .55, FTOP], [BXc + .55, BYc + .55, TUBE_Z0]], tiGlass(BXc, BYc, FTOP, TUBE_Z0, .55, tiLiquid(BXc, BYc, FTOP, TUBE_Z0, .3, NAOHC, .65, false)));
+    const keyIn = rod([BXc, 31.7, SC_Z], [BXc, 34.3, SC_Z], .36, PTFE, toneI, .5);
+    const bore = k > 0 ? `<g opacity="${f(k)}">${line([tiAdd([BXc, BYc, SC_Z], tiScl(hd, -.36)), tiAdd([BXc, BYc, SC_Z], tiScl(hd, .36))], 1.4)}</g>` : '';
+    put([[BXc - .55, 31.9, SC_Z - .55], [BXc + .55, 34.1, SC_Z + .55]], keyIn + bore + `<g opacity=".55">${rod([BXc, 31.9, SC_Z], [BXc, 34.1, SC_Z], .55, CLEAR, toneI, .7)}</g>`);
+    const hp = [[-.35, -1.5], [.35, -1.5], [.35, 1.5], [-.35, 1.5]].map(([a, b]) => [BXc + b*hd[0] + a*(-hd[2]), SC_Z + b*hd[2] + a*hd[0]]);
+    put([[BXc - 1.6, 31.1, SC_Z - 1.6], [BXc + 1.6, 31.7, SC_Z + 1.6]], act('tap', tiPrismY(hp, 31.1, 31.7, PTFE, .7)));
+    put([[BXc - .45, 34.3, SC_Z - .45], [BXc + .45, 34.7, SC_Z + .45]], rod([BXc, 34.3, SC_Z], [BXc, 34.7, SC_Z], .45, PTFE, toneI, .6, .45, 6));
+  }
+
+  // ---- stirrer on the base, the flask on its top plate
+  { const [sv, ins] = tiStirrer(st, m, k);
+    put([[STB[0], STB[1], SZ0], [STB[2], STB[3], SZ1]], sv, ins);
+    const near = facing([1,0,0]);
+    put([[STB[2], 28.4, 5.8], [STB[2] + 1.2, 30.6, 8]], act('knob', cylX(STB[2], STB[2] + 1.2, 29.5, 6.9, 1.1, DARK, toneI, .8, 18)
+      + (near ? line([[STB[2] + 1.22, 29.5, 6.9], [STB[2] + 1.22, 29.5 - .8*Math.sin(st.stir ? .9 : -1.6), 6.9 + .8*Math.cos(st.stir ? .9 : -1.6)]], .6) : '')));
+    const rk = st.stir ? .25 : -.25;
+    put([[STB[2], 37, 6.1], [STB[2] + .5, 38.6, 7.7]], act('knob', tiPrismY([[STB[2], 6.1], [STB[2] + .25 + rk*.6, 6.1], [STB[2] + .25 - rk*.6, 7.7], [STB[2], 7.7]].map(([x, z]) => [x, z]), 37, 38.6, st.stir ? matOf('#e2483d') : DARK, .6))); }
+  const fl = tiFlask(st, k, pH);
+  put([[FX - 4.3, FY - 4.3, FZ], [FX + 4.3, FY + 4.3, FTOP]], fl.svg);
+  put([[STB[0] - .6, 38.6, BH], [STB[0], 39.4, SZ0 + 3.8]], tiBx(STB[0] - .6, 38.6, 5.2, STB[0], 39.4, 7, DARK, .6));
+  items.push(...tiWire([[STB[0] - .6, 39, 6], [9.2, 39, 4.6], [8.4, 39, SZ0 + .3], [2.6, 39.4, SZ0 + .3], [1.8, 39.6, BH + .3], [.3, 40.2, BH + .3]], '#2e2b28', .5));
+
+  // ---- pH electrode above the neck, its holder ring, arm, post and foot, the cable to the meter
+  put([[EX - .6, EY - .6, FTOP], [EX + .6, EY + .6, HOLD_Z - .4]], tiElectrode(FTOP, HOLD_Z - .4, k));
+  put([[EX - .6, EY - .6, HOLD_Z + .4], [EX + .6, EY + .6, ESH]], tiElectrode(HOLD_Z + .4, ESH, k));
+  put([[EX - .7, EY - .7, ESH], [EX + .7, EY + .7, ESH + 2]], cyl(EX, EY, ESH, ESH + 2, .7, DARK, toneI, .8, 14));
+  put([[EX - .95, EY - .95, HOLD_Z - .4], [EX + .95, EY + .95, HOLD_Z + .4]], cyl(EX, EY, HOLD_Z - .4, HOLD_Z + .4, .95, DARK, toneI, .8, 18));
+  { const dv = norm([POST[0] - EX, POST[1] - EY, 0]), a0 = [EX + dv[0]*.95, EY + dv[1]*.95, HOLD_Z], a1 = [POST[0] - dv[0]*.9, POST[1] - dv[1]*.9, HOLD_Z];
+    const segs = 4; for (let i = 0; i < segs; i++){ const p = tiLerp(a0, a1, i/segs), q = tiLerp(a0, a1, (i + 1)/segs);
+      items.push({ box: tiBoxOf([p, q], .35), svg: rod(p, q, .32, DARK, toneI, .6) }); } }
+  put([[POST[0] - 3, POST[1] - 3, BH], [POST[0] + 3, POST[1] + 3, BH + 1.2]], cyl(POST[0], POST[1], BH, BH + 1.2, 3, STANDM, toneI, 1, 24));
+  put([[POST[0] - .5, POST[1] - .5, BH + 1.2], [POST[0] + .5, POST[1] + .5, HOLD_Z - .9]], cyl(POST[0], POST[1], BH + 1.2, HOLD_Z - .9, .5, STEELM, toneI, .8, 12));
+  put([[POST[0] - .9, POST[1] - .9, HOLD_Z - .9], [POST[0] + .9, POST[1] + .9, HOLD_Z + .9]], cyl(POST[0], POST[1], HOLD_Z - .9, HOLD_Z + .9, .9, DARK, toneI, .8, 16)
+    + rod([POST[0] + .9, POST[1], HOLD_Z], [POST[0] + 1.8, POST[1], HOLD_Z], .45, DARK, toneI, .6));
+  put([[POST[0] - .5, POST[1] - .5, HOLD_Z + .9], [POST[0] + .5, POST[1] + .5, POST_T]], cyl(POST[0], POST[1], HOLD_Z + .9, POST_T, .5, STEELM, toneI, .8, 12));
+  items.push(...tiWire([[EX, EY, ESH + 2], [EX, EY, ESH + 3.2], [EX + .8, EY + 3, ESH + 4], [POST[0] - 1.2, POST[1] - 2.5, ESH + 3.8], [POST[0] - .6, POST[1], POST_T - .3], [POST[0] - .6, POST[1], HOLD_Z + 1], [POST[0] - 1, POST[1], HOLD_Z - 1],
+    [POST[0] - .6, POST[1], BH + 1.5], [POST[0] - .6, POST[1] + 3.2, BH + 1.25], [POST[0] - .6, POST[1] + 3.8, BH + .3], [POST[0] - .6, 60, BH + .3], [POST[0] - .4, 60, 5], [24.8, 60, 6]], '#2e2b28', .45));
+  put([[24.8, 59.4, 5.4], [26, 60.6, 6.6]], cylX(25.4, 26, 60, 6, .5, STEELM, toneI, .6, 12) + cylX(24.6, 25.4, 60, 6, .42, DARK, toneI, .6, 12));
+
+  // ---- pH meter
+  { const [sv, ins] = tiMeter(st, m, k, pH); put([[26, MY0, BH], [40, MY1, 9.5]], sv, ins); }
+
+  // ---- NaOH bottle (polyethylene) and the wash bottle
+  { const [x, y] = BOT, A = tiRingZ(x, y, 14, 3, 24), B = tiRingZ(x, y, 15.4, 1.3, 16);
+    let sv = cyl(x, y, BH, 14, 3, CERAMIC, toneI, 1.2, 24) + loft(A, tiRingZ(x, y, 15.4, 1.3, 24), n => toneI(n, CERAMIC)) + cyl(x, y, 15.4, 17, 1.4, CAPM, toneI, .9, 16);
+    const band = (za, zb) => loft(tiRingZ(x, y, za, 3.02, 24), tiRingZ(x, y, zb, 3.02, 24), n => toneI(n, { l:'#ffffff', m:'#efece2', d:'#d2cdbd' }));
+    sv += band(6, 11) + ink(pd(tiRingZ(x, y, 6, 3.02, 24).filter(p => depthOf(sub(p, [x, y, 6])) > 0), false), .5) + ink(pd(tiRingZ(x, y, 11, 3.02, 24).filter(p => depthOf(sub(p, [x, y, 11])) > 0), false), .5);
+    if (facing([1,0,0])) sv += tx(x + 3.05, y, 9.2, 'NaOH', 1.3, INK, 800) + tx(x + 3.05, y, 7.3, '0.100 M', .95, '#c0392b', 800);
+    sv += hullInk([...tiRingZ(x, y, BH, 3, 16), ...tiRingZ(x, y, 14, 3, 16), ...B, [x, y, 17]], 1.4);
+    put([[x - 3, y - 3, BH], [x + 3, y + 3, 17]], sv); }
+  { const [x, y] = WASH, wm = { l:'#f6f8f8', m:'#dfe6e8', d:'#b9c4c7' };
+    let sv = cyl(x, y, BH, 11, 2.4, wm, toneI, 1.1, 20) + loft(tiRingZ(x, y, 11, 2.4, 20), tiRingZ(x, y, 12.2, 1.1, 20), n => toneI(n, wm)) + cyl(x, y, 12.2, 13.2, 1.15, matOf('#e2483d'), toneI, .8, 14);
+    if (facing([1,0,0])) sv += tx(x + 2.45, y, 7, 'DI H2O', .9, INK, 800);
+    const nz = [[x, y, 13.2], [x, y, 15.6], [x, y - .6, 16.5], [x, y - 2.6, 16.8], [x, y - 3.4, 16.4]];
+    sv += tiStroke(nz, '#f2f4f4', .5);
+    put([[x - 2.4, y - 3.6, BH], [x + 2.4, y + 2.4, 17]], sv); }
+
+  s += tiSort(items);
+
+  // ---- see-through overlays
+  const lbl = []; TI_PANELS = [];
+  if (k > 0){
+    // the two panels go in the empty space up top, either side of the rod and burette tops, each as high as it can sit
+    // clear of the page's own controls; with no room (a phone, or before layout) they flank the stand lower down
+    const u = INK_K, MW = 104*u, MH = 140*u, CW = 118*u, CH = 90*u, g = 8*u, Bk = tiBlocks(), vb = document.getElementById('fig').viewBox.baseVal;
+    const xa = Math.min(P(RX, RY, ROD_T)[0], P(BXc, BYc, TUBE_Z1)[0]) - g, xb = Math.max(P(RX, RY, ROD_T)[0], P(BXc, BYc, TUBE_Z1)[0]) + g, yLim = P(RX, RY, 44)[1];
+    const fit = (x0, w, h) => { if (!Bk || x0 < vb.x || x0 + w > vb.x + vb.width) return null;
+      for (let y = vb.y + 4*u; y + h <= yLim; y += 3*u) if (!tiHit([x0, y, x0 + w, y + h], Bk, g)) return y; return null; };
+    let mx, my, cx0, cy0, best = null;
+    for (const curveL of [true, false]){
+      const c = curveL ? [xa - CW, fit(xa - CW, CW, CH)] : [xb, fit(xb, CW, CH)], m = curveL ? [xb, fit(xb, MW, MH)] : [xa - MW, fit(xa - MW, MW, MH)];
+      if (c[1] != null && m[1] != null && (!best || Math.max(c[1], m[1]) < best.y)) best = { y: Math.max(c[1], m[1]), c, m }; }
+    if (best){ [cx0, cy0] = best.c; mx = best.m[0] + MW/2; my = best.m[1] + 62*u; TI_PANELS = [[cx0, cy0, cx0 + CW, cy0 + CH], [best.m[0], best.m[1], best.m[0] + MW, best.m[1] + MH]]; }
+    else { const [bx, by] = P(BXc, BYc, 54), sd = P(RX, RY, 66)[0] <= bx ? -1 : 1; mx = bx + sd*72*u; my = by; cx0 = bx - sd*22*u - (sd > 0 ? CW : 0); cy0 = by + 30*u; }
+    const spot = [FX, FY, FZ_IN + tiLevel(VW + st.V)*.5];
+    s += `<g opacity="${f(k)}">${tiMagnifier(st, k, spot, mx, my)}${tiCurve(st, cx0, cy0)}</g>`;
+  }
+  const lv = tiBurZ(st.Vb), zs = fl.zs, live = st.tapA > .6 || st.form > 0 || st.drops.length > 0;
+  if (k > .6){
+    lbl.push(
+      { at: [BXc - BR*CAM_V[0], BYc, 78], text: 'BURETTE 50 ML', on: false },
+      { at: [BXc, BYc, Math.min(lv, 74) - 6], text: 'NAOH 0.100 M', on: live },
+      { at: [BXc, BYc + BRI, lv], text: 'MENISCUS', on: live },
+      { at: [BXc + BR, BYc, Z0ML - ZPERML*40], text: 'GRADUATIONS', on: false },
+      { at: [BXc, 32.2, SC_Z], text: 'STOPCOCK', on: st.tapA > .05 },
+      { at: [BXc, 31.4, SC_Z + 1.2], text: 'PTFE KEY', on: st.tapA > .05 },
+      { at: [BXc, BYc, TIP_Z + .5], text: 'JET TIP', on: live },
+      { at: [19.2, BYc + 1.2, CL_Z], text: 'BURETTE CLAMP', on: false },
+      { at: [RX, RY - 1.1, CL_Z + 1], text: 'BOSS HEAD', on: false },
+      { at: [RX, RY, 80], text: 'STAND ROD', on: false },
+      { at: [SB[0] + 2, SB[1], SB[5]], text: 'RETORT BASE', on: false },
+      { at: [FX + 3.2, FY, FZ + 6], text: 'CONICAL FLASK', on: false },
+      { at: [FX, FY - 2.4, zs - .6], text: pH < 8.2 ? 'HCL + INDICATOR' : 'PINK: ENDPOINT', on: pH >= 8.2 },
+      { at: [FX, FY, FZ_IN + .4], text: 'STIR BAR', on: st.w > .1 },
+      { at: [FX + 2, FY, SZ1 - 1.3], text: 'DRIVE MAGNET', on: st.w > .1 },
+      { at: [FX + 1.8, FY, SZ0 + 2.5], text: 'MOTOR', on: st.w > .1 },
+      { at: [25, 28, SZ0 + .7], text: 'CONTROL BOARD', on: st.stir },
+      { at: [STB[2] + 1.2, 29.5, 6.9], text: 'SPEED KNOB', on: st.stir },
+      { at: [STB[2] + .3, 37.8, 7.7], text: 'POWER SWITCH', on: st.stir },
+      { at: [EX, EY, 22], text: 'PH ELECTRODE', on: true },
+      { at: [EX, EY, EBOT + .3], text: 'GLASS BULB', on: true },
+      { at: [EX, EY, 20], text: 'AG/AGCL WIRE', on: false },
+      { at: [EX + .5, EY, 26], text: 'KCL FILL', on: false },
+      { at: [(EX + POST[0])/2, (EY + POST[1])/2, HOLD_Z + .3], text: 'ELECTRODE HOLDER', on: false },
+      { at: [25.4, 60, 6.5], text: 'BNC SOCKET', on: false },
+      { at: [33, 55, 3.3], text: 'AMPLIFIER', on: true },
+      { at: [31.8, 53, 4.6], text: '9V BATTERY', on: false },
+      { at: [35.5, MY0 + 1, 7], text: 'PH METER', on: true },
+      { at: [BOT[0], BOT[1] + 3, 12], text: 'NAOH BOTTLE', on: false },
+      { at: [WASH[0], WASH[1] - 2.4, 9], text: 'WASH BOTTLE', on: false });
+    if (st.drops.length) lbl.push({ at: [BXc, BYc, st.drops[0].z], text: 'DROP 0.05 ML', on: true });
+    s += tiCallouts(lbl, [0, BW, 0, BD, 0, ROD_T]);
+  } else if (k === 0){
+    s += tiCallouts([
+      { at: [BXc, BYc, 70], text: 'BURETTE', on: false },
+      { at: [BXc, 31.4, SC_Z], text: 'STOPCOCK', on: st.tapA > .05 },
+      { at: [19.2, BYc + 1.2, CL_Z], text: 'BURETTE CLAMP', on: false },
+      { at: [RX, RY, 80], text: 'STAND ROD', on: false },
+      { at: [FX + 3.2, FY, FZ + 6], text: 'CONICAL FLASK', on: pH >= 8.2 },
+      { at: [STB[2], 33, SZ0 + 4], text: 'MAGNETIC STIRRER', on: st.stir },
+      { at: [EX, EY, 27], text: 'PH ELECTRODE', on: false },
+      { at: [35.5, MY0 + 1, 7], text: 'PH METER', on: true },
+      { at: [BOT[0], BOT[1] + 3, 12], text: 'NAOH BOTTLE', on: false },
+      { at: [WASH[0], WASH[1] - 2.4, 9], text: 'WASH BOTTLE', on: false } ], [0, BW, 0, BD, 0, ROD_T]);
+  }
+  return s;
+}
+
+/* ---------- behaviour (one state object, one loop) ---------- */
+let ui, tiLoopOn = false;
+const tiBusy = st => st.stir || st.w > 0 || st.tap || st.tapA > 0 || st.drops.length || st.dropQ > 0 || st.form > 0 || st.plumes.length || st.phase === 'reset';
+function tiRecord(st){ const lt = st.trace[st.trace.length - 1], p = tiPH(st.V);
+  if (!lt || Math.abs(st.V - lt[0]) > .04 || Math.abs(p - lt[1]) > .08) st.trace.push([st.V, p]);
+  if (st.endV == null && p >= 8.2) st.endV = Math.round(st.V/DROP)*DROP; }
+function tiPlume(st, n = 1){ for (let i = 0; i < n; i++) st.plumes.push({ i: 1, r: 0, sp: st.spin*.5 }); if (st.plumes.length > 10) st.plumes.splice(0, st.plumes.length - 10); }
+function tiStep(st, dt){
+  st.t += dt;
+  st.w = tiClamp(st.w + (st.stir ? 1 : -1)*dt/.8); st.spin += st.w*2.2*2*Math.PI*dt;
+  const tgt = st.tap ? 1 : st.dropQ > 0 || st.form > 0 ? .3 : 0;
+  st.tapA = st.tapA < tgt ? Math.min(tgt, st.tapA + dt/.3) : Math.max(tgt, st.tapA - dt/.3);
+  if (st.phase === 'reset'){ st.rt += dt/1.4; const e = ease(Math.min(1, st.rt)); st.V = st.Vfrom*(1 - e); st.Vb = st.Vbfrom*(1 - e);
+    if (st.rt >= 1){ st.phase = 'idle'; st.V = st.Vb = 0; st.trace = [[0, tiPH(0)]]; st.endV = null; } return; }
+  // stream: the open tap runs NaOH straight into the flask
+  if (st.tapA > .6){ const dv = Math.min(VMAX - st.Vb, FLOW*(st.tapA - .6)/.4*dt);
+    if (dv > 0){ st.Vb += dv; st.V += dv; st.pt = (st.pt || 0) + dt; if (st.pt > .12){ st.pt = 0; tiPlume(st); } tiRecord(st); }
+    if (st.Vb >= VMAX - 1e-6 && st.tap){ st.tap = 0; ui.flash('The burette is empty: press Reset'); } }
+  // drop by drop: the key cracked open, a drop swells on the jet, lets go and falls
+  if (!st.tap && st.dropQ > 0 && st.tapA >= .29){ st.form = Math.min(1, st.form + dt/.35);
+    if (st.form >= 1){ st.form = 0; st.dropQ--; st.Vb = Math.min(VMAX, st.Vb + DROP); st.drops.push({ z: TIP_Z - .3, vz: 0 }); } }
+  const zs = FZ_IN + tiLevel(VW + st.V);
+  for (const d of st.drops){ d.vz += 300*dt; d.z -= d.vz*dt; }
+  for (const d of st.drops.filter(d => d.z <= zs)){ st.V = Math.min(st.Vb, st.V + DROP); tiPlume(st); tiRecord(st); }
+  st.drops = st.drops.filter(d => d.z > zs);
+  // a plume fades as the swirl mixes it in; close to the end the pink lingers (few H+ left to use up the OH-)
+  const near = 1 + 7*Math.exp(-Math.max(0, NA0/CB - st.V)/.5), tau = (st.w > .5 ? .35 : 2.6)*near;
+  for (const p of st.plumes){ p.i *= Math.exp(-dt/tau); p.r += dt*(st.w > .5 ? 4 : .8); }
+  st.plumes = st.plumes.filter(p => p.i > .03);
+}
+function tiRun(){ if (tiLoopOn) return; tiLoopOn = true;
+  ui.animate(dt => { const st = ui.st; tiStep(st, dt); if (!tiBusy(st)){ tiLoopOn = false; return false; } return true; }); }
+function tiStir(st){ st.stir = !st.stir; tiRun(); }
+function tiNeedStir(st){ if (!st.stir){ st.stir = true; ui.flash('Stirrer on: the flask must be swirled as the base goes in'); } }
+function tiTap(st){
+  if (st.phase === 'reset') return ui.flash('One moment: refilling');
+  if (st.tap){ st.tap = 0; tiRun(); return; }
+  if (st.Vb >= VMAX - 1e-6) return ui.flash('The burette is empty: press Reset');
+  tiNeedStir(st); st.tap = 1; st.dropQ = 0; tiRun(); }
+function tiDrop(st){
+  if (st.phase === 'reset') return ui.flash('One moment: refilling');
+  if (st.tap) return ui.flash('Close the tap first, then add drop by drop');
+  if (st.Vb + DROP*(st.dropQ + 1) > VMAX + 1e-6) return ui.flash('The burette is empty: press Reset');
+  tiNeedStir(st); st.dropQ = Math.min(st.dropQ + 1, 6); tiRun(); }
+function tiReset(st){ st.tap = 0; st.dropQ = 0; st.form = 0; st.drops = []; st.plumes = []; st.phase = 'reset'; st.rt = 0; st.Vfrom = st.V; st.Vbfrom = st.Vb; tiRun(); }
+
+ui = mountFigure({
+  fig:'C1', title:'Acid-base titration', turn:'full',
+  size:[BW, BD, ROD_T], palette:'mint',
+  state:{ phase:'idle', V:0, Vb:0, tap:0, tapA:0, dropQ:0, form:0, drops:[], plumes:[], stir:false, w:0, spin:.6, t:0, trace:[[0, tiPH(0)]], endV:null, rt:0, Vfrom:0, Vbfrom:0 },
+  scene,
+  stats: st => { const p = tiPH(st.V);
+    return [ { label:'pH', value: p.toFixed(2) },
+      { label:'NaOH added', value: st.Vb.toFixed(2) + ' mL', small:true },
+      { label:'Indicator', value: tiIndName(p), small:true },
+      st.endV != null ? { label:'Endpoint', value: st.endV.toFixed(2) + ' mL', small:true } : null ]; },
+  buttons:[
+    { label:'Stirrer on / off', onClick: st => tiStir(st) },
+    { label:'Open / close tap', onClick: st => tiTap(st) },
+    { label:'Add a drop', onClick: st => tiDrop(st) },
+    { label:'Reset', onClick: st => tiReset(st) },
+  ],
+  acts:{ tap: st => tiTap(st), knob: st => tiStir(st) },
+  params:(st, q) => {
+    if (q.has('V')){ const v = tiClamp(+q.get('V') || 0, 0, VMAX); st.V = st.Vb = v; st.trace = [];
+      for (let x = 0; x < v; x += x > 23 && x < 26 ? .05 : .5) st.trace.push([x, tiPH(x)]); st.trace.push([v, tiPH(v)]); if (tiPH(v) >= 8.2) st.endV = 25.05; }
+    if (q.get('stir') === '1'){ st.stir = true; st.w = 1; }
+    if (q.get('tap') === '1'){ st.tap = 1; st.tapA = 1; }
+    if (q.has('drop')){ st.tapA = .3; st.drops = [{ z: +q.get('drop') || 18, vz: 0 }]; }
+    if (q.get('plume') === '1') st.plumes = [{ i: .9, r: .6, sp: 0 }];
+    if (q.has('spin')) st.spin = +q.get('spin');
+  },
+});
+xrMount(() => ui, () => '');
+// the panels and label columns steer round the page's controls, some of which (the switches, the zoom chip) arrive and
+// settle after the first draw: draw again whenever the figure or the stats change size, and once the page has loaded
+new ResizeObserver(() => ui.render()).observe(document.getElementById('fig'));
+new ResizeObserver(() => ui.render()).observe(document.getElementById('stats'));
+addEventListener('load', () => { for (const t of [0, 450, 1200]) setTimeout(() => ui.render(), t); });   // after the page's own fit-to-window
+</script><style>@media (max-width:560px),(pointer:coarse){#art{filter:none!important}.ctl:has(#wb){display:none!important}}</style><style>@media (max-width:560px){html body .kpad{width:100%;box-sizing:border-box;justify-content:space-between;gap:10px;margin:10px 0 0;padding:0;border:0;background:none;box-shadow:none}
+html body .kpad .dp{display:flex;gap:8px}html body .kpad .hub{display:none}
+html body .kpad .k{width:46px;height:42px;font-size:14px;border-radius:9px}
+html body .kpad .go{width:auto;height:42px;padding:0 26px;border-radius:999px;flex-direction:row;font-size:13px;box-shadow:0 3px 0 var(--ink),inset 0 -4px 0 rgba(0,0,0,.18)}
+html body .kpad .go small{display:none}html body .kpad .go.down{transform:translateY(2px);box-shadow:0 1px 0 var(--ink),inset 0 -2px 0 rgba(0,0,0,.18)}}</style>
+<script>requestAnimationFrame(() => { const o = { "◀": 0, "▲": 1, "▼": 2, "▶": 3 }; for (const k of document.querySelectorAll(".kpad .k")) k.style.order = o[k.textContent] ?? 0; });</script><style>@media (max-width:560px){.vset{margin:8px 0 2px!important}}</style><script>requestAnimationFrame(() => { const v = document.querySelector(".vset"), s = document.getElementById("stats"), z = document.querySelector(".zwrap"); if (!v) return; if (z && z.parentNode === v.parentNode){ const kp = document.querySelector(".kpad"); if (kp && innerWidth <= 560){ z.after(kp); kp.after(v); } else z.after(v); } else if (s && s.parentNode) s.parentNode.insertBefore(v, s); });</script><script>(() => { const fit = () => { const fig = document.getElementById("fig"); if (!fig) return;
+  fig.style.maxHeight = ""; if (innerWidth <= 560) return;
+  const extra = document.documentElement.scrollHeight - fig.clientHeight, room = innerHeight - extra - 12;
+  if (room < fig.clientHeight) fig.style.maxHeight = Math.max(320, room) + "px"; };
+  addEventListener("load", () => requestAnimationFrame(fit)); addEventListener("resize", fit); setTimeout(fit, 400); })();</script><style>.zwrap{position:relative}.zwrap.on{overflow:hidden}@media (min-width:561px){.zwrap.on{overflow:visible}html.zoomed,html.zoomed body{overflow:hidden}}.zwrap #fig{transform-origin:0 0}
+.zchip{position:absolute;right:2px;bottom:6px;display:flex;align-items:center;gap:2px;font:600 11px ui-monospace,Menlo,monospace;
+ background:rgba(242,239,231,.88);border:1px solid rgba(35,30,22,.25);border-radius:999px;padding:2px;z-index:3;user-select:none}
+.zchip button{all:unset;cursor:pointer;min-width:22px;height:22px;line-height:22px;text-align:center;border-radius:999px;color:#231e16}
+.zchip button:hover{background:rgba(35,30,22,.08)}.zchip .zp{min-width:44px}</style>
+<script>(() => { const fig = document.getElementById("fig"); if (!fig) return;
+  const wrap = document.createElement("div"); wrap.className = "zwrap"; fig.parentNode.insertBefore(wrap, fig); wrap.appendChild(fig);
+  const chip = document.createElement("div"); chip.className = "zchip";
+  chip.innerHTML = '<button class="zm" aria-label="Zoom out">−</button><button class="zp" aria-label="Reset zoom">100%</button><button class="zi" aria-label="Zoom in">+</button>';
+  wrap.appendChild(chip);
+  let s = 1, tx = 0, ty = 0;
+  const box = () => ({ w: fig.clientWidth, h: fig.clientHeight });
+  const apply = () => { const { w, h } = box(); s = Math.min(5, Math.max(1, s));
+    if (s <= 1.001){ s = 1; tx = ty = 0; } else { tx = Math.min(0, Math.max(w - w*s, tx)); ty = Math.min(0, Math.max(h - h*s, ty)); }
+    fig.style.transform = s === 1 ? "" : `translate(${tx}px,${ty}px) scale(${s})`; wrap.classList.toggle("on", s > 1); document.documentElement.classList.toggle("zoomed", s > 1);   /* desktop: nothing is cut off, the page just does not scroll while zoomed */
+    chip.querySelector(".zp").textContent = Math.round(s*100) + "%"; grain(); };
+  // the paper grain is noise in drawing units: zoomed, it would blow up into blotches, so its frequency rises with the
+  // zoom and it stays the same fine grain on screen (the filter is rebuilt on resize, so this re-applies then too)
+  const grain = () => { const fl = document.getElementById("hand"); if (!fl) return;
+    const ts = [...fl.querySelectorAll("feTurbulence")]; if (!ts.length) return;
+    const g = ts.find(t => t.getAttribute("result") === "n1") || ts.reduce((a, b) => parseFloat(b.getAttribute("baseFrequency")) > parseFloat(a.getAttribute("baseFrequency")) ? b : a);
+    if (!g.dataset.f0) g.dataset.f0 = g.getAttribute("baseFrequency");
+    const v = (parseFloat(g.dataset.f0) * s).toFixed(4); if (g.getAttribute("baseFrequency") !== v) g.setAttribute("baseFrequency", v); };
+  const fd = document.getElementById("fdefs"); if (fd) new MutationObserver(() => grain()).observe(fd, { childList: true, subtree: true });
+  const zoomAt = (k, px, py) => { const s2 = Math.min(5, Math.max(1, s*k)); tx = px - (px - tx)*s2/s; ty = py - (py - ty)*s2/s; s = s2; apply(); };
+  const local = e => { const r = wrap.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  wrap.addEventListener("wheel", e => {
+    if (e.ctrlKey || e.metaKey){ e.preventDefault(); const [x, y] = local(e); zoomAt(Math.exp(-Math.max(-50, Math.min(50, e.deltaY))*.006), x, y);   /* a wheel notch ~1.35x, a pinch stays smooth */ }
+    else if (s > 1){ e.preventDefault(); tx -= e.deltaX; ty -= e.deltaY; apply(); } }, { passive: false });
+  const center = () => { const { w, h } = box(); return [w/2, h/2]; };
+  chip.querySelector(".zi").onclick = () => zoomAt(1.5, ...center());
+  chip.querySelector(".zm").onclick = () => zoomAt(1/1.5, ...center());
+  chip.querySelector(".zp").onclick = () => { s = 1; apply(); };
+  chip.addEventListener("pointerdown", e => e.stopPropagation());
+  // two fingers: pinch to zoom and move to pan; the figure's own one-finger turn waits while they are down
+  const pts = new Map(); let pinch = null;
+  const two = () => { const [a, b] = [...pts.values()]; return { d: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x)/2, y: (a.y + b.y)/2 }; };
+  wrap.addEventListener("pointerdown", e => { if (e.pointerType !== "touch") return; pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 2){ pinch = two(); e.stopPropagation(); } }, true);
+  wrap.addEventListener("pointermove", e => { if (!pts.has(e.pointerId)) return; pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && pts.size === 2){ e.stopPropagation(); e.preventDefault(); const n = two(), r = wrap.getBoundingClientRect();
+      tx += n.x - pinch.x; ty += n.y - pinch.y; zoomAt(n.d / pinch.d, n.x - r.left, n.y - r.top); pinch = n; } }, true);
+  const up = e => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; };
+  wrap.addEventListener("pointerup", up, true); wrap.addEventListener("pointercancel", up, true);
+  addEventListener("resize", apply);
+})();</script><style>.toast{position:absolute!important;left:50%!important;right:auto!important;top:6%!important;bottom:auto!important;z-index:4!important;
+  transform:translate(-50%,8px)!important;opacity:0!important;pointer-events:none!important;display:flex!important;align-items:center;gap:8px;
+  width:max-content;max-width:min(86%,440px);white-space:normal!important;font:600 12.5px/1.35 ui-monospace,Menlo,monospace!important;
+  letter-spacing:.01em!important;text-transform:none!important;color:#231e16!important;background:#fff1bf!important;
+  border:1px solid rgba(35,30,22,.28)!important;border-radius:8px!important;box-shadow:0 8px 22px rgba(35,30,22,.16)!important;
+  padding:7px 13px 7px 9px!important;transition:opacity .18s ease,transform .18s ease!important}
+.toast::before{content:"!";flex:none;width:17px;height:17px;border-radius:50%;background:#231e16;color:#fff1bf;font:800 11px/17px ui-monospace,Menlo,monospace;text-align:center}
+.toast.show{opacity:1!important;transform:translate(-50%,0)!important}</style>
+<script>(() => { const cap = () => { const t = document.getElementById("toast"); if (!t) return; const s = t.textContent;
+  if (s && s[0] !== s[0].toUpperCase()) t.textContent = s[0].toUpperCase() + s.slice(1); };
+  let seen = null; const watch = () => { const t = document.getElementById("toast"); if (!t || t === seen) return; seen = t;
+    const zw = document.querySelector(".zwrap"); if (zw && t.parentNode !== zw) zw.appendChild(t);   // sits on the figure itself
+    new MutationObserver(cap).observe(t, { childList: true, characterData: true, subtree: true }); cap(); };
+  watch(); const st = document.querySelector(".stage"); if (st) new MutationObserver(watch).observe(st, { childList: true }); })();</script><script>(() => { const fix = () => { const art = document.getElementById('art'); if (!art) return;
+    for (const el of art.querySelectorAll('[fill="#41538f" i]')){ let top = null, a = el.parentElement;
+      while (a && a !== art){ const o = a.getAttribute('opacity'); if (o !== null && +o < 1) top = a; a = a.parentElement; }
+      if (top) top.parentNode.insertBefore(el, top); } };
+  const go = () => { const art = document.getElementById('art'); if (!art) return setTimeout(go, 50); fix(); new MutationObserver(fix).observe(art, { childList: true }); };
+  if (document.readyState === 'loading') addEventListener('DOMContentLoaded', go); else go(); })();</script><style>.lgd{display:none}@media (max-width:560px){html:not(.nolabels) .lgd.has{display:grid}}
+.lgd{grid-template-columns:1fr 1fr;gap:2px 8px;margin:4px 0 12px;font:700 10.5px/1.25 ui-monospace,Menlo,monospace;letter-spacing:.03em;color:#231e16}
+.lgd button{all:unset;display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px;border-radius:7px;-webkit-tap-highlight-color:transparent}
+.lgd b{flex:none;min-width:17px;height:17px;padding:0 3px;box-sizing:border-box;border-radius:999px;border:1.2px solid #231e16;background:#fff4d6;text-align:center;font:800 10px/15px ui-monospace,Menlo,monospace}
+.lgd .on b{background:var(--accent,#f4b829)}.lgd .sel{background:rgba(35,30,22,.09)}.lgd .sel b{background:#231e16;color:#fff4d6}</style>
+<script>(() => { const fig = document.getElementById("fig"); if (!fig) return;
+  const lg = document.createElement("div"); lg.className = "lgd"; const at = document.querySelector(".zwrap") || fig; at.parentNode.insertBefore(lg, at.nextSibling);
+  const hs = document.createElement("style"); document.head.appendChild(hs);
+  let sig = "", sel = 0, q = 0, names = "", num = new Map();
+  // the figure's own numbers count every label it has ever drawn; here they are reset to 1, 2, 3... down the left
+  // column then the right, each time the set of labels changes (so they hold still while the figure turns)
+  const renum = () => { if (innerWidth > 560) return; const gs = [...fig.querySelectorAll(".tag[data-t]")];
+    const key = gs.map(g => g.dataset.t).sort().join("|");
+    if (key !== names){ names = key; num = new Map(); const vb = fig.viewBox.baseVal, cx = vb.x + vb.width/2;
+      const at = g => { const r = g.querySelector("rect"); return r ? [+r.getAttribute("x") + r.getAttribute("width")/2, +r.getAttribute("y")] : [0, 0]; };
+      gs.map(g => [g.dataset.t, ...at(g)]).sort((a, b) => ((a[1] > cx) - (b[1] > cx)) || a[2] - b[2]).forEach(([t]) => { if (!num.has(t)) num.set(t, num.size + 1); }); }
+    for (const g of gs){ const n = String(num.get(g.dataset.t)); if (g.dataset.n !== n){ g.dataset.n = n; const t = g.querySelector("text"); if (t) t.textContent = n; } } };
+  const mark = () => { hs.textContent = sel ? `#fig .tag[data-n="${sel}"] rect{fill:#231e16!important}#fig .tag[data-n="${sel}"] text{fill:#fff4d6}#fig .tag[data-n="${sel}"] path{stroke-width:2.4}` : "";
+    for (const x of lg.children) x.classList.toggle("sel", +x.dataset.n === sel); };
+  const upd = () => { q = 0; const m = new Map();
+    if (innerWidth <= 560) for (const g of fig.querySelectorAll(".tag[data-n]")){ const n = +g.dataset.n; if (!m.has(n)) m.set(n, [g.dataset.t, g.classList.contains("on")]); }
+    const a = [...m].sort((x, y) => x[0] - y[0]), s = JSON.stringify(a); if (s === sig) return; sig = s;
+    lg.classList.toggle("has", a.length > 0);
+    lg.innerHTML = a.map(([n, [t, on]]) => `<button data-n="${n}" class="${on ? "on" : ""}"><b>${n}</b><span>${t}</span></button>`).join(""); mark(); };
+  lg.addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; sel = sel === +b.dataset.n ? 0 : +b.dataset.n; mark(); });
+  new MutationObserver(() => { renum(); if (!q) q = requestAnimationFrame(upd); }).observe(fig, { childList: true, subtree: true }); renum();
+  addEventListener("resize", () => { if (!q) q = requestAnimationFrame(upd); }); upd(); })();</script></body></html>
