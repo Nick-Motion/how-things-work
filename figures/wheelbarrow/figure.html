@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wheelbarrow</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   The book's wheelbarrow is a second-class lever. The load is between the wheel and the hands.
+   Two stones start in the tray. Load carries one of four visible table stones above the rim, then into the tray.
+   Lift rotates the frame about the wheel axle and raises both feet clear of the table. Press again to lower.
+   Roll translates the raised frame; the wheel turns distance/radius without slipping. Stones stay in the tray.
+   The table, finite stone supply, controls and assumed masses are teaching adaptations, not book apparatus.
+   Primary evidence is the 2016 book pp.20,22 and 1998 p.22. The 1988 edition is unverified.
+   Representative construction follows Truper 723700-02 and Marathon's universal wheel installation sheet.
+   A generic ball-bearing hub is chosen, not attributed to the book. Bearings reduce rolling friction, not lever effort.
+   Parts, each attached to the next.
+   TRAY. Floor, four sloped walls and rolled lip. Four bolts fix the floor to two continuous handle rails.
+   FRAME. Two handle rails with grip sleeves, two bent legs fixed to the rails, and a cross brace joining the legs.
+   WHEEL. Two axle brackets hang from the rails. A fixed axle passes through two hub bearings.
+   Tire is seated on the rim. Rim joins hub. Bearing outer rings sit in hub; inner rings fit axle; cage spaces balls.
+   OVERLAYS. Dashed moment arms and force arrows are teaching drawings and are excluded from anatomy.
+   Model units are 2 mm. Empty barrow mass is assumed 160 g at [66,40,32]; each stone is assumed 20 g.
+   Displayed handle force is combined vertical quasi-static force. Wheel reaction is the remaining weight.
+   shortcut: masses and bearing dimensions are illustrative, use measured hardware for a calibrated experiment. */
+const wbBoard = [150,88,2], wbPivot = [98,40,16], wbRadius = 14;
+const wbStonePlaces = [[64,34,36],[76,46,36],[87,34,36],[65,46,36],[76,34,36],[87,46,36]];
+const wbSupply = [[47,73,5],[59,74,5],[71,73,5],[83,74,5]];
+const wbStoneMat = matOf('#9eaaa5'), wbSteel = matOf('#72878a');
+const wbBounds = pts => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i])))];
+function wbPoint(st,[x,y,z]){
+  const a=st.angle*Math.PI/180,c=Math.cos(a),s=Math.sin(a);
+  return [98+st.travel+(x-98)*c+(z-16)*s,y,16-(x-98)*s+(z-16)*c];
+}
+function wbPrism(A,B,m){
+  const d=norm(sub(avg(B),avg(A))), toward=vis(d), cap=toward?B:A;
+  return loft(A,B,n=>tone(n,m))+shape(cap,tone(toward?d:d.map(v=>-v),m),.7)+hullInk([...A,...B],2.1);
+}
+function wbTube(st,y0,y1,ro,ri,m,ghost=0){
+  const ring=(y,r)=>ellUV(98,16,r,r,40).map(([x,z])=>wbPoint({...st,angle:0},[x,y,z]));
+  const A=ring(y0,ro),B=ring(y1,ro),Ai=ring(y0,ri),Bi=ring(y1,ri),near=vis([0,1,0]);
+  const outer=near?B:A,inner=near?Bi:Ai;
+  let svg=loft(A,B,n=>tone(n,m))+loft(Ai,Bi,n=>tone(n,m),true);
+  svg+=`<path d="${pd(outer)}${pd(inner)}" fill="${tone([0,near?1:-1,0],m)}" fill-rule="evenodd"/>`+ink(pd(outer),1.1)+ink(pd(inner),.8)+hullInk([...A,...B],1.8);
+  return {box:wbBounds([...A,...B]),svg:`<g opacity="${1-ghost}">${svg}</g>`};
+}
+function wbForces(st){
+  const handle=wbPoint(st,[16,40,29]), masses=[{m:.16,p:[66,40,32]},...wbStonePlaces.slice(0,st.stones).map(p=>({m:.02,p}))];
+  const weight=masses.reduce((v,a)=>v+a.m*9.81,0), moment=masses.reduce((v,a)=>v+a.m*9.81*(98+st.travel-wbPoint(st,a.p)[0]),0);
+  const effort=moment/(98+st.travel-handle[0]);
+  const center=masses.reduce((p,a)=>p.map((v,i)=>v+a.m*wbPoint(st,a.p)[i]),[0,0,0]).map(v=>v/(weight/9.81));
+  return {weight,effort,support:weight-effort,center,handle};
+}
+function wbArrow(a,b,col){
+  const [x,y]=P(...a),[u,v]=P(...b),len=Math.hypot(u-x,v-y),dx=(u-x)/len,dy=(v-y)/len,k=3*INK_K;
+  return `<path d="M${x} ${y}L${u} ${v}" fill="none" stroke="${col}" stroke-width="2.4"/><path d="M${u} ${v}L${u-dx*k*3-dy*k} ${v-dy*k*3+dx*k}L${u-dx*k*3+dy*k} ${v-dy*k*3-dx*k}Z" fill="${col}"/>`;
+}
+function wbScene(st,m){
+  const k=ease(st.xr||0),parts=[],trayParts=[],labels=[],to=p=>wbPoint(st,p);
+  let layer=parts;
+  const put=(pts,svg)=>layer.push({box:wbBounds(pts),svg});
+  const tube=(a,b,r,mat=wbSteel)=>{a=to(a);b=to(b);const bb=wbBounds([a,b]);layer.push({box:[bb[0].map(v=>v-r),bb[1].map(v=>v+r)],svg:rod(a,b,r,mat,tone,1.2)});};
+  const solid=(a,b,mat,opacity=1)=>{a=a.map(to);b=b.map(to);put([...a,...b],`<g opacity="${opacity}">${wbPrism(a,b,mat)}</g>`);};
+  const label=(p,text,on=false)=>labels.push({at:to(p),text,on});
+  let svg=board(0,0,...wbBoard,4,WOOD);
+  const shadowPts=[[16,22,29],[16,58,29],[43,20,47],[104,20,47],[104,60,47],[43,60,47],[98,40,2],[55,26,2],[55,54,2]].map(to);
+  svg+=castShadow(shadowPts,2,boardTop(0,0,150,88,2,4));
+  for(let i=st.stones;i<6;i++){
+    if(st.phase==='loading'&&i===st.stones)continue;
+    const p=wbSupply[i-2];put([p.map(v=>v-3),p.map(v=>v+3)],wbStone(p,i));
+  }
+  for(const y of [26,54]){
+    for(const [a,b] of [[[16,y,29],[43,y,29]],[[43,y,29],[65,y,29]],[[65,y,29],[87,y,29]],[[87,y,29],[100,y,22]]])tube(a,b,1.7);
+    tube([14,y,29],[27,y,29],2.2,DARK);
+    for(const [a,b] of [[[54,y,29],[49,y,3.4]],[[49,y,3.4],[60,y,3.4]],[[60,y,3.4],[68,y,29]]])tube(a,b,1.4);
+    tube([98,y,16],[98,y,23.5],2.2,METAL);
+    tube([98,y,23.5],[98,y+(y<40?3:-3),23.5],2.2,METAL);
+  }
+  tube([54,26,14],[54,54,14],1.2);
+  layer=trayParts;
+  const floor0=[[54,28,31.5],[91,28,31.5],[91,52,31.5],[54,52,31.5]],floor1=floor0.map(([x,y])=>[x,y,33]);
+  solid(floor0,floor1,m,1-.82*k);
+  const rim=[[43,20,47],[104,20,47],[104,60,47],[43,60,47]],base=[[54,28,33],[91,28,33],[91,52,33],[54,52,33]];
+  for(let i=0;i<4;i++){
+    const j=(i+1)%4,quad=[base[i],base[j],rim[j],rim[i]],mid=avg(quad),off=norm([mid[0]-73.5,mid[1]-40,0]);
+    solid(quad,quad.map(p=>p.map((v,n)=>v+off[n]*.75)),m,1-.82*k);
+    tube(rim[i],rim[j],.65,m);
+  }
+  for(const x of [59,85])for(const y of [28,52]){
+    layer=parts;tube([x,y,29],[x,y,31.5],.7,METAL);
+    layer=trayParts;tube([x,y,33],[x,y,33.4],1.1,METAL);
+  }
+  for(let i=0;i<st.stones;i++){
+    const stone=wbStonePlaces[i],p=to(stone);put([p.map(v=>v-5),p.map(v=>v+5)],`<g opacity="${1-.3*k}">${wbStone(stone,i,to)}</g>`);
+  }
+  if(st.phase==='loading'){
+    const a=wbSupply[st.stones-2],b=to(wbStonePlaces[st.stones]),t=ease(st.progress);
+    const p=t<.7?[a[0]+(b[0]-a[0])*t/.7,a[1]+(b[1]-a[1])*t/.7,a[2]+(60-a[2])*Math.sin(t/.7*Math.PI/2)]:[b[0],b[1],60+(b[2]-60)*ease((t-.7)/.3)];
+    put([p.map(v=>v-3),p.map(v=>v+3)],wbStone(p,st.stones));
+  }
+  layer=parts;
+  parts.push(wbTube(st,35.5,44.5,14,9.5,DARK,.75*k));
+  parts.push(wbTube(st,36,44,9.5,4.2,m,.8*k));
+  parts.push(wbTube(st,33.8,46.2,4.2,3.4,METAL,.8*k));
+  const axleA=[98+st.travel,24,16],axleB=[98+st.travel,56,16];put([[97+st.travel,24,15],[99+st.travel,56,17]],rod(axleA,axleB,.95,METAL,tone,1));
+  for(const y of [35,45]){
+    const bparts=[wbTube(st,y-.8,y+.8,3.4,3.15,METAL),wbTube(st,y-.8,y+.8,1.8,.95,METAL)];
+    for(let i=0;i<8;i++){
+      const a=i*Math.PI/4+st.travel/14*.65,p=[98+st.travel+2.6*Math.cos(a),y,16+2.6*Math.sin(a)];
+      bparts.push({box:[p.map(v=>v-.8),p.map(v=>v+.8)],svg:wbBall(p,.8,METAL.l)});
+    }
+    const cage=ellUV(98,16,2.6,2.6,40).map(([x,z])=>[x+st.travel,y+(vis([0,1,0])?.82:-.82),z]);
+    const bearing=byDepth(bparts)+`<path d="${pd(cage)}" fill="none" stroke="#ad8e4f" stroke-width=".8"/>`;
+    put([[94+st.travel,y-1,12],[102+st.travel,y+1,20]],bearing);
+  }
+  const wheelY=vis([0,1,0])?44.6:35.4,spin=st.travel/wbRadius;
+  for(let i=0;i<8;i++){
+    const a=i*Math.PI/4+spin,A=[98+st.travel+10*Math.sin(a),wheelY,16+10*Math.cos(a)],B=[98+st.travel+13.4*Math.sin(a),wheelY,16+13.4*Math.cos(a)];
+    put([A,B],`<g opacity="${1-.75*k}">${line([A,B],.9)}</g>`);
+  }
+  // The tray plane separates its contents from the frame even when overlapping boxes form a sorting cycle.
+  const aboveTray=vis([Math.sin(st.angle*Math.PI/180),0,Math.cos(st.angle*Math.PI/180)]);
+  svg+=aboveTray?byDepth(parts)+byDepth(trayParts):byDepth(trayParts)+byDepth(parts);
+  label([73,40,33],'TRAY FLOOR');label([73,20,47],'SIDE WALLS');label([73,60,47],'ROLLED LIP');label([104,40,47],'FRONT WALL');label([43,40,47],'REAR WALL');
+  label([35,26,29],'HANDLE RAILS',st.phase==='lifting');label([20,54,29],'GRIP SLEEVES',st.angle>0);label([49,54,10],'SUPPORT LEGS',st.phase==='lifting');label([54,40,14],'CROSS BRACE');
+  label([98,54,22],'AXLE BRACKETS');labels.push({at:[98+st.travel,54,16],text:'FIXED AXLE'});
+  labels.push({at:[98+st.travel,40,30],text:'TIRE',on:st.phase==='rolling'},{at:[106+st.travel,44,16],text:'WHEEL RIM',on:st.phase==='rolling'},{at:[98+st.travel,46,19.8],text:'HUB',on:st.phase==='rolling'},{at:[100.6+st.travel,45,16],text:'BALL BEARINGS',on:st.phase==='rolling'});
+  label([59,52,34],'TRAY BOLTS');
+  if(k>.6){
+    const g=wbForces(st),pivot=[98+st.travel,40,16],height=8;
+    const armA=[pivot[0],67,height],armB=[g.center[0],67,height],armC=[g.handle[0],67,height];
+    svg+=`<g data-overlay="lever geometry" opacity="${k}"><path d="${pd([armA,armC],false)}" fill="none" stroke="#b57233" stroke-width="1" stroke-dasharray="2 2"/>`;
+    for(const p of [armA,armB,armC])svg+=line([[p[0],p[1],height-1.5],[p[0],p[1],height+1.5]],1);
+    svg+=wbArrow([g.center[0],40,g.center[2]+24],[g.center[0],40,g.center[2]+7],'#c9573c');
+    for(const y of [26,54]){const p=to([18,y,29]);svg+=wbArrow(p,[p[0],p[1],p[2]+13],'#b9861e');}
+    svg+=wbArrow([pivot[0],40,3],[pivot[0],40,12],'#468b83')+'</g>';
+    svg+=xrCallouts(labels,[10,128,20,60,2,59]);
+  }
+  return svg;
+}
+function wbBall(p,r,col){const [x,y]=P(...p);return `<circle cx="${x}" cy="${y}" r="${r*1.2247}" fill="${col}" stroke="${INK}" stroke-width=".6"/>`;}
+function wbStone(p,i,transform=p=>p){
+  const bottom=ellUV(p[0],p[1],3.4,2.8,7).map(([x,y])=>[x,y,p[2]-3]),top=ellUV(p[0]-.4,p[1]+.2,2.8,2.4,7).map(([x,y],j)=>[x,y,p[2]+1.8+((i+j)%3)*.45]);
+  return wbPrism(bottom.map(transform),top.map(transform),wbStoneMat);
+}
+function wbAction(st,ui,kind){
+  if(st.phase!=='idle')return ui.flash('Wait for the movement to finish');
+  if(kind==='loading'&&st.stones===6)return ui.flash('All four table stones are in the tray');
+  if(kind==='loading'&&st.angle>0)return ui.flash('Lower the handles with Lift before loading');
+  if(kind==='rolling'&&st.angle===0)return ui.flash('Lift the handles before rolling');
+  if(kind==='rolling'&&st.travel>=22)return ui.flash('At the end of the table');
+  st.phase=kind;st.progress=0;
+  const from=kind==='lifting'?st.angle:st.travel,target=kind==='lifting'?(st.angle>0?0:14):Math.min(22,st.travel+11);
+  ui.animate(dt=>{
+    st.progress=Math.min(1,st.progress+dt/(kind==='loading'?1.2:1.1));
+    if(kind==='lifting')st.angle=from+(target-from)*ease(st.progress);
+    if(kind==='rolling')st.travel=from+(target-from)*ease(st.progress);
+    if(st.progress===1){if(kind==='loading')st.stones++;st.phase='idle';return false;}return true;
+  });
+}
+const wbUI=mountFigure({fig:'17',turn:'full',title:'Wheelbarrow',size:[150,88,65],palette:'tomato',
+  state:{stones:2,angle:0,travel:0,phase:'idle',progress:0},scene:wbScene,
+  stats:st=>[{label:'Stones',value:st.stones*20+' g'},{label:'Both handles',value:st.angle>0?wbForces(st).effort.toFixed(2)+' N':'Parked',small:true}],
+  buttons:[{label:'Load',onClick:(st,ui)=>wbAction(st,ui,'loading')},{label:'Lift',onClick:(st,ui)=>wbAction(st,ui,'lifting')},{label:'Roll',onClick:(st,ui)=>wbAction(st,ui,'rolling')}],
+  params:(st,q)=>{for(const [key,max] of [['stones',6],['angle',14],['travel',22]])if(q.has(key)){const v=Number(q.get(key));if(Number.isFinite(v))st[key]=Math.max(key==='stones'?2:0,Math.min(max,key==='stones'?Math.round(v):v));}}
+});
+xrMount(()=>wbUI,()=> '');
+</script></body></html>
