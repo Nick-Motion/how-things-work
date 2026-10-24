@@ -1,0 +1,651 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Capsule toy machine</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Capsule toy machine (gashapon). How a real one works, and where everything is after each step:
+   1. Insert coins: two 100 YEN coins are pushed edge-first through the two slits in the handle plate. Each drops into a
+      pocket in the COIN DISC that sits on the handle shaft just behind the plate. Their edges lift the COIN SENSE LEVER,
+      which lifts the LOCK PAWL out of the notch in the disc's rim: the handle is free. With no coins the pawl stays in the
+      notch and the handle only rattles.
+   2. Turn the knob one full turn clockwise: the shaft turns the coin disc (the coins ride round in their pockets), a
+      RATCHET WHEEL with an ANTI-REVERSE PAWL (no turning back), and a small PINION at the shaft's back end. The pinion
+      drives a CROWN GEAR (1 : 4) on the vertical ROTOR SHAFT, which turns the AGITATOR WHEEL a quarter turn.
+      - Low on the right the coins slide out of their pockets into the COIN CHUTE and fall into the COIN BOX.
+      - The agitator wheel is the floor of the capsule tank: four capsule-sized pockets, each holding one capsule, sitting on
+        the fixed BASE PLATE. Half way round, one pocket passes over the CAPSULE GATE (the only hole in the base plate):
+        its capsule drops through, pushes the sprung GATE FLAP aside, falls down the DROP DUCT and rolls down the CHUTE to
+        the EXIT FLAP. The STIRRER ARMS on the wheel stir the pile so a new capsule drops into the empty pocket.
+      - At the end of the turn the pawl drops back into the notch: locked again.
+   3. Take the capsule: lift the exit flap, the capsule rolls out onto the counter.
+   4. Open it: twist the two halves apart (clear top, coloured bottom); the toy is inside.
+
+   Parts (x = depth, front at x = W; y = width; z = up; 1 unit ~ 0.7 cm)
+   CASE      lower body . front handle plate . price card . coin slits . exit opening + flap on a hinge pin . coin box door +
+             lock . clear capsule tank on four corner posts . display card inside the tank . lid with its lock . service door
+   COINS     coin disc on the handle shaft with two coin pockets . lock pawl on its pivot pin (on the front wall) . pawl spring
+             to a tab on the front wall . coin sense lever on the pawl . coin chute on the coin box . coin box
+   DRIVE     handle . handle shaft . front bearing . ratchet wheel . anti-reverse pawl (hangs from the base plate) . shaft
+             hanger (hangs from the base plate) . pinion . crown gear . shaft collar . rotor shaft
+   CAPSULES  base plate on four plate brackets (on the side walls) . agitator wheel with four pockets . stirrer arms on its
+             hub . capsule gate (hole + collar) . gate flap + gate spring . drop duct . chute on four chute legs
+   Paths, worked out with numbers: the chute floor runs 13.5 -> 5 from x 9 to 50; a capsule (r 3.8) passes under the coin
+   disc (bottom z 14) with its top at 13.4, under the pinion (bottom 22.2) and the crown gear. The crown gear (r 7) ends at
+   x 18, the duct starts at x 17.4. The coin box (y 2..20) is beside the chute (y 20.5..29.5). */
+
+const W = 50, D = 50, BH = 3, ZB = 41;                       // body depth (x), width (y); board top; body top = tank floor
+const TX0 = 1.5, TX1 = 48.5, TY0 = 1.5, TY1 = 48.5, TZ1 = 75, LZ = 80;
+const OUTB = rrUV(0, BH, D, ZB, 2.5), OUTL = rrUV(0, TZ1, D, LZ, 2);
+const KY = 25, KZ = 24;                                      // handle axis (y, z)
+const CAPR = 3.8;                                            // capsule radius
+const WR = 17, PR = 12, HOLE = 4.1, WZ0 = 34;                // agitator wheel radius, pocket circle, pocket hole, wheel bottom
+const GATE = [13, 25];                                       // the gate: under the pocket at wheel angle 180
+const CH0 = 20.5, CH1 = 29.5;                                // chute walls (y)
+const floorZ = x => 13.5 - (x - 9) * 8.5 / 41;               // chute floor
+const SLOTY = [27.5, 22.5], SLOTZ = 31.7, POCK = [-18, 18];  // coin slits; coin pockets (deg clockwise from up, seen from the front)
+const EXIT = [19, 5, 31, 13.5];                              // exit opening y0 z0 y1 z1
+const WAIT = [46, 25, floorZ(46) + CAPR];                    // a capsule waiting behind the flap
+const OUTP = [59, 25], STACK = [61, 44];                     // capsule on the counter; coin stack
+const R2D = Math.PI / 180;
+const CAPCOLS = ['#e2483d', '#3e86d9', '#f2c230', '#38a565', '#8c4bd1', '#f08a2b', '#5cc0e8', '#f07fa0'];
+const TOYS = [{ name:'LUCKY CAT', kind:'cat', col:'#f6f1e8' }, { name:'FROG', kind:'frog', col:'#7cc46a' }, { name:'BEAR', kind:'bear', col:'#c98a52' },
+  { name:'ROBOT', kind:'robot', col:'#a9bccb' }, { name:'DUCK', kind:'duck', col:'#f6d04a' }, { name:'PENGUIN', kind:'penguin', col:'#3d4a6b' }];
+const COINM = { l:'#eef0f0', m:'#c3c8ca', d:'#8a9295' }, BRASS = { l:'#f0c870', m:'#d0a24a', d:'#9a7428' };
+const GEARM = { l:'#7c8389', m:'#5c6369', d:'#3b4146' }, WHEELM = matOf('#8fb3d9'), KNOBM = { l:'#fff4d6', m:'#e6dcbd', d:'#bfb390' };
+const PAWLM = matOf('#f2c230'), CREAM = '#fff4d6', RECESS = '#2b2523', GLASS = '#cfe9f0';
+
+/* ---------- small helpers ---------- */
+const kp = (x, r, al) => [x, KY - r * Math.sin(al * R2D), KZ + r * Math.cos(al * R2D)];   // point round the handle axis
+const approach = (v, t, d) => v < t ? Math.min(t, v + d) : Math.max(t, v - d);
+const lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+const bbox = (pts, pad = .3) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - pad), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + pad)];
+const ellZ = (x, y, z, r, n = 18) => on(PZ(z), ellUV(x, y, r, r, n));
+const txYr = (x, y, z, str, size, col = INK, weight = 700) => { const o = P(x, y, z);       // text on the y = 0 side, read from that side
+  return `<text transform="${txM(o, Dv(-1,0,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`; };
+const txB = (x, y, z, str, size, col = INK, weight = 700) => { const o = P(x, y, z);        // text on the back, read from behind
+  return `<text transform="${txM(o, Dv(0,1,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`; };
+// a flat convex part in the y-z plane, x0..x1 thick (pawls, levers, flaps)
+const prismX = (poly, x0, x1, mm, w = .6) => { const A = on(PX(x0), poly), B = on(PX(x1), poly), fF = facing([1,0,0]), fB = facing([-1,0,0]);
+  return loft(A, B, n => toneI(n, mm)) + (fF ? shape(B, toneI([1,0,0], mm), w) : fB ? shape(A, toneI([-1,0,0], mm), w) : '') + hullInk([...A, ...B], w + .3); };
+const barYZ = (p0, p1, th) => { const d = norm([0, p1[0] - p0[0], p1[1] - p0[1]]), n = [-d[2] * th / 2, d[1] * th / 2];
+  return [[p0[0] + n[0], p0[1] + n[1]], [p1[0] + n[0], p1[1] + n[1]], [p1[0] - n[0], p1[1] - n[1]], [p0[0] - n[0], p0[1] - n[1]]]; };
+const rotYZ = (p, c, ph) => { const cs = Math.cos(ph), sn = Math.sin(ph), dy = p[0] - c[0], dz = p[1] - c[1]; return [c[0] + dy * cs - dz * sn, c[1] + dy * sn + dz * cs]; };
+const springLine = (a, b, n, amp, side, col = '#cfd6d8') => { const pts = [];
+  for (let i = 0; i <= n; i++){ const t = i / n, o = i && i < n ? (i % 2 ? amp : -amp) : 0; pts.push(lerp3(a, b, t).map((v, k) => v + side[k] * o)); }
+  const d = pd(pts, false); return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="1.3" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width=".55" stroke-linejoin="round"/>`; };
+
+/* ---------- capsules (spheres: clear tinted top, coloured bottom, a seam round the middle) ---------- */
+function capSvg(x, y, z, col, rot = 0, r = CAPR){
+  const [X, Y] = P(x, y, z), R = r * CAM_K, b = R * Math.sin(PITCH * R2D), n = 14, lo = [], seam = [];
+  for (let i = 0; i <= n; i++){ const t = Math.PI * i / n; lo.push([X - R * Math.cos(t), Y + R * Math.sin(t)]); }
+  for (let i = 0; i <= n; i++){ const t = Math.PI * i / n; const q = [X + R * Math.cos(t), Y + b * Math.sin(t)]; lo.push(q); seam.push(q); }
+  const top = mix(col, '#ffffff', .68), sd = 'M' + seam.map(q => f(q[0]) + ' ' + f(q[1])).join('L');
+  let s = `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="${top}"/>` + fill(sp(lo), col);
+  s += `<path d="M${f(X - R * .78)} ${f(Y + R * .3)}Q${f(X - R * .55)} ${f(Y + R * .82)} ${f(X + R * .1)} ${f(Y + R * .84)}" fill="none" stroke="${mix(col, '#000000', .14)}" stroke-width="${f(R * .16)}" stroke-linecap="round"/>`;
+  s += `<path d="${sd}" fill="none" stroke="${INK}" stroke-width=".55"/>`;
+  s += `<ellipse cx="${f(X - R * .36)}" cy="${f(Y - R * .5)}" rx="${f(R * .24)}" ry="${f(R * .13)}" fill="#ffffff" transform="rotate(-30 ${f(X - R * .36)} ${f(Y - R * .5)})"/>`;
+  s += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="none" stroke="${INK}" stroke-width=".8"/>`;
+  return rot ? `<g transform="rotate(${f(rot)} ${f(X)} ${f(Y)})">${s}</g>` : s;
+}
+// the toy inside: a little round character, drawn facing the viewer
+function toySvg(X, Y, R, kind, col){
+  const circ = (x, y, r, c, w = 0) => `<circle cx="${f(x)}" cy="${f(y)}" r="${f(r)}" fill="${c}"${w ? ` stroke="${INK}" stroke-width="${w}"` : ''}/>`;
+  const eye = (x, y) => circ(x, y, R * .1, INK) + circ(x + R * .04, y - R * .04, R * .035, '#ffffff');
+  const dk = mix(col, '#000000', .3);
+  let s = '';
+  if (kind === 'cat' || kind === 'bear') for (const sg of [-1, 1]){ const ex = X + sg * R * .6, ey = Y - R * .68;
+    s += kind === 'cat' ? `<path d="M${f(ex - R * .28)} ${f(ey + R * .18)}L${f(ex + sg * R * .05)} ${f(ey - R * .38)}L${f(ex + R * .28)} ${f(ey + R * .18)}Z" fill="${col}" stroke="${INK}" stroke-width=".7"/>`
+      : circ(ex, ey, R * .3, dk, .7); }
+  if (kind === 'frog') for (const sg of [-1, 1]) s += circ(X + sg * R * .45, Y - R * .78, R * .3, col, .7) + circ(X + sg * R * .45, Y - R * .78, R * .18, '#ffffff') + circ(X + sg * R * .45, Y - R * .76, R * .09, INK);
+  if (kind === 'robot') s += `<path d="M${f(X)} ${f(Y - R)}L${f(X)} ${f(Y - R * 1.45)}" stroke="${INK}" stroke-width=".7"/>` + circ(X, Y - R * 1.5, R * .14, '#e2483d', .5)
+    + `<rect x="${f(X - R)}" y="${f(Y - R)}" width="${f(2 * R)}" height="${f(1.8 * R)}" rx="${f(R * .35)}" fill="${col}" stroke="${INK}" stroke-width=".9"/>`
+    + `<rect x="${f(X - R * .7)}" y="${f(Y - R * .62)}" width="${f(1.4 * R)}" height="${f(.8 * R)}" rx="${f(R * .15)}" fill="#1d2a26"/>` + circ(X - R * .32, Y - R * .22, R * .12, '#8af0ae') + circ(X + R * .32, Y - R * .22, R * .12, '#8af0ae');
+  else {
+    s += circ(X, Y, R, col, 1);
+    if (kind === 'penguin') s += `<ellipse cx="${f(X)}" cy="${f(Y + R * .15)}" rx="${f(R * .65)}" ry="${f(R * .6)}" fill="#fbf7ea"/>`;
+    s += eye(X - R * .32, Y - R * .08) + eye(X + R * .32, Y - R * .08);
+    if (kind === 'duck' || kind === 'penguin') s += `<ellipse cx="${f(X)}" cy="${f(Y + R * .22)}" rx="${f(R * .28)}" ry="${f(R * .12)}" fill="#f08a2b" stroke="${INK}" stroke-width=".5"/>`;
+    else if (kind === 'frog') s += `<path d="M${f(X - R * .4)} ${f(Y + R * .2)}Q${f(X)} ${f(Y + R * .55)} ${f(X + R * .4)} ${f(Y + R * .2)}" fill="none" stroke="${INK}" stroke-width=".7"/>`;
+    else s += circ(X, Y + R * .2, R * .09, INK) + `<ellipse cx="${f(X - R * .55)}" cy="${f(Y + R * .22)}" rx="${f(R * .15)}" ry="${f(R * .08)}" fill="#f2849a" opacity=".6"/><ellipse cx="${f(X + R * .55)}" cy="${f(Y + R * .22)}" rx="${f(R * .15)}" ry="${f(R * .08)}" fill="#f2849a" opacity=".6"/>`;
+  }
+  return s;
+}
+// an opened capsule on the counter: the coloured bottom half with the toy rising out of it, the clear top lifted off beside it
+function openCap(c){
+  const o = ease(c.open), x = OUTP[0], y = OUTP[1], z = BH + CAPR, [X, Y] = P(x, y, z), R = CAPR * CAM_K, b = R * Math.sin(PITCH * R2D), n = 14;
+  const cup = [], rimPts = [];
+  for (let i = 0; i <= n; i++){ const t = Math.PI * i / n; cup.push([X - R * Math.cos(t), Y + R * Math.sin(t)]); }
+  for (let i = 0; i <= n; i++){ const t = Math.PI * i / n; cup.push([X + R * Math.cos(t), Y + b * Math.sin(t)]); }
+  for (let i = 0; i < 2 * n; i++){ const t = Math.PI * i / n; rimPts.push([X + R * Math.cos(t), Y + b * Math.sin(t)]); }
+  const toy = TOYS[c.toy], [TX, TY] = P(x, y, z + 2.6 * o);
+  let s = fill(sp(rimPts), mix(c.col, '#000000', .35)) + ink(sp(rimPts), .7);
+  s += toySvg(TX, TY - R * .15, R * .62, toy.kind, toy.col);
+  s += fill(sp(cup), c.col) + `<path d="M${cup.slice(n + 1).map(q => f(q[0]) + ' ' + f(q[1])).join('L')}" fill="none" stroke="${INK}" stroke-width=".7"/>`
+    + `<path d="M${cup.slice(0, n + 1).map(q => f(q[0]) + ' ' + f(q[1])).join('L')}" fill="none" stroke="${INK}" stroke-width=".9"/>`;
+  // the clear dome: lifted, tipped over and set down beside the cup
+  const dx = x + 1, dy = y + 9 * o, dz = z + 6 * Math.sin(Math.PI * Math.min(1, o * 1.1)) * (1 - o) + 0, [DX, DY] = P(dx, dy, dz);
+  const dome = [];
+  for (let i = 0; i <= n; i++){ const t = Math.PI * i / n; dome.push([DX - R * Math.cos(t), DY - R * Math.sin(t)]); }
+  for (let i = 0; i <= n; i++){ const t = Math.PI * i / n; dome.push([DX + R * Math.cos(t), DY + b * Math.sin(t)]); }
+  const tilt = -150 * o;
+  const d = `<g transform="rotate(${f(tilt)} ${f(DX)} ${f(DY)})">` + fill(sp(dome), mix(c.col, '#ffffff', .68), 'opacity=".9"') + ink(sp(dome), .9)
+    + `<ellipse cx="${f(DX - R * .36)}" cy="${f(DY - R * .5)}" rx="${f(R * .22)}" ry="${f(R * .12)}" fill="#ffffff" opacity=".85"/></g>`;
+  return { cup: s, dome: d, domeAt: [dx, dy, dz] };
+}
+
+/* ---------- coins ---------- */
+function coinDisc(x, y, z, r = 1.7){
+  const A = ellZ(x, y, z, r, 18), B = ellZ(x, y, z + .7, r, 18);
+  return loft(A, B, n => toneI(n, COINM)) + fill(pd(B), COINM.l) + ink(sp(hull([...A, ...B].map(p => P(...p)))), .6) + ink(pd(ellZ(x, y, z + .72, r * .62, 14)), .35);
+}
+function coinStanding(x, y, z){
+  const A = on(PY(y - .35), ellUV(x, z, 1.7, 1.7, 16)), B = on(PY(y + .35), ellUV(x, z, 1.7, 1.7, 16));
+  const cap = facing([0,1,0]) ? B : A;
+  return loft(A, B, n => toneI(n, COINM)) + fill(pd(cap), COINM.l) + ink(pd(cap), .6);
+}
+// a coin riding in a pocket of the coin disc: its face turns with the disc
+const coinPos = (i, a) => kp(46.6, 8.1, POCK[i] + a);
+const coinTilted = (c, al) => { const nn = [0, -Math.cos(al * R2D), -Math.sin(al * R2D)];
+  return rod(c.map((v, k) => v - nn[k] * .35), c.map((v, k) => v + nn[k] * .35), 1.7, COINM, toneI, .6); };
+function flyPos(fl){
+  const t = fl.t, s0 = [STACK[0], STACK[1], fl.h + 1.5], s1 = [W + 5, SLOTY[fl.i], SLOTZ];
+  if (t < .65){ const q = ease(t / .65), p = lerp3(s0, s1, q); p[2] += 10 * Math.sin(Math.PI * q); return p; }
+  return lerp3(s1, [46.6, SLOTY[fl.i], SLOTZ], (t - .65) / .35);
+}
+function fallPos(cf){
+  const top = [46.5, 18.7, 21.5];
+  if (cf.t < .3) return lerp3(cf.p, top, cf.t / .3);
+  const q = (cf.t - .3) / .7; return [46.5, 18.7, 21.5 - 8 * q * q];
+}
+
+/* ---------- the pile in the tank ---------- */
+function makePile(){
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const out = []; let i = 0;
+  const layers = [[5, 7, 44.8], [4, 11.5, 48.95], [3, 16, 53.1], [2, 20.5, 57.25], [1, 25, 61.4]];
+  for (const [nL, o, z] of layers) for (let a = 0; a < nL; a++) for (let b = 0; b < nL; b++){
+    out.push({ x: o + 9 * a + (rnd() - .5) * 1.2, y: o + 9 * b + (rnd() - .5) * 1.2, z, col: CAPCOLS[(i * 5 + 3) % CAPCOLS.length], toy: (i * 7 + 2) % TOYS.length, rot: (rnd() - .5) * 70 }); i++; }
+  return out;
+}
+const freshPocket = i => ({ col: CAPCOLS[(i * 3 + 1) % CAPCOLS.length], toy: (i * 2 + 1) % TOYS.length });
+
+/* ---------- state ---------- */
+const st = { pal:'tomato', coins: 10, coinIn:[false, false], fly:null, queue:0, pawl:0, jig:0, a:0, w:0, w0:0, turning:false, tt:0,
+  pock:[0, 1, 2, 3].map(freshPocket), pile: makePile(), drop:null, gate:0, coinFall:[], box:0, boxFlash:0,
+  waiting:null, flap:0, flapT:0, move:null, out:null, got:0, openAfter:false, turnAfter:false, takeAfter:false };
+
+/* ---------- the case ---------- */
+function bodySvg(st, m){
+  const FRONT = facing([1,0,0]), BACK = facing([-1,0,0]), LEFT = facing([0,1,0]), RIGHT = facing([0,-1,0]);
+  const fr = tone([1,0,0], m);
+  let s = '';
+  if (FRONT){
+    const hole = on(PX(W), rectUV(EXIT[0], EXIT[1], EXIT[2], EXIT[3]));
+    let cav = fill(pd(hole), RECESS);
+    cav += fill(pd([[W, CH0, 5], [W, CH1, 5], [W - 14, CH1, floorZ(W - 14)], [W - 14, CH0, floorZ(W - 14)]]), '#77706a');
+    if (st.waiting) cav += capSvg(...WAIT, st.waiting.col, 25);
+    s += act('take', clipTo(hole, cav));
+    s += `<path d="${pd(on(PX(W), OUTB))}${pd(hole)}" fill="${fr}" fill-rule="evenodd"/>` + ink(pd(hole), 1.6);
+    // handle plate: price card, coin slits (a coin's edge shows in a slit until the turn takes it), the knob's boss
+    const FP = (dx, uv) => on(PX(W + dx), uv);
+    s += shape(FP(.3, rrUV(13, 15.5, 37, 39.6, 2)), '#dcdfdf', 1.1);
+    s += shape(FP(.35, rrUV(17, 35, 33, 38.6, 1)), CREAM, .7) + tx(W + .4, 25, 35.9, '200 YEN', 2.5, '#e2483d', 800);
+    s += act('coin', shape(FP(.35, rrUV(20.5, 28.9, 29.5, 34.3, 1)), '#3a3632', .8)
+      + SLOTY.map((y, i) => shape(FP(.4, rectUV(y - .45, 29.7, y + .45, 33.7)), '#120f0c', .4)
+        + (st.coinIn[i] && Math.abs(st.a) < 4 ? fill(pd(FP(.45, rectUV(y - .22, 30.1, y + .22, 33.3))), COINM.l) : '')).join(''));
+    // coin box door with its lock
+    s += shape(FP(.3, rrUV(3, 5, 16, 14, 1.2)), mix(fr, '#000000', .07), 1);
+    s += shape(FP(.4, ellUV(9.5, 9.5, 1.3, 1.3, 14)), METAL.l, .7) + line([[W + .5, 9.5, 8.8], [W + .5, 9.5, 10.2]], .6);
+  }
+  if (BACK){ const bk = tone([-1,0,0], m);
+    s += fill(pd(on(PX(0), OUTB)), bk);
+    s += shape(on(PX(-.2), rrUV(8, 8, 42, 36, 2)), mix(bk, '#000000', .07), 1.1);
+    s += shape(on(PX(-.3), ellUV(36, 22, 1.4, 1.4, 14)), METAL.l, .8) + line([[-.4, 36, 21.3], [-.4, 36, 22.7]], .6);
+    s += shape(on(PX(-.3), rectUV(14, 26, 30, 32)), '#f3f0e6', .7) + txB(-.35, 22, 27.9, 'NO. 0417', 2.4, INK, 800);
+  }
+  s += extrude(OUTB, 0, W, m);
+  const sm = tone([0,1,0], m), sr = tone([0,-1,0], m);
+  if (LEFT){
+    s += shape(on(PY(D + .2), rrUV(6, 9, 44, 36, 4)), mix(sm, '#ffffff', .22), 1);
+    s += txY(25, D + .3, 24.5, 'GASHAPON', 6, mix(sm, '#000000', .45), 800) + txY(25, D + .3, 16.5, 'CAPSULE TOYS', 3.2, mix(sm, '#000000', .45), 800);
+  }
+  if (RIGHT){
+    s += shape(on(PY(-.2), rrUV(6, 9, 44, 36, 4)), mix(sr, '#ffffff', .22), 1);
+    s += txYr(25, -.3, 24.5, 'GASHAPON', 6, mix(sr, '#000000', .45), 800) + txYr(25, -.3, 16.5, 'CAPSULE TOYS', 3.2, mix(sr, '#000000', .45), 800);
+  }
+  if (FRONT) s += ink(pd(on(PX(W), OUTB)), 2.2);
+  if (BACK) s += ink(pd(on(PX(0), OUTB)), 2.2);
+  s += hullInk([...on(PX(0), OUTB), ...on(PX(W), OUTB)], 2.8);
+  return s;
+}
+
+function lidSvg(m){
+  let s = '';
+  if (facing([1,0,0])){ s += fill(pd(on(PX(W), OUTL)), tone([1,0,0], m));
+    s += shape(on(PX(W + .3), ellUV(25, 77.5, 1.3, 1.3, 14)), METAL.l, .7) + line([[W + .4, 25, 76.8], [W + .4, 25, 78.2]], .6); }
+  if (facing([-1,0,0])) s += fill(pd(on(PX(0), OUTL)), tone([-1,0,0], m));
+  s += extrude(OUTL, 0, W, m);
+  if (facing([1,0,0])) s += ink(pd(on(PX(W), OUTL)), 1.8);
+  if (facing([-1,0,0])) s += ink(pd(on(PX(0), OUTL)), 1.8);
+  return s + hullInk([...on(PX(0), OUTL), ...on(PX(W), OUTL)], 2.4);
+}
+
+/* ---------- the agitator wheel's top (the tank floor) and the stirrer ---------- */
+function wheelTop(st){
+  const z = ZB + .04, rim = ellZ(25, 25, z, WR, 40);
+  let holes = '', under = '';
+  for (let i = 0; i < 4; i++){
+    const b = (45 + 90 * i + st.w) * R2D, cx = 25 + PR * Math.cos(b), cy = 25 + PR * Math.sin(b), h = ellZ(cx, cy, z, HOLE, 20);
+    holes += pd(h); under += fill(pd(h), RECESS);
+    if (st.pock[i]) under += clipTo(h, capSvg(cx, cy, WZ0 + CAPR, st.pock[i].col, 30 * i - 20));
+  }
+  return under + `<path d="${pd(rim)}${holes}" fill="${WHEELM.l}" fill-rule="evenodd"/>` + ink(pd(rim), 1) + ink(holes, .7);
+}
+function stirrerParts(st){
+  const out = [], z = ZB;
+  out.push({ box:[[22.6, 22.6, z], [27.4, 27.4, z + 2.4]], svg: cyl(25, 25, z, z + 2.4, 2.4, METAL, toneI, .9, 18) });
+  for (const off of [0, 180]){
+    const b = (st.w + off + 90) * R2D, c = Math.cos(b), sn = Math.sin(b);
+    const p0 = [25 + 2 * c, 25 + 2 * sn, z + 1.8], p1 = [25 + 7 * c, 25 + 7 * sn, z + 5.5], p2 = [25 + 13 * c, 25 + 13 * sn, z + 2.2];
+    out.push({ box: bbox([p0, p1], .6), svg: rod(p0, p1, .5, METAL, toneI, .7) });
+    out.push({ box: bbox([p1, p2], .6), svg: rod(p1, p2, .5, METAL, toneI, .7) });
+  }
+  return out;
+}
+
+/* ---------- the clear tank and its pile ---------- */
+function tankSvg(st, m, k){
+  const WALLS = [
+    { n:[-1,0,0], pts:[[TX0,TY0,ZB],[TX0,TY1,ZB],[TX0,TY1,TZ1],[TX0,TY0,TZ1]] },
+    { n:[1,0,0],  pts:[[TX1,TY0,ZB],[TX1,TY1,ZB],[TX1,TY1,TZ1],[TX1,TY0,TZ1]] },
+    { n:[0,-1,0], pts:[[TX0,TY0,ZB],[TX1,TY0,ZB],[TX1,TY0,TZ1],[TX0,TY0,TZ1]] },
+    { n:[0,1,0],  pts:[[TX0,TY1,ZB],[TX1,TY1,ZB],[TX1,TY1,TZ1],[TX0,TY1,TZ1]] } ];
+  const posts = [[TX0, TY0], [TX1 - 3, TY0], [TX0, TY1 - 3], [TX1 - 3, TY1 - 3]].map(([x, y]) =>
+    ({ at:[x + 1.5, y + 1.5, (ZB + TZ1) / 2], box:[[x, y, ZB], [x + 3, y + 3, TZ1]], svg: box(x, y, ZB, x + 3, y + 3, TZ1, m, tone, 1) }));
+  const mid = depthOf([25, 25, 58]), farP = posts.filter(q => depthOf(q.at) < mid - 1), nearP = posts.filter(q => depthOf(q.at) >= mid - 1);
+  let s = byDepth(farP);
+  for (const w of WALLS) if (!vis(w.n)) s += fill(pd(w.pts), GLASS, 'opacity=".22"') + ink(pd([w.pts[2], w.pts[3]], false), .7);
+  // floor: the top of the body with the round opening the agitator wheel turns in
+  const sq = on(PZ(ZB + .03), rectUV(TX0, TY0, TX1, TY1)), ring = ellZ(25, 25, ZB + .03, WR + .6, 40);
+  const floor = `<path d="${pd(sq)}${pd(ring)}" fill="${mix(m.d, '#ffffff', .62)}" fill-rule="evenodd"/>` + fill(pd(ring), RECESS) + ink(pd(ring), .8) + wheelTop(st);
+  s += k > 0 ? `<g opacity="${f(1 - .75 * k)}">${floor}</g>` : floor;   // see-through: the drive under the floor shows
+  // contents: the pile, the stirrer, the display card, sorted together
+  const fade = 1 - .88 * k, parts = stirrerParts(st);
+  for (const p of st.pile) parts.push({ at:[p.x, p.y, p.z], box:[[p.x - CAPR, p.y - CAPR, p.z - CAPR], [p.x + CAPR, p.y + CAPR, p.z + CAPR]],
+    svg: fade < 1 ? `<g opacity="${f(fade)}">${capSvg(p.x, p.y, p.z, p.col, p.rot)}</g>` : capSvg(p.x, p.y, p.z, p.col, p.rot) });
+  let card = box(46.8, 5, 64, 47.4, 45, 74, CERAMIC, toneI, .8);
+  if (facing([1,0,0])){ card += shape(on(PX(47.45), rrUV(6, 65, 44, 73, 1.5)), '#ffd9d0', .6) + tx(47.5, 25, 68.6, 'GASHAPON', 4.6, '#e2483d', 800) + tx(47.5, 25, 65.9, 'CAPSULE TOYS', 1.9, INK, 800);
+    for (const [y, c] of [[9.5, '#3e86d9'], [40.5, '#f2c230']]) card += capSvg(47.6, y, 69, c, 0, 2.2); }
+  parts.push({ box:[[46.8, 5, 64], [47.4, 45, 74]], svg: card });
+  s += byDepth(parts);
+  // near glass, its streaks, the top and bottom edges, then the near posts
+  for (const w of WALLS) if (vis(w.n)){
+    s += `<g pointer-events="none">` + fill(pd(w.pts), GLASS, 'opacity=".2"');
+    if (w.n[0]) s += fill(pd(on(PX(w.pts[0][0] + .05), [[12, ZB + 4], [18, ZB + 4], [34, TZ1 - 4], [28, TZ1 - 4]])), '#ffffff', 'opacity=".38"')
+      + fill(pd(on(PX(w.pts[0][0] + .05), [[21, ZB + 4], [23, ZB + 4], [39, TZ1 - 4], [37, TZ1 - 4]])), '#ffffff', 'opacity=".38"');
+    else s += fill(pd(on(PY(w.pts[0][1] + .05 * w.n[1]), [[12, ZB + 4], [17, ZB + 4], [31, TZ1 - 4], [26, TZ1 - 4]])), '#ffffff', 'opacity=".34"');
+    s += `</g>` + ink(pd([w.pts[0], w.pts[1]], false), 1) + ink(pd([w.pts[2], w.pts[3]], false), 1);
+  }
+  return s + byDepth(nearP);
+}
+
+/* ---------- see-through: the working parts inside the lower body ---------- */
+const CHUTEF = '#d3d8d9';
+function chuteSeg(x0, x1, inner){
+  const f0 = floorZ(x0), f1 = floorZ(x1), hh = 8.4;
+  const wall = y => [[x0, y, f0], [x1, y, f1], [x1, y, f1 + hh], [x0, y, f0 + hh]];
+  const wf = y => fill(pd(wall(y)), GLASS, 'opacity=".38"') + ink(pd([[x0, y, f0 + hh], [x1, y, f1 + hh]], false), .8) + ink(pd([[x0, y, f0], [x1, y, f1]], false), .6);
+  const nearHi = facing([0,1,0]);
+  let s = nearHi ? wf(CH0) : wf(CH1);
+  if (x0 <= 9 && facing([1,0,0])) s += fill(pd([[x0, CH0, f0], [x0, CH1, f0], [x0, CH1, f0 + hh], [x0, CH0, f0 + hh]]), GLASS, 'opacity=".38"');
+  s += shape([[x0, CH0, f0], [x1, CH0, f1], [x1, CH1, f1], [x0, CH1, f0]], CHUTEF, .7);
+  s += inner + (nearHi ? wf(CH1) : wf(CH0));
+  if (x0 <= 9 && !facing([1,0,0])) s += fill(pd([[x0, CH0, f0], [x0, CH1, f0], [x0, CH1, f0 + hh], [x0, CH0, f0 + hh]]), GLASS, 'opacity=".38"') + ink(pd([[x0, CH0, f0 + hh], [x0, CH1, f0 + hh]], false), .8);
+  return { box:[[x0, CH0, f1 - .5], [x1, CH1, f0 + hh]], svg: s };
+}
+function ductSvg(st, inner){
+  const xa = 8.6, xb = 17.4, ya = 20.6, yb = 29.4, zt = 32.8, low = x => floorZ(x) + 8.4;
+  const W4 = [
+    { n:[-1,0,0], p:[[xa, ya, low(xa)], [xa, yb, low(xa)], [xa, yb, zt], [xa, ya, zt]] },
+    { n:[1,0,0],  p:[[xb, ya, low(xb)], [xb, yb, low(xb)], [xb, yb, zt], [xb, ya, zt]] },
+    { n:[0,-1,0], p:[[xa, ya, low(xa)], [xb, ya, low(xb)], [xb, ya, zt], [xa, ya, zt]] },
+    { n:[0,1,0],  p:[[xa, yb, low(xa)], [xb, yb, low(xb)], [xb, yb, zt], [xa, yb, zt]] } ];
+  const wf = w => fill(pd(w.p), GLASS, 'opacity=".38"') + ink(pd(w.p), .6);
+  let s = W4.filter(w => !vis(w.n)).map(wf).join('');
+  // gate flap: hinged on the front edge of the hole, pushed down by the falling capsule, sprung shut
+  const g = ease(st.gate) * 72 * R2D, hx = 17.2, hz = 32.7, len = 8.4, tipX = hx - len * Math.cos(g), tipZ = hz - len * Math.sin(g);
+  const flap = [[hx, 21.2, hz], [hx, 28.8, hz], [tipX, 28.8, tipZ], [tipX, 21.2, tipZ]];
+  s += shape(flap, toneI([Math.sin(g), 0, Math.cos(g)], METAL), .7) + rod([hx, 20.8, hz], [hx, 29.2, hz], .35, GEARM, toneI, .5);
+  const mid = [hx - 3 * Math.cos(g), 28.4, hz - 3 * Math.sin(g)];
+  s += springLine([16.9, 28.4, 26.5], mid, 8, .55, [1, 0, 0]);
+  s += inner + W4.filter(w => vis(w.n)).map(wf).join('');
+  return { box:[[xa, ya, low(xb) - .2], [xb, yb, zt]], svg: s };
+}
+
+function mechParts(st){
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg });
+  const bx = (x0, y0, z0, x1, y1, z1, m, w = .8) => put([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, m, toneI, w));
+  const a = st.a, turning = st.turning, live = on => on ? matOf('#ffb347') : null;
+  // ---- capsule path: duct + chute pieces, the moving or waiting capsule inside the piece it is in
+  const c = st.drop, cap = c ? capSvg(c.x, c.y, c.z, c.col, c.rot) : '', waitS = st.waiting ? capSvg(...WAIT, st.waiting.col, 25) : '';
+  const inDuct = c && c.ph === 'fall' && c.z > 22;
+  parts.push(ductSvg(st, inDuct ? cap : ''));
+  for (const [x0, x1] of [[9, 18], [18, 27], [27, 36], [36, 45], [45, 49.4]]){
+    let inner = '';
+    if (c && !inDuct && c.x >= x0 - .01 && c.x < x1) inner += cap;
+    if (st.waiting && x0 === 45) inner += waitS;
+    parts.push(chuteSeg(x0, x1, inner));
+  }
+  for (const x of [22, 40]) for (const y of [21.5, 28.5]) put([[x - .5, y - .5, 3.5], [x + .5, y + .5, floorZ(x)]], rod([x, y, 3.6], [x, y, floorZ(x) - .1], .45, GEARM, toneI, .6));
+  // ---- base plate on its brackets, the capsule gate (a collar round the hole under the pocket's path)
+  let plate = box(6, 1, 33, 44, 49, 34, matOf('#c9cfd2'), toneI, .9);
+  plate += shape(ellZ(GATE[0], GATE[1], 34.05, HOLE + .7, 20), METAL.d, .6) + fill(pd(ellZ(GATE[0], GATE[1], 34.1, HOLE, 20)), RECESS);
+  const plateS = `<g opacity=".6">${plate}</g>`;   // the plate and the wheel sitting on it go in as one part: plate first
+  for (const y of [[1, 2.4], [47.6, 49]]) for (const x of [12, 36]) bx(x, y[0], 29, x + 4, y[1], 33, GEARM, .6);
+  // ---- agitator wheel (its side; the top is the tank floor), rotor shaft, crown gear, collar
+  put([[6, 1, 33], [44, 49, ZB]], plateS + '<g opacity=".5">' + loft(ellZ(25, 25, WZ0, WR, 40), ellZ(25, 25, ZB, WR, 40), n => toneI(n, WHEELM)) + hullInk([...ellZ(25, 25, WZ0, WR, 40), ...ellZ(25, 25, ZB, WR, 40)], 1.2) + '</g>');
+  put([[24, 24, 27.1], [26, 26, 33]], rod([25, 25, 27.1], [25, 25, 33], .9, METAL, toneI, .6));
+  let crown = cyl(25, 25, 25.8, 27.1, 7, live(turning) || BRASS, toneI, .9, 28);
+  for (let i = 0; i < 24; i++){ const b = (i * 15 + st.w) * R2D, p = [25 + 7 * Math.cos(b), 25 + 7 * Math.sin(b)];
+    if (vis([Math.cos(b), Math.sin(b), 0])) crown += line([[p[0], p[1], 25.8], [p[0], p[1], 26.6]], .4); }
+  put([[18, 18, 25.8], [32, 32, 27.1]], crown);
+  put([[23.5, 23.5, 24.4], [26.5, 26.5, 25.8]], cyl(25, 25, 24.4, 25.8, 1.5, METAL, toneI, .7, 16));
+  // ---- handle shaft in pieces between the parts it passes through; pinion, hanger, ratchet, front bearing
+  for (const [x0, x1] of [[31.6, 37], [38.2, 40], [41.6, 45], [48, 48.4]]) put([[x0, 24.2, 23.2], [x1, 25.8, 24.8]], rod([x0, KY, KZ], [x1, KY, KZ], .8, METAL, toneI, .6));
+  let pin = cylX(31, 33, KY, KZ, 1.8, live(turning) || BRASS, toneI, .8, 16);
+  { const cx = facing([1,0,0]) ? 33.05 : facing([-1,0,0]) ? 30.95 : null;
+    if (cx != null) for (let i = 0; i < 8; i++) pin += line([kp(cx, .9, i * 45 + a), kp(cx, 1.8, i * 45 + a)], .35); }
+  put([[31, 23.2, 22.2], [33, 26.8, 25.8]], pin);
+  put([[37, 23, 22.4], [38.2, 27, 33]], box(37, 23, 22.4, 38.2, 27, 33, GEARM, toneI, .7) + (facing([1,0,0]) ? shape(on(PX(38.25), ellUV(KY, KZ, 1.3, 1.3, 14)), METAL.l, .5) : ''));
+  let rat = cylX(40, 41.6, KY, KZ, 4.2, METAL, toneI, .8, 24);
+  { const cx = facing([1,0,0]) ? 41.65 : facing([-1,0,0]) ? 39.95 : null;
+    if (cx != null) for (let i = 0; i < 12; i++) rat += line([kp(cx, 3, i * 30 + a), kp(cx, 4.1, i * 30 + a + 10)], .4); }
+  put([[40, 20.8, 19.8], [41.6, 29.2, 28.2]], rat);
+  put([[40.2, 24.2, 28.2], [41.4, 25.8, 33]], box(40.2, 24.2, 28.3, 41.4, 25.8, 33, live(turning) || PAWLM, toneI, .6));
+  put([[48.4, 23.3, 22.3], [49, 26.7, 25.7]], cylX(48.4, 49, KY, KZ, 1.7, BRASS, toneI, .6, 16));
+  // ---- coin disc with its pockets, and the coins riding in them
+  let disc = cylX(45, 48, KY, KZ, 10, matOf('#d7dcdd'), toneI, 1, 32);
+  const capX = facing([1,0,0]) ? 48.05 : facing([-1,0,0]) ? 44.95 : null;
+  if (capX != null){
+    for (const p0 of POCK){ const al = p0 + a, c0 = kp(capX, 8.1, al), rr = [0, -Math.sin(al * R2D), Math.cos(al * R2D)], tt = [0, -Math.cos(al * R2D), -Math.sin(al * R2D)];
+      const q = [[2, .5], [2, -.5], [-2, -.5], [-2, .5]].map(([u, v]) => c0.map((cc, kk) => cc + rr[kk] * u + tt[kk] * v));
+      disc += shape(q, RECESS, .4); }
+    disc += shape([kp(capX, 10, 37 + a), kp(capX, 10, 43 + a), kp(capX, 8.8, 43 + a), kp(capX, 8.8, 37 + a)], RECESS, .4);   // the pawl's notch
+  }
+  for (let i = 0; i < 2; i++) if (st.coinIn[i]) disc += coinTilted(coinPos(i, a), POCK[i] + a);
+  put([[45, 15, 14], [48.4, 35, 34]], disc);
+  // ---- lock pawl, coin sense lever, pivot pin, spring to the tab on the front wall
+  const piv = [12.5, 35.8], ph = st.pawl * 10 * R2D, tip = rotYZ([18.6, 32.1], piv, ph), sense = rotYZ([28.5, 34.4], piv, ph);
+  put([[46.2, 11.8, 31.4], [47.4, 19.4, 36.6]], prismX(barYZ(piv, tip, 1.3), 46.2, 47.4, st.pawl > .5 ? matOf('#ffb347') : PAWLM));
+  put([[48.3, 11.8, 33.6], [48.9, 29, 36.4]], prismX(barYZ(piv, sense, .7), 48.3, 48.9, METAL));
+  put([[45.8, 11.9, 35.2], [49, 13.1, 36.4]], cylX(45.8, 49, piv[0], piv[1], .6, METAL, toneI, .5, 12));
+  put([[47.6, 8, 38.4], [49, 9.8, 39.8]], box(47.6, 8, 38.4, 49, 9.8, 39.8, GEARM, toneI, .5));
+  const sTo = rotYZ([15.2, 34.6], piv, ph);
+  put([[46.6, 8.5, 34], [47.2, 15.6, 38.6]], springLine([46.9, 8.9, 38.4], [46.9, sTo[0], sTo[1] + .6], 9, .5, [0, .6, .8]));
+  // ---- coin chute down to the coin box; a coin falling in it; the box and its lock
+  let cc = '';
+  for (const cf of st.coinFall){ const p = fallPos(cf); cc += coinStanding(p[0], p[1], p[2]); }
+  const nearHi = facing([0,1,0]), wA = box(45.2, 17.4, 13, 47.8, 17.6, 21.5, METAL, toneI, .5), wB = box(45.2, 19.8, 13, 47.8, 20, 21.5, METAL, toneI, .5);
+  put([[45.2, 17.4, 13], [47.8, 20, 21.5]], (nearHi ? wA : wB) + cc + `<g opacity=".5">${nearHi ? wB : wA}</g>`);
+  let cb = box(22, 2, 4, 47.5, 20, 13, st.boxFlash > 0 ? matOf('#ffd46a') : matOf('#aab4ba'), toneI, 1);
+  cb += shape(on(PZ(13.05), rectUV(45.3, 17.5, 47.7, 19.9)), RECESS, .4);
+  put([[22, 2, 4], [47.5, 20, 13]], cb);
+  put([[47.5, 8.5, 8.5], [49, 10.5, 10.5]], cylX(47.5, 49, 9.5, 9.5, 1, BRASS, toneI, .5, 12));
+  // ---- a coin on its way in through a slit
+  if (st.fly){ const p = flyPos(st.fly); if (p[0] < W) put([[p[0] - 1.7, p[1] - .4, p[2] - 1.7], [p[0] + 1.7, p[1] + .4, p[2] + 1.7]], coinStanding(...p)); }
+  return parts;
+}
+
+/* ---------- what stands in front of the machine: knob, exit flap, coins, the capsule you took ---------- */
+function flapSvg(st){
+  const th = ease(st.flap) * 80 * R2D, y0 = EXIT[0] + .4, y1 = EXIT[2] - .4, len = EXIT[3] - EXIT[1] - .3, t = .8, hx = W, hz = EXIT[3];
+  const dn = [Math.sin(th), 0, -Math.cos(th)], out = [Math.cos(th), 0, Math.sin(th)];
+  const Q = (a, w, y) => [hx + a * dn[0] + w * out[0], y, hz + a * dn[2] + w * out[2]];
+  const faces = [
+    { n: out, p:[Q(0, t, y0), Q(0, t, y1), Q(len, t, y1), Q(len, t, y0)], clear:true },
+    { n: dn,  p:[Q(len, 0, y0), Q(len, 0, y1), Q(len, t, y1), Q(len, t, y0)] },
+    { n:[0,1,0], p:[Q(0, 0, y1), Q(len, 0, y1), Q(len, t, y1), Q(0, t, y1)] },
+    { n:[0,-1,0], p:[Q(0, 0, y0), Q(len, 0, y0), Q(len, t, y0), Q(0, t, y0)] },
+    { n: out.map(v => -v), p:[Q(0, 0, y0), Q(0, 0, y1), Q(len, 0, y1), Q(len, 0, y0)], clear:true } ];
+  let s = '';
+  for (const fc of faces) if (vis(fc.n)) s += fc.clear ? fill(pd(fc.p), '#3d3935', 'fill-opacity=".32"') + ink(pd(fc.p), 1) : shape(fc.p, tone(fc.n, DARK), .9);
+  if (vis(out)) s += fill(pd([Q(len * .15, t + .05, y0 + 2), Q(len * .15, t + .05, y0 + 4), Q(len * .85, t + .05, y0 + 8), Q(len * .85, t + .05, y0 + 6)]), '#ffffff', 'opacity=".35"')
+    + shape([Q(len - 2.2, t + .05, 23), Q(len - 2.2, t + .05, 27), Q(len - .8, t + .05, 27), Q(len - .8, t + .05, 23)], DARK.d, .6);
+  s += rod([W + .4, y0 - .6, hz], [W + .4, y1 + .6, hz], .45, METAL, toneI, .6);
+  return { box: bbox(faces.flatMap(fc => fc.p).concat([[W, y0 - .6, hz + .5]])), svg: act('take', s) };
+}
+function movePos(t){
+  const x = WAIT[0] + (OUTP[0] - WAIT[0]) * t;
+  return [x, 25, (x <= W ? floorZ(x) : Math.max(BH, 5 - (x - W) * .5)) + CAPR];
+}
+function frontParts(st, m){
+  const parts = [], FRONT = facing([1,0,0]);
+  // knob: boss, white disc, grip bar across it (the bar turns with the handle)
+  const a = st.a;
+  const boss = cylX(W, W + 1.2, KY, KZ, 6.3, METAL, toneI, 1, 28), disc = cylX(W + 1.2, W + 3.4, KY, KZ, 5.6, KNOBM, toneI, 1.1, 28);
+  const bar = rod(kp(W + 4.4, 4.4, 90 + a), kp(W + 4.4, 4.4, 270 + a), 1.3, st.turning ? matOf('#ffb347') : matOf('#e2483d'), toneI, 1);
+  const dot = FRONT ? fill(pd(on(PX(W + 3.45), ellUV(...kp(0, 3.6, a).slice(1), .45, .45, 10))), INK) : '';
+  parts.push({ box:[[W, KY - 6.3, KZ - 6.3], [W + 5.8, KY + 6.3, KZ + 6.3]], svg: act('knob', FRONT ? boss + disc + dot + bar : bar + disc + boss) });
+  parts.push(flapSvg(st));
+  // coins on the counter
+  let stack = '';
+  for (let i = 0; i < st.coins; i++) stack += coinDisc(STACK[0], STACK[1], BH + .05 + i * .75);
+  if (!st.coins) stack += fill(pd(ellZ(STACK[0], STACK[1], BH + .05, 1.7)), '#d8d2c2') + ink(pd(ellZ(STACK[0], STACK[1], BH + .05, 1.7)), .4);
+  parts.push({ box:[[STACK[0] - 1.7, STACK[1] - 1.7, BH], [STACK[0] + 1.7, STACK[1] + 1.7, BH + .8 + st.coins * .75]], svg: act('coin', stack) });
+  // a coin flying from the stack into its slit: only the part in front of the plate shows
+  if (st.fly){ const p = flyPos(st.fly), y = SLOTY[st.fly.i];
+    let cs = coinStanding(...p);
+    if (p[0] - 1.7 < W) cs = clipTo([[W, y, 0], [W + 40, y, 0], [W + 40, y, 90], [W, y, 90]], cs);
+    if (p[0] + 1.7 > W) parts.push({ box:[[Math.max(W, p[0] - 1.7), p[1] - .4, p[2] - 1.7], [p[0] + 1.7, p[1] + .4, p[2] + 1.7]], svg: cs }); }
+  // the capsule rolling out, or on the counter (closed, or open with its toy)
+  if (st.move){ const p = movePos(st.move.t), rot = 25 + st.move.t * 300;
+    let cs = capSvg(...p, st.move.cap.col, rot);
+    if (p[0] < W) cs = clipTo(on(PX(W), rectUV(EXIT[0], EXIT[1], EXIT[2], EXIT[3])), cs);
+    parts.push({ box:[[p[0] - CAPR, p[1] - CAPR, p[2] - CAPR], [p[0] + CAPR, p[1] + CAPR, p[2] + CAPR]], svg: cs }); }
+  if (st.out){ const x = OUTP[0], y = OUTP[1], z = BH + CAPR;
+    if (st.out.open <= 0) parts.push({ box:[[x - CAPR, y - CAPR, BH], [x + CAPR, y + CAPR, BH + 2 * CAPR]], svg: act('open', capSvg(x, y, z, st.out.col, -15)) });
+    else { const oc = openCap(st.out), d = oc.domeAt;
+      parts.push({ box:[[x - CAPR, y - CAPR, BH], [x + CAPR, y + CAPR, BH + 2 * CAPR]], svg: oc.cup });
+      parts.push({ box:[[d[0] - CAPR, d[1] - CAPR, d[2] - CAPR], [d[0] + CAPR, d[1] + CAPR, d[2] + CAPR]], svg: oc.dome }); } }
+  return byDepth(parts);
+}
+
+/* ---------- labels ---------- */
+// pills in two columns either side (the kit's xrCallouts, but split evenly by screen x so a long list fits, and the right
+// column starts under the See-through / Labels switches)
+function callouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0]));
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 3*k);
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, ctm = svgEl.getScreenCTM();
+  const wMax = u ? hgt*1.3 + 12*k : Math.max(...items.map(it => it.text.length))*fs*.62 + fs*1.5 + 12*k;
+  const roomL = xmin - vb.x >= wMax, roomR = vb.x + vb.width - xmax >= wMax;
+  const all = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  const nL = !roomR ? all.length : !roomL ? 0 : Math.ceil(all.length / 2), Lc = all.slice(0, nL), Rc = all.slice(nL);
+  const top = { [-1]: fs, [1]: fs };
+  const below = (el, side) => { if (!el || !ctm) return; const r = el.getBoundingClientRect(); if (!r.height) return;
+    const q = new DOMPoint(r.right, r.bottom + 8).matrixTransform(ctm.inverse()); if (q.y > 0) top[side] = Math.max(top[side], q.y + hgt/2); };
+  below(document.getElementById('btns'), -1);
+  const vs = document.querySelector('.vset'); if (vs && getComputedStyle(vs).position === 'absolute') below(vs, 1);   // on a phone they sit under the figure
+  let s = '';
+  for (const [col, side] of [[Lc, -1], [Rc, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    y = vb.y + vb.height - hgt/2 + gap; for (const c of col.slice().reverse()){ c.py = Math.min(c.py, y - gap); y = c.py; }   // keep the column in the frame
+    y = -1e9; for (const c of col){ c.py = Math.max(c.py, y + gap, top[side]); y = c.py; }
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+const LB = [0, W, 0, D, 0, LZ];
+function insideLabels(st){
+  const t = st.turning, a = st.a, c = st.drop, b0 = (45 + st.w) * R2D;
+  const items = [
+    { at:[W + 4.4, KY, KZ + 4.4], text:'HANDLE', on: t },
+    { at:[43.3, KY, KZ + .8], text:'HANDLE SHAFT', on: t },
+    { at:[48.7, KY, KZ + 1.7], text:'FRONT BEARING', on: false },
+    { at:[W + .4, 22.5, 33.7], text:'COIN SLOTS', on: !!st.fly },
+    { at: kp(48, 10, 130 + a), text:'COIN DISC', on: t },
+    { at:[46.8, 15.5, 34.2], text:'LOCK PAWL', on: st.pawl > .5 },
+    { at:[48.6, 26, 35], text:'COIN SENSE LEVER', on: st.pawl > .5 },
+    { at:[46.9, 10.5, 37.6], text:'PAWL SPRING', on: false },
+    { at:[49, 12.5, 36.4], text:'PAWL PIVOT', on: false },
+    { at: kp(41.6, 4.2, 60), text:'RATCHET WHEEL', on: t },
+    { at:[40.8, 25.8, 31], text:'ANTI-REVERSE PAWL', on: t },
+    { at:[37.6, 27, 30], text:'SHAFT HANGER', on: false },
+    { at:[33, KY, KZ - 1.8], text:'PINION', on: t },
+    { at:[25 + 4.9, 25 - 4.9, 27.1], text:'CROWN GEAR', on: t },
+    { at:[25, 25.9, 30.5], text:'ROTOR SHAFT', on: t },
+    { at:[25, 26.5, 25], text:'SHAFT COLLAR', on: false },
+    { at:[40, 47, 34], text:'BASE PLATE', on: false },
+    { at:[14, 1, 30], text:'PLATE BRACKET', on: false },
+    { at:[25 + WR * Math.cos(-20 * R2D), 25 + WR * Math.sin(-20 * R2D), 37.5], text:'AGITATOR WHEEL', on: t },
+    { at:[25 + PR * Math.cos(b0), 25 + PR * Math.sin(b0), ZB], text:'CAPSULE POCKET', on: false },
+    { at:[25 + 7 * Math.cos(st.w * R2D + Math.PI / 2), 25 + 7 * Math.sin(st.w * R2D + Math.PI / 2), ZB + 5.5], text:'STIRRER ARMS', on: t },
+    { at:[GATE[0], GATE[1] + HOLE + .7, 34], text:'CAPSULE GATE', on: !!(c && c.ph === 'fall') },
+    { at:[13, 21.2, 32.4], text:'GATE FLAP', on: st.gate > .1 },
+    { at:[16.9, 28.4, 27], text:'GATE SPRING', on: st.gate > .1 },
+    { at:[8.6, 25, 26], text:'DROP DUCT', on: !!(c && c.ph === 'fall') },
+    { at:[30, CH0, floorZ(30) + 8.4], text:'CAPSULE CHUTE', on: !!(c && c.ph === 'roll') },
+    { at:[22, 21.5, 5], text:'CHUTE LEGS', on: false },
+    { at:[W + .8, 22, 8], text:'EXIT FLAP', on: st.flap > .05 },
+    { at:[46.5, 17.4, 19], text:'COIN CHUTE', on: st.coinFall.length > 0 },
+    { at:[30, 11, 13], text:'COIN BOX', on: st.boxFlash > 0 },
+    { at:[49, 9.5, 10.5], text:'COIN BOX LOCK', on: false },
+    { at:[W + .4, 18.8, EXIT[3]], text:'FLAP HINGE', on: st.flap > .05 } ];
+  if (st.coinIn[0] || st.coinIn[1]) items.push({ at: coinPos(st.coinIn[0] ? 0 : 1, a), text:'COINS', on: true });
+  if (st.waiting) items.push({ at:[WAIT[0], WAIT[1], WAIT[2] + CAPR], text:'CAPSULE', on: true });
+  return items;
+}
+function surfaceLabels(st){
+  if (!facing([1,0,0])) return facing([-1,0,0]) ? [{ at:[-.2, 25, 36], text:'SERVICE DOOR', on: false }] : [];
+  const items = [
+    { at:[W + 4.4, KY, KZ + 4.4], text:'HANDLE', on: st.turning },
+    { at:[W + .4, 22.5, 33.7], text:'COIN SLOTS', on: !!st.fly },
+    { at:[W + .4, 31, 38.6], text:'PRICE CARD', on: false },
+    { at:[W + .8, 22, 8], text:'EXIT FLAP', on: st.flap > .05 },
+    { at:[W + .4, 4, 12], text:'COIN BOX DOOR', on: false },
+    { at:[TX1, 8, 58], text:'CAPSULE TANK', on: false },
+    { at:[47.4, 41, 72], text:'DISPLAY CARD', on: false },
+    { at:[W + .3, 25, 78.8], text:'LID LOCK', on: false },
+    { at:[STACK[0], STACK[1], BH + st.coins * .75 + .8], text:'100 YEN COINS', on: !!st.fly } ];
+  if (st.out) items.push({ at:[OUTP[0], OUTP[1], BH + 2 * CAPR], text: st.out.open > .5 ? TOYS[st.out.toy].name : 'CAPSULE', on: true });
+  return items;
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const FRONT = facing([1,0,0]), k = ease(st.xr || 0);
+  let s = board(-4, -4, W + 20, D + 4, BH, 6);
+  s += castShadow([...on(PX(0), OUTB), ...on(PX(W), OUTB), [0, 0, LZ], [W, 0, LZ], [W, D, LZ], [0, D, LZ]], BH, boardTop(-4, -4, W + 20, D + 4, BH, 6));
+  const fr = frontParts(st, m);
+  if (!FRONT) s += fr;
+  const body = bodySvg(st, m);
+  s += k > 0 ? xrGhost(body, '', k, OUTB, 0, W, m) + `<g opacity="${f(k)}">${byDepth(mechParts(st))}</g>` : body;
+  s += tankSvg(st, m, k);
+  s += lidSvg(m);
+  if (FRONT) s += fr;
+  const items = k > .6 ? insideLabels(st) : surfaceLabels(st);
+  if (items.length) s += callouts(items, LB);
+  return s;
+}
+
+/* ---------- behaviour ---------- */
+let ui, looping = false;
+const pawlTarget = () => (st.coinIn[0] && st.coinIn[1] && !st.turning) || (st.turning && st.a < 330) ? 1 : 0;
+const busy = () => !!(st.fly || st.turning || st.jig > 0 || st.drop || st.coinFall.length || st.move || (st.out && st.out.opening) || st.openAfter
+  || st.flap !== st.flapT || st.pawl !== pawlTarget() || st.gate > 0 || st.boxFlash > 0);
+function kick(){ if (looping) return; looping = true; ui.animate(dt => { update(dt); const more = busy(); if (!more) looping = false; return more; }); }
+function refill(){ for (let i = 0; i < 4; i++) if (!st.pock[i] && st.pile.length){ const p = st.pile.pop(); st.pock[i] = { col: p.col, toy: p.toy }; } }
+function startFly(){ const i = st.coinIn[0] ? 1 : 0; st.coins--; st.fly = { i, t: 0, h: BH + st.coins * .75 }; }
+function update(dt){
+  if (st.fly){ st.fly.t += dt / .8; if (st.fly.t >= 1){ st.coinIn[st.fly.i] = true; st.fly = null; if (st.queue > 0){ st.queue--; startFly(); } else if (st.turnAfter){ st.turnAfter = false; turnKnob(); } } }
+  st.pawl = approach(st.pawl, pawlTarget(), dt / .15);
+  if (st.jig > 0){ st.jig = Math.max(0, st.jig - dt); st.a = st.jig > 0 ? 6 * Math.sin((.5 - st.jig) * Math.PI * 8) * Math.min(1, st.jig * 4) : 0; }
+  if (st.turning){
+    st.tt = Math.min(1, st.tt + dt / 2.6); st.a = 360 * ease(st.tt); st.w = st.w0 - st.a / 4;
+    for (let i = 0; i < 2; i++) if (st.coinIn[i] && POCK[i] + st.a >= 130){ st.coinIn[i] = false; st.coinFall.push({ p: coinPos(i, st.a), t: 0 }); }
+    for (let i = 0; i < 4; i++){ const b = (((45 + 90 * i + st.w) % 360) + 360) % 360;
+      if (st.pock[i] && !st.drop && !st.waiting && Math.abs(b - 180) < 6){ st.drop = { ...st.pock[i], x: GATE[0], y: GATE[1], z: WZ0 + CAPR, v: 0, ph:'fall', rot: 0 }; st.pock[i] = null; } }
+    if (st.tt >= 1){ st.turning = false; st.a = 0; st.w0 = st.w = (((st.w % 360) + 360) % 360); refill();
+      if (!st.drop && !st.waiting) st.takeAfter = st.openAfter = false; }   // an empty pocket came round: nothing to take
+  }
+  if (st.drop){ const c = st.drop;
+    if (c.ph === 'fall'){ c.v += 260 * dt; c.z -= c.v * dt; const zf = floorZ(GATE[0]) + CAPR; if (c.z <= zf){ c.z = zf; c.ph = 'roll'; c.v = 10; } }
+    else { c.v += 45 * dt; c.x += c.v * dt; c.rot += c.v * dt * 18;
+      if (c.x >= WAIT[0]){ st.waiting = { col: c.col, toy: c.toy }; st.drop = null; if (st.takeAfter){ st.takeAfter = false; takeCapsule(); } } else c.z = floorZ(c.x) + CAPR; } }
+  st.gate = approach(st.gate, st.drop && st.drop.ph === 'fall' && st.drop.z < WZ0 + 1.5 && st.drop.z > 21 ? 1 : 0, dt / .12);
+  for (const cf of st.coinFall.slice()){ cf.t += dt / .45; if (cf.t >= 1){ st.coinFall.splice(st.coinFall.indexOf(cf), 1); st.box++; st.boxFlash = .5; } }
+  if (st.boxFlash > 0) st.boxFlash = Math.max(0, st.boxFlash - dt);
+  st.flap = approach(st.flap, st.flapT, dt / .3);
+  if (st.move && st.flap >= 1){ st.move.t = Math.min(1, st.move.t + dt / .8);
+    if (st.move.t >= 1){ st.out = { ...st.move.cap, open: 0 }; st.move = null; st.flapT = 0; } }
+  if (st.openAfter && st.out && !st.move){ st.openAfter = false; st.out.opening = true; }
+  if (st.out && st.out.opening){ st.out.open = Math.min(1, st.out.open + dt / .9);
+    if (st.out.open >= 1){ st.out.opening = false; st.got++; ui.flash(`You got the ${TOYS[st.out.toy].name}!`, 2400); } }
+}
+
+function insertCoins(){
+  if (st.coinIn[0] && st.coinIn[1]) return ui.flash('200 YEN is in: turn the knob');
+  if (st.fly) return ui.flash('One coin at a time');
+  if (st.turning) return ui.flash('Wait for the knob to finish its turn');
+  const need = st.coinIn.filter(c => !c).length;
+  if (st.coins < need){ st.coins = 10; ui.flash('Out of coins: here are ten more 100 YEN coins'); }
+  st.queue = need - 1; startFly(); kick();
+}
+function turnKnob(){
+  if (st.turning) return ui.flash('The knob is already turning');
+  if (st.fly){ st.turnAfter = true; return; }                     // turns as soon as the coin is in
+  if (st.waiting || st.drop || st.move) return ui.flash('Take your capsule out first');
+  if (!(st.coinIn[0] && st.coinIn[1])){ st.jig = .5; kick(); return ui.flash(st.coinIn[0] || st.coinIn[1] ? 'Locked: it takes two 100 YEN coins' : 'Locked: insert 200 YEN first'); }
+  if (!st.pock.some(Boolean)) return ui.flash('Sold out');
+  st.turning = true; st.tt = 0; st.w0 = st.w; kick();
+}
+function takeCapsule(){
+  if (st.move) return;
+  if (st.drop || st.turning || st.turnAfter){ st.takeAfter = true; return kick(); }   // takes it as soon as it reaches the flap
+  if (!st.waiting) return ui.flash('Nothing behind the flap: turn the knob first');
+  st.out = null; st.move = { t: 0, cap: st.waiting }; st.waiting = null; st.flapT = 1; kick();
+}
+function openIt(){
+  if (st.move){ st.openAfter = true; return kick(); }
+  if (!st.out){
+    if (st.waiting || st.drop || st.turning || st.turnAfter){ takeCapsule(); st.openAfter = true; return; }
+    return ui.flash('Turn the knob to get a capsule first');
+  }
+  if (st.out.open > 0) return ui.flash('Already open: insert coins for another one');
+  st.out.opening = true; kick();
+}
+
+ui = mountFigure({
+  fig:'21', title:'Capsule toy machine', turn:'full',
+  size:[W + 20, D + 4, LZ + 2], center:[33, 25], palette:'tomato', state: st,
+  scene,
+  stats: st => [{ label:'Coins', value: String(st.coins) }, { label:'Toys', value: String(st.got) }],
+  buttons:[
+    { label:'Insert coins', onClick: insertCoins },
+    { label:'Turn the knob', onClick: turnKnob },
+    { label:'Take capsule', onClick: takeCapsule },
+    { label:'Open it', onClick: openIt },
+  ],
+  acts:{ coin: () => insertCoins(), knob: () => turnKnob(), take: () => takeCapsule(), open: () => openIt() },
+  params:(st, q) => {
+    if (q.has('coins')){ const n = +q.get('coins'); st.coinIn = [n > 0, n > 1]; st.pawl = n > 1 ? 1 : 0; }
+    if (q.has('a')){ st.a = +q.get('a'); st.w = -st.a / 4; }
+    if (q.get('waiting') === '1') st.waiting = { col: CAPCOLS[0], toy: 0 };
+    if (q.has('out')) st.out = { col: CAPCOLS[1], toy: (+q.get('out') || 0) % TOYS.length, open: +(q.get('open') || 0) };
+    if (q.has('flap')) st.flap = st.flapT = +q.get('flap');
+    if (q.has('drop')) st.drop = { col: CAPCOLS[2], toy: 1, x: GATE[0], y: GATE[1], z: +q.get('drop'), v: 0, ph:'fall', rot: 0 };
+    if (q.has('gate')) st.gate = +q.get('gate');
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
