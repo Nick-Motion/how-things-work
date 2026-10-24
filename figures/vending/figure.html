@@ -226,7 +226,7 @@ function frontFace(st, m){
   let s = clipTo(win, interior(st));
   s += act('take', clipTo(binO, binCavity(st) + flapSvg(st)));
   s += act('cup', clipTo(cupO, cupCavity(st)));
-  s += `<path d="${pd(on(F, OUT))}${pd(win)}${pd(binO)}" fill="${fc}" fill-rule="evenodd"/>`;
+  s += `<path d="${pd(on(F, OUT))}${pd(win)}${pd(binO)}${pd(cupO)}" fill="${fc}" fill-rule="evenodd"/>`;
   s += ink(pd(on(PX(W + .05), rrUV(1.4, 1.4, D - 1.4, H - 1.4, 2))), .9);                          // door seam
   // header sign
   s += shape(on(PX(W + .15), rrUV(WIN[0], 173.5, WIN[2], 180.5, 1.5)), '#fff4d6', 1.1);
@@ -333,7 +333,7 @@ function mech(st){
   put(vBoxOf([[70, 15, 94.5], [77, 13, 81]], 1.6), rod([70, 15, 94.5], [77, 13, 81], 1.4, METAL, toneI, .7));         // return chute
   put(vBoxOf([[64, 21, 122], [64, 21, 50]], 1.4), rod([64, 21, 122], [64, 21, 50], 1.3, METAL, toneI, .7));           // overflow chute
   bx(...CASH, GEARM, 1);
-  put([[76, 7, 72], [80, 19, 73]], box(76, 7, 71.5, 80, 19, 72.5, METAL, toneI, .6));                                // return cup tray
+  put([[75.5, 6.5, 71.5], [80, 19.5, 82.5]], `<g opacity=".7">${box(75.5, 6.5, 71.5, 80, 19.5, 82.5, METAL, toneI, .6)}</g>`);   // return cup
   // ---- control: keypad board, display module, control board, power supply, door lock
   bx(78.2, 5.5, 95, 79.4, 22.5, 124, PCBM, .6);
   bx(75, 5.5, 148, 79.4, 22.5, 161, DARK, .7);
@@ -435,15 +435,12 @@ const LBL = st => { const sp = st.spin || st.fall || { r:1, c:2 }, t = TRAYZ[sp.
     { at:[44, 24, 130], text:'CONTROL BOARD', on: vending },
     { at:[37, 6, 26], text:'POWER SUPPLY', on:false },
     { at:[80, 14, 50], text:'DOOR LOCK', on:false },
-    { at:[W - .9, D + .5, 158], text:'DOOR HINGE', on:false },
-    { at:[30 + 9*(sp.spin ? 0 : 0), yc + CR, t + CR], text:'SPIRAL', on: !!st.spin },
+    { at:[39, yc + CR, t + CR], text:'SPIRAL', on: !!st.spin },
     { at:[10, yc, t + 10.6], text:'SPIRAL MOTOR', on: !!st.spin },
     { at:[6.5, yc + 2.5, t + 12], text:'HOME SWITCH', on: !!st.spin },
-    { at:[67, 97, TRAYZ[0] - 1.2], text:'TRAY', on:false },
     { at:[4.6, 70, TRAYZ[2] + .9], text:'TRAY HARNESS', on: !!st.spin },
     { at:[77.5, 96.8, 120], text:'LED LIGHT', on:false },
-    { at:[71, 27, 52], text:'IR EMITTERS', on: st.beam > 0 },
-    { at:[71, 97, 52], text:'IR RECEIVERS', on: st.beam > 0 },
+    { at:[71, 97, 52], text:'DROP SENSOR', on: st.beam > 0 },
     { at:[70, 92, 16], text:'DELIVERY BIN', on: st.bin.length > 0 },
     { at:[W, 92, 30], text:'PUSH FLAP', on: st.flap > 0 },
     { at:[22, 80, 12.5], text:'COMPRESSOR', on:true },
@@ -462,6 +459,46 @@ const SURF = st => facing([1,0,0]) ? [
   { at:[W, 14, 158], text:'DISPLAY', on:false }, { at:[W, 13, 74], text:'CHANGE CUP', on: st.cup > 0 },
   { at:[W, 80, 36], text:'PUSH FLAP', on: st.bin.length > 0 }, { at:[W, 92, 150], text:'SPIRALS', on: !!st.spin } ] : [];
 
+// the core callout layout, with room kept for the switches top right (this figure has 34 labels)
+function vCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0])), cx = (xmin + xmax)/2;
+  // on a phone (LBL_U = drawing units per screen px) each label is a numbered badge and the names go in a legend under the figure
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 3*k);
+  const L = [], R = [];
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, btn = document.getElementById('btns');
+  const wMax = u ? hgt*1.3 + 12*k : Math.max(...items.map(it => it.text.length))*fs*.62 + fs*1.5 + 12*k;
+  const roomL = xmin - vb.x >= wMax, roomR = vb.x + vb.width - xmax >= wMax;
+  for (const it of items){ const [X, Y] = P(...it.at); ((X < cx && roomL) || !roomR ? L : R).push({ ...it, X, Y }); }
+  let s = '';
+  let top = { [-1]: fs, [1]: fs + 30*k };
+  if (btn && svgEl.getScreenCTM()){ const r = btn.getBoundingClientRect(), q = new DOMPoint(r.right, r.bottom + 50).matrixTransform(svgEl.getScreenCTM().inverse());
+    if (q.y > 0) top[-1] = q.y + hgt; }
+  for (const el of [document.querySelector('.vset'), document.getElementById('stats')])
+    if (el && svgEl.getScreenCTM() && getComputedStyle(el).position === 'absolute'){ const r = el.getBoundingClientRect(), q = new DOMPoint(r.left, r.bottom + 8).matrixTransform(svgEl.getScreenCTM().inverse());
+      if (q.y > 0) top[1] = Math.max(top[1], q.y + hgt/2); }
+  const cap = side => Math.floor((vb.y + vb.height - hgt/2 - top[side]) / gap) + 1;
+  for (let n = 0; n < items.length && (L.length > cap(-1) || R.length > cap(1)); n++){
+    const [A, Bc] = L.length > cap(-1) ? [L, R] : [R, L]; let bi = 0;
+    A.forEach((c, i) => { if (Math.abs(c.X - cx) < Math.abs(A[bi].X - cx)) bi = i; }); Bc.push(A.splice(bi, 1)[0]); }
+  for (const [col, side] of [[L, -1], [R, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    const shift = col.length ? Math.max(0, col.reduce((a, c) => a + c.py - c.Y, 0) / col.length) : 0;
+    const room = col.length ? col[0].py - top[side] : 0; for (const c of col) c.py -= Math.min(shift, room);
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+
 /* ---------- scene ---------- */
 function scene(st, m){
   const FR = facing([1,0,0]), BK = facing([-1,0,0]), LF = facing([0,1,0]), RT = facing([0,-1,0]);
@@ -479,8 +516,7 @@ function scene(st, m){
   if (FR || LF) s += hinges();
   if (FR) s += frontMounted(st, m);
   const B = [0, W + 3, 0, D, 0, H];
-  if (k > .6) s += xrCallouts(LBL(st), B);
-  else s += xrCallouts(SURF(st), B);
+  s += vCallouts(k > .6 ? LBL(st) : SURF(st), B);
   return s;
 }
 
@@ -493,7 +529,7 @@ function fresh(){
 const vs = Object.assign({ pal:'tomato' }, fresh());
 let ui, looping = false;
 const active = () => vs.coin != null || vs.spin || vs.fall || vs.take || vs.flap !== vs.flapT || vs.pay.length || vs.cup > 0
-  || vs.keyT > 0 || vs.keyQ.length || vs.retT > 0 || vs.msgT > 0 || vs.beam > 0 || (vs.xr || 0) > 0;
+  || vs.keyT > 0 || vs.keyQ.length || vs.retT > 0 || vs.msgT > 0 || vs.beam > 0;
 function kick(){ if (looping) return; looping = true; ui.animate(dt => { update(dt); const more = active(); if (!more) looping = false; return !!more; }); }
 const say = (a, b, s = 2) => { vs.msg = [a, b]; vs.msgT = s; };
 
@@ -563,7 +599,7 @@ function takeSnack(){
 }
 
 ui = mountFigure({
-  fig:'21', title:'Vending machine', size:[W + 3, D, H], palette:'tomato', state:vs,
+  fig:'21', title:'Vending machine', size:[W + 3, D, H], palette:'tomato', state:vs, turn:'full',
   scene,
   stats: st => [ { label:'Coins', value:String(st.coins) }, { label:'Credit', value:fmt(st.credit) }, { label:'Snacks', value:String(st.taken), small:true } ],
   buttons:[
@@ -589,6 +625,5 @@ ui = mountFigure({
   },
 });
 if (active()) kick();
-setInterval(() => { if ((vs.xr || 0) > 0 && !looping) kick(); }, 250);
 xrMount(() => ui, () => '');
 </script></body></html>
