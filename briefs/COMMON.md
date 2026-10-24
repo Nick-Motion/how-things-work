@@ -12,6 +12,8 @@ Deliverables in figures/<SLUG>/:
 
 Quality bar: the figure must do something real with 2-5 buttons, have a see-through with 30+ labelled real parts, no NaN/errors in data-errors, and look right from every yaw in the verify loop. Chromium runs need --no-sandbox and a fresh --user-data-dir each.
 
+Book-only exception for simple tools. Label every meaningful real component and physical feature shown. Keep force and travel overlays separate from anatomy. Declare the expected minimum label count in the individual brief before verification. Only a brief-declared simple-book exception may use the second argument in `verify_figure.sh <slug> [minimum-labels]`, whose default is 25. Never choose a lower minimum after a failure. Complex machines retain the 30+ target. Identify teaching adaptations in metadata/blurb and Truth first notes, without adding a page caption or inventing mechanisms. Treat reset and specimen replacement as teaching controls, not self-repair hardware.
+
 When done, reply with: slug, what the buttons do, anything that still looks wrong. Nothing else.
 
 Known gotcha: `?press=` runs with --virtual-time-budget hang in this machine's headless chromium while an animation loop runs (seen on toaster, crossing, microwave, vending). Use `timeout 60 chromium ... --screenshot` without --virtual-time-budget, or check the state machine by stepping update() in a test page. Never ship a figure whose animations were removed just to make headless happy.
