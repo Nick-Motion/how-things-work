@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bicycle derailleur gears</title>
+<style>@media(min-width:561px){#btns{display:grid;grid-template-columns:repeat(2,max-content);max-width:none}#stats{display:grid;grid-template-columns:repeat(2,max-content);gap:8px 14px}#stats .stat .v{font-size:22px}#stats .stat.small .v{font-size:14px}}</style></head><body>
+<script src="core.js"></script>
+<script>
+/* ---------- Truth first: how a derailleur bike really changes gear ----------
+   1. Pedal: the foot turns the pedal -> crank arm -> BB spindle (on two bearings in the BB shell) -> the 42T chainring,
+      bolted to the drive crank's spider. The ring pulls the chain's top run forward.
+   2. The top run drags the cog it sits on round. All eight cogs (11-13-15-18-21-24-28-32) slide onto the splines of the
+      freehub body, held by the lockring. Pawls on the freehub body catch the ratchet ring inside the hub shell, so the
+      hub, 32 spokes, rim and tyre turn: wheel rpm = cadence x 42 / cog teeth.
+   3. Under the cassette the slack side of the chain runs back round the tension pulley and up over the guide (jockey)
+      pulley to the cog. The cage, wound back by the cage spring in the P-knuckle, takes up the slack in every gear, so
+      the chain length (108 links) never changes.
+   4. Shift: the down-tube lever turns an index ratchet and a cable spool; each click lets out or winds in one step of
+      inner cable. The bare cable runs under the down tube, through the cable guide under the BB, along the top of the
+      drive chainstay to the housing stop, then through the housing loop to the barrel adjuster on the B-knuckle and on
+      to the anchor bolt on the outer link. This is a low-normal (Rapid Rise type) derailleur: the return spring across
+      the parallelogram pulls the P-knuckle inboard toward the big cogs, cable tension pulls it outboard to the small
+      ones. The H and L limit screws stop it at the 11T and the 32T.
+   5. The parallelogram (B-knuckle, outer and inner links, P-knuckle) carries the cage sideways and down the slant of the
+      cassette. The guide pulley pushes the chain sideways, but the chain only climbs to the next cog while it moves:
+      shift without pedalling and the derailleur moves while the chain waits.
+   6. Stop pedalling: the crank, chain and cassette stop, the wheel spins on; the ratchet ring overruns the pawls and
+      they click over its teeth.
+   Parts (each is held by the one named):
+   STAND    three legs with rubber feet (on the floor) . tripod hub . column (on the hub) . height collar . clamp arm .
+            clamp head . two jaws gripping the seatpost . T-handle
+   FRAME    seat tube . seat collar . seatpost (in the seat tube) . saddle on its rails . top tube and down tube (cut) .
+            BB shell . chainstays . seatstays . brake bridge . dropouts . derailleur hanger (part of the drive dropout) .
+            shifter boss on the down tube . cable guide under the BB . housing stop on the chainstay
+   WHEEL    tyre . rim . valve . 32 spokes (flange to rim) . hub shell + flanges . axle (in the dropouts) . hub bearings .
+            quick-release lever and nut
+   FREEHUB  freehub body (on the axle) . three pawls . ratchet ring (in the hub shell) . eight cogs . lockring
+   DRIVE    chain . chainring + spider + bolts . crank arms . pedals . BB spindle . BB bearings
+   DERAILLEUR B-knuckle on the hanger bolt . outer link . inner link . link pins . return spring . P-knuckle . cage spring .
+            cage plates . guide pulley . tension pulley . pulley bolts . H/L limit screws . barrel adjuster . anchor bolt
+   SHIFTER  lever on the shifter boss . index ratchet . cable spool . inner cable . housing loop */
+
+/* ---------- coordinates: x = across the bike (+x = drive side), y = forward, z = up; 1 unit = 1 cm ---------- */
+const XM = 60, YA = 36, ZA = 46;                                       // bike midplane, rear axle
+const RA = (x, y, z) => [XM + x, YA + y, ZA + z];                       // point relative to the rear axle
+const add3 = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]], scl3 = (a, k) => [a[0]*k, a[1]*k, a[2]*k], lerp3 = (a, b, t) => add3(a, scl3(sub(b, a), t));
+const rad = d => d*Math.PI/180;
+const boxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const BLACK = matOf('#46423d'), RUB = matOf('#3a3633'), TAN = matOf('#cfa76c'), ALU = matOf('#e4e7e8'), STANDM = matOf('#3f7fc0'),
+  BRASS = matOf('#d8b25a'), DARKM = matOf('#8d9599'), RED = matOf('#d9503e');
+const CHAINI = '#5b5853', CHAINO = '#b3b9bc', HOUSE = '#2f2c29', WIRE = '#cfd4d6';
+
+/* ---------- drivetrain: 1 x 8, 42T ring, 11-32 cassette, 11T pulleys, half-inch chain ---------- */
+const CPITCH = 1.27, TEETH = [11,13,15,18,21,24,28,32], RING = 42, RPUL = 11, CAD = 60;
+const pr = n => CPITCH / (2*Math.sin(Math.PI/n));                       // pitch radius of an n-tooth sprocket
+const BB = [XM, 77, 39], BBc = [BB[1] - YA, BB[2] - ZA], RINGX = 4.4, LC = 7.2;
+const cogX = q => 5.4 - .48*q;                                          // cog plane, relative to the midplane
+const lerpA = (arr, q) => { const i = Math.max(0, Math.min(arr.length - 1, q)), a = Math.min(arr.length - 2, Math.floor(i)), t = i - a; return arr[a]*(1-t) + arr[a+1]*t; };
+const cogR = q => lerpA(TEETH.map(pr), q);
+// parallelogram: links pivot on the B-knuckle at BK and carry the P-knuckle (cage pivot = guide pulley axle) along the cassette's slant
+const BK = [8.3, -2.5, -9.5];
+const pkIdeal = q => { const d = cogR(q) + .75 + pr(RPUL), th = rad(-102); return [cogX(q) + 1.1, d*Math.cos(th), d*Math.sin(th)]; };
+const LK = (Math.hypot(...sub(pkIdeal(0), BK)) + Math.hypot(...sub(pkIdeal(7), BK))) / 2;
+const pkAt = q => { const v = sub(pkIdeal(q), BK), l = Math.hypot(...v); return add3(BK, scl3(v, LK/l)); };
+const AXP = norm(cross(sub(pkAt(0), BK), sub(pkAt(7), BK)));                   // link pin axis
+const OFF = (() => { const o = scl3(norm(cross(AXP, norm(sub(pkAt(3.5), BK)))), 1.5); return o[2] < 0 ? scl3(o, -1) : o; })();   // outer link above the inner
+const anchorAt = q => add3(add3(BK, scl3(OFF, .5)), scl3(sub(pkAt(q), BK), .78));
+const SPRD = (() => { const d = (q, s) => Math.hypot(...sub(add3(pkAt(q), scl3(OFF, s*.5)), add3(BK, scl3(OFF, -s*.5)))); return d(7, 1) < d(0, 1) ? 1 : -1; })();  // spring diagonal that shortens inboard
+const BARREL_F = RA(8.9, -2.0, -4.3), BARREL_B = RA(8.9, -3.8, -3.4);   // barrel adjuster on the B-knuckle, opening backward
+
+// chain path in the side plane (u = y, v = z, rear axle at 0): cog -> ring -> tension pulley -> guide pulley -> cog
+function tangent2(c1, r1, s1, c2, r2, s2){
+  const du = c2[0]-c1[0], dv = c2[1]-c1[1], D = Math.hypot(du, dv), b = Math.atan2(dv, du), k = r2*s2 - r1*s1;
+  const t = b + Math.asin(Math.max(-1, Math.min(1, -k/D))), d = [Math.cos(t), Math.sin(t)], q = [d[1], -d[0]];
+  return { p1:[c1[0] + r1*s1*q[0], c1[1] + r1*s1*q[1]], p2:[c2[0] + r2*s2*q[0], c2[1] + r2*s2*q[1]] };
+}
+function chainPath(rc, G, phi){
+  const T = [G[0] + LC*Math.cos(phi), G[1] + LC*Math.sin(phi)];
+  const CC = [ { c:[0,0], r:rc, s:-1 }, { c:BBc, r:pr(RING), s:-1 }, { c:T, r:pr(RPUL), s:-1 }, { c:G, r:pr(RPUL), s:1 } ];
+  const segs = CC.map((a, i) => { const b = CC[(i+1) % 4]; return tangent2(a.c, a.r, a.s, b.c, b.r, b.s); });
+  let len = 0; const parts = [];
+  for (let i = 0; i < 4; i++){
+    const sg = segs[i], l = Math.hypot(sg.p2[0]-sg.p1[0], sg.p2[1]-sg.p1[1]);
+    parts.push({ kind:'line', a:sg.p1, b:sg.p2, len:l }); len += l;
+    const c = CC[(i+1)%4], pin = sg.p2, pout = segs[(i+1)%4].p1;
+    const a0 = Math.atan2(pin[1]-c.c[1], pin[0]-c.c[0]), a1 = Math.atan2(pout[1]-c.c[1], pout[0]-c.c[0]);
+    let da = c.s > 0 ? a1 - a0 : a0 - a1; da = ((da % (2*Math.PI)) + 2*Math.PI) % (2*Math.PI);
+    parts.push({ kind:'arc', c:c.c, r:c.r, s:c.s, a0, da, len:c.r*da }); len += c.r*da;
+  }
+  return { L:len, parts, T };
+}
+const CH_L = chainPath(cogR(7), [pkAt(7)[1], pkAt(7)[2]], rad(-50)).L, CH_N = Math.round(CH_L / CPITCH);   // 137.7 cm = 108 links
+function solvePhi(rc, G){ let lo = rad(-170), hi = rad(-10);
+  for (let i = 0; i < 30; i++){ const m = (lo + hi)/2; if (chainPath(rc, G, m).L > CH_L) lo = m; else hi = m; } return (lo + hi)/2; }
+function pathAt(cp, s){
+  s = ((s % cp.L) + cp.L) % cp.L;
+  for (let i = 0; i < 8; i++){ const p = cp.parts[i];
+    if (s <= p.len || i === 7){ const t = p.len ? Math.min(1, s/p.len) : 0;
+      if (p.kind === 'line') return { i, t, u: p.a[0] + (p.b[0]-p.a[0])*t, v: p.a[1] + (p.b[1]-p.a[1])*t };
+      const a = p.a0 + p.s*p.da*t; return { i, t, a, u: p.c[0] + p.r*Math.cos(a), v: p.c[1] + p.r*Math.sin(a) }; }
+    s -= p.len; } }
+// everything the chain, cage and sprockets need this frame
+function chainGeo(st){
+  const pk = pkAt(st.q), G = [pk[1], pk[2]], rc = cogR(st.qc), phi = solvePhi(rc, G), cp = chainPath(rc, G, phi);
+  const px = pk[0] - 1.1, cx = cogX(st.qc), p = cp.L / CH_N;
+  const xs = [t => cx + (RINGX - cx)*t, () => RINGX, t => RINGX + (px - RINGX)*t, () => px, () => px, () => px, t => px + (cx - px)*t, () => cx];
+  const R = [], part = [], ph = {};
+  for (let k = 0; k < CH_N; k++){
+    const a = pathAt(cp, st.s0 + k*p); R.push(RA(xs[a.i](a.t), a.u, a.v));
+    part.push(pathAt(cp, st.s0 + (k + .5)*p).i);
+    if (a.a != null && ph[a.i] == null) ph[a.i] = a.a;               // a roller sitting in a tooth gap sets that sprocket's phase
+  }
+  return { pk, G, phi, cp, px, cx, T: cp.T, R, part, ph, ci: Math.round(st.qc) };
+}
+
+/* ---------- drawing helpers ---------- */
+// surface of revolution about an axis: prof = [{x, r, m, c}] walked from the -axis end outward; c marks a crease (inked)
+function revGrid(o, ax, e1, e2, prof, n, opt = {}){
+  const sh = opt.sh || toneI, w = opt.w ?? .8, a0 = opt.a0 || 0, M = prof.length, J = opt.closed ? M : M - 1, out = [];
+  const V = prof.map(p => Array.from({length:n}, (_, i) => { const a = a0 + i/n*2*Math.PI, c = Math.cos(a), s = Math.sin(a);
+    return [0,1,2].map(k => o[k] + ax[k]*p.x + p.r*(c*e1[k] + s*e2[k])); }));
+  const nq = (j, i) => { const p0 = prof[j], p1 = prof[(j+1) % M], tx = p1.x - p0.x, tr = p1.r - p0.r, a = a0 + (i+.5)/n*2*Math.PI, c = Math.cos(a), s = Math.sin(a);
+    return [0,1,2].map(k => -tr*ax[k] + tx*(c*e1[k] + s*e2[k])); };
+  const VIS = Array.from({length:J}, (_, j) => Array.from({length:n}, (_, i) => vis(nq(j, i))));
+  const vq = j => (j < 0 || j >= J) ? (opt.closed ? VIS[(j + J) % J] : null) : VIS[j];
+  for (let j = 0; j < J; j++) for (let i = 0; i < n; i++){
+    if (!VIS[j][i]) continue;
+    const i1 = (i+1) % n, j1 = (j+1) % M, a = V[j][i], b = V[j][i1], c = V[j1][i1], d = V[j1][i], nr = nq(j, i);
+    let s = face(pd([a, b, c, d]), sh(norm(nr), prof[j].m || opt.m)), e = '';
+    const lo = vq(j-1), hi = vq(j+1);
+    if (prof[j].r > 1e-6 && (!lo || !lo[i] || prof[j].c)) e += pd([a, b], false);
+    if (prof[j1].r > 1e-6 && (!hi || !hi[i] || prof[j1].c)) e += pd([d, c], false);
+    if (!VIS[j][(i+n-1) % n] || opt.facet) e += pd([a, d], false);
+    if (!VIS[j][i1] || opt.facet) e += pd([b, c], false);
+    if (e) s += ink(e, w);
+    out.push({ d: depthOf(avg([a, b, c, d])), svg: s });
+  }
+  return out;
+}
+const soup = prims => prims.sort((a, b) => a.d - b.d).map(p => p.svg).join('');
+const EX = [1,0,0], EY = [0,1,0], EZ = [0,0,1];
+// a short round part along x (drum, nut, cup): closed ends
+const cylXr = (x0, x1, y, z, r, m, o = {}) => soup(revGrid([0, y, z], EX, EY, EZ, [{x:x0, r:0}, {x:x0, r, c:1}, {x:x1, r, c:1}, {x:x1, r:0}], o.n || 20, { m, sh: o.sh || toneI, w: o.w ?? .8, facet: o.facet }));
+// a round bar between two points, capped only where asked ('bore' = a cut tube end), inked along its two sides
+function tube(a, b, r, M, o = {}){
+  const sh = o.sh || tone, w = o.w ?? 1.1, r1 = o.r1 ?? r, n = o.n || 16, d = norm(sub(b, a));
+  const u = norm(cross(d, Math.abs(d[2]) < .9 ? [0,0,1] : [1,0,0])), v = cross(d, u);
+  const rg = (p, rr) => Array.from({length:n}, (_, i) => { const t = i/n*2*Math.PI; return add3(p, add3(scl3(u, rr*Math.cos(t)), scl3(v, rr*Math.sin(t)))); });
+  const A = rg(a, r), B = rg(b, r1), sv = norm(cross(d, CAM_V));
+  let s = loft(A, B, nr => sh(nr, M)) + ink(pd([add3(a, scl3(sv, r)), add3(b, scl3(sv, r1))], false) + pd([add3(a, scl3(sv, -r)), add3(b, scl3(sv, -r1))], false), w);
+  for (const [cap, R, nn] of [[o.capA, A, scl3(d, -1)], [o.capB, B, d]]) if (cap && vis(nn)){
+    s += fill(pd(R), sh(nn, M)) + ink(pd(R), w*.75);
+    if (cap === 'bore'){ const c = avg(R), Ri = R.map(p => lerp3(c, p, .76)); s += fill(pd(Ri), '#2a2622') + ink(pd(Ri), w*.45); } }
+  return s;
+}
+// a flat plate in the y-z plane from x0 to x1: uv is a counter-clockwise outline (y, z); hole optional
+function plateX(uv, x0, x1, m, sh = toneI, w = .7, hole = null){
+  const fx = vis([1,0,0]), xn = fx ? x1 : x0, xf = fx ? x0 : x1, nf = [fx ? 1 : -1, 0, 0];
+  let band = '', edge = '';
+  for (let i = 0; i < uv.length; i++){ const a = uv[i], b = uv[(i+1) % uv.length], nr = [0, b[1]-a[1], -(b[0]-a[0])];
+    if (!vis(nr)) continue;
+    band += face(pd([[x0, ...a], [x0, ...b], [x1, ...b], [x1, ...a]]), sh(norm(nr), m)); edge += pd([[xf, ...a], [xf, ...b]], false); }
+  const fd = pd(uv.map(p => [xn, ...p])) + (hole ? pd(hole.map(p => [xn, ...p]).reverse()) : '');
+  return band + (edge ? ink(edge, w*.8) : '') + `<path d="${fd}" fill="${sh(nf, m)}" fill-rule="evenodd"/>` + ink(fd, w);
+}
+const circUV = (cu, cv, r, n = 24) => ellUV(cu, cv, r, r, n);
+const hullUV = (cs) => hull(cs.flatMap(([cu, cv, r]) => circUV(cu, cv, r, 20)));
+// sprocket outline: roller gaps at ph + j*2pi/n (so the chain's rollers sit in them)
+function teethUV(cu, cv, n, ph, rp, tip, root){ const o = [], d = 2*Math.PI/n, at = (a, r) => [cu + r*Math.cos(a), cv + r*Math.sin(a)];
+  for (let j = 0; j < n; j++){ const a = ph + j*d;
+    o.push(at(a + .2*d, rp - root), at(a + .34*d, rp - root*.15), at(a + .45*d, rp + tip), at(a + .55*d, rp + tip), at(a + .66*d, rp - root*.15), at(a + .8*d, rp - root)); }
+  return o; }
+// a cable or housing cut into short pieces, each with its own box, so it sorts with the solids it passes
+const strk = (d, c, w) => `<path d="${d}" fill="none" stroke="${c}" style="stroke-width:${f(w)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+function wireItems(put, pts, col, wv, step = 3){
+  for (let i = 0; i < pts.length - 1; ){
+    let j = i + 1, len = 0; while (j < pts.length - 1 && len < step){ len += Math.hypot(...sub(pts[j], pts[j-1])); j++; }
+    if (len < step) j = pts.length - 1;
+    const seg = pts.slice(i, j + 1), d = pd(seg, false);
+    put(boxOf(seg, wv*.5), strk(d, INK, wv + .32) + strk(d, col, wv)); i = j; }
+}
+const bez = (a, b, c, d, n) => Array.from({length:n+1}, (_, i) => { const t = i/n, u = 1 - t; return [0,1,2].map(k => u*u*u*a[k] + 3*u*u*t*b[k] + 3*u*t*t*c[k] + t*t*t*d[k]); });
+const coil = (a, b, r, turns, n = 120) => { const d = norm(sub(b, a)), e1 = norm(cross(d, Math.abs(d[2]) < .9 ? [0,0,1] : [1,0,0])), e2 = cross(d, e1), o = [];
+  for (let i = 0; i <= n; i++){ const t = i/n, th = t*turns*2*Math.PI; o.push(add3(lerp3(a, b, t), add3(scl3(e1, r*Math.cos(th)), scl3(e2, r*Math.sin(th))))); } return o; };
+const coilSvg = pts => { const d = pd(pts, false); return strk(d, INK, .62) + strk(d, '#e8ecec', .3); };
+// sort: separated boxes first, then layers across the bike (it is thin in x), then depth
+function bgSort(list){
+  const sx = Math.sign(CAM_V[0]);
+  return list.filter(Boolean).sort((p, q) => sepOrder(p, q) || ((Math.abs(CAM_V[0]) > .04 && Math.abs(p.xk - q.xk) > .05) ? (p.xk - q.xk)*sx : 0)
+    || depthOf(boxMid(p.box)) - depthOf(boxMid(q.box))).map(p => p.svg).join('');
+}
+
+/* ---------- frame ---------- */
+const STu = norm([0, -.284, .959]), stAt = t => add3(BB, scl3(STu, t));          // seat tube, 73.5 deg
+const DTu = norm([0, .743, .669]), DTn = [0, DTu[2], -DTu[1]];                  // down tube, and its underside
+const dtAt = (t, o = 0, x = 0) => add3(add3(BB, scl3(DTu, t)), add3(scl3(DTn, o), [x, 0, 0]));
+const CS0 = s => [XM + 2.4*s, 75.3, 39.3], CS1 = s => [XM + 6.65*s, YA + 2.8, ZA - .3], csR = t => 1.0 - .28*t;
+const SS0 = s => [XM + 6.65*s, YA + 1.0, ZA + 2.6], SS1 = s => [XM + 1.4*s, 62.6, 87.6];
+const csAt = (s, t) => lerp3(CS0(s), CS1(s), t), ssAt = (s, t) => lerp3(SS0(s), SS1(s), t);
+const csTop = t => add3(csAt(1, t), [-.3, 0, csR(t) + .12]);                   // the cable's line along the drive chainstay
+const DROP_D = [[-2.0,-3.3],[-1.0,-4.3],[.1,-3.5],[.5,-1.4],[3.6,-1.3],[4.0,.6],[1.8,3.4],[.2,3.4],[-1.6,1.3],[-1.9,-1.0]];   // with the hanger
+const DROP_N = [[-1.2,-1.1],[1.2,-1.2],[3.6,-1.3],[4.0,.6],[1.8,3.4],[.2,3.4],[-1.5,1.4]];
+const HANGER = RA(8.25, -1.0, -3.2), BKC = RA(8.25, -2.5, -9.5);
+const SH_T = 18, SHC = dtAt(SH_T);                                                // down-tube shifter boss
+const ST_C = [36, 59.4], ST_HUB = 21.5, CLAMP_Z = 98.5, FEET = [[6, 59.4], [51, 33.4], [51, 85.4]];
+const SADDLE = (() => { const o = []; for (let i = 0; i <= 12; i++){ const t = i/12, y = 45 + 27.5*t, w = 6.9*Math.pow(1 - t, .55)*(1 - .25*t) + 1.6; o.push([XM + w, y]); }
+  for (let i = 12; i >= 0; i--){ const t = i/12, y = 45 + 27.5*t, w = 6.9*Math.pow(1 - t, .55)*(1 - .25*t) + 1.6; o.push([XM - w, y]); } return hull(o); })();
+const saddleZ = y => 108.2 + .9*Math.pow((72.5 - y)/27.5, 2);
+
+function stand(put){
+  const hub = [ST_C[0], ST_C[1], ST_HUB];
+  for (const [fx, fy] of FEET){ const ft = [fx, fy, 1.2], mid = lerp3(hub, ft, .5);
+    put(boxOf([hub, mid], .9), tube(hub, mid, .9, STANDM, { w: 1 }));
+    put(boxOf([mid, ft], .9), tube(mid, ft, .9, STANDM, { w: 1 }));
+    put([[fx - 1.4, fy - 1.4, 0], [fx + 1.4, fy + 1.4, 1.6]], cyl(fx, fy, 0, 1.6, 1.4, RUB, toneI, .9, 14)); }
+  put([[ST_C[0] - 2.4, ST_C[1] - 2.4, ST_HUB - 2], [ST_C[0] + 2.4, ST_C[1] + 2.4, ST_HUB + 2]], cyl(...ST_C, ST_HUB - 2, ST_HUB + 2, 2.4, STANDM, tone, 1.2, 20));
+  const cz = [ST_HUB + 2, 40, 58, 70]; for (let i = 0; i < 3; i++) put([[ST_C[0] - 1.7, ST_C[1] - 1.7, cz[i]], [ST_C[0] + 1.7, ST_C[1] + 1.7, cz[i+1]]], tube([...ST_C, cz[i]], [...ST_C, cz[i+1]], 1.7, METAL, { sh: tone, w: 1.2, n: 18 }));
+  put([[ST_C[0] - 2.2, ST_C[1] - 2.2, 70], [ST_C[0] + 2.2, ST_C[1] + 2.2, 73]], cyl(...ST_C, 70, 73, 2.2, STANDM, tone, 1.1, 18) + cylXr(ST_C[0] - 4.4, ST_C[0] - 2.1, ST_C[1], 71.5, .55, BLACK));
+  const uz = [73, 86, 100.6]; for (let i = 0; i < 2; i++) put([[ST_C[0] - 1.4, ST_C[1] - 1.4, uz[i]], [ST_C[0] + 1.4, ST_C[1] + 1.4, uz[i+1]]], tube([...ST_C, uz[i]], [...ST_C, uz[i+1]], 1.4, METAL, { sh: tone, w: 1.1, n: 18, capB: i === 1 }));
+  // clamp arm along x to the clamp head, jaws round the seatpost, T-handle behind
+  put([[ST_C[0] - 1.6, ST_C[1] - 1.6, CLAMP_Z - 1.6], [ST_C[0] + 1.6, ST_C[1] + 1.6, CLAMP_Z + 1.6]], box(ST_C[0] - 1.6, ST_C[1] - 1.6, CLAMP_Z - 1.6, ST_C[0] + 1.6, ST_C[1] + 1.6, CLAMP_Z + 1.6, STANDM, tone, 1));
+  put([[ST_C[0] + 1.6, ST_C[1] - 1.1, CLAMP_Z - 1.1], [53, ST_C[1] + 1.1, CLAMP_Z + 1.1]], tube([ST_C[0] + 1.6, ST_C[1], CLAMP_Z], [53, ST_C[1], CLAMP_Z], 1.1, METAL, { sh: tone, w: 1.1 }));
+  put([[53, 57.4, CLAMP_Z - 2], [57.4, 61.4, CLAMP_Z + 2]], box(53, 57.4, CLAMP_Z - 2, 57.4, 61.4, CLAMP_Z + 2, STANDM, tone, 1.1));
+  const jaw = (y0, y1) => put([[57.4, y0, CLAMP_Z - 1.5], [62.3, y1, CLAMP_Z + 1.5]], box(57.4, y0, CLAMP_Z - 1.5, 62.3, y1, CLAMP_Z + 1.5, RUB, toneI, .9));
+  jaw(60.8, 62.1); jaw(56.7, 58.0);
+  put([[48.2, ST_C[1] - .5, CLAMP_Z - .5], [53, ST_C[1] + .5, CLAMP_Z + .5]], tube([53, ST_C[1], CLAMP_Z], [48.6, ST_C[1], CLAMP_Z], .45, METAL, { w: .9 }));
+  put([[47.9, ST_C[1] - 3.2, CLAMP_Z - .5], [48.9, ST_C[1] + 3.2, CLAMP_Z + .5]], tube([48.4, ST_C[1] - 3, CLAMP_Z], [48.4, ST_C[1] + 3, CLAMP_Z], .5, BLACK, { w: .9, capA: 1, capB: 1 }));
+}
+
+function frame(put, m){
+  const fr = (a, b, r, o = {}) => put(boxOf([a, b], Math.max(r, o.r1 ?? r)), tube(a, b, r, o.M || m, { w: 1.3, ...o }));
+  // seat tube in sections (one per thing beside it), seat collar, seatpost (in sections through the clamp jaws)
+  const st = [1.8, 12, 24, 36, 44, 50.6]; for (let i = 0; i < st.length - 1; i++) fr(stAt(st[i]), stAt(st[i+1]), 1.45);
+  fr(stAt(50.6), stAt(54.3), 1.75, { M: BLACK, capB: 1, w: 1.1 });
+  const sp = [54.3, (CLAMP_Z - 1.5 - BB[2])/STu[2], (CLAMP_Z + 1.5 - BB[2])/STu[2], 70];
+  for (let i = 0; i < 3; i++) fr(stAt(sp[i]), stAt(sp[i+1]), 1.35, { M: ALU, sh: tone, w: 1.1 });
+  fr(add3(stAt(52.4), [1.75, 0, 0]), add3(stAt(52.4), [2.5, 0, 0]), .45, { M: METAL, capB: 1, w: .8 });   // collar bolt
+  // saddle: clamp on the post, two rails, the shell
+  const pt = stAt(70);
+  put(boxOf([add3(pt, [-1.6, -1.6, 0]), add3(pt, [1.6, 1.6, 1.6])]), box(pt[0] - 1.5, pt[1] - 1.5, pt[2], pt[0] + 1.5, pt[1] + 1.5, pt[2] + 1.4, ALU, toneI, .8));
+  for (const s of [-1, 1]) fr([XM + 1.6*s, 49, 107.6], [XM + 1.6*s, 67, 107.4], .3, { M: METAL, w: .8 });
+  { const A = SADDLE.map(([x, y]) => [XM + (x - XM)*.94, y, saddleZ(y) - 1.4]), B = SADDLE.map(([x, y]) => [x, y, saddleZ(y)]);
+    put(boxOf([...A, ...B]), loft(A, B, n => tone(n, BLACK)) + (vis([0,0,1]) ? fill(pd(B), tone([0,0,1], BLACK)) + ink(pd(B), 1) : '') + hullInk([...A, ...B], 1.8)); }
+  // top tube and down tube, cut through (the front half of the bike is not drawn)
+  const tt0 = stAt(49.5); fr(tt0, [XM, 84.5, tt0[2]], 1.4, { capB: 'bore' });
+  fr(dtAt(1.6), dtAt(14), 1.6); fr(dtAt(14), dtAt(26), 1.6, { capB: 'bore' });
+  // BB shell with its two bearing cups
+  put([[56.6, BB[1] - 2.1, BB[2] - 2.1], [63.4, BB[1] + 2.1, BB[2] + 2.1]], tube([56.6, BB[1], BB[2]], [63.4, BB[1], BB[2]], 2.1, m, { w: 1.3, n: 22 }));
+  for (const [a, b] of [[63.4, 64.1], [55.9, 56.6]]) put([[a, BB[1] - 2.4, BB[2] - 2.4], [b, BB[1] + 2.4, BB[2] + 2.4]], cylXr(a, b, BB[1], BB[2], 2.4, BLACK, { n: 12, facet: 1 }));
+  // cable guide under the BB shell
+  put([[59.4, 75.9, 35.9], [61.4, 78.6, 36.95]], box(59.4, 75.9, 35.9, 61.4, 78.6, 36.95, BLACK, toneI, .7));
+  // stays in sections, brake bridge, dropouts
+  for (const s of [-1, 1]){
+    for (let i = 0; i < 6; i++){ const t0 = i/6, t1 = (i+1)/6; fr(csAt(s, t0), csAt(s, t1), csR(t0), { r1: csR(t1) }); }
+    for (let i = 0; i < 6; i++){ const t0 = i/6, t1 = (i+1)/6; fr(ssAt(s, t0), ssAt(s, t1), .72 - .12*t0, { r1: .72 - .12*t1 }); }
+    const poly = (s > 0 ? DROP_D : DROP_N).map(([u, v]) => [YA + u, ZA + v]), x0 = XM + 6.5*s, x1 = XM + 7.0*s;
+    put(boxOf(poly.map(([y, z]) => [x0, y, z]).concat([[x1, YA, ZA]])), plateX(poly, Math.min(x0, x1), Math.max(x0, x1), m, tone, .9));
+  }
+  fr(ssAt(-1, .7), ssAt(1, .7), .45, { w: 1 });
+  // housing stop on the drive chainstay
+  put(boxOf([csTop(.8), csTop(.845)], .45), tube(csTop(.8), csTop(.845), .4, BLACK, { capA: 1, capB: 1, w: .8 }));
+}
+
+/* ---------- wheel (one item: its own faces sorted by depth) ---------- */
+const TYRE = [{x:-1.0, r:31.1, m:TAN}, {x:-1.4, r:32.4, m:TAN}, {x:-1.1, r:33.5, m:RUB, c:1}, {x:0, r:34, m:RUB}, {x:1.1, r:33.5, m:TAN, c:1}, {x:1.4, r:32.4, m:TAN}, {x:1.0, r:31.1, m:RUB}];
+const RIM = [{x:1.0, r:28.4, c:1}, {x:-1.0, r:28.4, c:1}, {x:-1.0, r:31.2, c:1}, {x:1.0, r:31.2, c:1}];
+const HUB = [{x:-4.6, r:.55, c:1}, {x:-4.6, r:1.45, c:1}, {x:-3.5, r:1.45, c:1}, {x:-3.5, r:2.5, c:1}, {x:-3.2, r:2.5, c:1}, {x:-3.2, r:1.2, c:1},
+  {x:.7, r:1.2, c:1}, {x:.7, r:2.5, c:1}, {x:1.0, r:2.5, c:1}, {x:1.0, r:1.6, c:1}, {x:1.9, r:1.6, c:1}, {x:1.9, r:.55, c:1}];
+function wheel(put, st){
+  const o = RA(0, 0, 0), a0 = st.wheelA, pr_ = [];
+  pr_.push(...revGrid(o, EX, EY, EZ, TYRE, 56, { closed: true, sh: tone, w: 1.3, a0 }));
+  pr_.push(...revGrid(o, EX, EY, EZ, RIM, 56, { closed: true, m: ALU, sh: tone, w: .9, a0 }));
+  pr_.push(...revGrid(o, EX, EY, EZ, HUB, 22, { m: ALU, w: .8, a0 }));
+  for (let i = 0; i < 32; i++){
+    const side = i % 2, h = (i - side)/2, ah = a0 + h*2*Math.PI/16 + side*Math.PI/16, ar = ah + ((h % 2) ? 1 : -1)*rad(58);
+    const A = RA(side ? -3.35 : .85, 2.2*Math.cos(ah), 2.2*Math.sin(ah)), B = RA(side ? -.25 : .25, 28.5*Math.cos(ar), 28.5*Math.sin(ar));
+    for (let k = 0; k < 3; k++){ const p = lerp3(A, B, k/3), q = lerp3(A, B, (k+1)/3);
+      pr_.push({ d: depthOf(lerp3(p, q, .5)), svg: `<path d="${pd([p, q], false)}" stroke="#4b4945" stroke-width=".75" stroke-linecap="round"/>` }); }
+  }
+  const av = a0 + Math.PI/32, vd = [0, Math.cos(av), Math.sin(av)], v0 = RA(0, 28.4*vd[1], 28.4*vd[2]), v1 = RA(0, 26.4*vd[1], 26.4*vd[2]);
+  pr_.push({ d: depthOf(v1) + .2, svg: tube(v0, v1, .3, BRASS, { sh: toneI, w: .7, capB: 1 }) });
+  put([[55.4, YA - 34.1, ZA - 34.1], [61.5, YA + 34.1, ZA + 34.1]], soup(pr_), 60);
+}
+function quickRelease(put){
+  // non-drive: cam lever folded forward; drive: the skewer nut
+  const lever = hullUV([[YA, ZA, 1.0], [YA + 6.5, ZA + 1.6, .62]]);
+  put([[51.6, YA - 1.1, ZA - 1.1], [53.0, YA + 7.2, ZA + 2.3]], cylXr(52.1, 53.0, YA, ZA, 1.0, METAL) + plateX(lever, 51.6, 52.05, METAL, toneI, .8));
+  put([[67.0, YA - 1, ZA - 1], [67.95, YA + 1, ZA + 1]], cylXr(67.0, 67.95, YA, ZA, .95, METAL, { n: 12, facet: 1 }));
+}
+
+/* ---------- cassette, chain and crankset ---------- */
+function chainSvg(g, ks){
+  let dI = '', dO = '', pins = '';
+  for (const k of ks){ const a = P(...g.R[k]), b = P(...g.R[(k+1) % CH_N]), sg = `M${f(a[0])} ${f(a[1])}L${f(b[0])} ${f(b[1])}`;
+    if (k % 2) dO += sg; else dI += sg;
+    pins += `<circle cx="${f(b[0])}" cy="${f(b[1])}" r=".2" fill="${INK}"/>`; }
+  return strk(dI + dO, INK, 1.12) + strk(dI, CHAINI, .8) + strk(dO, CHAINO, .8) + pins;
+}
+const linksOf = (g, parts) => { const o = []; for (let k = 0; k < CH_N; k++) if (parts.includes(g.part[k])) o.push(k); return o; };
+const chainBox = (g, ks) => boxOf(ks.flatMap(k => [g.R[k], g.R[(k+1) % CH_N]]), .45);
+function cassette(put, st, g, mech){
+  const fade = mech ? .6 : 1;
+  for (let i = 0; i < 8; i++){
+    const x = XM + cogX(i), rp = pr(TEETH[i]), ph = (i === g.ci && g.ph[7] != null) ? g.ph[7] : st.cassA;
+    let s = `<g opacity="${fade}">` + plateX(teethUV(YA, ZA, TEETH[i], ph, rp, .32, .42), x - .09, x + .09, METAL, toneI, .5) + '</g>';
+    let bx = [[x - .1, YA - rp - .4, ZA - rp - .4], [x + .1, YA + rp + .4, ZA + rp + .4]];
+    if (i === g.ci){ const ks = linksOf(g, [7]); if (ks.length){ s += chainSvg(g, ks); const cb = chainBox(g, ks); bx = [[0,1,2].map(k => Math.min(bx[0][k], cb[0][k])), [0,1,2].map(k => Math.max(bx[1][k], cb[1][k]))]; } }
+    put(bx, s, x);
+  }
+  // lockring, threaded into the freehub body
+  const lr = []; for (let j = 0; j < 12; j++){ const a = j/12*2*Math.PI; for (const [da, r] of [[0, 2.0], [.17, 2.0], [.2, 1.75], [.32, 1.75]]) lr.push([YA + r*Math.cos(a + da), ZA + r*Math.sin(a + da)]); }
+  put([[65.5, YA - 2, ZA - 2], [65.85, YA + 2, ZA + 2]], plateX(lr, 65.5, 65.85, BLACK, toneI, .6) + cylXr(65.85, 66.0, YA, ZA, .8, METAL));
+}
+function chainRuns(put, g){
+  // the straight runs between sprockets, a few links at a time; the wraps belong to their sprockets
+  for (const part of [0, 2, 6]){ const ks = linksOf(g, [part]);
+    for (let i = 0; i < ks.length; i += 3){ const c = ks.slice(i, i + 3); put(chainBox(g, c), chainSvg(g, c)); } }
+}
+function crankset(put, st, g){
+  const th = st.crank, cy = BB[1], cz = BB[2], dir = a => [Math.cos(a), Math.sin(a)];
+  // chainring and its wrap of chain, then spider arms and bolts, crank boss
+  const rp = pr(RING), rph = g.ph[1] != null ? g.ph[1] : th;
+  const holeR = circUV(cy, cz, 5.0, 36);
+  let s = plateX(teethUV(cy, cz, RING, rph, rp, .32, .42), XM + RINGX - .2, XM + RINGX + .2, METAL, toneI, .6, holeR);
+  const ks = linksOf(g, [1]); s += chainSvg(g, ks);
+  let sp = '';
+  for (let j = 0; j < 4; j++){ const a = th + rad(45) + j*Math.PI/2, d = dir(a), n = [-d[1], d[0]];
+    const arm = [[cy + n[0]*.9, cz + n[1]*.9], [cy + d[0]*5.6 + n[0]*.55, cz + d[1]*5.6 + n[1]*.55], [cy + d[0]*5.6 - n[0]*.55, cz + d[1]*5.6 - n[1]*.55], [cy - n[0]*.9, cz - n[1]*.9]];
+    sp += plateX(hullUV([[cy, cz, 1.0], [cy + d[0]*5.5, cz + d[1]*5.5, .6]]), XM + RINGX + .2, XM + RINGX + .75, BLACK, toneI, .6); }
+  const bolts = []; for (let j = 0; j < 4; j++){ const d = dir(th + rad(45) + j*Math.PI/2); bolts.push(cylXr(XM + RINGX + .75, XM + RINGX + 1.0, cy + 5.5*d[0], cz + 5.5*d[1], .42, METAL, { n: 10 })); }
+  const boss = cylXr(XM + 4.6, XM + 6.6, cy, cz, 2.0, METAL);
+  const near = vis([1,0,0]);
+  s = near ? s + sp + bolts.join('') + boss : boss + bolts.join('') + sp + s;
+  put(boxOf([[XM + RINGX - .2, cy - rp - .5, cz - rp - .5], [XM + 6.6, cy + rp + .5, cz + rp + .5]].concat(ks.map(k => g.R[k]))), s, XM + RINGX);
+  // crank arms and pedals (the pedals stay level)
+  for (const s2 of [1, -1]){
+    const a = th + (s2 > 0 ? 0 : Math.PI), d = dir(a), ey = cy + 17*d[0], ez = cz + 17*d[1];
+    const x0 = s2 > 0 ? XM + 6.6 : XM - 8.0, x1 = x0 + 1.4;
+    const arm = plateX(hullUV([[cy, cz, 1.7], [ey, ez, 1.05]]), x0, x1, METAL, tone, 1);
+    const cap = s2 > 0 ? cylXr(x1, x1 + .3, cy, cz, .9, BLACK) : cylXr(x0 - .3, x0, cy, cz, .9, BLACK);
+    const boss2 = s2 > 0 ? '' : cylXr(XM - 6.6, XM - 4.1, cy, cz, 1.6, METAL);
+    const armSvg = (s2 > 0) === near ? boss2 + arm + cap : cap + arm + boss2;
+    put(boxOf([[x0, cy, cz], [x1, ey, ez]], 1.75), armSvg);
+    const px0 = s2 > 0 ? x1 : x0 - 1.6, px1 = px0 + 1.6, b0 = s2 > 0 ? XM + 9.6 : XM - 17.2, b1 = b0 + 7.6;
+    put([[Math.min(px0, b0), ey - 3.3, ez - .8], [Math.max(px1, b1), ey + 3.3, ez + .8]],
+      (s2 > 0) === near ? cylXr(px0, px1, ey, ez, .42, METAL) + box(b0, ey - 3.2, ez - .8, b1, ey + 3.2, ez + .8, BLACK, toneI, .9)
+                        : box(b0, ey - 3.2, ez - .8, b1, ey + 3.2, ez + .8, BLACK, toneI, .9) + cylXr(px0, px1, ey, ez, .42, METAL));
+  }
+}
+
+/* ---------- rear derailleur ---------- */
+function derailleur(put, st, g, mech){
+  const near = vis([1,0,0]), pk = RA(...g.pk), px = XM + g.px, Gp = [YA + g.G[0], ZA + g.G[1]], Tp = [YA + g.T[0], ZA + g.T[1]];
+  const bk = RA(...BK), o2 = scl3(OFF, .5);
+  // B-knuckle on the hanger bolt, mounting bolt, H/L limit screws at its back
+  { const body = tube(HANGER, BKC, 1.2, BLACK, { capA: 1, capB: 1, w: 1.1 }), bolt = cylXr(XM + 9.45, XM + 10.0, HANGER[1], HANGER[2], .6, METAL, { n: 6, facet: 1 });
+    let scr = ''; for (const dz of [-5.9, -6.9]){ const a = RA(8.0, -1.9, dz), b = RA(8.0, -3.6, dz); scr += tube(a, b, .26, METAL, { sh: toneI, w: .7 }) + tube(b, add3(b, [0, -.35, 0]), .45, METAL, { sh: toneI, w: .7, capB: 1 }); }
+    const back = vis([0,-1,0]);
+    put(boxOf([HANGER, BKC], 1.25), (back ? '' : scr) + (near ? body + bolt : bolt + body) + (back ? scr : ''), XM + 8.25); }
+  // barrel adjuster with its knurled ring
+  put(boxOf([BARREL_F, BARREL_B], .55), tube(BARREL_F, BARREL_B, .48, METAL, { sh: toneI, capB: 1, w: .8 }) + tube(lerp3(BARREL_F, BARREL_B, .25), lerp3(BARREL_F, BARREL_B, .55), .62, METAL, { sh: toneI, w: .8 }));
+  // the two links with their pins; the anchor bolt on the outer link; the return spring across the parallelogram
+  for (const s of [1, -1]){ const a = add3(bk, scl3(o2, s)), b = add3(pk, scl3(o2, s));
+    let sv = tube(a, b, .42, METAL, { sh: tone, capA: 1, capB: 1, w: .9 });
+    for (const p of [a, b]) sv += tube(add3(p, scl3(AXP, -.6)), add3(p, scl3(AXP, .6)), .22, METAL, { sh: toneI, capA: 1, capB: 1, w: .6 });
+    if (s > 0){ const an = RA(...anchorAt(st.q)), on = norm(OFF), bolt = tube(an, add3(an, scl3(on, .7)), .42, METAL, { sh: toneI, capB: 1, w: .7, n: 6 });
+      sv = vis(on) ? sv + bolt : bolt + sv; }
+    put(boxOf([a, b], .7), sv); }
+  { const a = add3(bk, scl3(o2, -SPRD)), b = add3(pk, scl3(o2, SPRD)); put(boxOf([a, b], .5), coilSvg(coil(lerp3(a, b, .08), lerp3(a, b, .92), .32, 9)) + line([a, lerp3(a, b, .08)], .6) + line([lerp3(a, b, .92), b], .6)); }
+  // P-knuckle: the cage pivot drum and the block carrying the link pins (ghosted in see-through, its cage spring shows)
+  { const drum = cylXr(pk[0] - .48, pk[0] + .75, pk[1], pk[2], 1.25, BLACK, { sh: tone }), blk = tube(add3(pk, scl3(o2, -1)), add3(pk, scl3(o2, 1)), .7, BLACK, { capA: 1, capB: 1, w: .9 });
+    let sv = mech ? `<g opacity=".3">${drum}</g>` + coilSvg(coil([pk[0] - .4, pk[1], pk[2]], [pk[0] + .65, pk[1], pk[2]], .85, 4)) + cylXr(px - .6, pk[0] + .8, pk[1], pk[2], .3, METAL)
+                  : drum + blk;
+    put(boxOf([[pk[0] - .48, pk[1] - 1.3, pk[2] - 1.3], [pk[0] + .8, pk[1] + 1.3, pk[2] + 1.3], add3(pk, o2), add3(pk, scl3(o2, -1))], .2), sv, pk[0] + .1); }
+  // cage: inner plate, pulleys with the chain round them, outer plate, pulley bolt
+  { const pl = hullUV([[...Gp, 1.55], [...Tp, 1.55]]);
+    const inner = plateX(pl, px - .6, px - .45, METAL, tone, .8), outer = plateX(pl, px + .45, px + .6, METAL, tone, .8);
+    const gPh = g.ph[5] != null ? g.ph[5] : 0, tPh = g.ph[3] != null ? g.ph[3] : 0;
+    const pul = (c, ph) => plateX(teethUV(c[0], c[1], RPUL, ph, pr(RPUL), .25, .35), px - .14, px + .14, BLACK, toneI, .5) + (near ? '' : '');
+    const mid = pul(Gp, gPh) + pul(Tp, tPh) + chainSvg(g, linksOf(g, [3, 4, 5]));
+    const tb = cylXr(px + .6, px + .9, Tp[0], Tp[1], .5, METAL, { n: 6, facet: 1 }), tn = cylXr(px - .9, px - .6, Tp[0], Tp[1], .5, METAL, { n: 6, facet: 1 });
+    const sv = near ? tn + inner + mid + outer + tb : tb + outer + mid + inner + tn;
+    put(boxOf([[px - .9, Gp[0] - 2.4, Gp[1] - 2.4], [px + .9, Gp[0] + 2.4, Gp[1] + 2.4], [px, Tp[0] - 2.4, Tp[1] - 2.4], [px, Tp[0] + 2.4, Tp[1] + 2.4]]), sv, px); }
+}
+
+/* ---------- shifter and cable ---------- */
+const SH_X0 = 61.65, SH_X1 = 62.55;
+const leverAng = q => rad(42 + (7 - q)*14);                           // lever forward = slack (32T); pulled back = 11T
+function shifter(put, st, mech){
+  const near = vis([1,0,0]), a = leverAng(st.q), d = [Math.cos(a), Math.sin(a)], c = [SHC[1], SHC[2]];
+  const lev = hullUV([[...c, 1.0], [c[0] + d[0]*6.2, c[1] + d[1]*6.2, .62]]);
+  const drum = cylXr(SH_X0, SH_X1, c[0], c[1], 1.15, BLACK, { sh: tone });
+  let inside = '';
+  if (mech){ const rt = []; for (let j = 0; j < 8; j++){ const b = a + j*Math.PI/4; for (const [db, r] of [[0, 1.0], [.5, 1.0], [.62, .78], [.78, .78]]) rt.push([c[0] + r*Math.cos(b + db), c[1] + r*Math.sin(b + db)]); }
+    inside = plateX(rt, SH_X0 + .05, SH_X0 + .3, BRASS, toneI, .5) + cylXr(SH_X0 + .35, SH_X1 - .05, c[0], c[1], .62, METAL); }
+  const body = mech ? `<g opacity=".3">${drum}</g>` + inside : drum;
+  const lv = plateX(lev, SH_X1, SH_X1 + .4, METAL, tone, .9) + cylXr(SH_X1 + .4, SH_X1 + .75, c[0], c[1], .55, METAL, { n: 8, facet: 1 });
+  put([[SH_X0, c[0] - 7, c[1] - 7], [SH_X1 + .75, c[0] + 7, c[1] + 7]], near ? body + lv : lv + body, SH_X0 + .5);
+}
+function cableRoute(st){
+  const c0 = [62.0, SHC[1] + DTn[1]*1.15, SHC[2] + DTn[2]*1.15];
+  const bare = [c0, dtAt(16, 1.75, 1.1), dtAt(12.5, 1.85, .55), dtAt(4, 1.85, .55), [60.55, 77.6, 36.45], [61.3, 75.2, 37.3], [61.3, 73.0, 39.0], csTop(.12), csTop(.8)];
+  const h0 = csTop(.845), loop = bez(h0, [69.0, 37.96, 46.8], add3(BARREL_B, [1.2, -4.5, 2.2]), BARREL_B, 18);
+  return { bare, loop, last: [BARREL_F, RA(...anchorAt(st.q))] };
+}
+function cable(put, st, mech){
+  const cr = cableRoute(st);
+  wireItems(put, cr.bare, WIRE, .22);
+  if (!mech) wireItems(put, cr.loop, HOUSE, .62);
+  else { wireItems(put, cr.loop, WIRE, .22); }
+  wireItems(put, cr.last, WIRE, .22, 9);
+}
+
+/* ---------- see-through insides: hub, freehub, BB ---------- */
+function insides(put, st, g){
+  const balls = (x, y, z, R, n, r, a0 = 0) => { let s = ''; const pts = [];
+    for (let i = 0; i < n; i++){ const a = a0 + i/n*2*Math.PI, p = [x, y + R*Math.cos(a), z + R*Math.sin(a)]; pts.push({ p, d: depthOf(p) }); }
+    pts.sort((u, v) => u.d - v.d).forEach(({ p }) => { const q = P(...p); s += `<circle cx="${f(q[0])}" cy="${f(q[1])}" r="${f(r*1.2)}" fill="${METAL.l}" stroke="${INK}" stroke-width=".6"/>`; });
+    return s; };
+  // axle (the QR skewer runs inside it) with the two hub bearings
+  put([[52.8, YA - .5, ZA - .5], [67.2, YA + .5, ZA + .5]], tube([52.8, YA, ZA], [67.2, YA, ZA], .5, METAL, { sh: toneI, w: .8, capA: 1, capB: 1 }), 60);
+  for (const x of [XM - 4.1, XM + 1.5]) put([[x - .3, YA - 1.3, ZA - 1.3], [x + .3, YA + 1.3, ZA + 1.3]], balls(x, YA, ZA, .95, 9, .28, st.wheelA), x);
+  // ratchet ring in the hub shell, pawls on the freehub body's inner end, then the splined freehub body under the cogs
+  const rt = []; for (let j = 0; j < 18; j++){ const a = st.wheelA + j/18*2*Math.PI, d = 2*Math.PI/18; rt.push([YA + 1.12*Math.cos(a), ZA + 1.12*Math.sin(a)], [YA + 1.32*Math.cos(a + .8*d), ZA + 1.32*Math.sin(a + .8*d)]); }
+  put([[XM + 1.0, YA - 1.5, ZA - 1.5], [XM + 1.75, YA + 1.5, ZA + 1.5]], plateX(circUV(YA, ZA, 1.5, 36), XM + 1.0, XM + 1.75, BRASS, toneI, .6, rt.slice().reverse()), XM + 1.38);
+  let paw = cylXr(XM + 1.0, XM + 1.9, YA, ZA, .82, DARKM);
+  const rel = st.cassA - st.wheelA, pit = 2*Math.PI/18, lift = st.coast ? ((rel % pit) + pit) % pit / pit : 0;
+  for (let j = 0; j < 3; j++){ const a = st.cassA + j*2*Math.PI/3, b = a + .55, rr = .86 + .3*(1 - lift);
+    paw += plateX([[YA + .8*Math.cos(a), ZA + .8*Math.sin(a)], [YA + rr*Math.cos(b), ZA + rr*Math.sin(b)], [YA + .95*Math.cos(a - .12), ZA + .95*Math.sin(a - .12)]].reverse(), XM + 1.15, XM + 1.6, BRASS, toneI, .5); }
+  put([[XM + 1.0, YA - 1.2, ZA - 1.2], [XM + 1.9, YA + 1.2, ZA + 1.2]], paw, XM + 1.45);
+  put([[XM + 1.9, YA - 1.7, ZA - 1.7], [XM + 5.6, YA + 1.7, ZA + 1.7]], soup(revGrid([XM, YA, ZA], EX, EY, EZ, [{x:1.9, r:0}, {x:1.9, r:1.7, c:1}, {x:5.6, r:1.7, c:1}, {x:5.6, r:0}], 16, { m: DARKM, facet: 1, w: .6, a0: st.cassA })), XM + 3.75);
+  // BB spindle on its two bearings
+  put([[53.6, BB[1] - .95, BB[2] - .95], [66.4, BB[1] + .95, BB[2] + .95]], tube([53.6, BB[1], BB[2]], [66.4, BB[1], BB[2]], .95, METAL, { sh: toneI, w: .8, capA: 1, capB: 1 }), 60);
+  for (const x of [56.4, 63.6]) put([[x - .4, BB[1] - 1.9, BB[2] - 1.9], [x + .4, BB[1] + 1.9, BB[2] + 1.9]], balls(x, BB[1], BB[2], 1.5, 11, .38, st.crank), x);
+}
+
+/* ---------- shadows (on the floor) ---------- */
+function shadows(st){
+  const rp = (a, b, r) => [a, b].flatMap(p => [[p[0] - r, p[1], p[2]], [p[0] + r, p[1], p[2]], [p[0], p[1] - r, p[2]], [p[0], p[1] + r, p[2]]]);
+  const hs = [];
+  for (const [fx, fy] of FEET) hs.push(rp([ST_C[0], ST_C[1], ST_HUB], [fx, fy, 0], 1));
+  hs.push(rp([...ST_C, 0], [...ST_C, 100.6], 1.8), rp([...ST_C, CLAMP_Z], [57, ST_C[1], CLAMP_Z], 1.4));
+  hs.push(Array.from({length:40}, (_, i) => { const a = i/40*2*Math.PI; return RA(0, 34*Math.cos(a), 34*Math.sin(a)); }));
+  for (const s of [-1, 1]) hs.push(rp(CS0(s), CS1(s), 1), rp(SS0(s), SS1(s), .8));
+  hs.push(rp(stAt(0), stAt(70), 1.5), rp(dtAt(0), dtAt(26), 1.6), rp(stAt(49.5), [XM, 84.5, stAt(49.5)[2]], 1.4));
+  hs.push(SADDLE.map(([x, y]) => [x, y, saddleZ(y)]));
+  for (const s2 of [1, -1]){ const a = st.crank + (s2 > 0 ? 0 : Math.PI); hs.push(rp(BB, [BB[0] + 8*s2, BB[1] + 17*Math.cos(a), BB[2] + 17*Math.sin(a)], 1.2)); }
+  return hs.map(h => castShadow(h, 0)).join('');
+}
+
+/* ---------- scene ---------- */
+function buildItems(st, m, g, mech){
+  const list = [], put = (box, svg, xk) => list.push({ box, svg, xk: xk ?? (box[0][0] + box[1][0])/2 });
+  if (!mech){ stand(put); frame(put, m); wheel(put, st); quickRelease(put); }
+  else insides(put, st, g);
+  cassette(put, st, g, mech); chainRuns(put, g); crankset(put, st, g); derailleur(put, st, g, mech); shifter(put, st, mech); cable(put, st, mech);
+  return list;
+}
+const XB = [6, 77, 2, 97, 0, 110];
+function scene(st, m){
+  const k = ease(st.xr || 0), g = chainGeo(st);
+  let s = shadows(st);
+  if (k <= 0) s += bgSort(buildItems(st, m, g, false));
+  else s += `<g opacity="${f(1 - .62*k)}">${bgSort(buildItems(st, m, g, false))}</g><g opacity="${f(k)}">${bgSort(buildItems(st, m, g, true))}</g>`;
+  const items = k > .6 ? insideLabels(st, g) : surfaceLabels(st, g);
+  return s + (k > .6 ? bikeCallouts(items) : xrCallouts(items, XB));
+}
+function bikeCallouts(items){
+  const svg = document.getElementById('fig'), vb = svg.viewBox.baseVal, k = INK_K;
+  const u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.6*k, h = u ? 17*u : fs*1.8;
+  const cols = items.map(it => ({...it, p:P(...it.at)})).sort((a,b) => a.p[0]-b.p[0]);
+  const mid = Math.ceil(cols.length/2), split = [cols.slice(0,mid),cols.slice(mid)];
+  return split.map((col,i) => {
+    const panel = document.getElementById(u || i ? 'stats' : 'btns');
+    const edge = panel.getBoundingClientRect(), top = new DOMPoint(0,edge.bottom+12).matrixTransform(svg.getScreenCTM().inverse()).y + h/2;
+    const end = vb.y+vb.height-h/2-32*k, gap = Math.min(h+3*k,(end-top)/Math.max(1,col.length-1));
+    const maxW = Math.max(...col.map(it=>u ? h*1.3 : it.text.length*fs*.62+fs*1.5));
+    return col.sort((a,b)=>a.p[1]-b.p[1]).map((it,j)=>{
+      const w = u ? h*1.3 : it.text.length*fs*.62+fs*1.5;
+      const x = i ? vb.x+vb.width-w/2-2*k : vb.x+w/2+2*k;
+      const y = top+j*gap, edge = x+(i ? -w/2 : w/2), elbow = i ? vb.x+vb.width-maxW-5*k : vb.x+maxW+5*k;
+      return tag(it.at,(x-it.p[0])/k,(y-it.p[1])/k,it.text,it.on)
+        .replace(/<path d="[^"]*"/, `<path d="M${f(it.p[0])} ${f(it.p[1])}L${f(elbow)} ${f(y)}L${f(edge)} ${f(y)}"`);
+    }).join('');
+  }).join('');
+}
+function insideLabels(st, g){
+  const moving = st.cad > .5, shifting = Math.abs(st.g - st.q) > .01 || Math.abs(st.q - st.qc) > .01, pk = RA(...g.pk), px = XM + g.px;
+  const Gp = [YA + g.G[0], ZA + g.G[1]], Tp = [YA + g.T[0], ZA + g.T[1]], bk = RA(...BK), o2 = scl3(OFF, .5), cr = cableRoute(st), a = st.crank;
+  const top = g.R[g.part.indexOf(0) + 4] || g.R[0], ln = (s) => lerp3(add3(bk, scl3(o2, s)), add3(pk, scl3(o2, s)), .5);
+  return [
+    { at: RA(1.1, -23.8, 23.8), text:'TYRE', on: st.wheelW > .1 },
+    { at: RA(1.0, -21.6, -21), text:'RIM', on: st.wheelW > .1 },
+    { at: RA(.4, -9, 11), text:'SPOKES', on: st.wheelW > .1 },
+    { at: RA(-1.2, 0, 1.3), text:'HUB SHELL', on: st.wheelW > .1 },
+    { at: RA(-5.6, 0, .5), text:'AXLE', on: false },
+    { at: RA(-4.1, -.6, .8), text:'HUB BEARINGS', on: st.wheelW > .1 },
+    { at: RA(-7.8, 4.5, 1.2), text:'QUICK RELEASE', on: false },
+    { at: RA(1.4, 0, -1.4), text:'RATCHET RING', on: st.wheelW > .1 },
+    { at: RA(1.4, .8, .6), text:'PAWLS', on: !!st.coast },
+    { at: RA(3.8, 1.2, 1.2), text:'FREEHUB BODY', on: moving },
+    { at: RA(cogX(7), -4.6, 4.6), text:'CASSETTE', on: moving },
+    { at: RA(5.7, 1.4, 1.4), text:'LOCKRING', on: false },
+    { at: top, text:'CHAIN', on: moving },
+    { at: [XM + RINGX, BB[1] + 8.2*Math.cos(rad(60)), BB[2] + 8.2*Math.sin(rad(60))], text:'CHAINRING', on: moving },
+    { at: [XM + 7.3, BB[1] + 9*Math.cos(a), BB[2] + 9*Math.sin(a)], text:'CRANK ARM', on: moving },
+    { at: [XM + 13, BB[1] + 17*Math.cos(a), BB[2] + 17*Math.sin(a) + .8], text:'PEDAL', on: moving },
+    { at: [XM + 2, BB[1], BB[2] + .95], text:'BB SPINDLE', on: moving },
+    { at: [63.6, BB[1], BB[2] + 1.5], text:'BB BEARINGS', on: moving },
+    { at: csAt(1, .45), text:'CHAINSTAY', on: false },
+    { at: ssAt(1, .45), text:'SEATSTAY', on: false },
+    { at: RA(7.0, 2.4, 2.0), text:'DROPOUT', on: false },
+    { at: RA(7.0, -1.4, -2.2), text:'DERAILLEUR HANGER', on: false },
+    { at: RA(9.4, -1.8, -6.2), text:'B-KNUCKLE', on: shifting },
+    { at: ln(1), text:'OUTER LINK', on: shifting },
+    { at: ln(-1), text:'INNER LINK', on: shifting },
+    { at: lerp3(add3(bk, scl3(o2, -SPRD)), add3(pk, scl3(o2, SPRD)), .5), text:'RETURN SPRING', on: shifting },
+    { at: add3(pk, [.75, 0, 0]), text:'CAGE SPRING', on: moving },
+    { at: add3(pk, [0, 0, 1.25]), text:'P-KNUCKLE', on: shifting },
+    { at: [px, Gp[0] - 1.9, Gp[1] - .6], text:'GUIDE PULLEY', on: moving },
+    { at: [px, Tp[0], Tp[1] - 2.0], text:'TENSION PULLEY', on: moving },
+    { at: [px + .6, (Gp[0] + Tp[0])/2, (Gp[1] + Tp[1])/2], text:'CAGE PLATE', on: false },
+    { at: RA(8.0, -3.95, -6.4), text:'LIMIT SCREWS', on: st.g === 0 || st.g === 7 },
+    { at: lerp3(BARREL_F, BARREL_B, .4), text:'BARREL ADJUSTER', on: shifting },
+    { at: RA(...anchorAt(st.q)), text:'ANCHOR BOLT', on: shifting },
+    { at: cr.bare[7], text:'INNER CABLE', on: shifting },
+    { at: cr.loop[6], text:'HOUSING LOOP', on: shifting },
+    { at: [60.4, 76.2, 36.0], text:'CABLE GUIDE', on: shifting },
+    { at: [SH_X1 + .4, SHC[1] + 4*Math.cos(leverAng(st.q)), SHC[2] + 4*Math.sin(leverAng(st.q))], text:'SHIFT LEVER', on: shifting },
+    { at: [SH_X0 + .2, SHC[1], SHC[2] + .9], text:'INDEX RATCHET', on: shifting },
+    { at: [55, 59.4, CLAMP_Z + 2], text:'WORKSTAND CLAMP', on: false },
+  ];
+}
+function surfaceLabels(st, g){
+  const moving = st.cad > .5, shifting = Math.abs(st.g - st.q) > .01;
+  return [
+    { at: RA(1.2, -24, 24), text:'TYRE', on: st.wheelW > .1 },
+    { at: RA(cogX(7), -4.6, 4.6), text:'CASSETTE', on: moving },
+    { at: g.R[g.part.indexOf(0) + 4] || g.R[0], text:'CHAIN', on: moving },
+    { at: [XM + RINGX, BB[1] + 8.2*Math.cos(rad(60)), BB[2] + 8.2*Math.sin(rad(60))], text:'CHAINRING', on: moving },
+    { at: RA(9.4, -1.8, -6.2), text:'REAR DERAILLEUR', on: shifting },
+    { at: [SH_X1 + .4, SHC[1] + 4*Math.cos(leverAng(st.q)), SHC[2] + 4*Math.sin(leverAng(st.q))], text:'SHIFT LEVER', on: shifting },
+    { at: RA(-7.8, 4.5, 1.2), text:'QUICK RELEASE', on: false },
+    { at: [55, 59.4, CLAMP_Z + 2], text:'WORKSTAND', on: false },
+  ];
+}
+
+/* ---------- behaviour ---------- */
+const TAU = 6;                                                          // a free wheel in the stand coasts down over ~10 s
+function stepBike(st, dt){
+  const tgt = st.pedal ? CAD : 0; st.cad += Math.sign(tgt - st.cad)*Math.min(Math.abs(tgt - st.cad), 70*dt);
+  const v = st.cad/60*RING*CPITCH;                                       // chain speed, cm/s
+  st.s0 += v*dt; st.crank -= st.cad/60*2*Math.PI*dt;
+  st.q += Math.sign(st.g - st.q)*Math.min(Math.abs(st.g - st.q), 5*dt);   // the lever click pulls or frees the cable at once
+  if (v > 0) st.qc += Math.sign(st.q - st.qc)*Math.min(Math.abs(st.q - st.qc), v*dt/14);   // the chain climbs across as it runs
+  const wc = st.cad/60*RING/lerpA(TEETH, st.qc)*2*Math.PI, ww = st.wheelW*Math.exp(-dt/TAU);
+  st.coast = ww > wc + .02; st.wheelW = Math.max(wc, ww); if (!st.pedal && st.cad <= 0 && st.wheelW < .3) st.wheelW = 0, st.coast = false;
+  st.cassA -= wc*dt; st.wheelA -= st.wheelW*dt;
+  return st.pedal || st.cad > 0 || st.wheelW > 0 || Math.abs(st.g - st.q) > 1e-4 || (v > 0 && Math.abs(st.q - st.qc) > 1e-4);
+}
+function run(st, ui){ if (st.running) return; st.running = true; ui.animate(dt => { const go = stepBike(st, dt); if (!go) st.running = false; return go; }); }
+function shift(st, ui, d){
+  const ng = st.g + d;
+  if (ng < 0) return ui.flash('Top gear: the H limit screw stops the cage at the 11-tooth cog');
+  if (ng > 7) return ui.flash('Lowest gear: the L limit screw stops the cage at the 32-tooth cog');
+  st.g = ng; if (!st.pedal) ui.flash('Pedal to finish the shift: the chain only climbs across while it moves');
+  run(st, ui);
+}
+const wheelRpm = st => st.wheelW*60/(2*Math.PI);
+
+const ui = mountFigure({
+  fig:'BG', turn:'full', title:'Bicycle derailleur gears',
+  size:[80, 100, 111], palette:'tomato',
+  state:{ pedal:false, cad:0, g:3, q:3, qc:3, s0:0, crank:rad(20), cassA:0, wheelA:0, wheelW:0, coast:false, running:false },
+  scene,
+  stats: st => [ { label:'Gear', value:`42 / ${TEETH[Math.round(st.qc)]}` },
+                 { label:'Wheel', value:`${Math.round(wheelRpm(st))} rpm` },
+                 { label:'Cadence', value:`${Math.round(st.cad)} rpm`, small:true },
+                 { label:'Road speed', value:`${(wheelRpm(st)*2.1*60/1000).toFixed(1)} km/h`, small:true } ],
+  buttons:[
+    { label:'Pedal', onClick:(st, ui) => { if (st.pedal) return ui.flash('Already pedalling'); st.pedal = true; run(st, ui); } },
+    { label:'Shift up', onClick:(st, ui) => shift(st, ui, -1) },
+    { label:'Shift down', onClick:(st, ui) => shift(st, ui, 1) },
+    { label:'Stop pedalling', onClick:(st, ui) => { if (!st.pedal) return ui.flash(st.wheelW > 0 ? 'Already coasting: the freehub pawls overrun' : 'Not pedalling'); st.pedal = false; run(st, ui); } },
+  ],
+  params:(st, q) => {
+    if (q.has('gear')){ const gi = Math.max(0, Math.min(7, Math.round(+q.get('gear')))); st.g = st.q = st.qc = gi; }
+    if (q.has('q')) st.q = Math.max(0, Math.min(7, +q.get('q')));
+    if (q.has('crank')) st.crank = rad(+q.get('crank'));
+    if (q.has('s0')) st.s0 = +q.get('s0');
+    if (q.get('pedal') === '1') st.autoPedal = true;
+  },
+});
+xrMount(() => ui, () => '');
+if (ui.st.autoPedal){ ui.st.pedal = true; ui.st.cad = CAD; ui.st.wheelW = CAD/60*RING/lerpA(TEETH, ui.st.qc)*2*Math.PI; run(ui.st, ui); }
+</script></body></html>
