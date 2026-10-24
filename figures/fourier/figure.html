@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fourier's epicycles</title></head><body>
+<script src="core.js"></script>
+<script>
+/* ---------- Truth first: a Fourier drawing machine (harmonic synthesizer) on a bench deck ----------
+   How it works, and where everything is after each step:
+   1. RUN: the run switch closes the battery circuit (4 x AA in the battery box); the speed board (PWM, set by the speed
+      knob's potentiometer) feeds the gearmotor. Its pinion turns the drive gear on the long drive shaft under the deck.
+   2. At the back end of the drive shaft a pair of mitre gears (1:1 bevels) turns the vertical main shaft. It rises through
+      the hollow fixed sun post and turns ARM 1 once per revolution: frequency 1f.
+   3. Each arm is a flat gear case. Inside it a sun gear sits on the arm's pivot, held still relative to the arm below
+      (arm 1's sun is the fixed sun post), and meshes with a planet gear at the arm's tip. As the arm swings, the planet
+      rolls round the sun and spins the output boss on top, which carries the next arm:
+         next arm speed = arm + (sun teeth / planet teeth) x (arm - arm below)
+      Square-wave set: 48T/24T makes arm 2 turn 3x, then 1:1 stages give 5x, 7x, 9x (odd harmonics only).
+      Sawtooth set: every stage 1:1, giving 2x, 3x, 4x, 5x (every harmonic, alternate ones started half a turn round).
+      The arm length is the two gears' centre distance, so the same gears set the amplitude: arm n is 1/n as long.
+   4. The drive pin on the last arm's output boss rides in the slot of a Scotch yoke. The yoke slides on two guide rods,
+      so it keeps only the front-to-back part of the pin's motion: the sum of every arm's projection, a Fourier series.
+   5. The felt pen on the yoke's end writes that sum on the paper strip. At the front end of the drive shaft a second
+      mitre pair turns the rubber feed rollers under the paper: one turn of arm 1 = one turn of the feed rollers = one
+      wavelength (2 pi r = 24 units) of paper pulled from the supply roll, past the pen, through the nip, onto the take-up roll.
+   ADD HARMONIC: the next spare arm is lifted from the tray on the deck onto the top boss of the stack; the drive pin moves
+   up to its tip. TARGET SHAPE: the other arm set (other gear ratios and lengths) is fitted. SPEED: the knob sets the motor.
+   Parts (each held by another):
+   CASE    deck plinth . four rubber feet . front panel with name plate . back rating label . side vents
+   DRIVE   gearmotor: motor can, gearbox, motor bracket . motor pinion 12T . drive gear 20T . drive shaft . three pillow
+           blocks . main mitre gears . main shaft . thrust bearing . top bearing . feed mitre gears . feed axle . two axle
+           bearings . two rubber drive rollers
+   POWER   battery box with four AA cells . run switch (lever outside, body inside) . speed knob + potentiometer . speed
+           board with driver chip and capacitor . wires battery-switch-board-motor, pot-board
+   ARMS    fixed sun post . per arm: gear case, sun gear, planet gear, output boss . drive pin . spare-arm tray
+   YOKE    slotted yoke bar . pin roller . two linear bushings . two guide rods . four rod posts with clamps
+   PAPER   supply roll in two brackets . paper strip with chart grid . pen bracket, pen clamp, felt pen . pinch roller on
+           two spring arms . take-up roll in two brackets . take-up spring drum
+   OVERLAYS (the invisible maths): dashed target curve on the strip; in slow mode each arm's circle and its own sine;
+           in see-through the frequency bars (one per harmonic, height = amplitude). */
+
+/* ---------- geometry (x = depth, front at x = PW; y = width; z = up; 1 unit = 2.5 mm) ---------- */
+const PW = 100, PDY = 210, ZF = 2, TOP = 16;
+const OUT = rrUV(0, ZF, PDY, TOP, 2.5);                         // plinth profile in (y, z), swept along x
+const DECK = on(PZ(TOP), rectUV(0, 2.5, PW, PDY - 2.5));
+const MC = [50, 150];                                            // main shaft / arm 1 pivot
+const PEN_Y = 80, STRIP = [22, 78], NIP_Y = 16, SUP_Y = 88, SUP_R = 4.5, SUP_Z = 20.9, TAK_Y = 5.5, TAK_R = 4, TAK_Z = 20.4, PZP = 16.3;
+const WAVE = 24;                                                 // paper per turn of arm 1 = feed roller circumference
+const ROD_Y = [95, 204], ROD_Z = 37.5, YK = [39, 41], SLOT = [101, 199];
+const MOD_T = [3.4, 3, 2.6, 2.4, 2.2], MOD_Z = []; { let z = 17; for (const t of MOD_T){ MOD_Z.push(z); z += t + 1; } }
+const TRAY = [84, 26, 98, 86];
+const SPD = { slow: .06, normal: .35 };                          // arm 1, rev/s
+const KITS = {
+  sq:  { name:'Square wave', short:'square', n:[1,3,5,7,9], c:[1,1,1,1,1], A:26, teeth:[[48,24],[24,24],[18,18],[16,16],[12,12]] },
+  saw: { name:'Sawtooth', short:'sawtooth', n:[1,2,3,4,5], c:[1,-1,1,-1,1], A:15, teeth:[[30,30],[24,24],[20,20],[16,16],[12,12]] } };
+for (const K of Object.values(KITS)){
+  K.len = K.n.map(n => K.A / n);
+  K.rs = K.len.map((l, k) => l * K.teeth[k][0] / (K.teeth[k][0] + K.teeth[k][1]));
+  K.rp = K.len.map((l, k) => l * K.teeth[k][1] / (K.teeth[k][0] + K.teeth[k][1]));
+  // spare arms lie in the tray along y, one slot each (arm 1 is never spare)
+  K.tray = []; let cur = TRAY[3] - 1.5;
+  for (let k = 1; k < 5; k++){ const py = cur - (K.rs[k] + 1.2); K.tray[k] = { p:[91, py], th:-Math.PI/2, z0:16.8 }; cur = py - K.len[k] - K.rp[k] - 1.2 - 2; }
+}
+// self-check: the tooth counts must give exactly the kit's harmonics
+for (const K of Object.values(KITS)){ let w0 = 0, w1 = 1;
+  for (let k = 0; k < 4; k++){ const [ts, tp] = K.teeth[k], w2 = w1 + ts/tp*(w1 - w0);
+    if (Math.abs(w2 - K.n[k + 1]) > 1e-9) document.documentElement.dataset.errors = (document.documentElement.dataset.errors || '') + ` gear train ${K.name} stage ${k + 1};`;
+    w0 = w1; w1 = w2; } }
+
+/* ---------- colours ---------- */
+const MODM = ['#ef6a4c', '#f4b829', '#5a82c6', '#d8869c', '#9a7fd6'].map(matOf);
+const PAPERM = { l:'#fbf8ee', m:'#e9e3d2', d:'#c9c1ad' }, BRASS = matOf('#d8b25a'), IRON = matOf('#7a8085'), YOKEM = matOf('#aab3b8');
+const PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, TTM = matOf('#f2c230'), PENM = matOf('#2f4fb0'), CREAM = '#fff4d6', KNOBM = { l:'#fff4d6', m:'#e6dcbd', d:'#bfb390' };
+const INKC = '#2a3f9e';
+
+/* ---------- maths of the machine ---------- */
+const armTh = (K, k, t) => 2*Math.PI*K.n[k]*t + (K.c[k] > 0 ? -Math.PI/2 : Math.PI/2);
+function chain(K, t){ const out = []; let p = MC.slice();
+  for (let k = 0; k < 5; k++){ const th = armTh(K, k, t), tip = [p[0] + K.len[k]*Math.cos(th), p[1] + K.len[k]*Math.sin(th)];
+    out.push({ p, th, tip, z0: MOD_Z[k], sunAbs: k ? armTh(K, k - 1, t) : 0 }); p = tip; }
+  return out; }
+const penOff = (K, N, t) => { let x = 0; for (let k = 0; k < N; k++) x += K.c[k]*K.len[k]*Math.sin(2*Math.PI*K.n[k]*t); return x; };
+const target = (K, t) => { const a = ((t % 1) + 1) % 1;
+  return K === KITS.sq ? (a < .5 ? 1 : -1) * Math.PI/4*K.A : K.A*Math.PI*(a < .5 ? a : a - 1); };   // sum of sin(nx)/n -> pi/4 sgn, alt -> x/2
+const rmsErr = st => { const K = KITS[st.kit], tot = st.kit === 'sq' ? Math.PI*Math.PI/8 : Math.PI*Math.PI/6;
+  let s = 0; for (let k = 0; k < st.N; k++) s += 1/(K.n[k]*K.n[k]); return Math.sqrt(Math.max(0, 1 - s/tot)); };
+
+/* ---------- small helpers ---------- */
+const bxI = (x0, y0, z0, x1, y1, z1, m, w = .8, sh = toneI, extra = '') => ({ box:[[x0, y0, z0], [x1, y1, z1]], svg: box(x0, y0, z0, x1, y1, z1, m, sh, w) + extra });
+const rodI = (a, b, r, m, w = .8, r1 = r, sh = toneI) => { const d = norm(sub(b, a)), R = Math.max(r, r1), e = i => R*Math.sqrt(Math.max(0, 1 - d[i]*d[i]));
+  return { box:[[0,1,2].map(i => Math.min(a[i], b[i]) - e(i)), [0,1,2].map(i => Math.max(a[i], b[i]) + e(i))], svg: rod(a, b, r, m, sh, w, r1) }; };
+const cylI = (x, y, z0, z1, r, m, w = .8, n = 20, sh = toneI) => ({ box:[[x - r, y - r, z0], [x + r, y + r, z1]], svg: cyl(x, y, z0, z1, r, m, sh, w, n) });
+const cylXI = (x0, x1, y, z, r, m, w = .8, extra = '', n = 20) => ({ box:[[x0, y - r, z - r], [x1, y + r, z + r]], svg: cylX(x0, x1, y, z, r, m, toneI, w, n) + extra });
+const circ3 = (c, ax, r, n = 20) => { const e1 = Math.abs(ax[0]) > .9 ? [0,1,0] : [1,0,0], e2 = cross(ax, e1);
+  return Array.from({length:n}, (_, i) => { const a = i/n*2*Math.PI; return [0,1,2].map(j => c[j] + r*(e1[j]*Math.cos(a) + e2[j]*Math.sin(a))); }); };
+// text lying on a horizontal face, reading along direction (ux, uy)
+const txZ = (x, y, z, str, size, ux = 1, uy = 0, col = INK) => `<text transform="${txM(P(x, y, z), Dv(ux, uy, 0), Dv(-uy, ux, 0))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em">${str}</text>`;
+const txB = (x, y, z, str, size) => `<text transform="${txM(P(x, y, z), Dv(0, 1, 0), Dv(0, 0, -1))}" font-size="${size}" fill="${INK}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em">${str}</text>`;
+const mw = w => `style="stroke-width:${w.toFixed(2)}"`;      // a stroke in model units (not rescaled)
+
+// spur gear between face centres c0 -> c1 (pitch radius R, T teeth, phase ph measured from +x toward +y for a z axis)
+function gearSvg(c0, c1, R, T, ph, m, w = .7){
+  const ax = norm(sub(c1, c0)), e1 = Math.abs(ax[0]) > .9 ? [0,1,0] : [1,0,0], e2 = cross(ax, e1);
+  const md = 2*R/T, ro = R + .9*md, ri = R - 1.1*md, pt = 2*Math.PI/T, prof = [];
+  for (let i = 0; i < T; i++){ const a = ph + i*pt; for (const [rr, da] of [[ri, -.32], [ro, -.15], [ro, .15], [ri, .32]]){ const aa = a + da*pt; prof.push([rr*Math.cos(aa), rr*Math.sin(aa)]); } }
+  const ringAt = c => prof.map(([u, v]) => [0,1,2].map(i => c[i] + e1[i]*u + e2[i]*v));
+  const A = ringAt(c0), B = ringAt(c1), toB = vis(ax), cap = toB ? B : A, cc = toB ? c1 : c0, cn = toB ? ax : ax.map(v => -v);
+  const hubR = Math.max(.45, R*.32), hub = circ3(cc.map((v, i) => v + cn[i]*.03), ax, hubR, 16), bore = circ3(cc.map((v, i) => v + cn[i]*.05), ax, hubR*.4, 10);
+  const mark = [cc, [0,1,2].map(i => cc[i] + cn[i]*.04 + (e1[i]*Math.cos(ph) + e2[i]*Math.sin(ph))*ri*.85)];
+  return loft(A, B, n => toneI(n, m)) + fill(pd(cap), toneI(cn, m)) + ink(pd(cap), w*.55)
+    + shape(hub, toneI(cn, METAL), .45) + fill(pd(bore), '#2b2523') + line(mark, .45) + hullInk([...A, ...B], w);
+}
+// a cable cut into short pieces, each with its own box, so it sorts with the solids it passes (from the lamp)
+const fBend = (pts, r = 1.2) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k]) * d/la), q = c.map((v, k) => b[k] + (v - b[k]) * d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+const boxOf = (pts, e = .3) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const fWire = (pts, col, w = .35, segL = 6) => { const q = fBend(pts), out = [];
+  for (let i = 0; i < q.length - 1; ){ let j = i + 1, len = 0; while (j < q.length - 1 && len < segL){ len += Math.hypot(...q[j].map((v, k) => v - q[j - 1][k])); j++; }
+    if (len < segL) while (j < q.length - 1) j++;
+    const seg = q.slice(i, j + 1), d = pd(seg, false);
+    out.push({ box: boxOf(seg), svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w + .9)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linecap="round" stroke-linejoin="round"/>` });
+    i = j; }
+  return out; };
+
+/* ---------- one arm module: gear case, sun + planet inside, output boss on top ---------- */
+function casePlan(p, th, len, rs, rp){
+  const tip = [p[0] + len*Math.cos(th), p[1] + len*Math.sin(th)], pts = [];
+  for (let i = 0; i < 28; i++){ const a = i/28*2*Math.PI; pts.push([p[0] + (rs + 1.2)*Math.cos(a), p[1] + (rs + 1.2)*Math.sin(a)], [tip[0] + (rp + 1.2)*Math.cos(a), tip[1] + (rp + 1.2)*Math.sin(a)]); }
+  return { tip, ring: hull(pts) };
+}
+function modItem(K, k, pose, o){
+  const len = K.len[k], rs = K.rs[k], rp = K.rp[k], [ts, tp] = K.teeth[k], z0 = pose.z0, z1 = z0 + MOD_T[k], cm = MODM[k];
+  const { tip, ring } = casePlan(pose.p, pose.th, len, rs, rp), A = on(PZ(z0), ring), B = on(PZ(z1), ring);
+  const ca = Math.cos(pose.th), sa = Math.sin(pose.th);
+  let body = loft(A, B, n => tone(n, cm)) + fill(pd(B), tone([0,0,1], cm)) + ink(pd(B), .9);
+  // stamped speed on the lid
+  const fs = Math.min(4.2, (rp + 1.2)*1.25), tpos = [pose.p[0] + ca*len*.42, pose.p[1] + sa*len*.42];
+  if (len > 4.5) body += txZ(tpos[0] - sa*fs*.35, tpos[1] + ca*fs*.35, z1 + .05, K.n[k] + 'F', fs, ca, sa, mix(cm.d, '#000000', .2));
+  body += hullInk([...A, ...B], 1.7);
+  let s;
+  if (o.xk > 0){
+    // inside: sun on the pivot (turns with the arm below), planet at the tip (turns with the next arm)
+    const sunRel = pose.sunAbs - pose.th, plAbs = pose.th + Math.PI + Math.PI/tp - ts/tp*sunRel, g0 = z0 + .5, g1 = z1 - .6;
+    const gears = byDepth([
+      { box:[[pose.p[0] - rs, pose.p[1] - rs, g0], [pose.p[0] + rs, pose.p[1] + rs, g1]], svg: gearSvg([pose.p[0], pose.p[1], g0], [pose.p[0], pose.p[1], g1], rs, ts, pose.sunAbs, BRASS, .7) },
+      { box:[[tip[0] - rp, tip[1] - rp, g0], [tip[0] + rp, tip[1] + rp, g1]], svg: gearSvg([tip[0], tip[1], g0], [tip[0], tip[1], g1], rp, tp, plAbs, METAL, .7) } ]);
+    s = `<g opacity="${f(.5*o.xk)}">${fill(pd(A), mix(cm.d, '#f2efe7', .5))}${ink(pd(A), .6)}</g>` + `<g opacity="${f(o.xk)}">${gears}</g>`
+      + `<g opacity="${f(1 - .82*o.xk)}">${body}</g>` + `<g opacity="${f(.7*o.xk)}">${hullInk([...A, ...B], 1.7)}</g>`;
+  } else s = body;
+  // output boss on the planet shaft (the next arm or the drive pin sits on it)
+  const rb = Math.min(1.8, rp*.7 + .3);
+  s += cyl(tip[0], tip[1], z1, z1 + 1, rb, METAL, toneI, .7, 14);
+  if (o.slow){ const circle = on(PZ(z1 + .06), ellUV(pose.p[0], pose.p[1], len, len, 48));
+    s += `<path d="${pd(circle)}" fill="none" stroke="${cm.d}" ${mw(.5)} stroke-dasharray="1.6 1.2"/>` + `<path d="${pd([[pose.p[0], pose.p[1], z1 + .06], [tip[0], tip[1], z1 + .06]], false)}" fill="none" stroke="${cm.d}" ${mw(.45)}/>`; }
+  const pts = [...A, ...B]; return { box: boxOf(pts, 0).map((b, i) => i ? [b[0], b[1], z1 + 1] : b), svg: s, tip, z1 };
+}
+
+/* ---------- the plinth: case outside ---------- */
+function plinthBody(st, m){
+  const FRONT = facing([1,0,0]), BACK = facing([-1,0,0]), LEFT = facing([0,1,0]), RIGHT = facing([0,-1,0]);
+  let b = '';
+  if (FRONT){ b += fill(pd(on(PX(PW), OUT)), tone([1,0,0], m));
+    b += shape(on(PX(PW + .2), rrUV(146, 5.4, 197, 12.4, 1.6)), CREAM, .9) + tx(PW + .3, 171.5, 7.8, 'FOURIER EPICYCLES', 2.7, INK, 800);
+    b += tx(PW + .3, 122, 12.9, 'RUN', 1.9, INK, 800) + tx(PW + .3, 104, 12.9, 'SPEED', 1.9, INK, 800);
+    for (const [a, on1] of [[-50, st.speed === 'slow'], [50, st.speed === 'normal']]){ const r = a*Math.PI/180;
+      b += shape(on(PX(PW + .25), ellUV(104 - 3.6*Math.sin(r), 8.5 + 3.6*Math.cos(r), .45, .45, 10)), on1 ? '#ff8a2e' : '#c9c1b2', .4); }
+    b += shape(on(PX(PW + .25), ellUV(126.2, 11.2, .55, .55, 10)), st.run ? '#43c25c' : '#8d877a', .45); }
+  if (BACK){ b += fill(pd(on(PX(0), OUT)), tone([-1,0,0], m));
+    b += shape(on(PX(-.2), rrUV(70, 5.6, 110, 12.4, 1.2)), '#f3f0e6', .8) + txB(-.3, 90, 9.6, '6V  4 x AA', 2.2) + txB(-.3, 90, 6.8, 'MOD. HS-5', 1.8); }
+  b += extrude(OUT, 0, PW, m);
+  if (LEFT){ let v = ''; for (let x = 30; x <= 70; x += 4) v += pd([[x, PDY + .2, 6], [x, PDY + .2, 12]], false); b += `<path d="${v}" fill="none" stroke="${INK}" stroke-width="1.2" opacity=".7"/>`; }
+  if (RIGHT){ let v = ''; for (let x = 30; x <= 70; x += 4) v += pd([[x, -.2, 6], [x, -.2, 12]], false); b += `<path d="${v}" fill="none" stroke="${INK}" stroke-width="1.2" opacity=".7"/>`; }
+  if (FRONT) b += ink(pd(on(PX(PW), OUT)), 2.1);
+  if (BACK) b += ink(pd(on(PX(0), OUT)), 2.1);
+  return b + hullInk([...on(PX(0), OUT), ...on(PX(PW), OUT)], 2.8);
+}
+function frontControls(st){
+  const FRONT = facing([1,0,0]), a = (st.speed === 'slow' ? -50 : 50)*Math.PI/180, lz = 8.5 + (st.run ? 1.9 : -1.9);
+  let knob = cylX(PW, PW + 2.6, 104, 8.5, 2.6, KNOBM, toneI, 1.1, 24);
+  if (FRONT) knob += ink(pd([[PW + 2.65, 104, 8.5], [PW + 2.65, 104 - 2*Math.sin(a), 8.5 + 2*Math.cos(a)]], false), 1.1);
+  const sw = cylX(PW, PW + .8, 122, 8.5, 1.7, METAL, toneI, .9, 16) + rod([PW + .8, 122, 8.5], [PW + 3.6, 122, lz], .45, METAL, toneI, .8, .6);
+  return byDepth([{ box:[[PW, 101.4, 5.9], [PW + 2.6, 106.6, 11.1]], svg: act('speed', knob) }, { box:[[PW, 120.3, 6.4], [PW + 3.7, 123.7, 10.6]], svg: act('run', sw) }]);
+}
+
+/* ---------- inside the plinth (see-through) ---------- */
+function plinthInner(st){
+  const parts = [], put = it => parts.push(it), sh = 2*Math.PI*st.t, ZD = 12.4;
+  // drive shaft along y at x = 50, cut either side of everything mounted on it
+  const onShaft = [[17, 18.6], [28.5, 31.5], [68.5, 71.5], [112.3, 113.7], [138.5, 141.5], [147.4, 149]];
+  for (let i = 0; i < onShaft.length - 1; i++) put(rodI([50, onShaft[i][1], ZD], [50, onShaft[i + 1][0], ZD], .5, METAL, .6));
+  for (const y of [30, 70, 140]) put(bxI(47.6, y - 1.5, 3, 52.4, y + 1.5, 13.6, IRON, .7));                         // pillow blocks
+  // mitre gears: feed pair at the front end, main pair at the back end (cones share their apex)
+  put(rodI([50, 18.6, ZD], [50, 17, ZD], 2.6, BRASS, .7, 1));
+  put(rodI([52.6, NIP_Y, ZD], [51, NIP_Y, ZD], 2.6, BRASS, .7, 1));
+  put(rodI([50, 147.4, ZD], [50, 149, ZD], 2.6, BRASS, .7, 1));
+  put(rodI([50, 150, 9.8], [50, 150, 11.4], 2.6, BRASS, .7, 1));
+  // main shaft up to the deck: thrust bearing, shaft, top bearing
+  put(bxI(48, 148.2, 3, 52, 151.8, 9.8, IRON, .7));
+  put(rodI([50, 150, 11.4], [50, 150, 14.2], .8, METAL, .6));
+  put(cylI(50, 150, 14.2, 15, 1.9, IRON, .6, 16));
+  // feed axle along x with two rubber drive rollers and two bearings
+  const ax = [[19, 21], [23, 31], [51, 52.6], [69, 77], [79, 81]];
+  for (let i = 0; i < ax.length - 1; i++) put(rodI([ax[i][1], NIP_Y, ZD], [ax[i + 1][0], NIP_Y, ZD], .5, METAL, .6));
+  for (const x0 of [23, 69]) put(cylXI(x0, x0 + 8, NIP_Y, ZD, 3.82, DARK, .8));
+  for (const x0 of [19, 79]) put(bxI(x0, NIP_Y - 1.5, 3, x0 + 2, NIP_Y + 1.5, 13.4, IRON, .6));
+  // gearmotor under the shaft: can, gearbox, bracket, pinion 12T driving the 20T drive gear
+  put(rodI([50, 92, 8.4], [50, 103.5, 8.4], 3.2, METAL, .9));
+  put(bxI(48.6, 91.2, 7.4, 51.4, 92, 9.4, BRASS, .5));
+  put(bxI(46.5, 103.5, 5, 53.5, 111.4, 11.6, TTM, .8));
+  put(bxI(45, 96, 3, 55, 100, 5.2, IRON, .6));
+  put(rodI([50, 111.4, 8.4], [50, 112.3, 8.4], .35, METAL, .5));
+  put({ box:[[47.8, 112.3, 6.2], [52.2, 113.7, 10.6]], svg: gearSvg([50, 112.3, 8.4], [50, 113.7, 8.4], 1.5, 12, -sh*20/12, METAL, .6) });
+  put({ box:[[47.2, 112.3, 9.6], [52.8, 113.7, 15.2]], svg: gearSvg([50, 112.3, ZD], [50, 113.7, ZD], 2.5, 20, sh, BRASS, .7) });
+  // battery box with four AA cells
+  put(bxI(10, 127, 3, 36, 153, 3.6, DARK, .7));
+  for (const [x0, y0, x1, y1] of [[10, 127, 36, 127.6], [10, 152.4, 36, 153], [10, 127.6, 10.6, 152.4], [35.4, 127.6, 36, 152.4]]) put(bxI(x0, y0, 3.6, x1, y1, 8.6, DARK, .6));
+  for (const x of [13.8, 19.8, 25.8, 31.8]) put(rodI([x, 129, 6.4], [x, 151, 6.4], 2.7, matOf('#e2483d'), .7));
+  // speed board on standoffs, run switch body and speed pot behind the front panel
+  for (const [x, y] of [[67.5, 123.5], [86.5, 123.5], [67.5, 138.5], [86.5, 138.5]]) put(cylI(x, y, 3, 4.6, .5, METAL, .4, 8));
+  put(bxI(66, 122, 4.6, 88, 140, 5.2, PCBM, .6, toneI, facing([0,0,1]) ? `<path d="${pd([[70, 126, 5.22], [80, 126, 5.22], [80, 134, 5.22]], false)}" fill="none" stroke="#d8a24a" stroke-width=".6"/>` : ''));
+  put(bxI(74, 128, 5.2, 80, 134, 6.4, DARK, .5));
+  put(cylI(70, 136, 5.2, 8, 1.4, matOf('#3f7fc0'), .5, 12));
+  put(bxI(84, 128, 5.2, 87.5, 134, 7.2, matOf('#3f7fc0'), .5));
+  put(bxI(95, 119.5, 6.2, 99, 124.5, 10.8, DARK, .6));
+  put(cylXI(96, 99, 104, 8.5, 2.4, METAL, .6));
+  // wires along the floor, port to port
+  const red = st.run ? '#ff6a2a' : '#c0392b';
+  for (const w of [ fWire([[35.4, 150, 6.4], [38, 150, 3.7], [92, 150, 3.7], [92, 124, 3.7], [95, 123.5, 7]], red),
+      fWire([[95, 120.5, 7], [91, 120.5, 3.7], [88.5, 131, 3.7], [87.5, 131, 6]], red),
+      fWire([[35.4, 130, 6.4], [38, 130, 3.7], [64, 127, 3.7], [66, 127, 5]], '#3a3632'),
+      fWire([[96, 104, 7.4], [92, 104, 3.7], [83, 121, 3.7], [83, 122.2, 5]], '#e8e4da'),
+      fWire([[66, 133, 5], [62, 133, 3.7], [62, 90, 3.7], [49.3, 90, 3.7], [49.3, 91.2, 8]], red),
+      fWire([[66, 135, 5], [60, 135, 3.7], [60, 89, 3.7], [50.7, 89, 3.7], [50.7, 91.2, 8]], '#3a3632') ]) parts.push(...w);
+  return byDepth(parts);
+}
+
+/* ---------- the paper strip: chart grid, target, trace ---------- */
+function paperSvg(st){
+  const K = KITS[st.kit], y0 = TAK_Y, y1 = SUP_Y;
+  let s = shape(on(PZ(PZP), rectUV(STRIP[0], y0, STRIP[1], y1)), PAPERM.l, .8);
+  let g = '', g2 = '';
+  for (let x = 26; x <= 74; x += 4) (x === 50 ? (g2 += pd([[x, y0, PZP + .02], [x, y1, PZP + .02]], false)) : (g += pd([[x, y0, PZP + .02], [x, y1, PZP + .02]], false)));
+  const off = st.t*WAVE;
+  for (let j = Math.ceil((off - (PEN_Y - y0))/6); ; j++){ const y = PEN_Y - off + 6*j; if (y > y1) break; if (y < y0) continue;
+    (j % 4 === 0 ? (g2 += pd([[STRIP[0], y, PZP + .02], [STRIP[1], y, PZP + .02]], false)) : (g += pd([[STRIP[0], y, PZP + .02], [STRIP[1], y, PZP + .02]], false))); }
+  s += `<path d="${g}" fill="none" stroke="#bfdfe2" ${mw(.3)}/><path d="${g2}" fill="none" stroke="#8fc4ca" ${mw(.45)}/>`;
+  const tMin = st.t - (PEN_Y - 8)/WAVE, Y = tau => PEN_Y - (st.t - tau)*WAVE, h = 1/180;
+  // overlays for the current set: the target shape (dashed) and, when slow, each arm's own sine
+  let tk0 = tMin; for (let i = st.segs.length - 1; i >= 0; i--){ if (st.segs[i].kit !== st.kit){ tk0 = Math.max(tMin, st.segs[i].t1); break; } }
+  { const pts = []; for (let tau = tk0; tau <= st.t + 1e-9; tau += h) pts.push([50 + target(K, tau), Y(tau), PZP + .04]);
+    if (pts.length > 1) s += `<path d="${pd(pts, false)}" fill="none" stroke="#e2483d" ${mw(.45)} stroke-dasharray="1.4 1" opacity=".75"/>`; }
+  if (st.speed === 'slow'){ const ls = st.segs[st.segs.length - 1], t0 = Math.max(tMin, ls.t0);
+    for (let k = 0; k < st.N; k++){ const pts = []; for (let tau = t0; tau <= st.t + 1e-9; tau += h) pts.push([50 + K.c[k]*K.len[k]*Math.sin(2*Math.PI*K.n[k]*tau), Y(tau), PZP + .05]);
+      if (pts.length > 1) s += `<path d="${pd(pts, false)}" fill="none" stroke="${MODM[k].d}" ${mw(.4)} opacity=".8"/>`; } }
+  // the ink: every stretch the pen drew, with the set and arms in use at the time
+  const pts = [];
+  for (const sg of st.segs){ if (sg.t1 < tMin) continue; const KK = KITS[sg.kit];
+    for (let tau = Math.max(tMin, sg.t0); tau < sg.t1; tau += h) pts.push([50 + penOff(KK, sg.N, tau), Y(tau), PZP + .06]);
+    pts.push([50 + penOff(KK, sg.N, sg.t1), Y(sg.t1), PZP + .06]); }
+  if (pts.length > 1) s += `<path d="${pd(pts, false)}" fill="none" stroke="${INKC}" ${mw(.75)} stroke-linejoin="round" stroke-linecap="round"/>`;
+  return s;
+}
+
+/* ---------- everything on the deck ---------- */
+function deck(st, xk){
+  const K = KITS[st.kit], ch = chain(K, st.t), parts = [], put = it => parts.push(it), slow = st.speed === 'slow';
+  const N = st.N, top = ch[N - 1], tip = top.tip, px = 50 + penOff(K, N, st.t);
+  const mods = [];
+  for (let k = 0; k < 5; k++){
+    if (k < N){ mods.push(modItem(K, k, ch[k], { xk, slow })); continue; }
+    let pose = { ...K.tray[k], sunAbs: 0 };
+    if (st.mv && st.mv.k === k){ const e = ease(st.mv.p), to = ch[k];
+      let dth = ((to.th - pose.th) % (2*Math.PI) + 3*Math.PI) % (2*Math.PI) - Math.PI;
+      pose = { p:[pose.p[0] + (to.p[0] - pose.p[0])*e, pose.p[1] + (to.p[1] - pose.p[1])*e], th: pose.th + dth*e, z0: pose.z0 + (to.z0 - pose.z0)*e + 8*Math.sin(Math.PI*e), sunAbs: to.sunAbs*e }; }
+    mods.push(modItem(K, k, pose, { xk, slow: false }));
+  }
+  parts.push(...mods);
+  // drive pin from the top arm's boss up into the yoke slot
+  const zp = mods[N - 1].z1 + 1;
+  put(rodI([tip[0], tip[1], zp], [tip[0], tip[1], YK[0]], .55, METAL, .7));
+  // the Scotch yoke on its bushings and guide rods, the rod posts
+  const slot = on(PZ(YK[1] + .03), rrUV(px - .9, SLOT[0], px + .9, SLOT[1], .9));
+  const roller = on(PZ(YK[1] + .06), ellUV(tip[0], tip[1], .75, .75, 12));
+  put(bxI(px - 3, 77, YK[0], px + 3, 207, YK[1], YOKEM, .9, toneI, shape(slot, '#2b2523', .6) + shape(roller, METAL.l, .5)));
+  for (const y of ROD_Y){
+    put(bxI(px - 3, y - 3, 36, px + 3, y + 3, YK[0], DARK, .8));
+    put(rodI([5.7, y, ROD_Z], [px - 3, y, ROD_Z], .8, METAL, .7));
+    put(rodI([px + 3, y, ROD_Z], [94.3, y, ROD_Z], .8, METAL, .7));
+    for (const x of [4, 96]){ const c = cyl(x, y, TOP, 36.3, 1.3, DARK, toneI, .8, 14) + box(x - 1.7, y - 1.7, 36.3, x + 1.7, y + 1.7, 38.7, DARK, toneI, .7);
+      put({ box:[[x - 1.7, y - 1.7, TOP], [x + 1.7, y + 1.7, 38.7]], svg: c }); }
+  }
+  // pen: bracket under the yoke, clamp, felt pen with its cap up top and tip on the paper
+  put(bxI(px - 1, 81.8, 27, px + 1, 83, YK[0], YOKEM, .7));
+  put(bxI(px - 1.8, 78.2, 27, px + 1.8, 81.8, 30, YOKEM, .7));
+  put({ box:[[px - 1.1, 78.9, PZP], [px + 1.1, 81.1, 27]], svg: rod([px, PEN_Y, PZP + .05], [px, PEN_Y, 17.6], .3, PENM, toneI, .6, 1.1) + rod([px, PEN_Y, 17.6], [px, PEN_Y, 27], 1.1, CERAMIC, toneI, .8) });
+  put({ box:[[px - 1.2, 78.8, 30], [px + 1.2, 81.2, 33.2]], svg: rod([px, PEN_Y, 30], [px, PEN_Y, 31.4], 1.1, CERAMIC, toneI, .8) + rod([px, PEN_Y, 31.4], [px, PEN_Y, 33.2], 1.2, PENM, toneI, .8) });
+  // paper path: supply roll, pinch roller on spring arms, take-up roll and its spring drum
+  const tick = (x, y, z, r, a) => facing([x > 50 ? 1 : -1, 0, 0]) ? ink(pd([[x, y + r*.35*Math.cos(a), z + r*.35*Math.sin(a)], [x, y + r*.9*Math.cos(a), z + r*.9*Math.sin(a)]], false), .7) : '';
+  const capX = facing([1,0,0]) ? 79 : 21, cx2 = facing([1,0,0]) ? 79.05 : 20.95;
+  for (const x0 of [19, 79]){ put(bxI(x0, SUP_Y - 2.5, TOP, x0 + 2, SUP_Y + 2.5, 23.6, DARK, .7)); put(bxI(x0, TAK_Y - 2.3, TOP, x0 + 2, TAK_Y + 2.3, 23.2, DARK, .7)); }
+  const sa = -st.t*WAVE/SUP_R, ta = -st.t*WAVE/TAK_R;
+  put(cylXI(21, 79, SUP_Y, SUP_Z, SUP_R, PAPERM, 1.1, shape(on(PX(cx2), ellUV(SUP_Y, SUP_Z, 1.3, 1.3, 14)), '#8a7f6a', .5) + tick(cx2, SUP_Y, SUP_Z, SUP_R, sa), 28));
+  put(cylXI(21, 79, TAK_Y, TAK_Z, TAK_R, PAPERM, 1.1, shape(on(PX(cx2), ellUV(TAK_Y, TAK_Z, 1.3, 1.3, 14)), '#8a7f6a', .5) + tick(cx2, TAK_Y, TAK_Z, TAK_R, ta), 28));
+  put(cylXI(81, 85, TAK_Y, TAK_Z, 2.6, DARK, .8));
+  put(cylXI(22.5, 77.5, NIP_Y, PZP + 2, 2, DARK, .9, '', 18));
+  for (const x0 of [20.5, 77.5]) put(bxI(x0, NIP_Y - 1, TOP, x0 + 2, NIP_Y + 1, 20.2, IRON, .6));
+  // spare-arm tray
+  const [tx0, ty0, tx1, ty1] = TRAY;
+  put(bxI(tx0, ty0, TOP, tx1, ty1, 16.8, DARK, .8));
+  for (const [x0, y0, x1, y1] of [[tx0, ty0, tx1, ty0 + 1], [tx0, ty1 - 1, tx1, ty1], [tx0, ty0 + 1, tx0 + 1, ty1 - 1], [tx1 - 1, ty0 + 1, tx1, ty1 - 1]]) put(bxI(x0, y0, 16.8, x1, y1, 18.4, DARK, .7));
+  // see-through: the frequency bars, one per harmonic, height = that arm's amplitude
+  if (xk > 0) for (let k = 0; k < 5; k++){ const y = 78 - 12*k, hh = 22*K.len[k]/K.len[0], on1 = k < N;
+    put({ box:[[6.5, y - 2.5, TOP], [13.5, y + 2.5, TOP + hh]], svg: `<g opacity="${f(xk*(on1 ? 1 : .3))}">${box(7, y - 2.5, TOP, 13, y + 2.5, TOP + hh, MODM[k], toneI, .8)}${txZ(16.5, y, TOP + .05, K.n[k] + 'F', 3.2, 1, 0)}</g>` }); }
+  return { svg: cyl(MC[0], MC[1], TOP, 17, 3.4, DARK, toneI, .8, 24) + byDepth(parts), ch, px, mods, tip, zp };   // fixed sun post flange, always under arm 1
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0), FRONT = facing([1,0,0]), K = KITS[st.kit];
+  let s = castShadow([...on(PX(0), OUT), ...on(PX(PW), OUT)], 0);
+  for (const [x, y] of [[7, 7], [93, 7], [7, 203], [93, 203]]) s += cyl(x, y, 0, ZF, 3, DARK, toneI, .8, 16);
+  let body = plinthBody(st, m);
+  if (k > 0) body = xrGhost(body, '', k, OUT, 0, PW, m) + `<g opacity="${f(k)}">${plinthInner(st)}</g>`;
+  const ctl = frontControls(st);
+  s += FRONT ? body + ctl : ctl + body;
+  const d = deck(st, k);
+  // shadows on the deck: the arm stack, the yoke, the pen
+  const ring = [], ch = d.ch; for (let i = 0; i < st.N; i++) ring.push(...on(PZ(d.mods[i].z1), casePlan(ch[i].p, ch[i].th, K.len[i], K.rs[i], K.rp[i]).ring.filter((_, j) => j % 3 === 0)));
+  const sh = castShadow([...ring, ...on(PZ(TOP), [[MC[0] - 3, MC[1] - 3], [MC[0] + 3, MC[1] + 3]])], TOP, DECK)
+    + castShadow([[d.px - 3, 77, YK[1]], [d.px + 3, 77, YK[1]], [d.px - 3, 207, YK[1]], [d.px + 3, 207, YK[1]], [d.px - 3, 77, TOP], [d.px + 3, 207, TOP]], TOP, DECK)
+    + castShadow([[d.px, PEN_Y, PZP], [d.px - 1.5, 81, 33], [d.px + 1.5, 83, YK[0]]], TOP, DECK);
+  s += `<g opacity="${f(.5 - .3*k)}">${sh}</g>`;
+  s += `<g opacity="${f(1 - .45*k)}">${paperSvg(st)}</g>`;
+  s += d.svg;
+  s += labels(st, k, d);
+  return s;
+}
+
+function labels(st, k, d){
+  const K = KITS[st.kit], ch = d.ch, run = st.run, N = st.N, px = d.px, mv = !!st.mv;
+  const it = [];
+  if (k > .6){
+    it.push({ at:[50, 97, 8.4], text:'GEARMOTOR', on: run }, { at:[50, 113, 6.9], text:'PINION 12T', on: run }, { at:[50, 113.7, 14.6], text:'DRIVE GEAR 20T', on: run },
+      { at:[50, 55, 12.9], text:'DRIVE SHAFT', on: run }, { at:[52.4, 70, 9], text:'PILLOW BLOCK', on: false }, { at:[50, 148, 14.2], text:'MITRE GEARS', on: run },
+      { at:[50, 150, 13], text:'MAIN SHAFT', on: run }, { at:[52, 150, 6], text:'THRUST BEARING', on: false }, { at:[52, 17.5, 14.5], text:'FEED BEVELS', on: run },
+      { at:[40, NIP_Y, 12.9], text:'FEED AXLE', on: run }, { at:[27, NIP_Y, 16], text:'DRIVE ROLLER', on: run }, { at:[22, 140, 8.6], text:'BATTERY BOX', on: run },
+      { at:[77, 131, 6.4], text:'SPEED BOARD', on: run }, { at:[97, 122, 10.8], text:'RUN SWITCH', on: run }, { at:[MC[0] + 3.4, MC[1], 16.6], text:'SUN POST', on: false },
+      { at:[MC[0] + K.rs[0]*.7, MC[1], MOD_Z[0] + 2.8], text:`SUN GEAR ${K.teeth[0][0]}T`, on: run },
+      { at:[ch[0].tip[0], ch[0].tip[1], MOD_Z[0] + 2.8], text:`PLANET ${K.teeth[0][1]}T`, on: run },
+      { at:[d.tip[0], d.tip[1], d.zp], text:'OUTPUT BOSS', on: run },
+      { at:[10, 30, TOP + 22*K.len[4]/K.len[0]], text:'FREQUENCY BARS', on: false },
+      { at:[px + 3, ROD_Y[0], 38], text:'LINEAR BUSHING', on: run },
+      { at:[50, NIP_Y, PZP + 4], text:'PINCH ROLLER', on: run });
+  }
+  for (let i = 0; i < N; i++){ const c = ch[i], m = [c.p[0] + Math.cos(c.th)*K.len[i]*.55, c.p[1] + Math.sin(c.th)*K.len[i]*.55, MOD_Z[i] + MOD_T[i]];
+    if (i === 0 || (i === N - 1 && k > .6)) it.push({ at: m, text:`ARM ${i + 1} AT ${K.n[i]}F`, on: run }); }
+  it.push({ at:[d.tip[0], d.tip[1], (d.zp + YK[0])/2], text:'DRIVE PIN', on: run }, { at:[px + 3, 150, YK[1]], text:'SCOTCH YOKE', on: run },
+    { at:[px, PEN_Y, 23], text:'FELT PEN', on: run }, { at:[60, 60, PZP], text:'PAPER STRIP', on: run }, { at:[70, SUP_Y, SUP_Z + SUP_R], text:'SUPPLY ROLL', on: run },
+    { at:[70, TAK_Y, TAK_Z + TAK_R], text:'TAKE-UP ROLL', on: run }, { at:[12, ROD_Y[1], ROD_Z + .8], text:'GUIDE ROD', on: run },
+    { at:[91, 70, 18.4], text:'SPARE ARMS', on: mv });
+  if (k <= .6) it.push({ at:[PW + 3.6, 122, 8.5 + (run ? 1.9 : -1.9)], text:'RUN SWITCH', on: run }, { at:[PW + 2.6, 104, 11.1], text:'SPEED KNOB', on: st.speed === 'slow' });
+  return xrCallouts(it, [0, PW + 3, 0, PDY, 0, 42]);
+}
+
+/* ---------- behaviour (one state object, one clock) ---------- */
+let ui, fLoop = false;
+function fDrive(){
+  if (fLoop) return; fLoop = true;
+  ui.animate(dt => { const st = ui.st;
+    if (st.run){ st.t += dt*SPD[st.speed]; st.segs[st.segs.length - 1].t1 = st.t;
+      while (st.segs.length > 1 && st.segs[0].t1 < st.t - 3.5) st.segs.shift(); }
+    if (st.mv){ st.mv.p = Math.min(1, st.mv.p + dt/.9); if (st.mv.p >= 1){ st.N = st.mv.k + 1; st.mv = null; markSeg(st); } }
+    const go = st.run || !!st.mv; if (!go) fLoop = false; return go; });
+}
+function markSeg(st){ const last = st.segs[st.segs.length - 1]; last.t1 = st.t;
+  if (last.N !== st.N || last.kit !== st.kit) st.segs.push({ t0: st.t, t1: st.t, kit: st.kit, N: st.N }); }
+function toggleRun(st){ st.run = !st.run; if (st.run) fDrive(); }
+function addHarmonic(st){
+  if (st.mv) return ui.flash('one moment: an arm is being fitted');
+  if (st.N >= 5){ st.N = 1; markSeg(st); return ui.flash('all five arms were on: back to one arm'); }
+  st.mv = { k: st.N, p: 0 }; fDrive();
+}
+function setKit(st, key){
+  if (st.mv){ st.N = st.mv.k + 1; st.mv = null; }
+  st.kit = key; markSeg(st); ui.flash(`${KITS[key].name} arm set fitted`);
+}
+function setSpeed(st, key){ st.speed = key; }
+
+ui = mountFigure({
+  fig:'M1', title:"Fourier's epicycles", turn:'full',
+  size:[PW + 24, PDY, 200], center:[(PW + 3.6)/2, PDY/2], palette:'mint',
+  state:{ run:false, t:.1, speed:'normal', N:1, kit:'sq', mv:null, segs:[] },
+  scene,
+  stats: st => [
+    { label:'Harmonics', value: st.N, small:true },
+    { label:'Frequencies', value: KITS[st.kit].n.slice(0, st.N).map(n => n + 'f').join(' '), small:true },
+    { label:`RMS error vs ${KITS[st.kit].short}`, value: Math.round(rmsErr(st)*100) + '%', small:true } ],
+  buttons:[
+    { label:'Run / stop', onClick: st => toggleRun(st) },
+    { label:'Add harmonic', onClick: st => addHarmonic(st) },
+    { label:'Target shape', choices: st => Object.keys(KITS).map(key => ({ label: KITS[key].name, current: st.kit === key, onClick: st => setKit(st, key) })) },
+    { label:'Speed', choices: st => [['slow', 'Slow'], ['normal', 'Normal']].map(([key, lb]) => ({ label: lb, current: st.speed === key, onClick: st => setSpeed(st, key) })) },
+  ],
+  acts:{ run: st => toggleRun(st), speed: st => setSpeed(st, st.speed === 'slow' ? 'normal' : 'slow') },
+  params:(st, q) => {
+    if (KITS[q.get('kit')]) st.kit = q.get('kit');
+    if (q.has('n')) st.N = Math.max(1, Math.min(5, +q.get('n') | 0));
+    if (q.get('slow') === '1') st.speed = 'slow';
+    if (q.has('t')) st.t = +q.get('t');
+    st.segs = [{ t0: st.t - 3, t1: st.t, kit: st.kit, N: st.N }];
+  },
+});
+if (new URLSearchParams(location.search).get('run') === '1') toggleRun(ui.st);
+addEventListener('keydown', e => {
+  if (/input|textarea|button/i.test(e.target.tagName)) return;
+  const key = e.key.toLowerCase(), st = ui.st;
+  if (key === ' ' || key === 'enter') toggleRun(st); else if (key === 'h') addHarmonic(st); else return;
+  e.preventDefault(); ui.render();
+});
+xrMount(() => ui, () => '');
+</script></body></html>
