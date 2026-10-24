@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lever lock</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Source evidence is The Way Things Work Now, 2016, printed p13, saved now-pages.json[14].
+   Construction research is GB2480089A, description of conventional lever locks, paragraphs 73-74, 91-96.
+   https://patents.google.com/patent/GB2480089A/en
+   1. The key rests on the table. Insert moves its shank along x through the cover boss into the rear guide.
+   2. Turning the bitted key lifts five levers about their shared case-mounted pivot against five leaf springs.
+   3. Different cuts lift each lever by a different angle. All five gates must clear the bolt stump.
+   4. The key drive bit bears on the bolt talon. The lath slides 18 drawing units in case-mounted guides.
+      The stump travels through the gates into the other pockets. Springs lower the levers and retain the bolt.
+   5. One shallow cut on the wrong key under-lifts lever 3. Its shoulder stops the stump before bolt travel.
+   Teaching adaptation. Enlarged, colour-coded five-lever specimen with broad gates and slow staged timing.
+   Lever angles follow contact between each key corner and its saddle edge. Bolt travel follows the rear drive bit.
+   Generous gates and staged timing make this an illustrative model, not a manufacturable lock design.
+   Insert after an attempt replaces the whole specimen with a retracted one. This is a teaching reset, not self-repair.
+   1988 remains access-restricted and unverified. 1998 is not individually verified. No edition union is claimed.
+   Parts and their supports.
+   CASE. Back plate, cover, top, bottom and end plate are joined by four cover screws and their case bosses.
+   MECHANISM. Five pierced levers and spacer washers ride on a pivot fixed to the back plate and cover.
+   Five leaf springs are riveted to their levers and bear against the case top. Gates, pockets, shoulders
+   and saddles are physical features cut into those levers. The stump is fixed to the bolt lath.
+   BOLT. Head, lath and two talon cheeks are one moving assembly, held by upper and lower bolt guides.
+   KEY. Bow, collar, shank, five bitting steps and the rear drive bit are connected solids. Boss and rear guide
+   locate the shank. No electrical power, cylinder pins, latch spring or automatic return bolt is implied.
+   Data shape. phase is table / inserting / ready / turning / locked / blocked. Progress is 0..1.
+*/
+const lkBrass = matOf('#e4b34f'), lkSteel = matOf('#b5c4cb');
+const lkColors = ['#70b7c6','#ebae53','#e47e65','#9fa2d3','#8bb982'];
+const lkRadii=[16,18,14,19,17];
+const lkAngles = [10,17,12,21,15].map(a=>a*Math.PI/180);
+const lkOuter = rrUV(27,40,86,74,3,4);
+const lkHole = [[44,47],[56,47],[56,54],[64,54],[64,47],[77,47],[77,73],[64,73],[64,58],[56,58],[56,73],[44,73]];
+const lkState = {phase:'table',insert:0,rotation:0,lift:0,bolt:0,wrong:false,time:0};
+const lkRot = ([y,z],a) => [30+(y-30)*Math.cos(a)-(z-69)*Math.sin(a),69+(y-30)*Math.sin(a)+(z-69)*Math.cos(a)];
+const lkBounds = pts => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i])))];
+const lkClamp = t => Math.max(0,Math.min(1,t));
+function lkPose(st,t){
+  st.rotation = -2*Math.PI*t;
+  st.lift = t<.44 ? ease(lkClamp((t-.2)/.24)) : t<.56 ? 1 : 1-ease(lkClamp((t-.56)/.24));
+  const u=lkClamp((t-.44)/.12);
+  st.bolt = st.wrong ? 0 : (Math.sin(-2*Math.PI*(.44+.12*u))+Math.sin(.12*Math.PI))/(2*Math.sin(.12*Math.PI));
+}
+function lkAdvance(st,dt){
+  st.time+=dt;
+  if(st.phase==='inserting'){
+    st.insert=ease(lkClamp(st.time/.85));
+    if(st.time>=.85){st.insert=1;st.phase='ready';st.time=0;}
+  } else if(st.phase==='turning'){
+    const t=lkClamp(st.time/3.6);lkPose(st,t);
+    if(st.wrong && t>=.5){lkPose(st,.5);st.phase='blocked';}
+    else if(t>=1){lkPose(st,1);st.phase='locked';}
+  }
+  return st.phase==='inserting'||st.phase==='turning';
+}
+function lkRun(st,ui){ui.animate(dt=>lkAdvance(st,dt));}
+function lkInsert(st,ui){
+  if(st.phase==='inserting'||st.phase==='turning')return ui.flash('Wait for the key to stop');
+  if(st.phase==='ready'&&!st.wrong)return ui.flash('Key inserted. Turn it to lift the levers');
+  const replace=st.phase!=='table';
+  Object.assign(st,{phase:'inserting',insert:0,rotation:0,lift:0,bolt:0,wrong:false,time:0});
+  if(replace)ui.flash('Fresh retracted specimen and matching key');
+  lkRun(st,ui);
+}
+function lkTurn(st,ui){
+  if(st.phase==='table')return ui.flash('Insert the key first');
+  if(st.phase==='inserting'||st.phase==='turning')return ui.flash('Wait for the key to stop');
+  if(st.phase==='locked')return ui.flash('Bolt extended. Insert supplies a fresh specimen');
+  if(st.phase==='blocked')return ui.flash('Lever 3 blocks the stump. Insert supplies a matching key');
+  st.phase='turning';st.time=0;lkRun(st,ui);
+}
+function lkWrong(st,ui){
+  if(st.phase==='inserting'||st.phase==='turning')return ui.flash('Wait for the key to stop');
+  Object.assign(st,{phase:'inserting',insert:0,rotation:0,lift:0,bolt:0,wrong:true,time:0});
+  ui.flash('Fresh specimen. One key cut is too shallow');
+  ui.animate(dt=>{const more=lkAdvance(st,dt);if(st.phase==='ready'){st.phase='turning';st.time=0;return true;}return more;});
+}
+function lkCallouts(items){
+  const vb=document.getElementById('fig').viewBox.baseVal;
+  const ordered=items.slice().sort((a,b)=>P(...a.at)[0]-P(...b.at)[0]);
+  const half=Math.ceil(ordered.length/2);
+  return [ordered.slice(0,half),ordered.slice(half)].map((col,side)=>{
+    col.sort((a,b)=>P(...a.at)[1]-P(...b.at)[1]);
+    const gap=Math.min(vb.height*.69/half,18*INK_K),x=vb.width*(side?.84:.23),top=vb.height*.22;
+    return col.map((it,i)=>{const [px,py]=P(...it.at);return tag(it.at,(x-px)/INK_K,(top+i*gap-py)/INK_K,it.text,it.on);}).join('');
+  }).join('');
+}
+function lkLeverAngle(st,i){
+  if(st.insert<1)return -lkAngles[i];
+  const r=lkRadii[i]-(st.wrong&&i===2?5:0),a=st.rotation,w=Math.sign(Math.sin(a))*1.2;
+  const y=62+Math.sin(a)*r+Math.cos(a)*w,z=27-Math.cos(a)*r+Math.sin(a)*w;
+  const bottom=27+lkRadii[i];
+  let lo=-lkAngles[i],hi=0;
+  // The key's highest corner bears on the inclined saddle edge.
+  for(let n=0;n<24;n++){
+    const mid=(lo+hi)/2,edge=69+(y-30)*Math.tan(mid)+(bottom-69)/Math.cos(mid);
+    if(edge<z)lo=mid;else hi=mid;
+  }
+  return (lo+hi)/2;
+}
+function lkScene(st,m){
+  const parts=[], labels=[], outerParts=[];
+  const put=(pts,svg,list=parts)=>list.push({box:lkBounds(pts),svg});
+  const bx=(v,mat=lkSteel,list=parts)=>put([v.slice(0,3),v.slice(3)],box(...v,mat,toneI,.9),list);
+  const lab=(at,text,on=false)=>labels.push({at,text,on});
+  const seg=(a,b,r,mat=lkSteel,list=parts)=>put([a.map(v=>v-r),b.map(v=>v+r)],rod(a,b,r,mat,toneI,.8),list);
+  let svg=board(0,0,122,132,3,5,WOOD);
+  svg+=castShadow([[12,20,8],[35,20,88],[35,97,88],[12,114,51]],3,boardTop(0,0,122,132,3,5));
+  const k=ease(st.xr||0), travel=18*st.bolt;
+  bx([12,20,8,14,96,88],m,outerParts);
+  for(const y of [20,88])bx([12,y,3,35,y+8,8],lkSteel,outerParts);
+  bx([14,20,85,33,96,88],m,outerParts);
+  bx([14,20,8,33,96,11],m,outerParts);
+  bx([14,20,11,33,23,85],m,outerParts);
+  // The end plate is split around the actual bolt aperture.
+  bx([12,96,8,35,99,49],lkSteel,outerParts);bx([12,96,62,35,99,88],lkSteel,outerParts);
+  bx([28,96,49,35,99,62],lkSteel,outerParts);
+  const cover=rrUV(20,8,96,88,2,4), keyhole=[...ellUV(62,27,2.6,2.6,20)];
+  let cv=extrude(cover,33,35,m);
+  const capx=vis([1,0,0])?35:33;
+  cv+=`<path d="${pd(on(PX(capx),cover))}${pd(on(PX(capx),keyhole))}${pd(on(PX(capx),rectUV(60,17,64,27)))}" fill="${tone([vis([1,0,0])?1:-1,0,0],m)}" fill-rule="evenodd"/>`;
+  cv+=ink(pd(on(PX(capx),cover)),1.8);
+  if(vis([1,0,0]))cv+=tx(35.1,57,76,'LEVER',5.2)+tx(35.1,57,68,'LOCK',5.2)+shape(on(PX(35.15),keyhole),'#231e16',.7)+shape(on(PX(35.15),rectUV(60,17,64,27)),'#231e16',.7);
+  put([[33,20,8],[35,96,88]],cv,outerParts);
+  for(const [y,z]of [[25,14],[91,14],[25,82],[91,82]]){
+    seg([14,y,z],[33,y,z],2,lkSteel,outerParts);
+    put([[35,y-1.8,z-1.8],[35.8,y+1.8,z+1.8]],cylX(35,35.8,y,z,1.8,lkSteel)+line([[35.9,y-1,z],[35.9,y+1,z]],.8),outerParts);
+  }
+  lab([13,38,63],'BACK PLATE');
+  lab([30,98,73],'END PLATE');lab([35.8,91,82],'COVER SCREW');
+  // Bolt remains a real solid outside the ghosted case.
+  const boltParts=[];
+  bx([14.5,44+travel,51,16.5,91+travel,60],lkSteel,boltParts);
+  bx([14.5,88+travel,50,27.5,96+travel,61],lkBrass,boltParts);
+  bx([16.5,49+travel,54.7,32.2,51+travel,57.3],st.phase==='blocked'?matOf('#df654c'):lkBrass,boltParts);
+  // Talon cheeks straddle the key's rear driving bit.
+  for(const y of [44.1+travel,54.1+travel])bx([14.5,y,31,17.5,y+2,51],lkSteel,boltParts);
+  lab([25,94+travel,57],'BOLT HEAD',st.bolt>0);lab([16,80+travel,59],'BOLT LATH',st.bolt>0);
+  lab([31,50+travel,56],'BOLT STUMP',st.phase==='turning'||st.phase==='blocked');
+  lab([16,55+travel,40],'BOLT TALON',st.phase==='turning');
+  for(const [a,b,name]of [[48.5,50.5,'LOWER BOLT GUIDE'],[60.5,62.5,'UPPER BOLT GUIDE']]){
+    bx([14,82,a,18,91,b],lkSteel);lab([18,86,(a+b)/2],name);
+  }
+  seg([14,30,69],[33,30,69],1.6);lab([32,30,69],'LEVER PIVOT');
+  seg([14,62,27],[18,62,27],3.1);lab([16,62,27],'REAR KEY GUIDE');
+  for(let i=0;i<5;i++){
+    const x=18+i*2.7, a=lkLeverAngle(st,i);
+    const rr=p=>lkRot(p,a), outer=rrUV(27,27+lkRadii[i],86,74,3,4).map(rr), hole=lkHole.map(rr), pivot=ellUV(30,69,1.7,1.7,16);
+    const aa=on(PX(x),outer),bb=on(PX(x+1.25),outer),ha=on(PX(x),hole),hb=on(PX(x+1.25),hole);
+    let plate=loft(aa,bb,n=>toneI(n,matOf(lkColors[i])))+loft(ha,hb,n=>toneI(n,matOf(lkColors[i])),true);
+    const fx=vis([1,0,0])?x+1.25:x;
+    plate+=`<path d="${pd(on(PX(fx),outer))}${pd(on(PX(fx),hole))}${pd(on(PX(fx),pivot))}" fill="${toneI([vis([1,0,0])?1:-1,0,0],matOf(lkColors[i]))}" fill-rule="evenodd"/>`;
+    plate+=ink(pd(on(PX(fx),outer)),1.1)+ink(pd(on(PX(fx),hole)),.8)+ink(pd(on(PX(fx),pivot)),.7);
+    put([...aa,...bb],plate);
+    put([[x+1.25,28,67],[x+2.7,32,71]],cylX(x+1.25,x+2.7,30,69,2,lkBrass));
+    lab([fx,...rr([39,65])],'LEVER '+(i+1),st.lift>.1);
+    lab([fx,...rr([59,56])],'GATE '+(i+1),st.lift>.98&&!(st.wrong&&i===2));
+    const start=[x+.6,...rr([77,73])],end=[x+.6,37,85];
+    const curve=Array.from({length:15},(_,j)=>{const t=j/14;return [x+.6,start[1]+(end[1]-start[1])*t,start[2]+(end[2]-start[2])*t+5*Math.sin(Math.PI*t)];});
+    for(let j=0;j<curve.length-1;j++)seg(curve[j],curve[j+1],.33,lkSteel);
+    seg([x, start[1],start[2]],[x+1.25,start[1],start[2]],.8,lkBrass);
+    lab(curve[7],'LEAF SPRING '+(i+1),st.lift>.1);
+    if(i===4){lab([fx,...rr([62,27+lkRadii[i]])],'KEY SADDLE',st.lift>.1);lab([fx,...rr([54,61])],'BLOCKING SHOULDER',st.phase==='blocked');lab([x+2,30,69],'SPACER WASHER');}
+  }
+  const kx=st.insert, shift=41*(1-kx), ky=62+40*(1-kx), kz=27-22.5*(1-kx), angle=st.rotation+(1-kx)*Math.PI/2;
+  const keyParts=[];
+  const kr=(x,r,w=0)=>[x+shift,ky+Math.sin(angle)*r+Math.cos(angle)*w,kz-Math.cos(angle)*r+Math.sin(angle)*w];
+  seg([16+shift,ky,kz],[60+shift,ky,kz],1.3,lkBrass,keyParts);
+  seg([54+shift,ky,kz],[57+shift,ky,kz],2.1,lkBrass,keyParts);
+  // A ring bow has a real bore and thickness.
+  const bowRing=(rx,rz,w)=>ellUV(68,0,rx,rz,24).map(([x,r])=>kr(x,r,w));
+  const bow0=bowRing(9,6,-1),bow1=bowRing(9,6,1);
+  const bore0=bowRing(5.5,3,-1),bore1=bowRing(5.5,3,1);
+  let bow=loft(bow0,bow1,n=>toneI(n,lkBrass))+loft(bore0,bore1,n=>toneI(n,lkBrass),true);
+  const bowcap=vis([0,Math.cos(angle),Math.sin(angle)])?1:0;
+  bow+=`<path d="${pd(bowcap?bow1:bow0)}${pd(bowcap?bore1:bore0)}" fill="${lkBrass.l}" fill-rule="evenodd"/>`+ink(pd(bowcap?bow1:bow0),1.1)+ink(pd(bowcap?bore1:bore0),.8);
+  put([...bow0,...bow1],bow,keyParts);
+  for(let i=0;i<5;i++){
+    const x=18+i*2.7,r=lkRadii[i]-(st.wrong&&i===2?5:0);
+    const prof=[[0,-1.2],[r,-1.2],[r,1.2],[0,1.2]],a=prof.map(([rr,w])=>kr(x,rr,w)),b=prof.map(([rr,w])=>kr(x+2.1,rr,w));
+    let bit=loft(a,b,n=>toneI(n,lkBrass));const cap=vis([1,0,0])?b:a;bit+=shape(cap,lkBrass.l,.7);put([...a,...b],bit,keyParts);
+  }
+  seg(kr(16.5,0),kr(16.5,18/(2*Math.sin(.12*Math.PI))),1.1,lkBrass,keyParts);
+  if(k>.6){lab([68+shift,ky,kz+5],'KEY BOW');lab([45+shift,ky,kz],'KEY SHANK');lab(kr(28,14),'BITTING PROFILE',st.lift>.1);lab(kr(16.5,10),'DRIVE BIT',st.phase==='turning');lab([35,62,27],'COVER KEYHOLE');}
+  if(k>0){
+    svg+=`<g opacity="${1-.86*k}">${byDepth(outerParts)}</g>`;
+    svg+=`<g opacity="${k}">${byDepth([...parts,...boltParts,...keyParts])}</g>`;
+    // Keep the external key and bolt visible through the transition without doubling their ink.
+    if(k<1)svg+=`<g opacity="${1-k}">${byDepth([...boltParts,...keyParts])}</g>`;
+    if(k>.6)svg+=lkCallouts(labels);
+  } else svg+=byDepth([...outerParts,...boltParts,...keyParts]);
+  return svg;
+}
+const ui=mountFigure({fig:'13',title:'Lever lock',turn:'full',size:[122,132,88],palette:'cobalt',state:lkState,scene:lkScene,
+ stats:st=>[{label:'Bolt travel',value:(18*st.bolt/3).toFixed(1)+' mm'},{label:'Gates aligned',value:(st.lift>.98?(st.wrong?'4 / 5':'5 / 5'):'0 / 5'),small:true}],
+ buttons:[{label:'Insert',onClick:lkInsert},{label:'Turn',onClick:lkTurn},{label:'Wrong key',onClick:lkWrong}],
+ params:(st,q)=>{if(q.get('state')==='ready'){st.phase='ready';st.insert=1;}if(q.get('state')==='aligned'){st.phase='ready';st.insert=1;lkPose(st,.5);}if(q.get('state')==='locked'){st.phase='locked';st.insert=1;lkPose(st,1);}if(q.get('state')==='blocked'){st.phase='blocked';st.insert=1;st.wrong=true;lkPose(st,.5);}}});
+xrMount(()=>ui,()=> '');
+document.querySelector('header').appendChild(document.getElementById('stats'));
+const lkStyle=document.createElement('style');lkStyle.textContent='header{align-items:center}#stats{position:static!important;display:flex;gap:22px}.stats .stat{margin:0}.stats .v{font-size:20px!important}';document.head.appendChild(lkStyle);
+if(!document.documentElement.hasAttribute('data-errors'))document.documentElement.dataset.errors='';
+</script></body></html>

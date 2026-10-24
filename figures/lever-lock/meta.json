@@ -1,0 +1,72 @@
+{
+  "slug": "lever-lock",
+  "title": "Lever lock",
+  "prompt": "a key-operated lever lock beside its key on a table with three buttons: \u201cInsert\u201d slides the key beneath the tumblers; \u201cTurn\u201d aligns their slots and extends the bolt; \u201cWrong key\u201d leaves a tumbler blocking the bolt; see-through reveals the spring-loaded levers, stump, bolt pin and key profile",
+  "source": "book",
+  "sourceUrl": "https://en.wikipedia.org/wiki/The_Way_Things_Work",
+  "category": "home",
+  "buttons": [
+    "Insert",
+    "Turn",
+    "Wrong key"
+  ],
+  "blurb": "A five-lever teaching adaptation shows how a matching key aligns gates so the bolt stump can pass.",
+  "adaptation": {
+    "kind": "source-supported teaching model",
+    "limits": [
+      "Enlarged colour-coded schematic, not exact book geometry or a manufacturable lock.",
+      "Animation stages key lifting and bolt drive for readability.",
+      "Bolt travel uses a drawing scale of three units per millimetre.",
+      "Insert after an attempt replaces the specimen and matching key as a teaching action. It is not hardware self-repair.",
+      "1988 is access-restricted and unverified. 1998 is not individually verified. No complete edition union is claimed."
+    ]
+  },
+  "provenance": {
+    "identity": "checked_named_machine_or_diagram",
+    "editions": {
+      "1988": "access_restricted_unverified",
+      "1998": "not_individually_verified",
+      "2016": "direct_page_support"
+    },
+    "printedPage": 13,
+    "rawEvidence": "/home/nm/.bb/thread-storage/thr_mr6grtbcjs/book-catalog-audit/raw/now-pages.json",
+    "rawJsonIndex": 14,
+    "citations": [
+      {
+        "url": "https://archive.org/details/the-way-things-work-now-david-macaulay-neil-ardley-z-library/page/n14/mode/1up",
+        "edition": "2016",
+        "printedPage": 13
+      },
+      {
+        "url": "https://patents.google.com/patent/GB2480089A/en",
+        "scope": "Conventional pivoted lever, gate, spring, fence and bolt principles only. Extra anti-pick mechanism is not reproduced."
+      }
+    ]
+  },
+  "verification": {
+    "productionTelemetry": "n/a. Standalone static figure has no production telemetry.",
+    "liveVerification": "untested",
+    "localVerdict": "pass",
+    "checkId": "e3e4f9f43cd03d40d9495cfd1a6a591d2f7440cf00947c7c1b64572ae8028185-local-1",
+    "command": "bb pod check --local --heavy -- timeout --kill-after=5s 360s bash figures/lever-lock/evidence/final-check.sh",
+    "labels": 34,
+    "minimumLabels": 25,
+    "browserErrors": [],
+    "nanCoordinates": false,
+    "dataErrorsOnSuccessfulLoad": "",
+    "animation": "preserved",
+    "turn": "full",
+    "views": "Seven yaw/pitch samples, both opaque and see-through; actual turntable start/stop and Front view interactions.",
+    "phone": "390px viewport, no horizontal overflow, 34-item legend.",
+    "video": {
+      "journey": "evidence/video/page@e66526e0c0fe413cfc5d49322759d85a.webm",
+      "matrix": "evidence/video/page@4af39068d5bbd86687b7b28b69016f00.webm",
+      "journeySeconds": 24.96,
+      "matrixSeconds": 19.92,
+      "framesReviewed": true,
+      "review": "Reviewed initial state, real clicks, matching-key bolt extension, wrong-key block, replacement specimen, rotation and phone frames."
+    },
+    "repairRounds": 3,
+    "independentVerification": "pending coordinator assignment"
+  }
+}
