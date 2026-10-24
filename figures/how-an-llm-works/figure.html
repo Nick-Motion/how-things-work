@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>How an LLM works</title></head><body>
+<script src="core.js"></script>
+<script>
+/* How an LLM works: a cabinet "language machine" that runs the real steps of one small GPT (GPT-2 small: 12 layers,
+   768 numbers per token, 12 attention heads, a 50257-token vocabulary) and then samples the next word.
+
+   TRUTH FIRST (what really happens, and where the material is after each step)
+   1. Text in. The sentence is only characters: the card standing in the hopper on top.
+   2. Tokenize. A byte-pair tokenizer cuts the text into pieces it knows ('the', ' cat', ' sat' ...) and swaps each for
+      its number in the vocabulary (' cat' = 3797). Material: one numbered tile per token, in order, on the conveyor.
+   3. Embed. Each token number pulls one row of the embedding table: a vector of 768 numbers. A position code is added
+      so the model knows the order. Material: one vector per token, standing on its tile.
+   4. Transformer layers (x12). Each token's vector rides up its own column, the residual stream. In every layer:
+      norm, then attention: Q, K and V projections; each of 12 heads scores how much the token should look at every
+      EARLIER token (causal mask), softmaxes the scores and mixes those tokens' V vectors into its stream; then the MLP
+      (expand x4, nonlinearity, shrink) adds its own update. Every token's K and V are kept in the KV cache, so a new
+      token does not make the old ones run again.
+   5. Output. Only the LAST token's vector is read: a final norm, then the LM head multiplies it by the vocabulary
+      matrix, giving one score (logit) per token in the vocabulary. Softmax with a temperature turns scores into
+      probabilities (low temperature: the top word nearly always; high: more surprises).
+   6. Sample. One token is drawn at random by those probabilities (here among the top 5): the sampler wheel.
+   7. Repeat. The token is turned back into text (printed on the tape) and appended to the input: its tile rides the
+      return tube back into the token chute (it is already a token, so it skips the cutter), and the next pass embeds
+      and runs only that new token, reading the rest from the KV cache.
+   Token numbers are GPT-2's where known ('the' 1169, ' the' 262, ' on' 319, ' cat' 3797, ' and' 290, '.' 13, ',' 11);
+   the rest, and the probabilities, are illustrative.
+
+   PARTS (x = depth 0..60, front at x = 60; y = width 0..120, +y to the viewer's left; z = up, case 6..112 on feet)
+   CASE      rounded cabinet . four feet . front display . five stage plates with lamps . temperature knob . NEXT window
+             . power lamp . back: fan grille, power inlet, cord, vents . ends: name plate, rating plate
+   INPUT     hopper on the top (right) . sentence card . two feed rollers on brackets bolted under the top . cutter blade
+             . funnel . clear token chute down to the conveyor . vocabulary drum on two posts . ID stamp arch
+   EMBED     conveyor belt with end drums . embedding table (cabinet, one drawer per slot) . position dial on its top .
+             vector cells standing on each tile
+   LAYERS    four trays (layers 1, 2, 3 and 12) on four corner posts . a residual column per slot through every tray . a
+             puck per token per tray . on each tray: norm, Q/K/V projections, 12 head blocks, MLP block . attention arcs
+             . KV cache rack on the back wall (one cartridge per token per layer) . weight memory on the floor at the back
+             with its bus bar up to every tray
+   OUTPUT    final norm (collector) riding the output rail over the last column . rail hanger from the top . LM head with
+             five logit bars . softmax unit on a post . temperature shaft from the knob . sampler wheel on the spin motor
+             . motor post . pointer . detokenizer on the floor . token lift and its carrier up into the printer . printer
+             on the top (left) . output tape . return tube along the top with three clamps, down into the funnel
+   POWER     power supply . controller board on the back wall . cooling fan . wiring */
+const W = 60, D = 120, H = 112, Z0 = 6, TOP = 142;
+const OUT = rrUV(0, Z0, D, H, 9);                                   // case profile in (y, z), swept along x
+const XC = 44, NMAX = 9, NL = 12, CHY = 14.5;                       // columns/tiles/chute line up at x = 44; chute y
+const ZT = [28, 44, 60, 76], TRAY_L = [1, 2, 3, 12];                // the four trays drawn and the layer each one is
+const yCol = i => 92 - 7*i, ySc = i => 92 - 9.4*i;                  // slot of token i in the machine / on the display
+const TEMPS = [0.3, 0.8, 1.5];
+const DUR = [1900, 1400, 2800, 2200, 2400];                         // ms: tokenize, embed, layers, sample, repeat
+const PLATES = ['TOKENIZE', 'EMBED', 'LAYERS', 'SAMPLE', 'REPEAT'], PLY = [91, 73, 55, 37, 19];
+const PROMPT = [['the', 1169], ['cat', 3797], ['sat', 3332], ['on', 319], ['the', 262]];
+const NEXT = [                                                      // top-5 next tokens [text, id, p] after 0..4 new words
+  [['mat', 2603, .38], ['floor', 4314, .21], ['sofa', 34902, .14], ['bed', 3996, .09], ['rug', 14638, .06]],
+  [['and', 290, .31], ['.', 13, .29], [',', 11, .16], ['all', 477, .06], ['again', 757, .05]],
+  [['then', 788, .22], ['it', 340, .2], ['the', 262, .15], ['purred', 47153, .08], ['slept', 21256, .07]],
+  [['slept', 21256, .24], ['purred', 47153, .17], ['looked', 3114, .12], ['yawned', 46883, .08], ['stayed', 9658, .07]],
+  [['.', 13, .41], ['all', 477, .12], ['for', 329, .1], ['until', 1566, .07], ['soundly', 31723, .05]] ];
+const GL = '#8af0ae', GLD = '#5aa982', SCR = '#1d2a26', CREAM = '#fff4d6', AMBER = '#f4b829', RECESS = '#2b2523';
+const QKV = ['#ef8a5c', '#5fb0d6', '#8ccf7e'], SECT = ['#ef6a4c', '#f4b829', '#93d3b0', '#76a0e2', '#f3a6bb'];
+const TILEM = matOf('#f3e7c4'), NEWM = matOf('#f4b829'), TRAYM = matOf('#ebe6d8'), PCB = matOf('#2f7a55'),
+  RUBBER = matOf('#4a4540'), PAPER = matOf('#fbf8ef'), CASEM = matOf('#e6e1d4'), KNOBM = { l:'#fff4d6', m:'#e6dcbd', d:'#bfb390' };
+
+/* ---------- small helpers ---------- */
+const clamp01 = v => Math.max(0, Math.min(1, v));
+
+// the engine's xrCallouts, laid out for a tall machine with many parts: the two columns are balanced to fit the
+// height, the right one starts under the See-through / Labels switches, and a crowded column packs upward
+function llmCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0])), cx = (xmin + xmax)/2;
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8*k, hgt = u ? 17*u : fs*1.75, gap = hgt + (u ? 3*u : 2.4*k);
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, M = svgEl.getScreenCTM() && svgEl.getScreenCTM().inverse();
+  const below = (id, pad) => { const el = document.getElementById(id) || document.querySelector(id); if (!el || !M || getComputedStyle(el).position === 'static') return -1e9;
+    const r = el.getBoundingClientRect(); return r.height ? new DOMPoint(r.right, r.bottom + pad).matrixTransform(M).y + hgt/2 : -1e9; };
+  const top = { [-1]: Math.max(fs, below('btns', 30)), [1]: Math.max(fs + 30*k, below('.vset', 8), below('stats', 8)) }, bot = vb.y + vb.height - hgt/2;
+  const cap = side => Math.max(1, Math.floor((bot - top[side])/gap) + 1);
+  const all = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  // the leftmost anchors go left, as many as that column holds; the rest go right
+  let nL = all.filter(c => c.X < cx).length; nL = Math.max(all.length - cap(1), Math.min(nL, cap(-1)));
+  let s = '';
+  for (const [col, side] of [[all.slice(0, nL), -1], [all.slice(nL), 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    y = 1e9; for (let i = col.length - 1; i >= 0; i--){ const c = col[i]; c.py = Math.max(top[side], Math.min(c.py, y - gap, bot)); y = c.py; }
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? Math.min(xmin, c.X - 14*k) - 10*k - w/2 : Math.max(xmax, c.X + 14*k) + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+const llmH = (a, b, c) => { const x = Math.sin(a*12.9898 + b*78.233 + c*37.719)*43758.5453; return x - Math.floor(x); };
+const vcol = v => v >= 0 ? mix('#f3efe2', '#e2483d', Math.min(1, v)) : mix('#f3efe2', '#3b6fd8', Math.min(1, -v));
+const llmRand = s => { let t = (Math.imul(s, 2654435761) + 0x6D2B79F5) | 0; t = Math.imul(t ^ t >>> 15, 1 | t); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+const fr = (y0, z0, y1, z1, r = 0, dx = .3) => on(PX(W + dx), r ? rrUV(y0, z0, y1, z1, r, 4) : rectUV(y0, z0, y1, z1));
+const fcirc = (y, z, r, dx = .35) => on(PX(W + dx), ellUV(y, z, r, r, 14));
+const txY0 = (x,y,z,str,size,col=INK,weight=700) => `<text transform="${txM(P(x,y,z), Dv(-1,0,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;   // on the y = 0 end
+const txB = (x,y,z,str,size,col=INK,weight=700) => `<text transform="${txM(P(x,y,z), Dv(0,1,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;    // on the back
+const llmAlong = (pts, u) => { const seg = pts.slice(1).map((p, i) => Math.hypot(...sub(p, pts[i]))), tot = seg.reduce((a, b) => a + b, 0);
+  let d = clamp01(u)*tot; for (let i = 0; i < seg.length; i++){ if (d <= seg[i] || i === seg.length - 1){ const k = seg[i] ? Math.min(1, d/seg[i]) : 0; return pts[i].map((v, j) => v + (pts[i+1][j] - v)*k); } d -= seg[i]; } };
+const llmWire = (pts, col, w = .5) => { const d = pd(pts, false), b = [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - .6), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + .6)];
+  return { box: b, svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w + 1)}" stroke-linejoin="round" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linejoin="round" stroke-linecap="round"/>` }; };
+const tileSvg = (x, y, z, mm = TILEM) => box(x - 2, y - 2, z, x + 2, y + 2, z + 3, mm, toneI, .6);
+
+/* ---------- the state machine: stage = steps done this round, target = where the buttons asked to go ---------- */
+const nTok = st => st.ctx.length;
+const llmRun = st => st.stage < st.target, llmPh = st => llmRun(st) ? st.stage : -1;
+const curLayer = st => llmPh(st) === 2 ? Math.min(NL, 1 + Math.floor(st.t*NL)) : st.lay >= nTok(st) ? NL : 0;
+const tDrop = (st, i) => .18 + .5*i/nTok(st);
+function tileAt(st, i){                                              // [y, z] of token i's tile, or null (not cut yet)
+  if (llmPh(st) !== 0) return st.stage >= 1 ? [yCol(i), 9] : null;
+  const a = st.t - tDrop(st, i); if (a < 0) return null;
+  if (a < .08) return [CHY, 86 - 77*a/.08];                          // falling down the chute
+  return [CHY + (yCol(i) - CHY)*ease(clamp01((a - .08)/.2)), 9];    // carried to its slot
+}
+const embStart = (st, i) => .08 + .7*(i - st.emb)/Math.max(1, nTok(st) - st.emb);
+const cellsOf = (st, i) => i < st.emb ? 6 : llmPh(st) === 1 && i < nTok(st) ? Math.floor(6*clamp01((st.t - embStart(st, i))/.18)) : 0;
+const drawerOut = (st, i) => llmPh(st) === 1 && i >= st.emb && i < nTok(st) ? 6*Math.sin(Math.PI*clamp01((st.t - embStart(st, i) + .1)/.36)) : 0;
+const RET = [[16, 108, 113], [22, 98, 113.5], [22, 26, 113.5], [44, 26, 113.5], [44, 26, 91.5], [44, 19, 88.5]];
+function retTileAt(st){                                              // the sampled token's tile on its way round (bottom centre)
+  if (llmPh(st) !== 4) return null; const t = st.t;
+  if (t < .2) return [16, 108, 31 + 82*ease(t/.2)];                  // up the lift into the printer
+  if (t < .3) return [16, 108, 113];                                 // printing
+  if (t < .66) return llmAlong(RET, (t - .3)/.36);                   // the return tube
+  if (t < .76) return [XC, CHY, 88 - 79*(t - .66)/.1];               // down the chute
+  return [XC, CHY + (yCol(nTok(st)) - CHY)*ease(clamp01((t - .76)/.2)), 9];
+}
+const collectorY = st => llmPh(st) === 4 && st.t > .76 ? yCol(nTok(st) - 1) - 7*ease(clamp01((st.t - .76)/.2)) : yCol(nTok(st) - 1);
+const attnW = (ctx, layer) => { const n = ctx.length, sc = ctx.map(([w, id], j) => 2.4*llmH(id, layer, j) + (j === n - 2 ? 1 : 0) + (j === 1 ? .9 : 0));
+  const e = sc.map(Math.exp), tot = e.reduce((a, b) => a + b, 0); return e.map(v => v/tot); };
+const wheelAng = st => llmPh(st) === 3 ? st.a0 + (st.a1 - st.a0)*(1 - Math.pow(1 - clamp01((st.t - .35)/.6), 3)) : st.ang;
+const picked = st => st.pick >= 0 && (st.stage === 4 || llmPh(st) === 4 || (llmPh(st) === 3 && st.t > .95));
+
+/* ---------- front display: what the numbers are doing, drawn on the screen ---------- */
+function llmScreen(st){
+  const n = nTok(st), ph = llmPh(st), t = st.t, X = W + .45, Lc = curLayer(st);
+  const T = (y, z, str, size, col = GL, w = 700) => tx(X, y, z, str, size, col, w);
+  const rect = (y0, z0, y1, z1, fc, sc = 'none', sw = .5) => `<path d="${pd(fr(y0, z0, y1, z1, 0, .4))}" fill="${fc}" stroke="${sc}" stroke-width="${sw}"/>`;
+  const hdr = ph === 0 ? 'SPLITTING THE TEXT INTO TOKENS' : ph === 1 ? 'LOOKING UP EMBEDDINGS' : ph === 2 ? `LAYER ${Lc} OF 12  ATTENTION + MLP`
+    : ph === 3 ? 'SCORING EVERY TOKEN  SAMPLING' : ph === 4 ? 'APPEND THE WORD  GO AGAIN'
+    : ['INPUT TEXT', `${n} TOKENS  VOCAB OF 50257`, `${n} VECTORS OF 768 NUMBERS`, 'LAST TOKEN HAS READ THE REST', `NEXT TOKEN  TEMPERATURE ${TEMPS[st.temp]}`][st.stage];
+  let s = T(54, 97, hdr, 2.6, GL, 800) + `<path d="${pd([[X, 96, 95], [X, 12, 95]], false)}" stroke="${GLD}" stroke-width=".6"/>`;
+  if (st.stage === 0 && (ph !== 0 || t < .5)) s += `<g opacity="${f(ph === 0 ? 1 - 2*t : 1)}">${T(54, 65, st.ctx.map(c => c[0]).join(' '), 4.2)}</g>`;
+  for (let i = 0; i < n; i++){
+    if (!(st.stage >= 1 || (ph === 0 && t > tDrop(st, i) + .08))) continue;
+    s += rect(ySc(i) - 4.2, 63.5, ySc(i) + 4.2, 70.5, '#24493a', GL) + T(ySc(i), 66.2, st.ctx[i][0], 2.2) + T(ySc(i), 60.3, st.ctx[i][1], 1.7, GLD);
+    const c = cellsOf(st, i);
+    for (let cc = 0; cc < c; cc++) s += rect(ySc(i) - 2.6, 54.9 - 2.9*cc, ySc(i) + 2.6, 57.5 - 2.9*cc, vcol(2*llmH(st.ctx[i][1], cc, 7) - 1));
+  }
+  if (st.emb > 0 || ph === 1) s += T(54, 37, '768 NUMBERS PER TOKEN  6 SHOWN', 1.8, GLD);
+  if (ph === 4 && t > .3){ const c = NEXT[st.gen][st.pick];
+    s += rect(ySc(n) - 4.2, 63.5, ySc(n) + 4.2, 70.5, AMBER, GL) + T(ySc(n), 66.2, c[0], 2.2, INK, 800) + T(ySc(n), 60.3, c[1], 1.7, GLD); }
+  // attention: the last token looks back at every earlier one (line weight = attention weight)
+  if (n > 1 && (ph === 2 || (!llmRun(st) && st.stage === 3))){
+    const w = attnW(st.ctx, Math.max(1, Lc)), ya = ySc(n - 1);
+    for (let j = 0; j < n - 1; j++){ const yb = ySc(j), hh = Math.min(20, 3 + .66*Math.abs(ya - yb));
+      const pts = Array.from({length: 15}, (_, q) => { const u = q/14; return [X, ya + (yb - ya)*u, 70.8 + 4*hh*u*(1 - u)]; });
+      s += `<path d="${pd(pts, false)}" fill="none" stroke="#ffd166" stroke-width="${f(.3 + 4*w[j])}" stroke-linecap="round" opacity=".9"/>`; }
+  }
+  // next-token probabilities after the LM head and softmax
+  if (st.probs && (st.stage === 4 || ph === 4 || (ph === 3 && t > .12))){
+    const g = ph === 3 ? clamp01((t - .12)/.2) : 1, cand = NEXT[st.gen], hit = picked(st);
+    cand.forEach((c, r) => { const zc = 91.5 - 3.8*r, p = st.probs[r], y0 = 82 - 54*p*g, me = hit && r === st.pick;
+      s += T(88.5, zc - .9, c[0], 2.4, me ? AMBER : GL, 800) + rect(y0, zc - 1.2, 82, zc + 1.2, me ? AMBER : GL)
+        + T(y0 - 5, zc - .8, Math.round(100*p*g) + '%', 1.9, me ? AMBER : GLD, 800); });
+  }
+  return s;
+}
+
+/* ---------- see-through: the working parts ---------- */
+let MECH_LABELS = '';
+function llmMech(st, k, labelsOn){
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg });
+  const bx = (x0, y0, z0, x1, y1, z1, mm, w = .7) => put([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, mm, toneI, w));
+  const n = nTok(st), ph = llmPh(st), t = st.t, Lc = curLayer(st), ta = TRAY_L.indexOf(Lc), ret = retTileAt(st);
+  const glass = (b, inner) => `${inner}<g opacity=".45">${box(...b[0], ...b[1], CLEAR, toneI, .6)}</g>`;
+  // ---- input: card inside, feed rollers, cutter, funnel, chute, vocabulary drum, ID stamp
+  const feed = ph === 0 ? clamp01(t/.45) : st.stage > 0 || st.gen > 0 ? 1 : 0, cb = 117 - 36*feed;
+  if (feed > 0 && feed < 1){ const z0 = Math.max(98, cb), z1 = Math.min(117, cb + 18); if (z1 > z0) bx(33, 14, z0, 51, 15, z1, PAPER, .5); }
+  for (const x of [29, 53]) bx(x, 9, 92, x + 2, 20, 111, METAL);
+  for (const y of [12.4, 16.6]) put([[31, y - 1.6, 102.4], [53, y + 1.6, 105.6]], rod([31, y, 104], [53, y, 104], 1.6, RUBBER, toneI, .6));
+  const strike = ph === 0 && t < .5 ? 1.2*Math.abs(Math.sin(t*40)) : 0;
+  bx(31, 11 + strike, 97, 53, 12.6 + strike, 99.5, METAL, .6);
+  put([[31, 9, 86], [53, 20, 94]], openShell(on(PZ(86), rectUV(41, 11.5, 47, 17.5)), on(PZ(94), rectUV(31, 9, 53, 20)), nn => toneI(nn, METAL)) + hullInk([...on(PZ(86), rectUV(41, 11.5, 47, 17.5)), ...on(PZ(94), rectUV(31, 9, 53, 20))], .8));
+  { let inner = '';
+    for (let i = 0; i < n; i++){ const p = tileAt(st, i); if (p && p[1] > 12.5) inner += tileSvg(XC, p[0], p[1]); }
+    if (ret && ret[0] === XC && ret[1] === CHY && ret[2] > 12.5) inner += tileSvg(XC, CHY, ret[2], NEWM);
+    put([[41, 11.5, 13], [47, 17.5, 86]], glass([[41, 11.5, 13], [47, 17.5, 86]], inner)); }
+  { const th = (ph === 0 ? t*9 : 0), DRUMM = matOf('#f2d48a');
+    let d = rod([20, CHY, 66], [36, CHY, 66], 6, DRUMM, toneI, .8, 6, 20);
+    for (let q = 0; q < 6; q++){ const a = th + q*Math.PI/3, nv = [0, Math.cos(a), Math.sin(a)]; if (vis(nv)) d += ink(pd([[20.3, CHY + 6.05*nv[1], 66 + 6.05*nv[2]], [35.7, CHY + 6.05*nv[1], 66 + 6.05*nv[2]]], false), .5); }
+    put([[20, 8.5, 60], [36, 20.5, 72]], d); }
+  bx(18, 13, 7, 20, 16, 68, METAL); bx(36, 13, 7, 38, 16, 68, METAL);
+  const under = [...Array(n).keys()].some(i => { const p = tileAt(st, i); return p && p[1] === 9 && Math.abs(p[0] - 23.5) < 2.2; });
+  bx(38, 22, 7, 39, 25, 17, METAL); bx(49, 22, 7, 50, 25, 17, METAL); bx(38, 22, 17, 50, 25, 19, METAL);
+  bx(42, 22.5, ph === 0 && under ? 12.1 : 14.5, 46, 24.5, 17, matOf(ph === 0 && under ? AMBER : '#e2483d'), .6);
+  parts.push(llmWire([[37.5, CHY, 8], [37.5, 23.5, 8]], '#3a3632', .35));
+  // ---- conveyor, tiles, embedding table with a drawer per slot, position dial, vector cells
+  bx(40, 10.5, 7, 48, 96.5, 9, RUBBER, .7);
+  for (const y of [9.5, 97.5]) put([[39.6, y - 1, 7], [48.4, y + 1, 9]], rod([39.6, y, 8], [48.4, y, 8], 1, METAL, toneI, .5));
+  for (let i = 0; i < n; i++){ const p = tileAt(st, i); if (p && p[1] <= 12.5) put([[XC - 2, p[0] - 2, 9], [XC + 2, p[0] + 2, 12]], tileSvg(XC, p[0], 9)); }
+  if (ret && ret[2] <= 12.5 && ret[0] === XC) put([[XC - 2, ret[1] - 2, 9], [XC + 2, ret[1] + 2, 12]], tileSvg(XC, ret[1], 9, NEWM));
+  bx(18, 30, 7, 36, 96, 18, WOOD, .9);
+  for (let i = 0; i < NMAX; i++){ const yc = yCol(i), o = drawerOut(st, i);
+    put([[36, yc - 3, 9.5], [36.8 + o, yc + 3, 15.5]], box(36, yc - 3, 9.5, 36.8 + o, yc + 3, 15.5, matOf(o > .5 ? '#f2c98a' : '#e3b679'), toneI, .6)
+      + (vis([1,0,0]) ? ink(pd([[36.85 + o, yc - 1.4, 12.5], [36.85 + o, yc + 1.4, 12.5]], false), .9) : '')); }
+  { const a = (ph === 1 ? t*14 : 0) + 1; put([[22, 84, 18], [30, 92, 19.5]], cyl(26, 88, 18, 19.5, 4, METAL, toneI, .7) + ink(pd([[26, 88, 19.55], [26 + 3.3*Math.cos(a), 88 + 3.3*Math.sin(a), 19.55]], false), .8)); }
+  for (let i = 0; i < n; i++){ const c = cellsOf(st, i), yc = yCol(i); if (!c) continue; let v = '';
+    for (let cc = 0; cc < c; cc++){ const col = vcol(2*llmH(st.ctx[i][1], cc, 7) - 1); v += box(XC - 1.5, yc - 1.5, 12 + 1.5*cc, XC + 1.5, yc + 1.5, 13.5 + 1.5*cc, matOf(col), toneI, .4); }
+    put([[XC - 1.5, yc - 1.5, 12], [XC + 1.5, yc + 1.5, 21]], v); }
+  // ---- the layer stack: corner posts, trays, columns, pucks, modules, attention arcs
+  for (const [x, y] of [[11, 31], [53, 31], [11, 95], [53, 95]]){ let z0 = x === 11 ? 15 : 7;
+    for (const zt of ZT){ put([[x - .8, y - .8, z0], [x + .8, y + .8, zt]], rod([x, y, z0], [x, y, zt], .8, METAL, toneI, .5, .8, 10)); z0 = zt + 1; } }
+  const hidden = (i, j) => mix('#fff4d6', SECT[(st.ctx[i][1] + 2*j) % 5], .35 + .45*llmH(st.ctx[i][1], j, 3));
+  const done = (i, j) => i < n && (i < st.lay || (ph === 2 && Lc >= TRAY_L[j]));
+  ZT.forEach((zt, j) => { const tz = zt + 1, lit = ta === j;
+    bx(10, 30, zt, 54, 97, tz, lit ? matOf('#f6e7b8') : TRAYM, .8);
+    put([[54, 89, zt - 2], [54.6, 97, tz]], box(54, 89, zt - 2, 54.6, 97, tz, KNOBM, toneI, .5) + tx(54.7, 93, zt - 1.3, 'L' + TRAY_L[j], 1.9, INK, 800));
+    bx(16, 88, tz, 30, 95, tz + 3, matOf(lit ? '#fff4d6' : '#ece6d4'), .6);
+    [[82.4, 86], [78.6, 82.2], [74.8, 78.4]].forEach(([y0, y1], q) => bx(16, y0, tz, 30, y1, tz + 5, matOf(lit ? QKV[q] : mix(QKV[q], '#9a9a9a', .45)), .6));
+    for (const [x0, x1] of [[16.5, 21.5], [24.5, 29.5]]) for (let c = 0; c < 6; c++){ const on1 = lit && (c + (x0 > 20 ? 1 : 0) + Math.floor(t*40)) % 3 !== 0;
+      bx(x0, 58 + 2.6*c, tz, x1, 60 + 2.6*c, tz + 3.5, on1 ? matOf(AMBER) : matOf('#8f989b'), .5); }
+    { let fins = ''; for (let yy = 38; yy <= 54; yy += 4) fins += pd([[16.4, yy, tz + 6.02], [29.6, yy, tz + 6.02]], false);
+      put([[16, 36, tz], [30, 56, tz + 6]], box(16, 36, tz, 30, 56, tz + 6, matOf(lit ? '#d9c8f4' : '#c4b6dc'), toneI, .7) + `<path d="${fins}" fill="none" stroke="${INK}" stroke-width=".5" opacity=".6"/>`); }
+    for (let i = 0; i < NMAX; i++){ const yc = yCol(i), mm = i >= n ? matOf('#d6d1c4') : done(i, j) ? matOf(hidden(i, j)) : matOf(CREAM);
+      put([[XC - 2.2, yc - 2.2, tz], [XC + 2.2, yc + 2.2, tz + 1.4]], cyl(XC, yc, tz, tz + 1.4, 2.2, mm, toneI, .6, 14)); }
+    if (n > 1 && (lit || (!llmRun(st) && st.stage === 3 && j === 3))){
+      const w = attnW(st.ctx, TRAY_L[j]), ya = yCol(n - 1), z0 = tz + 1.4; let a = '';
+      for (let jj = 0; jj < n - 1; jj++){ const yb = yCol(jj), hh = Math.min(10.5, 1.4 + .19*(yb - ya));
+        const pts = Array.from({length: 13}, (_, q) => { const u = q/12; return [XC, ya + (yb - ya)*u, z0 + 4*hh*u*(1 - u)]; });
+        a += `<path d="${pd(pts, false)}" fill="none" stroke="${AMBER}" stroke-width="${f(.4 + 3.2*w[jj])}" stroke-linecap="round" opacity=".92"/>`; }
+      put([[XC - .5, ya, z0], [XC + .5, yCol(0), z0 + 10.5]], a); }
+  });
+  for (let i = 0; i < NMAX; i++){ const yc = yCol(i), segs = [];
+    if (cellsOf(st, i) >= 6) segs.push([21, ZT[0]]);
+    for (let j = 1; j < 4; j++) segs.push([ZT[j - 1] + 2.4, ZT[j]]);
+    for (const [z0, z1] of segs) put([[XC - .5, yc - .5, z0], [XC + .5, yc + .5, z1]], rod([XC, yc, z0], [XC, yc, z1], .45, done(i, 0) ? matOf('#f6d77a') : METAL, toneI, .4, .45, 8)); }
+  // ---- KV cache on the back wall, weight memory and its bus bar
+  bx(2, 31, 15, 10, 32.5, 80, METAL); bx(2, 95.5, 15, 10, 97, 80, METAL);
+  ZT.forEach((zt, j) => { bx(2, 32.5, zt - 1, 10, 95.5, zt, METAL, .5);
+    for (let i = 0; i < n; i++) bx(3, yCol(i) - 2.6, zt, 9, yCol(i) + 2.6, zt + 4.5, done(i, j) ? matOf('#f2b84b') : matOf('#c6ccce'), .5); });
+  bx(2, 30, 7, 14, 98, 15, PCB, .9);
+  for (const y of [38, 50, 62, 74, 86]) bx(4, y, 15, 9, y + 7, 16.2, DARK, .5);
+  bx(11, 97.5, 15, 13, 99.5, 77, matOf(ph === 2 ? '#f2b84b' : '#c9a24e'), .6);
+  ZT.forEach(zt => bx(11, 97, zt, 13, 97.5, zt + 1, matOf('#c9a24e'), .4));
+  // ---- output: rail + collector (final norm), LM head + logits, softmax, temperature shaft, wheel, motor, pointer
+  const yL = collectorY(st);
+  put([[39.3, 31.3, 89.3], [40.7, 32.7, 111]], box(39.3, 31.3, 89.3, 40.7, 32.7, 111, METAL, toneI, .5));
+  put([[39.3, 32.7, 89.3], [40.7, yL - 2.8, 90.7]], rod([40, 32.7, 90], [40, yL - 2.8, 90], .7, METAL, toneI, .5));
+  put([[39.3, yL + 2.8, 89.3], [40.7, 100, 90.7]], rod([40, yL + 2.8, 90], [40, 100, 90], .7, METAL, toneI, .5));
+  put([[37, yL - 2.8, 87], [47, yL + 2.8, 93]], box(37, yL - 2.8, 87, 47, yL + 2.8, 93, matOf(ph === 3 && t < .3 ? AMBER : '#f3efe2'), toneI, .7));
+  put([[XC - .5, yL - .5, ZT[3] + 2.4], [XC + .5, yL + .5, 87]], rod([XC, yL, ZT[3] + 2.4], [XC, yL, 87], .45, METAL, toneI, .4, .45, 8));
+  const hot = ph === 3;
+  bx(20, 100, 86, 44, 116, 98, matOf(hot && t < .35 ? '#e4d6fb' : '#cdb9ef'), .9);
+  for (let b = 0; b < 5; b++){ const p = st.probs ? st.probs[b] : 0, g = ph === 3 ? clamp01((t - .05)/.2) : st.probs ? 1 : 0;
+    const hb = 1 + g*9*clamp01((Math.log(Math.max(p, .01)) - Math.log(.01))/(Math.log(.8) - Math.log(.01)));
+    bx(30, 101.6 + 2.8*b, 98, 33, 103.6 + 2.8*b, 98 + hb, matOf(st.probs ? SECT[b] : '#c6ccce'), .5); }
+  bx(20, 100, 78, 44, 116, 86, matOf(hot && t > .2 && t < .4 ? '#c7f0de' : '#9fd7c0'), .9);
+  bx(28, 106, 31, 32, 110, 78, METAL, .6);
+  put([[44, 107.4, 81.4], [W, 108.6, 82.6]], rod([44, 108, 82], [W, 108, 82], .6, METAL, toneI, .5));
+  bx(42, 106, 31, 46, 110, 58, METAL, .6); bx(40, 104, 58, 49, 112, 66, DARK, .8);
+  put([[49, 107, 61], [50, 109, 63]], cylX(49, 50, 108, 62, .9, METAL, toneI, .5, 10));
+  { const xc = vis([1,0,0]) ? 52.06 : 49.94, a0 = wheelAng(st), pr = st.probs || [.2, .2, .2, .2, .2];
+    let w = cylX(50, 52, 108, 62, 8, KNOBM, toneI, .9, 32), acc = 0;
+    pr.forEach((p, b) => { const a = a0 + acc*360, e = a0 + (acc + p)*360; acc += p;
+      w += shape(on(PX(xc), [[108, 62], ...arcUV(108, 62, 7.5, a, e, Math.max(2, Math.round(p*24)))]), st.probs ? SECT[b] : '#d6d1c4', .4); });
+    w += shape(on(PX(xc + (xc > 50 ? .02 : -.02)), ellUV(108, 62, 1.2, 1.2, 10)), METAL.m, .4);
+    put([[50, 100, 54], [52.5, 116, 70]], w); }
+  bx(47.6, 107.4, 66, 48.6, 108.6, 72.5, METAL, .5); bx(47.6, 107.4, 71.5, 53.2, 108.6, 72.5, METAL, .5);
+  put([[52.6, 107, 69.2], [53, 109, 71.5]], shape([[52.8, 107, 71.5], [52.8, 109, 71.5], [52.8, 108, 69.2]], '#e2483d', .5));
+  // ---- detokenizer, token lift with its carrier, power supply, fan, controller, wiring
+  bx(22, 100, 7, 48, 116, 31, matOf(ph === 4 && t < .1 ? '#f6d79c' : '#e8c07a'), .9);
+  put([[18, 105, 7], [20, 111, 112]], box(18, 105, 7, 20, 111, 112, RUBBER, toneI, .6));
+  { const cz = ret && ret[2] < 112.5 && ret[0] === 16 ? ret[2] : 31;
+    put([[13.5, 105.5, cz - .7], [18, 110.5, cz]], box(13.5, 105.5, cz - .7, 18, 110.5, cz, METAL, toneI, .5));
+    if (ret && ret[0] === 16 && ret[2] < 112) put([[14, 106, ret[2]], [18, 110, ret[2] + 3]], tileSvg(16, 108, ret[2], NEWM)); }
+  bx(3, 100, 7, 17, 116, 20, matOf('#c9cfd2'), .8);
+  { let fan = cylX(2, 6, 108, 44, 7, DARK, toneI, .8, 24);
+    if (vis([1,0,0])){ const a = (llmRun(st) ? performance.now()/90 : 0); for (let q = 0; q < 4; q++){ const g = a + q*Math.PI/2; fan += ink(pd([[6.05, 108, 44], [6.05, 108 + 6*Math.cos(g), 44 + 6*Math.sin(g)]], false), .9); } }
+    put([[2, 101, 37], [6, 115, 51]], fan); }
+  bx(2, 60, 86, 3.4, 96, 106, PCB, .7);
+  for (let q = 0; q < 3; q++) bx(3.4, 63 + 10*q, 92, 4.4, 70 + 10*q, 99, DARK, .4);
+  parts.push(llmWire([[3.5, 101, 20], [2.6, 99.8, 22], [2.6, 99.8, 96], [2.6, 96, 96]], '#e2483d', .4));
+  parts.push(llmWire([[17, 113.5, 14], [21.9, 113.5, 14]], '#3a3632', .4));
+  parts.push(llmWire([[3.4, 94, 100], [12, 99.8, 100], [20, 102, 94]], '#3a3632', .4));
+  // ---- the return tube's run inside the case, down into the funnel's side
+  for (const [a, b] of [[[44, 26, 112], [44, 26, 93]], [[44, 26, 93], [44, 19.5, 90]]]){
+    const bb = [[41, Math.min(a[1], b[1]) - 3, Math.min(a[2], b[2]) - 3], [47, Math.max(a[1], b[1]) + 3, Math.max(a[2], b[2])]];
+    const inside = ret && ret[0] === XC && ret[2] + 1.5 >= bb[0][2] && ret[2] + 1.5 <= bb[1][2] && ret[1] >= bb[0][1] && ret[1] <= bb[1][1] && ret[1] > 18 ? tileSvg(XC, ret[1], ret[2], NEWM) : '';
+    put(bb, inside + `<g opacity=".5">${rod(a, b, 3, CLEAR, toneI, .6)}</g>`); }
+  const svg = byDepth(parts);
+  const fd = Math.max(0, n - 1);
+  MECH_LABELS = !labelsOn ? '' : llmCallouts([
+    ...(feed > 0 && feed < 1 ? [{ at:[42, 14.5, Math.max(99, cb + 2)], text:'SENTENCE CARD', on: true }] : []),
+    { at:[42, 12.4, 105.6], text:'FEED ROLLERS', on: ph === 0 },
+    { at:[42, 11.5, 99.5], text:'CUTTER', on: ph === 0 && t < .5 },
+    { at:[47, 11.5, 50], text:'TOKEN CHUTE', on: ph === 0 || (ph === 4 && t > .66 && t < .78) },
+    { at:[28, 8.5, 66], text:'VOCAB DRUM', on: ph === 0 },
+    { at:[44, 23.5, 19], text:'ID STAMP', on: ph === 0 },
+    ...(st.stage >= 1 || ph === 0 ? [{ at:[46, yCol(0), 11], text:'TOKEN TILES', on: ph === 0 }] : []),
+    { at:[48, 70, 8], text:'CONVEYOR', on: ph === 0 || ph === 4 },
+    { at:[36, 40, 16], text:'EMBED TABLE', on: ph === 1 },
+    { at:[26, 88, 19.5], text:'POSITION DIAL', on: ph === 1 },
+    ...(st.emb > 0 || ph === 1 ? [{ at:[XC + 1.5, yCol(Math.min(1, fd)), 18], text:'EMBEDDINGS', on: ph === 1 }] : []),
+    { at:[XC, yCol(Math.min(2, fd)), 37], text:'RESIDUAL PATH', on: ph === 2 },
+    { at:[54, 34, ZT[0] + 1], text:'LAYER 1', on: ta === 0 },
+    { at:[54, 34, ZT[3] + 1], text:'LAYER 12', on: ta === 3 },
+    { at:[16, 91, ZT[3] + 4], text:'RMSNORM', on: ph === 2 },
+    { at:[16, 80, ZT[3] + 6], text:'QKV PROJECTION', on: ph === 2 },
+    { at:[16.5, 66, ZT[3] + 4.5], text:'ATTN HEADS', on: ph === 2 },
+    ...(n > 1 && (ph === 2 ? ta >= 0 : st.stage === 3) ? [{ at:[XC, (yCol(n - 1) + yCol(0))/2, ZT[ta >= 0 ? ta : 3] + 2.4 + Math.min(10.5, 1.4 + .19*(yCol(0) - yCol(n - 1)))], text:'ATTN WEIGHTS', on: true }] : []),
+    { at:[16, 46, ZT[3] + 7], text:'MLP BLOCK', on: ph === 2 },
+    { at:[9, 40, ZT[1] + 4.5], text:'KV CACHE', on: ph === 2 },
+    { at:[14, 50, 12], text:'WEIGHT MEMORY', on: ph === 2 },
+    { at:[37, yL, 92], text:'FINAL NORM', on: ph === 3 && t < .3 },
+    { at:[32, 100, 92], text:'LM HEAD', on: ph === 3 && t < .35 },
+    { at:[31.5, 104.4, 100], text:'LOGITS', on: ph === 3 },
+    { at:[44, 102, 80], text:'SOFTMAX', on: ph === 3 && t > .2 && t < .4 },
+    { at:[52, 101, 58], text:'SAMPLER WHEEL', on: ph === 3 && t > .35 },
+    { at:[48, 104, 26], text:'DETOKENIZER', on: ph === 4 && t < .1 },
+    { at:[19, 111, 60], text:'TOKEN LIFT', on: ph === 4 && t < .2 },
+    { at:[3.4, 80, 104], text:'CONTROLLER', on: llmRun(st) },
+    { at:[17, 104, 18], text:'POWER SUPPLY', on: false },
+    { at:[4, 108, 50], text:'COOLING FAN', on: llmRun(st) },
+    { at:[12, 98.5, 60], text:'BUS BAR', on: ph === 2 },
+    { at:[56, 108, 82], text:'TEMP SHAFT', on: ph === 3 && t > .35 },
+    { at:[45, 108, 64], text:'WHEEL MOTOR', on: ph === 3 && t > .35 },
+    { at:[52.8, 108, 70], text:'POINTER', on: picked(st) },
+  ], [0, W + 3, 0, D, 0, TOP]);
+  return svg;
+}
+
+/* ---------- on top: hopper + card, printer + tape, return tube with clamps ---------- */
+function llmTop(st, k){
+  const parts = [], ph = llmPh(st), t = st.t, ret = retTileAt(st), ghost = svg => k > 0 ? `<g opacity="${f(1 - .6*k)}">${svg}</g>` : svg;
+  parts.push({ box:[[30, 6, 112], [54, 22, 117]], svg: ghost(box(30, 6, 112, 54, 22, 117, CASEM, toneI, 1) + shape(on(PZ(117.05), rectUV(32, 13.6, 52, 15.4)), RECESS, .7)) });
+  const feed = ph === 0 ? clamp01(t/.45) : st.stage > 0 || st.gen > 0 ? 1 : 0, cb = 117 - 36*feed, z0 = Math.max(117, cb), z1 = cb + 18;
+  if (z1 > z0 + .2){ let c = box(33, 14, z0, 51, 15, z1, PAPER, toneI, .8);
+    [['the cat', 13], ['sat on', 8.6], ['the', 4.2]].forEach(([str, dz]) => { if (cb + dz > z0 + .4 && cb + dz + 2.8 < z1) c += txY(42, 15.06, cb + dz, str, 3.2, INK, 800); });
+    parts.push({ box:[[33, 14, z0], [51, 15, z1]], svg: c }); }
+  // printer: the returning tile is inside it while the word is printed
+  { const tileIn = ret && ret[0] === 16 && ret[2] >= 112 ? tileSvg(16, 108, ret[2], NEWM) : '';
+    parts.push({ box:[[10, 98, 112], [34, 118, 122]], svg: tileIn + ghost(box(10, 98, 112, 34, 118, 122, CASEM, toneI, 1)
+      + shape(on(PZ(122.05), rectUV(15, 107.2, 29, 108.4)), RECESS, .6) + shape(on(PZ(122.06), ellUV(31, 101, .9, .9, 10)), ph === 4 ? '#43c25c' : '#3a3632', .4)) }); }
+  const words = st.out.slice(), grow = ph === 4 ? clamp01((t - .2)/.1) : 0;
+  if (ph === 4 && grow > .5) words.push(NEXT[st.gen][st.pick][0]);
+  const len = 2.6 + 4*(st.out.length + grow);
+  if (st.out.length || grow > 0){ let tp = box(15.5, 107.6, 122, 28.5, 108, 122 + len, PAPER, toneI, .7);
+    words.forEach((w, q) => { const zb = 122 + len - 3.6 - 4*q; if (zb > 122.6) tp += txY(22, 108.06, zb, w, 2.6, INK, 800); });
+    parts.push({ box:[[15.5, 107.6, 122], [28.5, 108, 122 + len]], svg: tp }); }
+  // return tube: pieces between the clamps, so each sorts on its own
+  const tube = (a, b, bb) => { const inside = ret && t >= .3 && t < .66 && ret[0] >= bb[0][0] && ret[0] <= bb[1][0] && ret[1] >= bb[0][1] && ret[1] <= bb[1][1] && ret[2] >= 112 ? tileSvg(ret[0], ret[1], ret[2], NEWM) : '';
+    parts.push({ box: bb, svg: inside + `<g opacity=".5">${rod(a, b, 3, CLEAR, toneI, .7)}</g>` + `<path d="${pd([[a[0] - .6, a[1], a[2] + 2.3], [b[0] - .6, b[1], b[2] + 2.3]], false)}" stroke="#ffffff" stroke-width="1" opacity=".38" fill="none"/>` }); };
+  const cut = [98, 80.8, 79.2, 56.8, 55.2, 36.8, 35.2, 26];
+  for (let q = 0; q < cut.length; q += 2) tube([22, cut[q], 115], [22, cut[q + 1], 115], [[19, cut[q + 1], 112], [25, cut[q], 118]]);
+  for (const y of [80, 56, 36]) parts.push({ box:[[18.6, y - .8, 112], [25.4, y + .8, 118.4]], svg: box(18.6, y - .8, 112, 25.4, y + .8, 118.4, METAL, toneI, .6) });
+  tube([22, 26, 115], [44, 26, 115], [[19, 23, 112], [47, 29, 118]]);
+  parts.push({ box:[[40.4, 22.4, 112], [47.6, 29.6, 112.8]], svg: cyl(44, 26, 112, 112.8, 3.6, DARK, toneI, .7) });
+  return byDepth(parts);
+}
+
+/* ---------- the case ---------- */
+function scene(st, m){
+  const FRONT = facing([1,0,0]), BACK = facing([-1,0,0]), LEFT = facing([0,1,0]), RIGHT = facing([0,-1,0]);
+  const k = ease(st.xr || 0), n = nTok(st), ph = llmPh(st);
+  let s = castShadow([...on(PX(0), OUT), ...on(PX(W), OUT), [10, 98, 122], [34, 118, 122], [30, 6, 117], [54, 22, 117]]);
+  s += byDepth([[4, 4], [50, 4], [4, 110], [50, 110]].map(([x, y]) => ({ box:[[x, y, 0], [x + 6, y + 6, Z0]], svg: box(x, y, 0, x + 6, y + 6, Z0, DARK, toneI, .8) })));
+  // knob on the front (turns with the temperature) and the mains cord out of the back
+  const ka = (-60 + 60*st.temp)*Math.PI/180;
+  let knob = cylX(W, W + 3, 108, 82, 4.5, KNOBM, toneI, 1.1, 24);
+  if (FRONT) knob += ink(pd([[W + 3.05, 108, 82], [W + 3.05, 108 - 3.6*Math.sin(ka), 82 + 3.6*Math.cos(ka)]], false), 1.2);
+  knob = act('temp', knob);
+  const cordPts = [[-1, 108, 13], [-4, 108.5, 10], [-6, 109.5, 4], [-9, 111, 1], [-20, 114, 1], [-32, 112, 1.2]];
+  const cord = cylX(-3, 0, 108, 13, 2.2, DARK, toneI, 1, 16)
+    + `<path d="${pd(cordPts, false)}" fill="none" stroke="${INK}" style="stroke-width:3.4" stroke-linecap="round" stroke-linejoin="round"/>`
+    + `<path d="${pd(cordPts, false)}" fill="none" stroke="${DARK.m}" style="stroke-width:2" stroke-linecap="round" stroke-linejoin="round"/>`
+    + box(-37, 109, 0, -31.5, 115, 4.6, DARK, toneI, 1);
+
+  let body = '';
+  if (FRONT){
+    body += fill(pd(on(PX(W), OUT)), tone([1,0,0], m));
+    body += shape(fr(7, 31, 101, 105, 4), CREAM, 1.1) + shape(fr(10, 34, 98, 102, 3, .35), SCR, .8) + llmScreen(st);
+    // right column: temperature knob markings, NEXT window, power lamp
+    body += tx(W + .4, 108, 72.5, 'TEMP', 2.2, INK, 800);
+    TEMPS.forEach((v, q) => { const a = (-60 + 60*q)*Math.PI/180; body += tx(W + .4, 108 - 7*Math.sin(a), 82 + 7*Math.cos(a) - .6, String(v), 1.6, INK, q === st.temp ? 900 : 600); });
+    body += tx(W + .4, 108, 60.5, 'NEXT', 2.2, INK, 800) + shape(fr(101, 46, 115, 58, 2, .35), SCR, .8);
+    if (picked(st)) body += tx(W + .45, 108, 50.8, NEXT[st.gen][st.pick][0], 2.6, AMBER, 800);
+    body += shape(fcirc(108, 38, 1.6), '#43c25c', .6) + tx(W + .4, 108, 33.6, 'ON', 1.6, INK, 800);
+    // five stage plates: the running one lights up, a green lamp once it has run this round
+    PLATES.forEach((p, q) => { const lit = ph === q, dn = q < st.stage;
+      body += shape(fr(PLY[q] - 8, 14, PLY[q] + 8, 23, 2, .35), lit ? AMBER : CREAM, .9) + tx(W + .45, PLY[q], 17.6, p, 2.3, INK, 800)
+        + shape(fcirc(PLY[q], 26.6, 1.1), lit ? '#ffcf4a' : dn ? '#43c25c' : '#3a3632', .5); });
+  }
+  if (BACK){ const tb = tone([-1,0,0], m);
+    body += fill(pd(on(PX(0), OUT)), tb);
+    body += shape(on(PX(-.2), rrUV(20, 60, 90, 104, 4)), mix(tb, '#ffffff', .12), 1);                       // service panel
+    for (let q = 0; q < 4; q++) body += shape(on(PX(-.25), ellUV(24 + q*62/3, 100, .8, .8, 8)), METAL.m, .4);
+    let v = ''; for (let z = 66; z <= 96; z += 5) v += pd([[-.25, 32, z], [-.25, 78, z]], false);
+    body += `<path d="${v}" fill="none" stroke="${INK}" stroke-width="1.1" opacity=".7"/>`;
+    body += shape(on(PX(-.2), ellUV(108, 44, 8, 8, 24)), mix(tb, '#000000', .25), 1);                        // fan grille
+    let g = ''; for (let q = -6; q <= 6; q += 2) g += pd([[-.3, 108 + q, 44 - Math.sqrt(64 - q*q)*.9], [-.3, 108 + q, 44 + Math.sqrt(64 - q*q)*.9]], false);
+    body += `<path d="${g}" fill="none" stroke="${INK}" stroke-width=".8"/>`;
+    body += shape(on(PX(-.2), rrUV(102, 9, 114, 17, 1.5)), '#3a3632', .8);                                    // power inlet
+    body += shape(on(PX(-.2), rrUV(30, 20, 74, 34, 2)), '#f3f0e6', .9) + txB(-.3, 52, 28.6, 'GPT-2 SMALL  124M PARAMS', 2.3, INK, 800) + txB(-.3, 52, 23.4, '230V~  450W', 2, INK, 700);
+  }
+  body += extrude(OUT, 0, W, m);
+  if (LEFT){ const sm = tone([0,1,0], m);
+    body += shape(on(PY(D + .2), rrUV(10, 70, 50, 96, 5)), mix(sm, '#ffffff', .22), 1);
+    body += txY(30, D + .3, 84, 'LLM-1', 8, mix(sm, '#000000', .5), 900) + txY(30, D + .3, 75.5, 'LANGUAGE MACHINE', 2.6, mix(sm, '#000000', .5), 800);
+    let v = ''; for (let z = 22; z <= 46; z += 4) v += pd([[14, D + .2, z], [46, D + .2, z]], false);
+    body += `<path d="${v}" fill="none" stroke="${INK}" stroke-width="1.2" opacity=".7"/>`; }
+  if (RIGHT){ const sm = tone([0,-1,0], m);
+    body += shape(on(PY(-.2), rrUV(12, 80, 48, 100, 3)), '#f3f0e6', .9);
+    body += txY0(30, -.3, 94, '12 LAYERS  12 HEADS', 2.4, INK, 800) + txY0(30, -.3, 89, '768 DIMS  50257 TOKENS', 2.4, INK, 800) + txY0(30, -.3, 84, 'CONTEXT 1024', 2.4, INK, 800);
+    let v = ''; for (let z = 22; z <= 46; z += 4) v += pd([[14, -.2, z], [46, -.2, z]], false);
+    body += `<path d="${v}" fill="none" stroke="${INK}" stroke-width="1.2" opacity=".7"/>`; }
+  if (FRONT) body += ink(pd(on(PX(W), OUT)), 2.2);
+  if (BACK) body += ink(pd(on(PX(0), OUT)), 2.2);
+  body += hullInk([...on(PX(0), OUT), ...on(PX(W), OUT)], 2.8);
+  if (k > 0) body = xrGhost(body, '', k, OUT, 0, W, m) + `<g opacity="${f(k)}">${llmMech(st, k, k > .6)}</g>`;
+  s += FRONT ? cord + body + knob : knob + body + cord;
+  s += llmTop(st, k);
+  if (k > .6) s += MECH_LABELS;
+  else s += llmCallouts([
+    ...(st.stage === 0 && st.gen === 0 ? [{ at:[42, 15, 128], text:'SENTENCE CARD', on: ph === 0 }] : []),
+    { at:[30, 10, 116], text:'HOPPER', on: ph === 0 },
+    ...(FRONT ? [{ at:[W, 30, 90], text:'DISPLAY', on: ph >= 0 }, { at:[W, PLY[2], 14], text:'STAGE LAMPS', on: ph >= 0 },
+      { at:[W + 3, 108, 86.5], text:'TEMP KNOB', on: ph === 3 }, { at:[W, 102, 52], text:'NEXT WORD', on: picked(st) }] : []),
+    { at:[10, 112, 122], text:'PRINTER', on: ph === 4 },
+    ...(st.out.length ? [{ at:[22, 108, 124], text:'OUTPUT TAPE', on: ph === 4 }] : []),
+    { at:[22, 66, 118], text:'RETURN TUBE', on: ph === 4 && st.t > .3 && st.t < .66 } ], [0, W + 3, 0, D, 0, TOP]);
+  return s;
+}
+
+/* ---------- behaviour (one state object, one clock) ---------- */
+let ui, llmLoop = false;
+function llmReset(st){ Object.assign(st, { stage:0, target:0, t:0, ctx: PROMPT.map(c => c.slice()), out: [], gen:0, emb:0, lay:0, probs:null, pick:-1, ang:0, a0:0, a1:0 }); }
+function begin(st){                                                  // a step starts
+  if (st.stage !== 3) return;
+  const cand = NEXT[st.gen], e = cand.map(c => Math.pow(c[2], 1/TEMPS[st.temp])), tot = e.reduce((a, b) => a + b, 0);
+  st.probs = e.map(v => v/tot);
+  const r = llmRand(st.seed++); let acc = 0, pick = cand.length - 1;
+  for (let b = 0; b < cand.length; b++){ if (r < acc + st.probs[b]){ pick = b; break; } acc += st.probs[b]; }
+  let mid = 0; for (let b = 0; b < pick; b++) mid += st.probs[b]; mid += st.probs[pick]/2;
+  st.pick = pick; st.a0 = st.ang; st.a1 = st.ang + 720 + ((((90 - mid*360 - st.ang) % 360) + 360) % 360);
+}
+function finish(st){                                                 // a step ends
+  const ph = st.stage; st.t = 0;
+  if (ph === 1) st.emb = nTok(st);
+  if (ph === 2) st.lay = nTok(st);
+  if (ph === 3) st.ang = st.a1 % 360;
+  if (ph === 4){ const c = NEXT[st.gen][st.pick]; st.ctx.push([c[0], c[1]]); st.out.push(c[0]); st.gen++; st.probs = null; st.pick = -1; st.stage = st.target = 1; return; }
+  st.stage++;
+}
+function runLoop(){
+  if (llmLoop) return; llmLoop = true;
+  ui.animate(dt => { const st = ui.st;
+    if (st.stage < st.target){ st.t += dt*1000/DUR[st.stage]; if (st.t >= 1){ finish(st); if (st.stage < st.target) begin(st); } }
+    if (st.stage >= st.target){ llmLoop = false; return false; }
+    return true; });
+}
+function doneMsg(st, s){
+  const last = st.ctx[nTok(st) - 1];
+  return s === 1 ? (st.gen ? `"${last[0]}" is already token ${last[1]}: it skips the tokenizer` : 'already split into tokens')
+    : s === 2 ? 'already embedded' : s === 3 ? 'all 12 layers have run'
+    : `already picked "${NEXT[st.gen][st.pick][0]}": Repeat feeds it back in`;
+}
+function go(st, s){
+  if (s === 5 && st.gen >= NMAX - PROMPT.length){ if (llmRun(st)) return ui.flash('one moment');
+    llmReset(st); return ui.flash('the context is full: a new sentence goes in', 2200); }
+  if (llmRun(st)){ if (s > st.target) st.target = s; else if (s <= st.stage) ui.flash(doneMsg(st, s), 1800); runLoop(); return; }
+  if (st.stage >= s) return ui.flash(doneMsg(st, s), 2000);
+  st.target = s; st.t = 0; begin(st); runLoop();
+}
+function instant(st, s){                                             // jump straight to a state (for ?stage= / ?gen= / ?run=)
+  if (s === 5){ instant(st, 4); st.target = 5; finish(st); return; }
+  while (st.stage < s){ st.target = s; begin(st); finish(st); }
+  st.target = st.stage;
+}
+function setTemp(st, q){
+  if (llmPh(st) === 3) return ui.flash('the temperature is set before sampling');
+  st.temp = q; if (st.stage === 4) ui.flash('the new temperature counts from the next sample');
+}
+
+const llmState = { temp:1, seed:3 }; llmReset(llmState);
+ui = mountFigure({
+  fig:'LM', title:'How an LLM works', turn:'full',
+  size:[W + 3, D, TOP], center:[W/2, D/2], palette:'cobalt',
+  state: llmState,
+  scene,
+  buttons:[
+    { label:'Tokenize', onClick:(st) => go(st, 1) },
+    { label:'Embed', onClick:(st) => go(st, 2) },
+    { label:'Run layers', onClick:(st) => go(st, 3) },
+    { label:'Sample next word', onClick:(st) => go(st, 4) },
+    { label:'Repeat', onClick:(st) => go(st, 5) },
+  ],
+  stats: st => [
+    { label:'TOKENS', value: String(nTok(st)) },
+    { label:'LAYER', value: `${curLayer(st)}/12` },
+    { label:'P(NEXT)', small: true, value: picked(st) ? Math.round(100*st.probs[st.pick]) + '%' : '--' },
+    { label:'TEMP', value: TEMPS[st.temp].toFixed(1), small: true },
+  ],
+  acts:{ temp:(st) => setTemp(st, (st.temp + 1) % TEMPS.length) },
+  params:(st, q) => {
+    if (q.has('temp')) st.temp = Math.max(0, Math.min(2, +q.get('temp') | 0));
+    if (q.has('seed')) st.seed = +q.get('seed') | 0;
+    const g = Math.max(0, Math.min(NMAX - PROMPT.length, +(q.get('gen') || 0) | 0));
+    for (let i = 0; i < g; i++) instant(st, 5);
+    if (q.has('stage')) instant(st, Math.max(0, Math.min(4, +q.get('stage') | 0)));
+    if (q.has('run')){ const p = Math.max(st.gen ? 1 : 0, Math.min(4, +q.get('run') | 0)); instant(st, p);
+      st.target = p + 1; st.t = clamp01(+(q.get('t') || .5)); begin(st); }
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
