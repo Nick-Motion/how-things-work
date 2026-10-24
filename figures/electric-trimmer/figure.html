@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Electric trimmer</title>
+<script>
+addEventListener('error', e => { document.documentElement.dataset.errors += String(e.message) + ';'; });
+addEventListener('unhandledrejection', e => { document.documentElement.dataset.errors += String(e.reason) + ';'; });
+</script></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   The 2016 book, printed page 14, supports two counter-reciprocating serrated blades and a crank drive.
+   Representative apparatus uses the motor, pinion, reduction gear and stacked 180-degree eccentric cams in
+   Makita patent US20140007717A1, description and figures 1-6. Each circular cam bears on the transverse
+   slot of a blade yoke. Rotation moves each yoke along x. The opposed sharp tooth edges shear a stem.
+   Mains enters the rear cord grip, passes the trigger switch and field coils to the brushes and armature.
+   The armature shaft carries the fan and pinion. The gear and cams rotate together on a fixed spindle.
+   A fixed guide bar and shoulder bolts through longitudinal blade slots constrain the blades to x travel.
+   Start powers the drive or stops it. Slow selects a slowed teaching view, not a measured motor speed.
+   Feed slides the existing sprig in a bench holder toward the teeth. It waits for actual edge closure,
+   then separates the leafy tip from the held stem. The clipped tip falls onto the table and remains there.
+   Feed after a cut replaces the specimen as a teaching control. The machine does not regrow plants.
+   Teaching adaptations are enlarged clearances, sparse teeth, a bench holder and slowed motion.
+   This is an educational adaptation, not an exact branded product or book illustration.
+   1988 is access restricted and unverified. 1998 is not individually verified.
+
+   Parts and attachments.
+   CASE      rounded split shell on chassis, seam, fasteners, vents, rear grip on shell,
+             front bow on shell lugs, trigger and return spring in rear grip, guard on front nose.
+   STRUCTURE base plate on case bosses, motor cradle on plate, motor end bearings in cradle,
+             gear spindle on plate, thrust washer on spindle, guide bar on nose,
+             pressure strip and shoulder bolts on guide bar, tip protector on guide bar.
+   MOTOR     field laminations and two copper field coils on cradle, armature and windings on shaft,
+             commutator on shaft, two brushes in holders, cooling fan and pinion keyed to shaft.
+   DRIVE     reduction gear on spindle, carrier pins coupling gear to two eccentric cams,
+             upper and lower cams inside matching blade yokes, integral tangs from yokes to blades,
+             two serrated blades, ground bevels and elongated guide slots.
+   POWER     cord, strain relief, cord clamp, switch, live and neutral leads along shell wall,
+             field leads to brush holders. Bench specimen holder is separate from machine anatomy.
+*/
+const trSteel = matOf('#aebcc2'), trCopper = matOf('#de9957'), trGreen = matOf('#68a85d');
+const trOutline = rrUV(20,4,40,35,7,6);
+const trBoard = [0,0,148,64,3,5];
+const trBound = [2,139,16,55,3,43];
+const trPtsBox = (pts, pad=0) => [0,1].map(side => [0,1,2].map(axis => (side ? Math.max : Math.min)(...pts.map(p => p[axis])) + (side ? pad : -pad)));
+const trPart = (a,b,svg) => ({box:[a,b],svg});
+function trRound(profile,a,b,material){
+  const ends = [on(PX(a),profile),on(PX(b),profile)];
+  return extrude(profile,a,b,material) + shape(ends[vis([1,0,0]) ? 1 : 0],tone([vis([1,0,0]) ? 1 : -1,0,0],material),1.2) + hullInk(ends.flat(),2.8);
+}
+function trRod(parts,a,b,r,material){
+  parts.push({box:trPtsBox([a,b],r),svg:rod(a,b,r,material,toneI,.9)});
+}
+function trBox(parts,a,b,material){ parts.push(trPart(a,b,box(...a,...b,material,toneI,.8))); }
+function trDisc(parts,x,y,z,h,r,material){
+  parts.push(trPart([x-r,y-r,z],[x+r,y+r,z+h],cyl(x,y,z,z+h,r,material,toneI,.8,20)));
+}
+function trGear(parts,x,y,z,r,teeth,angle,material){
+  trDisc(parts,x,y,z,1.6,r-.65,material);
+  for(let i=0;i<teeth;i++){
+    const a=angle+i*Math.PI*2/teeth, da=Math.PI/teeth*.35;
+    const ring=(rr,aa,zz)=>[x+rr*Math.cos(aa),y+rr*Math.sin(aa),zz];
+    const lower=[ring(r-.8,a-da,z),ring(r+.25,a-da,z),ring(r+.25,a+da,z),ring(r-.8,a+da,z)];
+    const upper=lower.map(p=>[p[0],p[1],z+1.6]);
+    parts.push({box:trPtsBox([...lower,...upper]),svg:loft(lower,upper,n=>toneI(n,material))+shape(upper,material.l,.5)});
+  }
+}
+function trBlade(parts,phase,upper){
+  const shift=2*Math.cos(phase), z=upper ? 11.65 : 11.05, mat=upper ? METAL : trSteel;
+  const ring=on(PZ(z+.5),rectUV(53+shift,28,135+shift,32));
+  let holes='';
+  for(const x of [66,85,104,123]) holes+=pd(on(PZ(z+.5),rrUV(x-3+shift,29.25,x+3+shift,30.75,.6,3)));
+  const low=ring.map(p=>[p[0],p[1],z]);
+  parts.push(trPart([53+shift,28,z],[135+shift,32,z+.5],loft(low,ring,n=>toneI(n,mat))+`<path d="${pd(ring)}${holes}" fill="${mat.l}" fill-rule="evenodd"/>`+ink(pd(ring),.7)));
+  for(let x=58;x<=132;x+=7) for(const side of [-1,1]){
+    const q=[[x-2+shift,30+side*2,z],[x-1.3+shift,30+side*7,z],[x+1.3+shift,30+side*7,z],[x+2+shift,30+side*2,z]];
+    const up=q.map(p=>[p[0],p[1],z+.5]);
+    const bevel=[up[0],up[1],up[1].map((v,i)=>i===0?v+.35:v),up[0].map((v,i)=>i===0?v+.35:v)];
+    parts.push({box:trPtsBox([...q,...up]),svg:loft(q,up,n=>toneI(n,mat))+shape(up,mat.l,.65)+fill(pd(bevel),'#ffffff')});
+  }
+  return shift;
+}
+function trYoke(parts,phase,z){
+  const x=38+2*Math.cos(phase), y=30+2*Math.sin(phase);
+  trDisc(parts,x,y,z,.5,3.7,trCopper);
+  for(const [a,b] of [ [[x-4.8,23,z],[x-3.8,37,z+.5]], [[x+3.8,23,z],[x+4.8,37,z+.5]],
+    [[x-3.8,23,z],[x+3.8,24,z+.5]], [[x-3.8,36,z],[x+3.8,37,z+.5]],
+    [[x+4.8,28.8,z],[53+2*Math.cos(phase),31.2,z+.5]] ]) trBox(parts,a,b,trSteel);
+}
+function trMechanism(st){
+  const parts=[], labs=[], live=st.power==='running', ang=st.angle;
+  const label=(at,text,on=false)=>labs.push({at,text,on});
+  trBox(parts,[17,21,4.7],[50,39,5.8],trSteel); label([18,24,5.8],'CHASSIS');
+  for(const x of [22,32]) for(const y of [24,36]) trBox(parts,[x-1,y-1,5.8],[x+1,y+1,18],trSteel);
+  label([22,24,16],'MOTOR CRADLE');
+  trDisc(parts,27,30,16,1,5.6,trSteel); label([27,34,16.5],'LOWER END PLATE');
+  trDisc(parts,27,30,17,1,1.5,DARK); label([27,30,17.5],'LOWER BEARING');
+  trDisc(parts,27,30,31,1.1,5.6,trSteel); label([27,34,31.5],'UPPER END PLATE');
+  trDisc(parts,27,30,31,2,1.5,DARK); label([27,30,32.5],'UPPER BEARING');
+  trDisc(parts,27,30,14,19,.65,METAL); label([27,30,29],'ARMATURE SHAFT',live);
+  trDisc(parts,27,30,20,7,2.8,trSteel); label([27,30,23],'ARMATURE',live);
+  for(let i=0;i<6;i++){
+    const a=ang*-4.5+i*Math.PI/3, x=27+2.7*Math.cos(a), y=30+2.7*Math.sin(a);
+    trRod(parts,[x,y,20],[x,y,27],.65,trCopper);
+  }
+  label([29,30,25],'ROTOR WINDINGS',live);
+  for(const side of [-1,1]){
+    trBox(parts,[23,30+side*4.6-1,19],[31,30+side*4.6+1,29],trSteel);
+    trBox(parts,[24,30+side*4.6-1.2,20],[30,30+side*4.6+1.2,27.5],trCopper);
+  }
+  label([23,34.6,28.5],'FIELD CORE'); label([28,34.6,25],'FIELD COIL',live);
+  trDisc(parts,27,30,28,2,1.8,trCopper); label([27,30,29.2],'COMMUTATOR',live);
+  for(const side of [-1,1]){
+    trBox(parts,[27+side*2.6-1,28.9,28],[27+side*2.6+1,31.1,30],DARK);
+    trBox(parts,[27+side*4-1,28.6,27.7],[27+side*4+1,31.4,30.3],trSteel);
+  }
+  label([29,30,29],'CARBON BRUSHES',live); label([23,30,30.2],'BRUSH HOLDERS');
+  trDisc(parts,27,30,18,1,4.8,DARK);
+  for(let i=0;i<8;i++){
+    const a=-ang*4.5+i*Math.PI/4;
+    trRod(parts,[27+Math.cos(a),30+Math.sin(a),18.5],[27+4.5*Math.cos(a+.2),30+4.5*Math.sin(a+.2),18.5],.35,trSteel);
+  }
+  label([30,33,18.5],'COOLING FAN',live);
+  trGear(parts,27,30,14,2,8,-ang*4.5+.2,trSteel); label([27,31,14.8],'MOTOR PINION',live);
+  trGear(parts,38,30,14,9,36,ang,trSteel); label([42,35,15.6],'REDUCTION GEAR',live);
+  trDisc(parts,38,30,5.8,11,1,METAL); label([38,30,16.5],'GEAR SPINDLE');
+  trDisc(parts,38,30,13.4,.6,2.2,trCopper); label([38,30,13.7],'THRUST WASHER');
+  trYoke(parts,ang+Math.PI,11.05); trYoke(parts,ang,11.65);
+  for(const offset of [0,Math.PI]){
+    const a=ang+offset;
+    trDisc(parts,38+1.2*Math.cos(a),30+1.2*Math.sin(a),11.05,4.8,.45,METAL);
+  }
+  label([38+2*Math.cos(ang),30+2*Math.sin(ang),12.15],'UPPER ECCENTRIC',live);
+  label([38-2*Math.cos(ang),30-2*Math.sin(ang),11.55],'LOWER ECCENTRIC',live);
+  label([38+2*Math.cos(ang)+4.3,26,12.15],'UPPER BLADE YOKE',live);
+  label([38-2*Math.cos(ang)-4.3,34,11.55],'LOWER BLADE YOKE',live);
+  label([38,31.2,14],'CAM DRIVE PINS',live);
+  trBox(parts,[48,27,5.8],[53,33,9.5],trSteel); label([50,28,7],'NOSE BRACKET');
+  trBox(parts,[50,28.7,9.5],[138,31.3,11],trSteel); label([74,30,10],'GUIDE BAR');
+  trBlade(parts,ang+Math.PI,false); trBlade(parts,ang,true);
+  label([72+2*Math.cos(ang),35,12.15],'UPPER SERRATED BLADE',live);
+  label([112-2*Math.cos(ang),24,11.55],'LOWER SERRATED BLADE',live);
+  trBox(parts,[56,29,12.2],[135,31,12.8],trSteel); label([115,30,12.8],'PRESSURE STRIP');
+  for(const x of [66,85,104,123]){
+    trDisc(parts,x,30,10.3,3,.55,METAL); trDisc(parts,x,30,13.3,.6,1,METAL);
+  }
+  label([104,30,13.9],'SHOULDER BOLTS');
+  trBox(parts,[135,28,10],[139,32,13],DARK); label([138,30,13],'TIP PROTECTOR');
+  trBox(parts,[12,27,28],[18,33,30],DARK); label([15,30,29],'TRIGGER SWITCH',live);
+  trRod(parts,[15,30,30],[15,30,35],.6,METAL);
+  const coil=Array.from({length:49},(_,i)=>[15+Math.cos(i*Math.PI/4),30+Math.sin(i*Math.PI/4),30+i/12]);
+  parts.push({box:trPtsBox(coil,.2),svg:line(coil,.65)}); label([16,30,32],'RETURN SPRING');
+  trBox(parts,[16,22,6],[19,26,7],DARK); label([17.5,24,7],'CORD CLAMP');
+  for(const [route,col] of [
+    [[[14,24,7],[16,24,7],[16,22,9],[16,22,28],[14,27,29]],'#aa6737'],
+    [[[18,29,29],[19,23,29],[24,23,27],[26,25.4,25]],'#aa6737'],
+    [[[28,34.6,25],[32,36,25],[33,36,29],[31,30,29]],'#aa6737'],
+    [[[23,30,29],[20,30,29],[20,37,8],[16,37,7],[14,24,7]],'#427bb5']
+  ]) for(let i=1;i<route.length;i++) trRod(parts,route[i-1],route[i],.23,matOf(col));
+  label([16,22,20],'LIVE LEAD',live); label([20,37,12],'RETURN LEAD',live);
+  return {parts,labs};
+}
+function trOutside(st,m,k){
+  const parts=[];
+  let shell=trRound(trOutline,14,51,m);
+  if(vis([0,1,0])){
+    for(let x=20;x<34;x+=3) shell+=shape(on(PY(40.1),rrUV(x,18,x+1.2,27,.5,3)),DARK.m,.4);
+    shell+=line([[17,40.15,12],[46,40.15,12]],.7);
+  }
+  if(vis([0,-1,0])) for(let x=20;x<34;x+=3) shell+=shape(on(PY(19.9),rrUV(x,18,x+1.2,27,.5,3)),DARK.m,.4);
+  for(const y of [21,39]) for(const x of [19,46]) shell+=cyl(x,y,32,32.8,.6,METAL,toneI,.4,8);
+  if(k>0) shell=xrGhost(shell,'',k,trOutline,14,51,m);
+  parts.push(trPart([14,20,4],[51,40,35],shell));
+  for(const [a,b] of [ [[16,30,26],[4,30,32]], [[4,30,32],[4,30,40]], [[4,30,40],[21,30,40]], [[21,30,40],[24,30,33]],
+    [[45,20,27],[46,17,39]], [[46,17,39],[46,43,39]], [[46,43,39],[45,40,27]] ]) trRod(parts,a,b,1.65,DARK);
+  trBox(parts,[10,28,36],[18,32,37.8],st.power==='running'?trCopper:m);
+  let guard=trRound(rrUV(17,8,43,28,3,4),52,53,DARK);
+  parts.push(trPart([52,17,8],[53,43,28],`<g opacity="${1-.8*k}">${guard}</g>`));
+  const cord=[[14,24,7],[10,24,6],[8,20,4],[10,13,4],[6,8,4],[0,7,3.7]];
+  for(let i=1;i<cord.length;i++) trRod(parts,cord[i-1],cord[i],.65,DARK);
+  trRod(parts,[12,24,7],[14,24,7],1.15,DARK);
+  return parts;
+}
+function trSprig(st){
+  const parts=[], offset=9*ease(st.feed), ytip=41-offset, x=89.5;
+  const cut=st.sprig==='cut', fall=cut ? ease(Math.min(1,st.fall)) : 0;
+  const leafyZ=11.6-7.9*fall, leafyDy=cut?3*fall:0;
+  trRod(parts,[x,cut?35:ytip,11.6],[x,56-offset,11.6],.48,trCopper);
+  if(cut) trRod(parts,[x,ytip+leafyDy,leafyZ],[x,35+leafyDy,leafyZ],.48,trCopper);
+  for(const [side,dy] of [[-1,.8],[1,1.7],[-1,2.5]]){
+    const y=ytip+dy+leafyDy, z=leafyZ;
+    const stem=[x,y,z], tip=[x+side*4,y-2,z+.2];
+    trRod(parts,stem,tip,.18,trGreen);
+    const leaf=[stem,[x+side*2.1,y-3.2,z+.6],tip,[x+side*3,y+.5,z+.2]];
+    parts.push({box:trPtsBox(leaf,.15),svg:shape(leaf,trGreen.l,.6)+line([stem,tip],.4)});
+  }
+  trBox(parts,[86,44,3],[93,48,4],trSteel);
+  for(const xx of [88.5,90.5]) trRod(parts,[xx,46,4],[xx,46,12.3],.45,trSteel);
+  return parts;
+}
+function trLabels(items){
+  const svg=document.getElementById('fig'), vb=svg.viewBox.baseVal;
+  const mobile=window.LBL_U&&LBL_U(), columns=mobile?4:2;
+  const sorted=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  let top=12*INK_K;
+  if(!mobile&&svg.getScreenCTM()){
+    const r=document.getElementById('btns').getBoundingClientRect();
+    top=Math.max(top,new DOMPoint(r.right,r.bottom+20).matrixTransform(svg.getScreenCTM().inverse()).y);
+  }
+  const leaders=[];
+  const pills=Array.from({length:columns},(_,column)=>{
+    const group=sorted.slice(Math.floor(column*sorted.length/columns),Math.floor((column+1)*sorted.length/columns)).sort((a,b)=>a.p[1]-b.p[1]);
+    let columnTop=top, bottom=vb.height-12*INK_K;
+    if(!mobile&&svg.getScreenCTM()){
+      const inverse=svg.getScreenCTM().inverse(), stats=document.getElementById('stats').getBoundingClientRect();
+      if(column) columnTop=Math.max(columnTop,new DOMPoint(stats.left,stats.bottom+12).matrixTransform(inverse).y);
+      const zoom=document.querySelector('.zchip');
+      if(zoom) bottom=Math.min(bottom,new DOMPoint(0,zoom.getBoundingClientRect().top-14).matrixTransform(inverse).y);
+    }
+    const gap=(bottom-columnTop)/Math.max(1,group.length-1);
+    return group.map((it,i)=>{
+      const w=mobile?22*mobile:it.text.length*8.6*INK_K*.62+8.6*INK_K*1.5;
+      const x=mobile?vb.x+(column+.5)*vb.width/columns:column?vb.x+vb.width-w/2-3*INK_K:vb.x+w/2+3*INK_K;
+      const markup=tag(it.at,(x-it.p[0])/INK_K,(columnTop+i*gap-it.p[1])/INK_K,it.text,it.on);
+      return markup.replace(/<path[^>]*\/><circle[^>]*\/>/,leader=>{leaders.push(leader);return '';});
+    }).join('');
+  }).join('');
+  return `<g class="tag">${leaders.join('')}</g>`+pills;
+}
+function trScene(st,m){
+  const k=ease(st.xr||0), mech=trMechanism(st), outside=trOutside(st,m,k);
+  let svg=board(...trBoard) + castShadow([[4,30,40],[51,20,35],[53,43,28],[139,23,11],[139,37,11],[14,20,4]],3,boardTop(...trBoard));
+  if(k>0){
+    svg+=byDepth(outside)+`<g opacity="${k}">${byDepth([...mech.parts,...trSprig(st)])}</g>`;
+  } else {
+    const exposed=mech.parts.filter(p=>p.box[0][0]>=53);
+    svg+=byDepth([...outside,...exposed,...trSprig(st)]);
+  }
+  if(k>.6) svg+=trLabels(mech.labs);
+  return svg;
+}
+function trUpdate(st,dt){
+  if(st.power==='running') st.angle=(st.angle+dt*(st.speed==='slow'?1.7:6))%(Math.PI*2);
+  if(st.sprig==='feeding'){
+    st.feed=Math.min(1,st.feed+dt/1.1);
+    if(st.feed===1) st.sprig='waiting';
+  }
+  if(st.sprig==='waiting' && st.power==='running' && Math.abs(Math.cos(st.angle))>.82){ st.sprig='cut';st.clips++;st.fall=0; }
+  if(st.sprig==='cut') st.fall=Math.min(1,st.fall+dt/.65);
+}
+let ui, trLoop=false;
+function trKick(){
+  if(trLoop) return;
+  trLoop=true;
+  ui.animate(dt=>{
+    trUpdate(ui.st,dt);
+    trLoop=ui.st.power==='running'||ui.st.sprig==='feeding'||ui.st.sprig==='cut'&&ui.st.fall<1;
+    return trLoop;
+  });
+}
+function trStart(st){ st.power=st.power==='running'?'stopped':'running';trKick(); }
+function trFeed(st){
+  if(st.power!=='running') return ui.flash('Start the blades before feeding the sprig');
+  if(st.sprig==='feeding'||st.sprig==='waiting') return ui.flash('The sprig is already at the blades');
+  st.feed=0;st.fall=0;st.sprig='feeding';trKick();
+}
+function trSlow(st){ st.speed=st.speed==='slow'?'normal':'slow';trKick(); }
+ui=mountFigure({
+  fig:'14',turn:'full',title:'Electric trimmer',size:[148,64,43],center:[74,32],palette:'tomato',
+  state:{power:'stopped',speed:'normal',angle:Math.PI/2,sprig:'ready',feed:0,fall:0,clips:0},scene:trScene,
+  stats:st=>[{label:'Drive',value:st.power==='stopped'?'Off':st.speed==='slow'?'Slow':'On'},{label:'Clips',value:String(st.clips)}],
+  buttons:[{label:'Start',onClick:trStart},{label:'Feed',onClick:trFeed},{label:'Slow',onClick:trSlow}],
+  params:(st,q)=>{
+    if(q.get('running')==='1') st.power='running';
+    if(q.get('slow')==='1') st.speed='slow';
+    const angle=Number(q.get('angle'));if(q.has('angle')&&Number.isFinite(angle))st.angle=angle;
+    if(q.get('cut')==='1'){st.sprig='cut';st.feed=1;st.fall=1;st.clips=1;}
+  }
+});
+xrMount(()=>ui,()=>'');
+requestAnimationFrame(()=>ui.render());
+if(ui.st.power==='running')trKick();
+</script></body></html>

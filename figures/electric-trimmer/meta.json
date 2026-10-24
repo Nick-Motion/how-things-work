@@ -1,0 +1,61 @@
+{
+  "slug": "electric-trimmer",
+  "title": "Electric trimmer",
+  "prompt": "an electric hedge trimmer with a sprig held at its teeth on a table with three buttons: \u201cStart\u201d moves the blades back and forth; \u201cFeed\u201d brings the sprig into the teeth and clips it; \u201cSlow\u201d reduces the cutting speed; see-through reveals the motor, crank linkage and opposed serrated blades",
+  "source": "book",
+  "sourceUrl": "https://en.wikipedia.org/wiki/The_Way_Things_Work",
+  "category": "home",
+  "buttons": [
+    "Start",
+    "Feed",
+    "Slow"
+  ],
+  "blurb": "A teaching adaptation of a hedge trimmer shows how a motor and opposed eccentric cams slide two serrated blades past one another to clip a sprig.",
+  "teachingAdaptations": [
+    "Enlarged internal clearances and fewer teeth make the crank-cam drive legible.",
+    "Start toggles power; Slow toggles an uncalibrated slower teaching view.",
+    "Feed slides a specimen in a separate bench holder and replaces it on the next run after a cut.",
+    "The holder and specimen replacement are teaching controls, not self-feeding or self-repair hardware."
+  ],
+  "mechanism": "Corded motor and reduction gear drive two 180-degree opposed eccentric cams engaging transverse blade-yoke slots; a guide bar and shoulder bolts constrain the serrated blades to longitudinal sliding.",
+  "sourceEvidence": {
+    "edition2016": {
+      "printedPage": 14,
+      "rawJsonIndex": 15,
+      "url": "https://archive.org/details/the-way-things-work-now-david-macaulay-neil-ardley-z-library/page/n15/mode/1up",
+      "rawEvidence": "/home/nm/.bb/thread-storage/thr_mr6grtbcjs/book-catalog-audit/raw/now-pages.json"
+    },
+    "edition1988": "access_restricted_unverified",
+    "edition1998": "not_individually_verified",
+    "reproduction": "Educational adaptation, not an exact illustration or verified edition union."
+  },
+  "research": [
+    {
+      "url": "https://patents.google.com/patent/US20140007717A1/en",
+      "title": "Makita electrically powered gardening tool",
+      "supports": "Upright motor, fan, pinion, reduction gear, guide assembly, stacked opposed eccentric crank cams, shell, handles and guard."
+    },
+    {
+      "url": "https://patents.google.com/patent/US3897630A/en",
+      "title": "Black and Decker double cam drive for two reciprocating cutting blades",
+      "supports": "Two circular cams in transverse follower slots drive counter-reciprocating blade yokes."
+    }
+  ],
+  "telemetry": {
+    "status": "n/a",
+    "reason": "Standalone static figure has no production telemetry; local browser verification only. Live verification untested."
+  },
+  "verification": {
+    "productionTelemetry": "n/a, standalone static figure has no production telemetry",
+    "liveVerification": "untested",
+    "automatedLocal": "passed 3d178788d87e6dd888394f55b356839155a4a6c7ae45a4be5fb8562aaf3b9a37-local-1",
+    "defaultVerifier": "passed unchanged, 36 rendered labels, minimum 25",
+    "browser": "Real Playwright button journeys; 111 annotation visibility checks; 15 Labels-off versus removed-layer pixel comparisons, all zero differing pixels; 14 closed/xray angle renders; full keyboard orbit; drag; turntable; 400% zoom; phone and resize; no recorded errors or NaN.",
+    "video": "evidence/label-repair/media.json lists recorded baseline, final label journey, mechanism journey and 12-second short. Every listed contact sheet reviewed.",
+    "visualReview": "Labels-off is clean and labels restore. All 14 camera renders, final shots, phone and videos reviewed. Existing dense Labels-on layout retained.",
+    "independentVerification": "pending coordinator assignment",
+    "freshRepairRounds": 2,
+    "sourceRepairCount": 1,
+    "priorFailures": "Preserved in evidence/label-repair/before-meta.json and coordinator recovery-<slug>-rounds-1-3.json."
+  }
+}
