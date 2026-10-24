@@ -15,3 +15,5 @@ Quality bar: the figure must do something real with 2-5 buttons, have a see-thro
 When done, reply with: slug, what the buttons do, anything that still looks wrong. Nothing else.
 
 Known gotcha: `?press=` runs with --virtual-time-budget hang in this machine's headless chromium while an animation loop runs (seen on toaster, crossing, microwave, vending). Use `timeout 60 chromium ... --screenshot` without --virtual-time-budget, or check the state machine by stepping update() in a test page. Never ship a figure whose animations were removed just to make headless happy.
+
+/tmp hygiene: give each headless run `--user-data-dir=/tmp/cf-<SLUG>-prof` (reuse one dir per figure, not mktemp per run) and delete it when you finish. The fleet filled /tmp once already.
