@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Maxwell's electromagnetic wave</title></head><body>
+<script src="core.js"></script>
+<script>
+/* ---------- Truth first: sending a wave across a bench (Hertz, 1888) ----------
+   1. The RF oscillator makes an alternating voltage: a transistor keeps an LC tank (a small coil and a tuning
+      capacitor) ringing at the frequency on the dial; a power amplifier on a heat sink sends it out of the output
+      socket into 50 ohm coax.
+   2. The coax runs along the stand and the boom to the transmitting dipole's feed block: its centre conductor to the
+      top rod, its braid (through a ferrite balun) to the bottom rod. The voltage pushes the free electrons of both
+      rods up and down together: an alternating current, biggest at the feed and zero at the tips, where charge piles
+      up, + and - in turn.
+   3. The changing current makes a changing magnetic field, the changing charge a changing electric field, and each
+      changing field makes the other (Maxwell: curl E = -dB/dt, curl B = mu0 eps0 dE/dt). The pair breaks away and
+      travels at c = 1/sqrt(mu0 eps0) = 3.0e8 m/s. E is vertical (along the rods), B horizontal, both at right angles
+      to the direction of travel and in step. It is strongest broadside to the rods (the bench's level), none straight
+      up, so the crests spread as rings in the level plane.
+   4. Wavelength = c / f: 150 MHz 2 m, 600 MHz 50 cm, 2.4 GHz 12.5 cm, 30 THz infrared 10 um, light 450-730 THz
+      666-411 nm. The rods are cut for 600 MHz: 2 x 10.5 cm + the 3.2 cm feed block = 24 cm, about half a wavelength.
+   5. A metal sheet at the far end (Hertz used a zinc sheet) forces E to zero on its surface, so the wave reflects,
+      upside down. Going out and coming back add up to a standing wave: E nodes every half wavelength from the sheet,
+      antinodes half way between (B has its antinodes at E's nodes).
+   6. The receiving dipole rides a carriage along a rail with a scale. The E field pushes its electrons along the rods;
+      that current runs through a small lamp's filament across the feed gap and heats it (power goes as E squared).
+      At a node there is no E: dark. At an antinode it is brightest. Off tune (150 MHz, 2.4 GHz) it glows weakly.
+      Infrared and light are far too fast for any circuit or 21 cm rod: atoms make and absorb light, so the lamp
+      stays dark (the figure draws those waves as if an oscillator could make them, stretched to be seen).
+   7. All drawn in slow motion: the real wave crosses the 1.4 m bench in under 5 ns.
+   Parts (each held by another):
+   BOARD       wooden baseboard
+   OSCILLATOR  case . front panel . frequency display (module behind) . tuning dial on a potentiometer . power button .
+               LED . output socket and the coax plug . circuit board on standoffs . oscillator transistor . tank coil .
+               tuning capacitor . power amplifier . heat sink . mains transformer . mains inlet and cord off the board
+   CABLE       coax: plug, along the board, over the stand base, up the stand rod, under the boom, into the feed block
+   TRANSMITTER base disc . stand rod . clamp boss . boom (insulating) . feed block . balun . top and bottom rods
+   RECEIVER    rail with a scale and end stops . carriage with a thumb screw . stand rod . clamp boss . boom . feed block .
+               lead wires . lamp holder . bulb . filament . rods
+   REFLECTOR   aluminium sheet . two slotted feet
+   SPECTRUM    a sloping strip along the front edge: radio to X-ray on a log scale, the visible rainbow, a red pointer
+   OVERLAYS    E arrows (red, vertical) . B arrows (blue, horizontal) . crests spreading as rings . nodes */
+
+/* ---------- geometry (x = depth, y = along the board, z = up; 1 unit = 1 cm) ---------- */
+const BX = 50, BY = 166, BH = 3;                                     // baseboard
+const XA = 28, FZ = 38, HL = 10.5, FB = 1.6, RR = .55;               // antenna axis x, feed height, rod length, feed block half height, rod radius
+const SX = 19, YT = 140, RY = 10, LEN = YT - RY;                     // stand rods x, transmitter y, reflector face y, path length
+const RAIL = [17, 18, BH, 21, 124, 4.6], CARZ = 6.6, YR0 = 22, YR1 = 120;
+const OSC = [3, 144, BH, 20, 163, 15];
+const REFL = [12, RY - .5, 4.6, 44, RY, 54];
+const SPX0 = 41, SPX1 = 48, SPY0 = 26, SPY1 = 122, SPH0 = 1.2, SPH1 = 6;
+const VF = 90, AE = 6;                                               // drawn wave front speed (cm/s), arrow length per unit field
+const STEELM = { l:'#dfe3e4', m:'#b4bcbf', d:'#7d878b' }, ALUM = { l:'#f3f5f5', m:'#cfd5d7', d:'#9aa4a8' };
+const PVC = matOf('#efe9da'), BLK = matOf('#3a3632'), BRASSM = matOf('#c9a24a'), COPM = matOf('#d08a52');
+const PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, MAGM = matOf('#5d646b'), SPECM = matOf('#f4efe0');
+const PANEL = '#3b4045', CREAM = '#f2efe7', GLASS = '#dcecef';
+const COL = { E:'#e2483d', B:'#3d7fd8', crest:'#f4b829', el:'#3d6fd8' };
+// the oscillator's settings. lamD = wavelength as drawn (cm): true below 10 cm would be invisible, so those are stretched
+const MX_F = [
+  { label:'Radio 150 MHz',      band:'Radio',        f:150e6,  lam:2,       lamD:200,  res:.2 },
+  { label:'UHF 600 MHz',        band:'Radio (UHF)',  f:600e6,  lam:.5,      lamD:50,   res:1 },
+  { label:'Microwave 2.4 GHz',  band:'Microwave',    f:2.4e9,  lam:.125,    lamD:12.5, res:.3 },
+  { label:'Infrared 30 THz',    band:'Infrared',     f:30e12,  lam:1e-5,    lamD:7,    res:0 },
+  { label:'Red light 450 THz',  band:'Visible red',  f:450e12, lam:6.66e-7, lamD:5,    res:0, glow:'#e8402f' },
+  { label:'Green light 560 THz', band:'Visible green', f:560e12, lam:5.35e-7, lamD:4,  res:0, glow:'#3fbf55' },
+  { label:'Violet light 730 THz', band:'Visible violet', f:730e12, lam:4.11e-7, lamD:3, res:0, glow:'#8a4fd8' },
+];
+const BANDS = [[6, 9, 'RADIO', '#b9c9dc'], [9, 11.5, 'MICROWAVE', '#a5d0bd'], [11.5, 14.6, 'INFRARED', '#e09a7e'],
+  [14.9, 16.5, 'UV', '#c0a8e0'], [16.5, 18, 'X-RAY', '#9ea7b2']];
+const RAINBOW = ['#e8402f', '#f08a24', '#f4d03f', '#3fbf55', '#2f9ad8', '#3b4fc8', '#8a4fd8'];
+
+/* ---------- small helpers ---------- */
+const mxLerp = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const mxBoxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const mxBx = (b, M, w = .8) => box(b[0], b[1], b[2], b[3], b[4], b[5], M, toneI, w);
+const mxBB = b => [[b[0], b[1], b[2]], [b[3], b[4], b[5]]];
+const mxCorners = b => { const o = []; for (const x of [b[0], b[3]]) for (const y of [b[1], b[4]]) for (const z of [b[2], b[5]]) o.push([x, y, z]); return o; };
+const mxStroke = (pts, col, w, extra = '') => { const d = pd(pts, false);
+  return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(w + .9)}" stroke-linecap="round" stroke-linejoin="round" ${extra}/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(w)}" stroke-linecap="round" stroke-linejoin="round" ${extra}/>`; };
+const mxDot = (p, r, col, w = .5, extra = '') => { const [X, Y] = P(...p); return `<circle cx="${f(X)}" cy="${f(Y)}" r="${(r*CAM_K).toFixed(2)}" fill="${col}" stroke="${INK}" stroke-width="${w}" ${extra}/>`; };
+// a cable in short pieces (each with its own box) so it sorts with the solids it passes; core = copper shown in see-through
+function mxWire(pts, col, w = .7, seg = 3, core = null, k = 0){
+  const q = [pts[0]];
+  for (let i = 1; i < pts.length; i++){ const a = pts[i-1], b = pts[i], n = Math.max(1, Math.ceil(Math.hypot(...sub(b, a)) / seg));
+    for (let j = 1; j <= n; j++) q.push(mxLerp(a, b, j/n)); }
+  const out = [];
+  for (let i = 0; i < q.length - 1; i++){ const pp = [q[i], q[i+1]];
+    const svg = core && k > 0 ? `<g opacity="${f(1 - .65*k)}">${mxStroke(pp, col, w)}</g><g opacity="${f(k)}">${mxStroke(pp, core, w*.35)}</g>` : mxStroke(pp, col, w);
+    out.push({ box: mxBoxOf(pp), svg }); }
+  return out; }
+const txT = (x, y, z, str, size, col = INK, weight = 700) => `<text transform="${txM(P(x, y, z), Dv(0,-1,0), Dv(1,0,0))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+function mxArrow(a, b, col, w = .8){
+  const A = P(...a), B2 = P(...b), dx = B2[0] - A[0], dy = B2[1] - A[1], len = Math.hypot(dx, dy);
+  if (len < .5) return '';
+  const ux = dx/len, uy = dy/len, hl = Math.min(len*.42, 2.6*w), hw = hl*.5, e = [B2[0] - ux*hl*.8, B2[1] - uy*hl*.8];
+  const head = `M${f(B2[0])} ${f(B2[1])}L${f(B2[0] - ux*hl - uy*hw)} ${f(B2[1] - uy*hl + ux*hw)}L${f(B2[0] - ux*hl + uy*hw)} ${f(B2[1] - uy*hl - ux*hw)}Z`;
+  const ln = `M${f(A[0])} ${f(A[1])}L${f(e[0])} ${f(e[1])}`;
+  return `<path d="${ln}" fill="none" stroke="${INK}" stroke-width="${f(w*2 + .5)}" stroke-linecap="round"/><path d="${ln}" fill="none" stroke="${col}" stroke-width="${f(w*1.2)}" stroke-linecap="round"/>`
+    + `<path d="${head}" fill="${col}" stroke="${INK}" stroke-width="${f(w*.8)}" stroke-linejoin="round"/>`; }
+
+// byDepth's pair rule is not transitive, so with a few hundred parts a far part can land over a near one: every
+// separated pair that overlaps on screen becomes an edge, then the parts go out farthest-first
+function mxSort(items){
+  items = items.filter(Boolean); const n = items.length, out = Array.from({length:n}, () => []), deg = new Array(n).fill(0);
+  const dep = items.map(p => depthOf(p.at || boxMid(p.box))), done = new Array(n).fill(false);
+  const R = items.map(p => { if (!p.box) return null; const xs = [], ys = [];
+    for (const x of [0, 1]) for (const y of [0, 1]) for (const z of [0, 1]){ const q = P(p.box[x][0], p.box[y][1], p.box[z][2]); xs.push(q[0]); ys.push(q[1]); }
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; });
+  const hit = (a, b) => a && b && a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++){ const o = hit(R[i], R[j]) ? sepOrder(items[i], items[j]) : 0;
+    if (o < 0){ out[i].push(j); deg[j]++; } else if (o > 0){ out[j].push(i); deg[i]++; } }
+  let svg = '';
+  const ready = []; for (let i = 0; i < n; i++) if (!deg[i]) ready.push(i);
+  for (let c = 0; c < n; c++){ let best = -1;
+    for (let i = 0; i < n; i++) if (!done[i] && (best < 0 || (deg[i] === 0) > (deg[best] === 0) || ((deg[i] === 0) === (deg[best] === 0) && dep[i] < dep[best]))) best = i;
+    done[best] = true; svg += items[best].svg; for (const j of out[best]) deg[j]--; }
+  return svg; }
+
+/* ---------- physics: a wave sent toward the sheet, reflected upside down, the two added ---------- */
+const mxCh = st => MX_F[st.fi];
+const mxTd = ch => Math.max(.45, Math.min(2.2, ch.lamD/70));          // drawn period (s): slow motion
+// how strongly the oscillator was sending at time te (0 before it started / after it stopped)
+const mxEnv = (st, te) => st.tOn == null || te < st.tOn || (st.tOff != null && te >= st.tOff) ? 0 : Math.min(1, (te - st.tOn)/.25);
+// E (up) and B (along +x) at distance d from the transmitter, at time st.t + dt
+function mxField(st, d, dt = 0){
+  const ch = mxCh(st), kk = 2*Math.PI/ch.lamD, w = 2*Math.PI/mxTd(ch), t = st.t + dt;
+  const e1 = mxEnv(st, t - d/VF), e2 = mxEnv(st, t - (2*LEN - d)/VF);
+  const c1 = e1 ? e1*Math.cos(w*t - kk*d) : 0, c2 = e2 ? e2*Math.cos(w*t - kk*(2*LEN - d)) : 0;
+  return [c1 - c2, -c1 - c2]; }
+// the lamp's power: the square of the standing wave's amplitude at the receiver, times how well the rods are tuned
+function mxLampTarget(st){
+  const ch = mxCh(st), d = YT - st.yr, kk = 2*Math.PI/ch.lamD;
+  const e1 = mxEnv(st, st.t - d/VF), e2 = mxEnv(st, st.t - (2*LEN - d)/VF);
+  return ch.res * Math.max(0, e1*e1 + e2*e2 - 2*e1*e2*Math.cos(2*kk*(LEN - d))) / 4; }
+const mxIT = st => { const ch = mxCh(st); return mxEnv(st, st.t) * Math.cos(2*Math.PI*st.t/mxTd(ch)); };
+const mxQT = st => { const ch = mxCh(st); return mxEnv(st, st.t) * Math.sin(2*Math.PI*st.t/mxTd(ch)); };
+const mxIR = st => mxCh(st).res * mxField(st, YT - st.yr)[0] / 2;
+const mxQR = st => mxCh(st).res * mxField(st, YT - st.yr, -mxTd(mxCh(st))/4)[0] / 2;
+const mxLF = st => Math.log10(mxCh(st).f);
+const mxFmtF = f0 => f0 >= 1e12 ? `${Math.round(f0/1e12)} THz` : f0 >= 1e9 ? `${(f0/1e9).toFixed(1)} GHz` : `${Math.round(f0/1e6)} MHz`;
+const mxFmtL = l => l >= 1 ? `${l.toFixed(2)} m` : l >= .01 ? `${(l*100).toFixed(1)} cm` : l >= 1e-6 ? `${Math.round(l*1e6)} µm` : `${Math.round(l*1e9)} nm`;
+
+/* ---------- behaviour ---------- */
+let ui, mxLoopOn = false;
+const mxBusy = st => st.on || (st.tOn != null && st.tOff != null && st.t - st.tOff < 2*LEN/VF + .6) || st.yr !== st.yrT || st.lamp > .004 || Math.abs(st.lf - mxLF(st)) > .002;
+function mxStep(st, dt){
+  st.t += dt;
+  if (st.yr !== st.yrT){ const dy = st.yrT - st.yr, v = Math.max(6, Math.min(45, Math.abs(dy)*2.5))*dt; st.yr = Math.abs(dy) <= v ? st.yrT : st.yr + Math.sign(dy)*v; }
+  st.lamp += (mxLampTarget(st) - st.lamp)*(1 - Math.exp(-dt/.18));
+  st.lf += (mxLF(st) - st.lf)*(1 - Math.exp(-dt/.22));
+}
+function mxRun(){ if (mxLoopOn) return; mxLoopOn = true;
+  ui.animate(dt => { const st = ui.st; mxStep(st, dt); if (!mxBusy(st)){ mxLoopOn = false; st.lamp = 0; return false; } return true; }); }
+function mxSayLight(st){ if (mxCh(st).res === 0) ui.flash('No circuit oscillates this fast: atoms make light. Drawn as if one could', 2600); }
+function mxTransmit(st){
+  st.on = !st.on;
+  if (st.on){ st.tOn = st.t; st.tOff = null; mxSayLight(st); } else st.tOff = st.t;
+  mxRun(); }
+function mxSetF(st, i){
+  st.fi = i;
+  if (st.on){ st.tOn = st.t; st.tOff = null; } else st.tOn = null;   // a fresh wave goes out at the new frequency
+  if (st.on) mxSayLight(st);
+  mxRun(); }
+// nearest node / antinode on the rail at the current wavelength (distance s from the sheet: nodes at n half waves)
+function mxSpots(st, node){
+  const lam = mxCh(st).lamD, out = [];
+  for (let n = 0; n < 200; n++){ const s = (node ? n : n + .5)*lam/2, y = RY + s; if (y > YR1) break; if (y >= YR0) out.push(y); }
+  return out; }
+function mxMove(st, node){
+  if (mxCh(st).lamD < 10) return ui.flash('Nodes of this wave are less than a micron apart');
+  const c = mxSpots(st, node).filter(y => Math.abs(y - st.yr) > .5);
+  if (!c.length) return ui.flash('No ' + (node ? 'node' : 'antinode') + ' on the rail at this wavelength');
+  st.yrT = c.reduce((a, b) => Math.abs(b - st.yr) < Math.abs(a - st.yr) ? b : a);
+  if (!st.on) ui.flash('Moved. Transmit to test it');
+  mxRun(); }
+
+/* ---------- parts ---------- */
+function mxShadows(st){
+  const top = boardTop(0, 0, BX, BY, BH, 4);
+  const thin = (a, b, r) => [-r, r].flatMap(dx => [-r, r].flatMap(dy => [[a[0] + dx, a[1] + dy, a[2]], [b[0] + dx, b[1] + dy, b[2]]]));
+  const stand = (y, zb) => [thin([SX, y, zb], [SX, y, FZ + 2.4], .5), thin([SX, y, FZ], [XA, y, FZ], .5), thin([XA, y, FZ - FB - HL], [XA, y, FZ + FB + HL], .6)];
+  const ps = [mxCorners(OSC), mxCorners(REFL), mxCorners([12.5, RY - 4, BH, 16, RY + 3.5, 4.6]), mxCorners([40, RY - 4, BH, 43.5, RY + 3.5, 4.6]),
+    on(PZ(BH + .9), ellUV(SX, YT, 3.4, 3.4, 12)), ...stand(YT, BH + .9), mxCorners([16.2, st.yr - 3, BH, 21.8, st.yr + 3, CARZ]), ...stand(st.yr, CARZ),
+    [...thin([XA + 3.3, st.yr, FZ - 1], [XA + 3.3, st.yr, FZ + 1], 1.1)],
+    mxCorners([SPX0, SPY0, BH, SPX1, SPY1, BH + SPH1]), mxCorners(RAIL)];
+  return clipTo(top, ps.map(p => castShadow(p, BH)).join('')); }
+
+function mxOscInside(st){
+  const pi = [], put2 = (b, svg) => pi.push({ box: mxBB(b), svg }), on = st.on;
+  for (const [x, y] of [[5.2, 146.2], [17.8, 146.2], [5.2, 160.8], [17.8, 160.8]]) put2([x - .3, y - .3, BH, x + .3, y + .3, 4.2], cyl(x, y, BH, 4.2, .3, STEELM, toneI, .4, 8));
+  put2([4.5, 145.5, 4.2, 18.5, 161.5, 4.6], mxBx([4.5, 145.5, 4.2, 18.5, 161.5, 4.6], PCBM, .6));
+  // mains transformer: laminated core, copper winding on top
+  put2([5.2, 156.8, 4.6, 9.4, 161, 7.8], mxBx([5.2, 156.8, 4.6, 9.4, 161, 7.8], MAGM, .6));
+  put2([6, 157.5, 7.8, 8.6, 160.3, 9], mxBx([6, 157.5, 7.8, 8.6, 160.3, 9], COPM, .6));
+  // oscillator transistor, tank coil, tuning capacitor
+  put2([12, 150.6, 4.6, 13.2, 151.8, 6.2], cyl(12.6, 151.2, 4.6, 6.2, .6, BLK, toneI, .6, 14));
+  { const hel = []; for (let i = 0; i <= 60; i++){ const t = i/60, a = t*6*2*Math.PI; hel.push([15.2 + .7*Math.cos(a), 149.6 + 4*t, 5.9 + .7*Math.sin(a)]); }
+    put2([14.4, 149.4, 4.6, 16, 153.8, 6.7], mxStroke([[15.2, 149.6, 4.6], hel[0]], COPM.m, .35) + mxStroke(hel, on ? '#f08a3a' : COPM.m, .35) + mxStroke([hel[60], [15.2, 153.6, 4.6]], COPM.m, .35)); }
+  put2([14.4, 154.6, 4.6, 16, 156.2, 5.9], cyl(15.2, 155.4, 4.6, 5.9, .8, matOf('#3f62b5'), toneI, .6, 16));
+  // power amplifier on its heat sink
+  put2([16.4, 146.4, 4.6, 18, 149, 5.4], mxBx([16.4, 146.4, 4.6, 18, 149, 5.4], BLK, .5));
+  put2([16.2, 146.2, 5.4, 18.2, 149.2, 5.8], mxBx([16.2, 146.2, 5.4, 18.2, 149.2, 5.8], ALUM, .5));
+  for (let y = 146.3; y < 149.1; y += .7) put2([16.2, y, 5.8, 18.2, y + .25, 8.2], mxBx([16.2, y, 5.8, 18.2, y + .25, 8.2], ALUM, .4));
+  // display module behind the window, potentiometer behind the dial on its bracket
+  put2([18.6, 153.6, 9.4, 19.8, 161.4, 13.4], mxBx([18.6, 153.6, 9.4, 19.8, 161.4, 13.4], matOf('#2e3d36'), .5));
+  put2([17.4, 156.8, 4.6, 18, 158.2, 5.4], mxBx([17.4, 156.8, 4.6, 18, 158.2, 5.4], STEELM, .4));
+  put2([17.4, 156.3, 5.4, 20, 158.7, 7.8], cylX(17.4, 20, 157.5, 6.6, 1.2, STEELM, toneI, .6, 16));
+  // wiring: transistor to coil, amplifier to the output socket, mains inlet to the transformer
+  pi.push(...mxWire([[12.6, 151.6, 6.2], [13.8, 150.8, 6.2], [14.5, 149.8, 5.9]], '#d8a24a', .25, 1.5));
+  pi.push(...mxWire([[18, 147.7, 5], [19, 147.6, 5.7], [19.9, 147.5, 6.4]], '#2b2725', .3, 1.5));
+  pi.push(...mxWire([[3.1, 158, 6], [4.4, 158.4, 6], [5.2, 158.8, 6]], '#2b2725', .3, 1.5));
+  return mxSort(pi); }
+
+function mxOsc(st, m, k, put){
+  const [x0, y0, z0, x1, y1, z1] = OSC; let sv = mxBx(OSC, m, 1.2);
+  if (facing([1,0,0])){
+    const X = x1 + .03, F = (u0, v0, u1, v1, c, w = .6, dx = 0) => shape(on(PX(X + dx), rectUV(u0, v0, u1, v1)), c, w);
+    sv += F(145, 4, 162, 14, PANEL, .8);
+    sv += F(153.6, 9.6, 161.4, 13.2, '#1d2a26', .7, .02);
+    sv += tx(X + .05, 157.5, 10.8, st.on ? mxFmtF(mxCh(st).f) : '- - -', 1.55, '#8af0ae', 800);
+    sv += tx(X + .05, 157.5, 4.6, 'TUNING', .75, CREAM, 800) + tx(X + .05, 147.5, 8.3, 'OUTPUT', .75, CREAM, 800)
+      + tx(X + .05, 149.8, 9.9, 'POWER', .75, CREAM, 800) + tx(X + .05, 151.4, 4.6, '50 OHM', .65, CREAM, 700);
+    sv += shape(on(PX(X + .04), ellUV(151.4, 12, .45, .45, 12)), st.on ? '#43c25c' : '#2c4a33', .4);
+  }
+  if (facing([-1,0,0])){ sv += shape(on(PX(x0 - .03), rectUV(156.6, 4.6, 159.4, 7.4)), '#2b2725', .6) + shape(on(PX(x0 - .03), rectUV(147, 9, 153, 13)), '#f3f0e6', .5)
+      + `<text transform="${txM(P(x0 - .05, 150, 11.4), Dv(0,1,0), Dv(0,0,-1))}" font-size=".7" fill="${INK}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800">230V 15W</text>`; }
+  if (facing([0,0,1])){ let v = ''; for (let y = 148; y <= 159; y += 1.4) v += pd([[6, y, z1 + .02], [12, y, z1 + .02]], false); sv += ink(v, .8);
+    sv += txT(16, 153.5, z1 + .03, 'RF OSCILLATOR', 1.1, mix(m.d, '#000000', .2), 800); }
+  if (facing([0,1,0])){ let v = ''; for (let x = 6; x <= 17; x += 1.6) v += pd([[x, y1 + .02, 7], [x, y1 + .02, 12]], false); sv += ink(v, .8); }
+  put(mxBB(OSC), sv, k > 0 ? mxOscInside(st) : '');
+  // dial, power button, output socket and the coax plug on the front panel
+  { const a = (-135 + 270*st.fi/(MX_F.length - 1))*Math.PI/180, KN = { l:'#fbf6e6', m:'#e8dcc0', d:'#bfb08c' };
+    let d = cylX(20, 21.8, 157.5, 6.6, 2.1, KN, toneI, 1, 24);
+    if (facing([1,0,0])) d += ink(pd([[21.85, 157.5, 6.6], [21.85, 157.5 - 1.6*Math.sin(a), 6.6 + 1.6*Math.cos(a)]], false), 1);
+    put([[20, 155.4, 4.5], [21.8, 159.6, 8.7]], act('dial', d)); }
+  put([[20, 148.6, 11], [21, 150.6, 13]], act('tx', cylX(20, 21, 149.6, 12, 1, matOf(st.on ? '#e2483d' : '#43c25c'), toneI, .8, 18)));
+  put([[20, 146.4, 5.3], [21.2, 148.6, 7.5]], cylX(20, 21.2, 147.5, 6.4, 1.1, BRASSM, toneI, .7, 18));
+  put([[21.2, 146.55, 5.45], [23.4, 148.45, 7.35]], cylX(21.2, 23.4, 147.5, 6.4, .95, BLK, toneI, .8, 16));
+}
+
+function mxAntenna(st, k, put, items, y, rx){
+  const zb = rx ? CARZ : BH + .9;
+  if (!rx) put([[SX - 3.4, y - 3.4, BH], [SX + 3.4, y + 3.4, BH + .9]], cyl(SX, y, BH, BH + .9, 3.4, BLK, toneI, 1, 26));
+  // stand rod in two pieces either side of the clamp boss, the boss, the insulating boom out to the feed block
+  put([[SX - .5, y - .5, zb], [SX + .5, y + .5, FZ - 1]], rod([SX, y, zb], [SX, y, FZ - 1], .5, STEELM, toneI, .8));
+  put([[SX - 1.1, y - 1.1, FZ - 1], [SX + 1.1, y + 1.1, FZ + 1]], mxBx([SX - 1.1, y - 1.1, FZ - 1, SX + 1.1, y + 1.1, FZ + 1], BLK, .7));
+  put([[SX - .5, y - .5, FZ + 1], [SX + .5, y + .5, FZ + 2.4]], rod([SX, y, FZ + 1], [SX, y, FZ + 2.4], .5, STEELM, toneI, .8));
+  put([[SX + 1.1, y - .45, FZ - .45], [XA - 1.1, y + .45, FZ + .45]], rod([SX + 1.1, y, FZ], [XA - 1.1, y, FZ], .45, PVC, toneI, .7));
+  // feed block: inside it the coax splits (transmitter) or the lamp's lead wires run (receiver)
+  const fb = [XA - 1.1, y - 1.1, FZ - FB, XA + 1.1, y + 1.1, FZ + FB];
+  let ins = '';
+  if (k > 0){
+    if (rx){ const lit = mix('#d08a52', '#ffb02e', Math.min(1, st.lamp*1.5));
+      ins = mxStroke([[XA, y, FZ + FB], [XA + .5, y, FZ + .9], [XA + 1.1, y, FZ + .35]], lit, .35) + mxStroke([[XA, y, FZ - FB], [XA + .5, y, FZ - .9], [XA + 1.1, y, FZ - .35]], lit, .35); }
+    else ins = cylX(XA - 1.05, XA - .55, y, FZ - 1.05, .5, BLK, toneI, .5, 12)
+      + mxStroke([[XA - 1.1, y, FZ - 1.05], [XA - .3, y, FZ - 1.05], [XA - .1, y, FZ - .2], [XA, y, FZ + FB]], COPM.l, .35)
+      + mxStroke([[XA - .55, y, FZ - 1.05], [XA - .3, y - .3, FZ - 1.3], [XA, y, FZ - FB]], '#b4bcbf', .35);
+  }
+  put(mxBB(fb), mxBx(fb, BLK, .8), ins);
+  // the two rods; in see-through their free electrons slosh, and charge gathers at the tips
+  const I = rx ? mxIR(st) : mxIT(st), q = rx ? mxQR(st) : mxQT(st);
+  for (const sg of [1, -1]){
+    const a = [XA, y, FZ + sg*FB], b = [XA, y, FZ + sg*(FB + HL)];
+    let el = '';
+    if (k > 0){
+      const lo = sg > 0 ? FZ + FB + .3 : FZ - FB - HL + .3, hi = sg > 0 ? FZ + FB + HL - .3 : FZ - FB - .3;
+      for (let i = 0; i < 6; i++){ const u = (i + .5)/6, z = FZ + sg*(FB + HL*u) - 1.1*I*Math.cos(Math.PI/2*u);
+        el += mxDot([XA + .1, y, Math.max(lo, Math.min(hi, z))], .38, COL.el, .35); }
+      const qq = sg*q;
+      if (Math.abs(qq) > .05) el += mxDot(b, 1.4, qq > 0 ? COL.E : COL.B, 0, `opacity="${f(.55*Math.abs(qq))}"`)
+        + `<text x="${f(P(...b)[0] + 2.2)}" y="${f(P(...b)[1] + .6)}" font-size="2" font-weight="800" fill="${qq > 0 ? COL.E : COL.B}" font-family="ui-monospace,Menlo,monospace" opacity="${f(Math.min(1, Math.abs(qq)*1.5))}">${qq > 0 ? '+' : '-'}</text>`;
+    }
+    put([[XA - RR, y - RR, Math.min(a[2], b[2])], [XA + RR, y + RR, Math.max(a[2], b[2])]], rod(a, b, RR, ALUM, toneI, .9), el);
+  }
+  if (!rx){ put([[XA - 2.1, y - .45, FZ - 1.5], [XA - 1.1, y + .45, FZ - .6]], cylX(XA - 2.1, XA - 1.1, y, FZ - 1.05, .45, BLK, toneI, .6, 12)); return; }
+  // receiver: lamp holder on the block's front, the bulb in it, its glow; filament in see-through
+  put([[XA + 1.1, y - .8, FZ - .8], [XA + 2.2, y + .8, FZ + .8]], cylX(XA + 1.1, XA + 2.2, y, FZ, .8, BRASSM, toneI, .7, 16));
+  { const c = [XA + 3.3, y, FZ], g = st.lamp, [X, Y] = P(...c), r = 1.15*CAM_K;
+    let sv = g > .02 ? `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r*(1.5 + 2.8*g))}" fill="#ffd84a" opacity="${f(.5*Math.min(1, g*1.4))}"/>` : '';
+    sv += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r)}" fill="${mix(GLASS, '#fff1a8', Math.min(1, g*1.6))}" stroke="${INK}" stroke-width=".9"/>`;
+    if (k > 0){ const fil = []; for (let i = 0; i <= 10; i++) fil.push([XA + 3.3, y - .55 + 1.1*i/10, FZ + .25 + (i % 2 ? .22 : -.22)*(i && i < 10 ? 1 : 0)]);
+      const hot = mix('#6a5a4a', '#ff9a1f', Math.min(1, g*2));
+      sv += `<g opacity="${f(k)}">` + mxStroke([[XA + 2.2, y - .3, FZ + .3], [XA + 3.3, y - .55, FZ + .25]], '#b4bcbf', .2) + mxStroke([[XA + 2.2, y + .3, FZ - .3], [XA + 3.3, y + .55, FZ + .25]], '#b4bcbf', .2)
+        + `<path d="${pd(fil, false)}" fill="none" stroke="${hot}" stroke-width=".8" stroke-linejoin="round"/></g>`; }
+    sv += `<path d="${pd([[c[0], y + .55, FZ + .75], [c[0], y + .1, FZ + .95]], false)}" fill="none" stroke="#ffffff" stroke-width=".7" opacity=".7" stroke-linecap="round"/>`;
+    items.push({ box: [[XA + 2.15, y - 1.15, FZ - 1.15], [XA + 4.45, y + 1.15, FZ + 1.15]], svg: sv }); }
+}
+
+function mxRail(st, put){
+  let sv = mxBx(RAIL, ALUM, 1);
+  if (facing([0,0,1])){ let t = '';
+    for (let s = 10; s <= RAIL[4] - RY; s += 5){ const y = RY + s; if (y < RAIL[1] + .5) continue; t += pd([[RAIL[3] - (s % 10 ? .9 : 1.7), y, RAIL[5] + .02], [RAIL[3], y, RAIL[5] + .02]], false); }
+    sv += ink(t, .5);
+    for (let s = 20; s <= 120; s += 20) sv += txT(17.9, RY + s, RAIL[5] + .03, String(s), 1, INK, 700); }
+  put(mxBB(RAIL), sv);
+  for (const y0 of [RAIL[1] - 1, RAIL[4]]) put([[16.5, y0, BH], [21.5, y0 + 1, 5.6]], mxBx([16.5, y0, BH, 21.5, y0 + 1, 5.6], BLK, .7));
+  // carriage with its index mark and thumb screw
+  const y = st.yr, cb = [16.2, y - 3, RAIL[5], 21.8, y + 3, CARZ];
+  let cs = mxBx(cb, BLK, .9);
+  if (facing([1,0,0])) cs += `<path d="${pd([[21.83, y, RAIL[5] + .2], [21.83, y, CARZ - .2]], false)}" stroke="#e2483d" stroke-width="1.2"/>`;
+  put(mxBB(cb), act('rx', cs));
+  put([[21.8, y - 1.6, 4.8], [23.2, y - .2, 6.2]], act('rx', cylX(21.8, 23.2, y - .9, 5.5, .7, STEELM, toneI, .6, 14)));
+}
+
+function mxReflector(st, put){
+  for (const x0 of [12.5, 40]) put([[x0, RY - 4, BH], [x0 + 3.5, RY + 3.5, 4.6]], mxBx([x0, RY - 4, BH, x0 + 3.5, RY + 3.5, 4.6], BLK, .8));
+  let sv = mxBx(REFL, ALUM, 1.2);
+  if (facing([0,1,0])) sv += `<path d="${pd([[16, RY + .03, 50], [24, RY + .03, 58]], false)}${pd([[19, RY + .03, 44], [31, RY + .03, 56]], false)}" stroke="#ffffff" stroke-width="1.6" opacity=".6" fill="none"/>`;
+  put(mxBB(REFL), sv);
+}
+
+const mxSpP = (y, a) => [SPX1 - (SPX1 - SPX0)*a, y, BH + SPH0 + (SPH1 - SPH0)*a];
+const mxSpY = lf => SPY1 - 2 - (lf - 6)/12*(SPY1 - SPY0 - 4);
+const mxSlopeV = norm([SPX1 - SPX0, 0, -(SPH1 - SPH0)]);
+const txS = (y, a, str, size, col = INK) => `<text transform="${txM(P(...mxSpP(y, a)), Dv(0,-1,0), Dv(...mxSlopeV))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".03em">${str}</text>`;
+function mxSpectrum(st, put){
+  const nS = [SPH1 - SPH0, 0, SPX1 - SPX0], Q = (ya, yb, a0, a1) => [mxSpP(ya, a0), mxSpP(yb, a0), mxSpP(yb, a1), mxSpP(ya, a1)];
+  const prof = [[SPX0, BH], [SPX1, BH], [SPX1, BH + SPH0], [SPX0, BH + SPH1]];
+  let sv = '';
+  if (facing([0,1,0])) sv += shape(prof.map(([x, z]) => [x, SPY1, z]), toneI([0,1,0], SPECM), .8);
+  if (facing([0,-1,0])) sv += shape(prof.map(([x, z]) => [x, SPY0, z]), toneI([0,-1,0], SPECM), .8);
+  if (facing([1,0,0])) sv += shape([[SPX1, SPY0, BH], [SPX1, SPY1, BH], [SPX1, SPY1, BH + SPH0], [SPX1, SPY0, BH + SPH0]], toneI([1,0,0], SPECM), .8);
+  if (facing([-1,0,0])) sv += shape([[SPX0, SPY0, BH], [SPX0, SPY1, BH], [SPX0, SPY1, BH + SPH1], [SPX0, SPY0, BH + SPH1]], toneI([-1,0,0], SPECM), .8);
+  if (facing(nS)){
+    sv += shape(Q(SPY0, SPY1, 0, 1), toneI(nS, SPECM), .9);
+    const a0 = .3, a1 = .74;
+    for (const [l0, l1, name, c] of BANDS){ const ya = mxSpY(l0), yb = mxSpY(l1);
+      sv += shape(Q(ya, yb, a0, a1), c, .45) + txS((ya + yb)/2, .46, name, name.length > 6 ? 1.15 : 1.4); }
+    const v0 = 14.6, v1 = 14.9;
+    RAINBOW.forEach((c, i) => { sv += fill(pd(Q(mxSpY(v0 + (v1 - v0)*i/7), mxSpY(v0 + (v1 - v0)*(i + 1)/7), a0, a1)), c); });
+    sv += ink(pd(Q(mxSpY(v0), mxSpY(v1), a0, a1)), .45) + txS(mxSpY(14.75), .8, 'LIGHT', 1.1);
+    let tk = '';
+    for (let l = 6; l <= 18; l++) tk += pd([mxSpP(mxSpY(l), a0 - .04), mxSpP(mxSpY(l), a0)], false);
+    sv += ink(tk, .45);
+    [[6, '1 MHz'], [9, '1 GHz'], [12, '1 THz'], [15, '1 PHz'], [18, '1 EHz']].forEach(([l, t]) => { sv += txS(mxSpY(l), .1, t, 1.05); });
+    // the pointer: a red window over the strip and a tab on its top edge
+    const yp = mxSpY(st.lf);
+    sv += `<path d="${pd(Q(yp - .45, yp + .45, a0 - .05, a1 + .05))}" fill="#e2483d" fill-opacity=".25" stroke="#e2483d" stroke-width="1.1"/>`
+      + shape([mxSpP(yp, a1 + .07), mxSpP(yp - 1.2, .97), mxSpP(yp + 1.2, .97)], '#e2483d', .7);
+  }
+  sv += hullInk([...prof.map(([x, z]) => [x, SPY0, z]), ...prof.map(([x, z]) => [x, SPY1, z])], 1.6);
+  put([[SPX0, SPY0, BH], [SPX1, SPY1, BH + SPH1]], sv);
+}
+
+function mxCables(st, k){
+  const C0 = '#2b2725';
+  return [
+    // coax: out of the plug, down to the board, over the stand base, up the rod, under the boom, into the feed block
+    ...mxWire([[23.4, 147.5, 6.4], [24.4, 147.5, 6.1], [24.8, 147.3, 4.6], [24.2, 146.4, BH + .4], [21.5, 144.4, BH + .4], [SX + .9, YT + 3.9, BH + .4],
+      [SX + .9, YT + 3, BH + 1.25], [SX + .9, YT + .5, BH + 1.25], [SX + .9, YT + .5, FZ - 1.8], [SX + 1.6, YT, FZ - 1.05], [XA - 2.1, YT, FZ - 1.05]], C0, .55, 3, COPM.l, k),
+    // mains cord out of the back, over the board's back edge, down to the floor
+    ...mxWire([[3, 158, 6], [1.6, 158, 5.6], [.6, 158, BH + .3], [-.5, 158, BH - .2], [-.6, 158.5, .4], [-12, 161, .4]], C0, .55, 3),
+  ]; }
+
+/* ---------- the wave: E arrows up/down, B arrows across, the crests as rings, the nodes ---------- */
+function mxWave(st, k, items){
+  const ch = mxCh(st), lam = ch.lamD, sp = lam >= 24 ? Math.min(4, lam/8) : Math.max(.75, lam/4), wA = lam < 10 ? .5 : .8;
+  const smp = [];
+  for (let d = 2.6; d <= LEN - .3; d += sp){ const [e, b] = mxField(st, d); smp.push({ y: YT - d, e, b }); }
+  let any = false;
+  for (let i = 0; i < smp.length; i++){
+    const p = smp[i], q = smp[i + 1] || p, inAnt = Math.abs(p.y - st.yr) < 1.4;
+    if (Math.abs(p.e) < .01 && Math.abs(q.e) < .01) continue;
+    any = true;
+    const zE = FZ + AE*p.e, zq = FZ + AE*q.e, xB = XA + AE*p.b, xq = XA + AE*q.b;
+    let sE = '', sB = '';
+    if (ch.glow) sE += `<path d="${pd([[XA, p.y, FZ], [XA, q.y, FZ]], false)}" stroke="${ch.glow}" stroke-width="7" opacity=".28" stroke-linecap="round"/>`;
+    sE += `<path d="${pd([[XA, p.y, FZ], [XA, q.y, FZ]], false)}" stroke="${INK}" stroke-width=".5" stroke-dasharray="1.2 1.2"/>`;
+    if (!inAnt) sE += mxArrow([XA, p.y, FZ], [XA, p.y, zE], COL.E, wA);
+    sE += `<path d="${pd([[XA, p.y, zE], [XA, q.y, zq]], false)}" fill="none" stroke="${COL.E}" stroke-width="${lam < 10 ? .7 : 1.1}" stroke-linecap="round"/>`;
+    if (!inAnt) sB += mxArrow([XA, p.y, FZ], [xB, p.y, FZ], COL.B, wA);
+    sB += `<path d="${pd([[xB, p.y, FZ], [xq, q.y, FZ]], false)}" fill="none" stroke="${COL.B}" stroke-width="${lam < 10 ? .7 : 1.1}" stroke-linecap="round"/>`;
+    items.push({ box: [[XA - .3, q.y, Math.min(FZ, zE, zq) - .05], [XA + .3, p.y, Math.max(FZ, zE, zq) + .05]], svg: sE });
+    items.push({ box: [[Math.min(XA, xB, xq) - .05, q.y, FZ - .3], [Math.max(XA, xB, xq) + .05, p.y, FZ + .3]], svg: sB });
+  }
+  if (lam < 10) return any;
+  // nodes of E, once the reflected wave has come back that far
+  for (let n = 1; ; n++){ const s = n*lam/2, d = LEN - s; if (d < 3) break;
+    if (mxEnv(st, st.t - (2*LEN - d)/VF) > .6) items.push({ box: [[XA - .5, RY + s - .5, FZ - .5], [XA + .5, RY + s + .5, FZ + .5]], svg: mxDot([XA, RY + s, FZ], .55, '#ffffff', .7) }); }
+  // crests of the outgoing wave, spreading as rings in the level plane
+  const kk = 2*Math.PI/lam, w = 2*Math.PI/mxTd(ch);
+  for (let n = Math.ceil((w*st.t - kk*LEN)/(2*Math.PI)); n <= Math.floor((w*st.t - kk*4)/(2*Math.PI)); n++){
+    const d = (w*st.t - 2*Math.PI*n)/kk; if (mxEnv(st, st.t - d/VF) < .3) continue;
+    const th = Math.min(70, Math.asin(Math.min(1, 19/d))*180/Math.PI), pts = [];
+    for (let i = 0; i <= 24; i++){ const a = (-th + 2*th*i/24)*Math.PI/180, y = YT - d*Math.cos(a); if (y > RY + .5) pts.push([XA + d*Math.sin(a), y, FZ]); }
+    for (let i = 0; i + 3 < pts.length; i += 3){ const seg = pts.slice(i, i + 4);
+      items.push({ box: mxBoxOf(seg), svg: `<path d="${pd(seg, false)}" fill="none" stroke="${COL.crest}" stroke-width="1.4" opacity=".75" stroke-dasharray="2 1.4" stroke-linecap="round"/>` }); }
+  }
+  return any;
+}
+
+/* ---------- scene ---------- */
+// xrCallouts from core.js with one change: the reflector fills the right edge, so core's room test sends every
+// label left and the one column runs off the bottom; here the labels split by x into two columns, the right one
+// under the stats, and a column that would overflow hands its innermost labels to the other side
+function mxCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0])), cx = (xmin + xmax)/2;
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0;
+  let fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 3*k);
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, btn = document.getElementById('btns'), sp = document.getElementById('stats');
+  const top = { [-1]: fs, [1]: fs + 30*k }, inv = svgEl.getScreenCTM() && svgEl.getScreenCTM().inverse();
+  if (btn && inv){ const r = btn.getBoundingClientRect(), q = new DOMPoint(r.right, r.bottom + 50).matrixTransform(inv); if (q.y > 0) top[-1] = q.y + hgt; }
+  if (sp && inv && !u){ const r = sp.getBoundingClientRect(), q = new DOMPoint(r.left, r.bottom + 12).matrixTransform(inv);
+    if (q.y > 0 && q.y < vb.y + vb.height*.6) top[1] = q.y + hgt/2; }
+  // the right column stops above the zoom pill in the bottom right corner (about 46 screen px tall)
+  const px2u = inv ? vb.width/svgEl.getBoundingClientRect().width : 1, bot = { [-1]: vb.y + vb.height - hgt, [1]: vb.y + vb.height - (u ? 66 : 46)*px2u - hgt };
+  const cap = side => Math.max(0, Math.floor((bot[side] - top[side])/gap) + 1);
+  // too many labels for both columns: shrink the pills until they fit (down to 75%)
+  for (let i = 0; i < 6 && cap(-1) + cap(1) < items.length; i++){ fs *= .95; hgt *= .95; gap *= .95; }
+  const all = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  const nL = Math.max(Math.min(all.filter(c => c.X < cx).length, cap(-1)), all.length - cap(1));
+  const L = all.slice(0, nL), R = all.slice(nL);
+  let s = '';
+  for (const [col, side] of [[L, -1], [R, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    const over = col.length ? Math.max(0, col[col.length - 1].py - bot[side]) : 0, room = col.length ? col[0].py - top[side] : 0;
+    for (const c of col) c.py -= Math.min(over, room);
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+
+function scene(st, m){
+  const k = ease(st.xr || 0), items = [];
+  const put = (b, svg, inside = '') => items.push({ box: b, svg: k > 0 && inside ? `<g opacity="${f(1 - .8*k)}">${svg}</g><g opacity="${f(k)}">${inside}</g>` : svg });
+  let s = castShadow(mxCorners([0, 0, 0, BX, BY, BH]));
+  s += board(0, 0, BX, BY, BH, 4, WOOD) + mxShadows(st);
+  mxOsc(st, m, k, put);
+  mxAntenna(st, k, put, items, YT, false);
+  mxAntenna(st, k, put, items, st.yr, true);
+  mxRail(st, put);
+  mxReflector(st, put);
+  mxSpectrum(st, put);
+  items.push(...mxCables(st, k));
+  const wave = mxWave(st, k, items);
+  s += mxSort(items);
+
+  // ---- labels
+  const B = [0, BX, 0, BY, 0, 54], on = st.on, lit = st.lamp > .03, ch = mxCh(st), y = st.yr, dl = Math.min(LEN - 4, 40);
+  const lbl = [];
+  if (wave){ const yE = YT - dl, [e, b] = mxField(st, dl);
+    lbl.push({ at: [XA, yE, FZ + AE*e], text: 'E FIELD', on: true }, { at: [XA + AE*b, yE - 2, FZ], text: 'B FIELD', on: true }); }
+  if (k > .6){
+    lbl.push(
+      { at: [20, 162, 15], text: 'RF OSCILLATOR', on },
+      { at: [20, 160, 12.5], text: 'FREQUENCY DISPLAY', on },
+      { at: [21.8, 157.5, 8.7], text: 'TUNING DIAL', on: false },
+      { at: [21, 149.6, 13], text: 'POWER BUTTON', on },
+      { at: [21.2, 147.5, 7.5], text: 'OUTPUT SOCKET', on },
+      { at: [4.5, 161.5, 4.6], text: 'CIRCUIT BOARD', on: false },
+      { at: [12.6, 151.2, 6.2], text: 'OSCILLATOR TRANSISTOR', on },
+      { at: [15.2, 151.6, 6.6], text: 'TANK COIL', on },
+      { at: [15.2, 155.4, 5.9], text: 'TUNING CAPACITOR', on },
+      { at: [17.2, 146.4, 5], text: 'POWER AMPLIFIER', on },
+      { at: [17.2, 148, 8.2], text: 'HEAT SINK', on: false },
+      { at: [7, 160, 9], text: 'TRANSFORMER', on: false },
+      { at: [SX + .9, YT + .5, 22], text: 'COAX CABLE', on },
+      { at: [SX + 1.6, YT + 3.4, BH + .9], text: 'STAND BASE', on: false },
+      { at: [SX, YT + .5, 14], text: 'STAND ROD', on: false },
+      { at: [(SX + XA)/2, YT, FZ + .45], text: 'INSULATING BOOM', on: false },
+      { at: [XA - .8, YT, FZ - 1.05], text: 'BALUN', on },
+      { at: [XA, YT, FZ + FB + HL], text: 'TRANSMITTING DIPOLE', on },
+      { at: [XA, YT, FZ - FB - HL*.6], text: 'FREE ELECTRONS', on },
+      { at: [XA + 1.1, YT - 1.1, FZ - FB], text: 'FEED BLOCK', on: false },
+      { at: [XA, y, FZ + FB + HL], text: 'RECEIVING DIPOLE', on: lit },
+      { at: [XA + 3.3, y, FZ + 1.15], text: 'LAMP', on: lit },
+      { at: [XA + 3.3, y + .4, FZ + .25], text: 'FILAMENT', on: lit },
+      { at: [XA + 1.6, y, FZ - .8], text: 'LAMP HOLDER', on: false },
+      { at: [XA + .6, y, FZ - 1], text: 'LEAD WIRES', on: lit },
+      { at: [21.8, y + 2, 5.6], text: 'CARRIAGE', on: st.yr !== st.yrT },
+      { at: [21, RAIL[1] + 8, 4.6], text: 'RAIL AND SCALE', on: st.yr !== st.yrT },
+      { at: [28, RY, 52], text: 'METAL REFLECTOR', on: wave },
+      { at: [SPX1, SPY0 + 6, BH + SPH0], text: 'SPECTRUM STRIP', on: false },
+      { at: mxSpP(mxSpY(st.lf), .97), text: 'POINTER', on: Math.abs(st.lf - mxLF(st)) > .01 },
+      { at: [BX, 6, BH], text: 'BASEBOARD', on: false });
+    if (wave && lam10(ch)) lbl.push({ at: [XA, YT - 12, FZ], text: 'WAVE CREST', on: true });
+    if (wave && lam10(ch)){ const s1 = ch.lamD/2; if (LEN - s1 > 3) lbl.push({ at: [XA, RY + s1, FZ - .5], text: 'NODE', on: true }); }
+    s += mxCallouts(lbl, B);
+  } else if (k === 0){
+    s += mxCallouts([...lbl,
+      { at: [20, 162, 15], text: 'OSCILLATOR', on },
+      { at: [SX + .9, YT + .5, 22], text: 'COAX CABLE', on },
+      { at: [XA, YT, FZ + FB + HL], text: 'TRANSMITTING DIPOLE', on },
+      { at: [XA, y, FZ + FB + HL], text: 'RECEIVING DIPOLE', on: lit },
+      { at: [XA + 3.3, y, FZ + 1.15], text: 'LAMP', on: lit },
+      { at: [21.8, y + 2, 5.6], text: 'CARRIAGE', on: st.yr !== st.yrT },
+      { at: [28, RY, 52], text: 'METAL REFLECTOR', on: wave },
+      { at: [SPX1, SPY0 + 6, BH + SPH0], text: 'SPECTRUM STRIP', on: false } ], B);
+  }
+  return s;
+}
+const lam10 = ch => ch.lamD >= 10;
+
+ui = mountFigure({
+  fig:'P8', title:"Maxwell's electromagnetic wave",
+  size:[BX, BY + 16, 56], center:[BX/2, BY/2 - 14], palette:'tomato', turn:'full',
+  state:{ on:false, tOn:null, tOff:null, t:0, fi:1, yr:RY + 62.5, yrT:RY + 62.5, lamp:0, lf:Math.log10(600e6) },
+  scene,
+  stats: st => { const ch = mxCh(st);
+    return [ { label:'Frequency', value: mxFmtF(ch.f) },
+      { label:'Wavelength', value: mxFmtL(ch.lam) },
+      { label:'Band', value: ch.band, small:true },
+      { label:'Lamp', value: Math.round(Math.min(1, st.lamp)*100) + ' %', small:true } ]; },
+  buttons:[
+    { label:'Transmit', onClick: st => mxTransmit(st) },
+    { label:'Frequency', choices: st => MX_F.map((c, i) => ({ label: c.label, current: st.fi === i, onClick: s => mxSetF(s, i) })) },
+    { label:'Move receiver', choices: st => { const no = mxCh(st).lamD < 10, why = 'Nodes of this wave are less than a micron apart';
+      return [ { label:'To a node', disabled: no, why, onClick: s => mxMove(s, true) }, { label:'To an antinode', disabled: no, why, onClick: s => mxMove(s, false) } ]; } },
+  ],
+  acts:{ tx: st => mxTransmit(st), dial: st => mxSetF(st, (st.fi + 1) % MX_F.length),
+    rx: st => { const sp = mxSpots(st, true), atNode = sp.some(y => Math.abs(y - st.yr) < .6); mxMove(st, !atNode); } },
+  params:(st, q) => {
+    if (q.has('f')) st.fi = Math.max(0, Math.min(MX_F.length - 1, +q.get('f') | 0));
+    st.lf = mxLF(st);
+    if (q.has('rx')) st.yr = st.yrT = Math.max(YR0, Math.min(YR1, RY + +q.get('rx')));
+    if (q.has('t')) st.t = +q.get('t');
+    if (q.get('on') === '1'){ st.on = true; st.tOn = st.t - 100; st.lamp = mxLampTarget(st); }
+  },
+});
+if (new URLSearchParams(location.search).get('go') === '1') mxRun();
+addEventListener('keydown', e => { if (e.key !== ' ' || /input|textarea|button/i.test(e.target.tagName)) return; e.preventDefault(); mxTransmit(ui.st); ui.render(); });
+xrMount(() => ui, () => '');
+</script></body></html>
