@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Piano action</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Piano action: one grand-piano key and its action (Erard / Renner double-escapement), in a slice of a grand piano one
+   key wide, modelled at 1 unit = 1 mm. x = depth (the key front faces the viewer at +x), y = width, z = up.
+   Everything is laid out along the key in u = mm behind the key front (x = KF - u).
+
+   How it really works (where every part is after each step):
+   1. Press the key: the key is a lever on the balance pin; its back end rises 12 mm while the front goes down 10 mm.
+      The capstan screw on the key lifts the wippen by its heel; the wippen pivots on its flange (on the wippen rail),
+      so the jack it carries rises about twice as far as the capstan and pushes the hammer shank up by its knuckle.
+      The hammer shank pivots in the hammer flange, so the hammer head (6-7 x farther out) swings up toward the string.
+   2. Let-off: about 2.5 mm before the string, the jack's toe hits the let-off button. The jack tips forward and
+      slips out from under the knuckle, so the hammer flies the last bit free, strikes the string from below and
+      bounces straight off it (it must never stay on the string).
+   3. Check: with the key held down, the falling hammer's tail is caught by the backcheck on the back of the key
+      ~15 mm below the string; the repetition lever under the knuckle is pressed down by the falling hammer.
+   4. The damper: when the key is about halfway down, the key's back end lifts the damper underlever by its cushion;
+      the damper wire, guided by the damper guide rail, lifts the damper head off the string, so it can ring.
+   5. Release: the backcheck lets go; the repetition spring lifts the hammer on the repetition lever (the drop screw
+      stops it), high enough that the jack springs back under the knuckle once its toe leaves the let-off button.
+      That is why a grand can repeat a note from a half-raised key. Fully up, the damper falls back on the string
+      and the ringing stops; the key rests on the back rail cloth again.
+   6. Sustain pedal: the pedal is a lever on a fulcrum in the pedal box; its back end pushes the pedal rod up
+      through the keybed, which lifts the damper tray under every underlever: the damper stays up after release.
+   The string runs from the tuning pin (in the pinblock, through the iron plate) through the agraffe, over the strike
+   point, under the damper, over the bridge glued on the soundboard, to the hitch pin on the plate's tail. Its
+   vibration reaches the soundboard through the bridge; the soundboard, braced by ribs, moves the air.
+
+   Parts (each held by another):
+   CASE      pedal box (plinth) with the keybed on top . two cheek blocks . key slip . two rim walls . front panel
+             with the fallboard . back wall . lid on its hinge (straight side) . lid prop
+   KEYFRAME  two side rails on the keybed . front rail + punching . balance rail + punching + balance pin .
+             back rail + cloth
+   KEY       key (basswood) . keytop (front + top) . two key leads . capstan screw . backcheck wire + head
+   ACTION    two action brackets (foot, front post, rear post, upper arm, rest arm) on the keyframe side rails .
+             wippen rail . wippen flange + centre pin . wippen + heel cushion . jack + its centre pin . let-off rail +
+             let-off button on its screw . repetition flange post . repetition lever . repetition spring .
+             hammer flange rail . drop screw . hammer flange + centre pin . hammer shank . knuckle . hammer rest rail .
+             hammer head: molding + felt
+   DAMPER    belly rail . damper flange rail . underlever flange . underlever + cushion + wire block . damper wire
+             (two pieces either side of the guide rail) . damper guide rail . damper head: felt + block .
+             damper tray + its two guides
+   STRING    pinblock . iron plate (front, side strut, tail) + bolts . tuning pin + coil . agraffe . string .
+             soundboard . two ribs . bridge + two bridge pins . liner (inner rim) . hitch pin
+   PEDAL     pedal tread . pedal lever . fulcrum block + pin . return spring . pedal rod */
+
+const KF = 705;                                                    // x of the key front (u = 0)
+const pQ = (u, y, z) => [KF - u, y, z];
+const pRot = ([u, z], c, a) => { const du = u - c[0], dz = z - c[1], ca = Math.cos(a), sa = Math.sin(a); return [c[0] + du*ca - dz*sa, c[1] + du*sa + dz*ca]; };
+const pR = (u0, z0, u1, z1) => [[u0, z0], [u1, z0], [u1, z1], [u0, z1]];
+const pBox = (pts, e = -.05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+/* ---------- materials ---------- */
+const PM = {
+  key: matOf('#ecd6a6'), top: { l:'#fffdf6', m:'#ebe7da', d:'#c4bfae' }, lead: matOf('#8f969a'), brass: matOf('#e2bd5c'),
+  wood: matOf('#e8c58e'), rail: matOf('#c99a62'), frame: matOf('#d8b98a'), red: matOf('#c9473c'), green: matOf('#3f7d52'),
+  felt: { l:'#f7f1df', m:'#e4dcc3', d:'#b9ae8f' }, knuck: matOf('#b78a5e'), alu: matOf('#cfd5d8'), steel: METAL,
+  plate: matOf('#dcb44e'), pin: matOf('#b07448'), board: matOf('#f3dfb2'), bridge: matOf('#b8683c'), dhead: matOf('#4a3d36'),
+  dark: DARK };
+
+/* ---------- the key, action and damper (u, z in mm; KF - u = x) ---------- */
+const KP = [220, 66], AMAX = Math.atan(10/220);                    // balance pin; 10 mm key dip at the front
+const KY0 = 38.25, KY1 = 61.75;                                    // a white key is 23.5 mm wide
+const WP = [252, 108];                                             // wippen centre pin
+const PJ0 = [352.5, 116], TIP0 = [352.5, 132.5];                   // jack centre pin, jack tip (top centre)
+const PR0 = [368, 129.5];                                          // repetition lever centre pin
+const HF = [339.5, 146];                                           // hammer centre pin
+const KN = [13, -8.5], KNR = 5;                                    // knuckle centre (relative to HF), radius
+const HEAD_M = [[102,-3],[118,-14],[130,-12],[132,-2],[129,30],[124,44],[108,44],[103,30]];
+const HEAD_F = [[103,24],[129.6,24],[127,36],[122,44],[110,44],[105,36]];
+const SZ = 239.5;                                                  // underside of the string
+const UPV = [553, 101];                                            // underlever centre pin
+const PPV = [300, 22], BMAX = .0286;                               // pedal lever fulcrum; pedal travel (rad)
+const DROP_U = 324, LET_U = 311;                                   // drop screw, let-off button
+const TRAY_U = 527, DW_U = 495;                                    // pedal rod / tray; damper wire
+
+const keyA = kd => kd * AMAX;
+const tk = (p, kd) => pRot(p, KP, keyA(kd));
+// the wippen turns so its heel (300, 98) stays on the capstan's top
+const wipA = kd => { const zc = tk([300, 98], kd)[1]; return Math.asin(clamp((zc - 98) / 48, -1, 1)); };
+const tw = (p, kd) => pRot(p, WP, wipA(kd));
+// hammer angle that puts the knuckle's underside at height z
+const KR = Math.hypot(KN[0], KN[1] - KNR), KPH = Math.atan2(KN[1] - KNR, KN[0]);
+const thForZ = z => Math.asin(clamp((z - HF[1]) / KR, -1, 1)) - KPH;
+const tipZ = kd => tw(TIP0, kd)[1];
+const thJack = kd => thForZ(tipZ(kd));
+const th = (p, a) => pRot([HF[0] + p[0], HF[1] + p[1]], HF, a);
+const crownZ = a => Math.max(...HEAD_F.map(p => th(p, a)[1]));
+const solveTh = z => { let lo = 0, hi = 1; for (let i = 0; i < 40; i++){ const m = (lo + hi)/2; if (crownZ(m) < z) lo = m; else hi = m; } return (lo + hi)/2; };
+const TH_S = solveTh(SZ), TH_LET = solveTh(SZ - 2.5), TH_C = solveTh(SZ - 15), TH_DROP = solveTh(SZ - 5.5);
+const KLET = (() => { let lo = 0, hi = 1; for (let i = 0; i < 40; i++){ const m = (lo + hi)/2; if (thJack(m) < TH_LET) lo = m; else hi = m; } return (lo + hi)/2; })();
+const KCHK = .8;
+// let-off button: just touching the jack's toe at let-off
+const B_LO = tw([LET_U, 119], KLET)[1];
+// drop screw: stops the repetition lever's front just before let-off
+const repFrontZ = kd => tw([DROP_U, 132.5], kd)[1];
+const REP_K = (PR0[0] - DROP_U) / (PR0[0] - TIP0[0]);
+const knBot = a => th([KN[0], KN[1] - KNR], a)[1];
+const DROP_Z = repFrontZ(KLET) + (knBot(TH_DROP) - tipZ(KLET)) * REP_K;   // the hammer drops 3 mm at let-off
+const REP_H = .6;                                                  // repetition lever regulated 0.6 mm above the jack top
+const repMax = kd => clamp((DROP_Z - repFrontZ(kd)) / REP_K, -5, REP_H);
+const thRep = kd => thForZ(tipZ(kd) + repMax(kd));
+// backcheck: its felt face meets the hammer's tail at the check angle with the key fully down
+const TAIL = [131, -9];
+const BC_FACE = (() => { const t = th(TAIL, TH_C); return pRot([t[0] + 1.2, t[1]], KP, -AMAX); })();
+const BC_HEAD = [[-1.2,-9],[7,-11],[9,9],[0.6,10]].map(([a, b]) => [BC_FACE[0] + a, BC_FACE[1] + b]);
+const BC_W = [BC_FACE[0] + 5, 88];                                 // where its wire leaves the key
+
+/* ---------- the simulation (pure: one state object, one step) ---------- */
+const GRAV = 15, REP_RATE = 1.6, SLOWMO = 7.5, AJ_OUT = .26;
+const eIn = k => Math.pow(k, 1.6), eIO = ease;
+function newState(){ return { kd:0, q:[], tw:null, hold:0, th:thRep(0), om:0, jackIn:true, aj:0, checked:false, struck:false,
+  amp:0, ring:0, speed:0, ped:0, pedT:0, lid:0, lidT:0, kv:0 }; }
+const trayLift = st => st.ped * BMAX * (TRAY_U - PPV[0]);
+function underA(st){                                               // underlever lift angle (front up, rad)
+  const keyLift = tk([490, 88], st.kd)[1] - 92, trayTop = 94 + trayLift(st);
+  return Math.max(0, keyLift / (UPV[0] - 490), (trayTop - 96) / (UPV[0] - TRAY_U)); }
+const damperLift = st => underA(st) * (UPV[0] - DW_U);
+function settled(st){
+  if (st.checked) return true;
+  return Math.abs(st.th - Math.max(st.jackIn ? thJack(st.kd) : 0, thRep(st.kd))) < 1e-4 && Math.abs(st.om) < 1e-3; }
+function busy(st){ return !!(st.tw || st.q.length || st.hold > 0 || st.amp > .004 || !settled(st) || st.ped !== st.pedT
+  || st.lid !== st.lidT || (st.jackIn && st.aj > 0)); }
+function simStep(st, dt){
+  // the finger: a queue of key moves
+  if (!st.tw && st.hold <= 0 && st.q.length){ const n = st.q.shift(); st.tw = { a: st.kd, b: n.b, d: n.d, t: 0, e: n.e, hold: n.hold || 0 }; }
+  const kd0 = st.kd;
+  if (st.tw){ const w = st.tw; w.t += dt; const k = Math.min(1, w.t / w.d); st.kd = w.a + (w.b - w.a) * w.e(k);
+    if (k >= 1){ st.hold = w.hold; st.tw = null; } }
+  else if (st.hold > 0) st.hold -= dt;
+  st.kv = dt > 0 ? (st.kd - kd0) / dt : 0;
+  const thJ = Math.max(0, thJack(st.kd)), thJ0 = Math.max(0, thJack(kd0));
+  // let-off: the toe meets the button and the jack slips out from under the knuckle
+  if (st.jackIn && st.kd >= KLET){ st.jackIn = false; st.struck = false; }
+  if (st.checked && st.kd < KCHK) st.checked = false;
+  if (st.checked){ st.th = TH_C; st.om = 0; }
+  else {
+    const prev = st.th;
+    st.om -= GRAV * dt; st.th += st.om * dt;
+    if (st.th >= TH_S && st.om > 0){                               // strike, then straight back off the string
+      st.th = TH_S; st.speed = st.om * HEAD_F[3][0] / 1000 * SLOWMO; st.amp = Math.min(1, .25 + st.om / 2.6); st.om = -.5 * st.om; st.struck = true; }
+    if (!st.jackIn && st.struck && st.kd >= KCHK && st.om < 0 && st.th <= TH_C){ st.checked = true; st.th = TH_C; st.om = 0; }
+    else if (st.jackIn && st.th <= thJ){ st.th = thJ; st.om = dt > 0 ? (thJ - thJ0) / dt : 0; }
+    // the repetition spring holds the knuckle up on its lever, but a struck hammer falling with the key held presses it down
+    if (!st.checked && !(st.struck && st.kd >= KCHK)){ const lifted = Math.min(thRep(st.kd), prev + REP_RATE * dt); if (st.th < lifted){ st.th = lifted; st.om = 0; } }
+    if (st.th < 0){ st.th = 0; st.om = 0; }
+  }
+  // the jack springs back under the knuckle once its toe is off the button and the knuckle is above its tip
+  if (!st.jackIn && ((st.kd < KLET - .08 && st.th >= thJ + .01) || st.kd < .2)){ st.jackIn = true; st.struck = false; }
+  // escaped, the jack tips forward (its toe under the button) until its tip stands clear in front of the knuckle
+  if (!st.jackIn){ const z = tw([LET_U, 119], st.kd)[1], pj = tw(PJ0, st.kd); st.aj = Math.max(st.aj + Math.min(AJ_OUT - st.aj, dt * 6), (z - B_LO) / (pj[0] - LET_U)); }
+  else st.aj = Math.max(0, st.aj - dt * 3);
+  // the string rings while its damper is off it
+  st.ring += dt;
+  st.amp *= Math.exp(-dt * (damperLift(st) < 1 ? 14 : .3));
+  if (st.amp < .004) st.amp = 0;
+  const mv = (k, kT, rate) => st[k] + Math.sign(st[kT] - st[k]) * Math.min(Math.abs(st[kT] - st[k]), dt * rate);
+  st.ped = mv('ped', 'pedT', 1/.3); st.lid = mv('lid', 'lidT', 1/1.1);
+}
+
+/* ---------- drawing helpers (each returns sortable items {box, svg}) ---------- */
+function pPrism(poly, y0, y1, M, w = .8, extra){
+  const A = poly.map(([u, z]) => pQ(u, y0, z)), B = poly.map(([u, z]) => pQ(u, y1, z));
+  const pos = vis([0,1,0]), cap = pos ? B : A, cn = pos ? [0,1,0] : [0,-1,0];
+  let s = loft(A, B, n => toneI(n, M));
+  if (vis(cn)) s += fill(pd(cap), toneI(cn, M)) + ink(pd(cap), w*.6);
+  if (extra) s += extra(pos ? y1 : y0);
+  return { box: pBox([...A, ...B]), svg: s + hullInk([...A, ...B], w) };
+}
+// a long bar (u0..u1, z0..z1) turned about piv by a, cut into pieces so it sorts against what sits on it; ink only on
+// its real edges, never on the cuts
+function pBar(u0, u1, z0, z1, y0, y1, M, piv, a, cuts, w = .9, extra){
+  const out = [], pos = vis([0,1,0]), cy = pos ? y1 : y0, fy = pos ? y0 : y1, T = (u, z) => pRot([u, z], piv, a);
+  const E = (u, z, y) => { const [uu, zz] = T(u, z); return pQ(uu, y, zz); };
+  const cs = [u0, ...cuts.filter(c => c > u0 && c < u1), u1];
+  for (let i = 0; i < cs.length - 1; i++){
+    const ua = cs[i], ub = cs[i + 1], poly = [T(ua, z0), T(ub, z0), T(ub, z1), T(ua, z1)];
+    const A = poly.map(([u, z]) => pQ(u, y0, z)), B = poly.map(([u, z]) => pQ(u, y1, z)), cap = pos ? B : A;
+    let s = loft(A, B, n => toneI(n, M)) + fill(pd(cap), toneI(pos ? [0,1,0] : [0,-1,0], M));
+    if (extra) s += extra(ua, ub, cy, T);
+    let d = pd([E(ua, z1, cy), E(ub, z1, cy)], false) + pd([E(ua, z0, cy), E(ub, z0, cy)], false) + pd([E(ua, z1, fy), E(ub, z1, fy)], false);
+    for (const [uu, real] of [[ua, i === 0], [ub, i === cs.length - 2]]) if (real) d += pd([E(uu, z0, cy), E(uu, z1, cy), E(uu, z1, fy)], false) + (vis([uu === u0 ? 1 : -1, 0, 0]) ? pd([E(uu, z0, fy), E(uu, z1, fy)], false) : '');
+    out.push({ box: pBox([...A, ...B]), svg: s + ink(d, w) });
+  }
+  return out;
+}
+const pBx = (u0, u1, y0, y1, z0, z1, M, w = .7, shade = toneI, extra = '') => ({ box: [[KF - u1, y0, z0], [KF - u0, y1, z1]], svg: box(KF - u1, y0, z0, KF - u0, y1, z1, M, shade, w) + extra });
+const pRod = (a, b, r, M, w = .6, n = 12) => ({ box: pBox([a, b].flatMap(p => [[p[0] - r, p[1] - r, p[2] - r], [p[0] + r, p[1] + r, p[2] + r]])), svg: rod(a, b, r, M, toneI, w, r, n) });
+const pCyl = (u, y, z0, z1, r, M, w = .6, n = 16) => ({ box: [[KF - u - r, y - r, z0], [KF - u + r, y + r, z1]], svg: cyl(KF - u, y, z0, z1, r, M, toneI, w, n) });
+// a wire or string as short pieces, so it sorts with the solids it passes
+function pWire(pts, col, wd = .9, step = 30){
+  const q = [pts[0]];
+  for (let i = 1; i < pts.length; i++){ const a = pts[i - 1], b = pts[i], n = Math.max(1, Math.ceil(Math.hypot(...sub(b, a)) / step));
+    for (let k = 1; k <= n; k++) q.push(a.map((v, j) => v + (b[j] - v) * k / n)); }
+  const out = [];
+  for (let i = 0; i < q.length - 1; i++){ const d = pd([q[i], q[i + 1]], false);
+    out.push({ box: pBox([q[i], q[i + 1]], -.01), svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(wd + 1)}" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(wd)}" stroke-linecap="round"/>` }); }
+  return out;
+}
+const dotOn = (p, r, col = INK) => { const [X, Y] = P(...p); return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r)}" fill="${col}"/>`; };
+
+/* ---------- the inside: keyframe, key, action, damper, string, soundboard ---------- */
+function interior(st){
+  const it = [], put = x => Array.isArray(x) ? it.push(...x) : it.push(x), kd = st.kd, ka = keyA(kd);
+  // keyframe on the keybed
+  for (const [y0, y1] of [[30, 37], [63, 70]]) put(pBx(2, 505, y0, y1, 50, 60, PM.frame, .7));
+  put(pBx(5, 22, 37, 63, 50, 54, PM.frame, .6)); put(pCyl(12, 50, 54, 56.4, 6, PM.red, .5));
+  put(pBx(205, 235, 37, 63, 50, 62, PM.frame, .6)); put(pCyl(220, 50, 62, 66, 7, PM.red, .5));
+  put(pBx(478, 505, 37, 63, 50, 60, PM.frame, .6)); put(pBx(480, 504, 40, 60, 60, 66, PM.green, .5));
+  { const t = tk([220, 88], kd); put(pCyl(t[0], 50, t[1] + .1, t[1] + 3.5, 1.6, PM.steel, .5, 10)); }   // balance pin, through the key
+  // the key: wood, keytop, leads, capstan, backcheck
+  const leads = (ua, ub, cy, T) => [55, 85].filter(u => u > ua && u < ub).map(u => { const c = T(u, 77);
+    return shape(on(PY(cy + (cy > 50 ? .05 : -.05)), ellUV(KF - c[0], c[1], 6, 6, 14)).map(p => p), PM.lead.m, .5); }).join('');
+  put(pBar(0, 505, 66, 88, KY0, KY1, PM.key, KP, ka, [145, 190, 260, 340, 420, 470], .9, leads));
+  put(pBar(0, 145, 88, 91, KY0 - .2, KY1 + .2, PM.top, KP, ka, [], .8));
+  put(pPrism([[-2.6, 70], [0, 70], [0, 91], [-2.6, 91]].map(p => tk(p, kd)), KY0 - .2, KY1 + .2, PM.top, .8));
+  { const c = tk([300, 88], kd); put(pCyl(c[0], 50, c[1], c[1] + 10, 5, PM.brass, .7, 16)); }
+  { const w0 = tk(BC_W, kd), w1 = tk([BC_W[0], BC_FACE[1] - 9], kd); put(pRod(pQ(w0[0], 50, w0[1]), pQ(w1[0], 50, w1[1] + 1), 1.2, PM.steel, .5, 8));
+    put(pPrism(BC_HEAD.map(p => tk(p, kd)), 44, 56, PM.wood, .8, cy => shape([[-1.2,-9],[0.6,10],[1.6,10],[0.2,-9]].map(([a, b]) => tk([BC_FACE[0] + a, BC_FACE[1] + b], kd)).map(([u, z]) => pQ(u, cy + (cy > 50 ? .05 : -.05), z)), PM.red.l, .4))); }
+  // action brackets: foot, front post, rear post, upper arm, rest arm
+  for (const [y0, y1] of [[31, 35], [65, 69]]){
+    put(pPrism(pR(232, 60, 332, 66), y0, y1, PM.alu, .7));
+    put(pPrism(pR(232, 66, 242, 142), y0, y1, PM.alu, .7));
+    put(pPrism(pR(324, 66, 332, 138), y0, y1, PM.alu, .7));
+    put(pPrism([[236, 142], [242, 142], [300, 146], [300, 152]], y0, y1, PM.alu, .7));
+    put(pPrism([[334, 146], [334, 152], [412, 140], [412, 134]], y0, y1, PM.alu, .7));
+  }
+  // rails between the brackets
+  put(pBx(242, 264, 35, 65, 120, 134, PM.rail, .7));                                       // wippen rail
+  put(pBx(298, 334, 35, 65, 138, 158, PM.rail, .7));                                       // hammer flange rail
+  put(pBx(300, 316, 35, 65, 129, 138, PM.rail, .6));                                       // let-off rail
+  put(pBx(398, 412, 35, 65, 128, 140, PM.rail, .6)); put(pBx(398, 412, 36, 64, 140, 141.6, PM.green, .5));   // hammer rest rail + felt
+  put(pRod(pQ(LET_U, 50, 129), pQ(LET_U, 50, B_LO + 2.4), .9, PM.steel, .4, 8)); put(pCyl(LET_U, 50, B_LO, B_LO + 2.4, 4.5, PM.red, .5));
+  put(pRod(pQ(DROP_U, 50, DROP_Z), pQ(DROP_U, 50, 138), 1.3, PM.steel, .5, 8)); put(pCyl(DROP_U, 50, 158, 160.5, 3, PM.steel, .5, 12));
+  // wippen, its flange and heel
+  const wa = wipA(kd), W = p => pRot(p, WP, wa);
+  for (const [y0, y1] of [[43, 44.4], [55.6, 57]]) put(pPrism(pR(246, 104, 258, 120), y0, y1, PM.wood, .6, cy => dotOn(pQ(WP[0], cy, WP[1]), .9)));
+  put(pBar(247, 382, 104, 114, 44.5, 55.5, PM.wood, WP, wa, [300, 335, 360], .8));
+  put(pPrism(pR(293, 98.2, 307, 104).map(W), 45, 55, PM.red, .6));
+  for (const [y0, y1] of [[43, 44.8], [55.2, 57]]) put(pPrism(pR(364, 114, 372, 128).map(W), y0, y1, PM.wood, .6));
+  // repetition lever: follows the knuckle, stopped by the drop screw
+  const knZ = th([KN[0], KN[1] - KNR], st.th)[1], tz = tipZ(kd);
+  const rr = clamp(Math.min(knZ - tz, repMax(kd)), -5, 4), ra = -rr / (PR0[0] - TIP0[0]), PRw = W(PR0), RL = p => pRot(W(p), PRw, ra);
+  put(pPrism(pR(320, 127, 349, 132.5).map(RL), 45, 55, PM.wood, .7));
+  for (const [y0, y1] of [[45, 46], [54, 55]]) put(pPrism(pR(349, 127, 357, 132.5).map(RL), y0, y1, PM.wood, .6));
+  put(pPrism(pR(357, 127, 384, 132.5).map(RL), 45, 55, PM.wood, .7, cy => dotOn(pQ(PRw[0], cy, PRw[1]), .9)));
+  { const a = W([372, 121]), b = RL([382, 127]), m2 = W([381, 120]); put(pWire([pQ(a[0], 50, a[1]), pQ(m2[0], 50, m2[1]), pQ(b[0], 50, b[1])], '#cfd6d8', .7, 6)); }
+  // jack: rides the wippen, tips forward at let-off
+  const PJ = W(PJ0), J = p => pRot(W(p), PJ, st.aj);
+  put(pPrism(pR(349.5, 114, 356, 132.5).map(J), 46, 54, PM.wood, .7, cy => dotOn(pQ(PJ[0], cy, PJ[1]), .9)));
+  put(pPrism(pR(306, 114, 349.5, 119).map(J), 46, 54, PM.wood, .7));
+  // hammer: flange, shank, knuckle, head
+  for (const [y0, y1] of [[42, 45.5], [54.5, 58]]) put(pPrism(pR(334, 140, 346, 151), y0, y1, PM.wood, .6, cy => dotOn(pQ(HF[0], cy, HF[1]), .9)));
+  put(pBx(334, 346, 42, 58, 151, 158, PM.wood, .6));
+  const ta = st.th, H = p => th(p, ta), H3 = (p, y) => { const q = H(p); return pQ(q[0], y, q[1]); };
+  put(pRod(H3([-3, 0], 50), H3([40, 0], 50), 4, PM.wood, .7)); put(pRod(H3([40, 0], 50), H3([102.4, 0], 50), 4, PM.wood, .7));
+  { const c = H(KN); put(pRod(pQ(c[0], 45, c[1]), pQ(c[0], 55, c[1]), KNR, PM.knuck, .6, 16)); }
+  put(pPrism(HEAD_M.map(H), 45.5, 54.5, PM.wood, .9, cy => shape(HEAD_F.map(H).map(([u, z]) => pQ(u, cy + (cy > 50 ? 1.6 : -1.6), z)), toneI(cy > 50 ? [0,1,0] : [0,-1,0], PM.felt), .7)));
+  it[it.length - 1].svg = pPrism(HEAD_F.map(H), 44, 56, PM.felt, .9).svg.replace(/^/, it[it.length - 1].svg);
+  it[it.length - 1].box = pBox([...HEAD_M.map(p => H3(p, 44)), ...HEAD_M.map(p => H3(p, 56))]);
+  // damper: flange rail, underlever, wire, guide rail, head; tray and its guides
+  const ua = -underA(st), U = p => pRot(p, UPV, ua), lift = damperLift(st);
+  put(pBx(558, 566, 35, 65, 96, 114, PM.rail, .6));
+  for (const [y0, y1] of [[42.5, 44.3], [55.7, 57.5]]) put(pPrism(pR(548, 96, 558, 108), y0, y1, PM.wood, .6, cy => dotOn(pQ(UPV[0], cy, UPV[1]), .9)));
+  put(pBar(482, 556, 96, 104, 44.5, 55.5, PM.wood, UPV, ua, [500, 530], .8));
+  put(pPrism(pR(484, 92.2, 496, 96).map(U), 45, 55, PM.red, .6));
+  put(pPrism(pR(489, 104, 501, 111).map(U), 45, 55, PM.wood, .6));
+  { const b = U([DW_U, 110]); put(pRod(pQ(b[0], 50, b[1]), pQ(DW_U, 50, 205), 1.1, PM.steel, .5, 8)); put(pRod(pQ(DW_U, 50, 212), pQ(DW_U, 50, SZ + 1.2 + lift), 1.1, PM.steel, .5, 8)); }
+  put(pBx(484, 506, 30, 70, 205, 212, PM.rail, .7, toneI, dotOn(pQ(DW_U, 50, 212.05), 1.6, '#c9473c')));
+  put(pBx(483, 507, 43.5, 56.5, SZ + 1.1 + lift, SZ + 7 + lift, PM.felt, .7));
+  put(pBx(483, 507, 43.5, 56.5, SZ + 7 + lift, SZ + 27 + lift, PM.dhead, .9));
+  const tl = trayLift(st);
+  put(pBx(512, 542, 34.6, 65.4, 88 + tl, 94 + tl, PM.rail, .7));
+  for (const [y0, y1] of [[30, 34.5], [65.5, 70]]) put(pBx(510, 544, y0, y1, 82, 106, PM.frame, .6));
+  put(pRod(pQ(TRAY_U, 50, 50), pQ(TRAY_U, 50, 88 + tl), 2.2, PM.steel, .6, 10));
+  // string side: pinblock, plate, tuning pin, agraffe, string, soundboard, bridge, hitch pin
+  put(pBx(566, 590, 30, 70, 92, 200, PM.rail, 1));                                         // belly rail
+  put(pBx(170, 382, 30, 70, 195, 222, PM.pin, 1));                                         // pinblock
+  const bolts = cy => [[180, 40], [370, 60], [180, 60], [370, 40]].map(([u, y]) => dotOn(pQ(u, y, 229.05), 1.6, '#8a6a1e')).join('');
+  put(pBx(165, 392, 30, 70, 222, 229, PM.plate, 1, toneI, facing([0,0,1]) ? bolts() : ''));
+  put(pBx(392, 652, 31, 37, 222, 229, PM.plate, .8));
+  put(pBx(652, 690, 30, 70, 222, 229, PM.plate, .9));
+  put(pCyl(200, 50, 229, SZ + 16.5, 3.4, PM.steel, .6, 14));
+  { let c = ''; for (const z of [SZ + 4, SZ + 6, SZ + 8]) c += ink(pd(on(PZ(z), ellUV(KF - 200, 50, 3.9, 3.9, 14))), .7); it[it.length - 1].svg += c; }
+  put(pBx(383, 391, 46, 54, 229, SZ + 5.5, PM.brass, .7, toneI, facing([1,0,0]) ? dotOn(pQ(383 - .05, 50, SZ + .6), 1.1) : ''));
+  put(pBx(578, 672, 30, 70, 200, 209, PM.board, 1));                                       // soundboard
+  for (const u of [598, 640]) put(pBx(u, u + 8, 30, 70, 188, 200, PM.board, .7));         // ribs
+  put(pBx(628, 644, 38, 62, 209, SZ, PM.bridge, .8));
+  put(pCyl(633, 48.5, SZ, SZ + 4.5, .9, PM.steel, .4, 8)); put(pCyl(639, 51.5, SZ, SZ + 4.5, .9, PM.steel, .4, 8));
+  put(pBx(672, 690, 30, 70, 130, 222, PM.rail, 1));                                        // liner
+  put(pCyl(668, 50, 229, SZ + 5.5, 2, PM.steel, .5, 10));
+  // the string, and while it rings, the blur of its swing between agraffe and bridge
+  const sc = SZ + .6, sPts = [pQ(203.4, 50, SZ + 7), pQ(387, 50, sc), pQ(636, 50, sc), pQ(668, 50, SZ + 1)];
+  put(pWire(sPts, st.amp > .02 ? '#ffd36b' : '#dfe4e4', 1.1, 26));
+  if (st.amp > .01){ const A = st.amp * 3.2 * Math.abs(Math.cos(st.ring * 70)) + st.amp * .8, n = 10, seg = [];
+    for (let i = 0; i < n; i++){ const u0 = 387 + (636 - 387) * i / n, u1 = 387 + (636 - 387) * (i + 1) / n, e = u => A * Math.sin(Math.PI * (u - 387) / 249);
+      const poly = [pQ(u0, 50, sc + e(u0)), pQ(u1, 50, sc + e(u1)), pQ(u1, 50, sc - e(u1)), pQ(u0, 50, sc - e(u0))];
+      seg.push({ box: pBox(poly, -.02), svg: fill(pd(poly), '#ffc94a', `opacity="${f(.35 + .3*st.amp)}"`) + ink(pd([poly[0], poly[1]], false), .35) + ink(pd([poly[3], poly[2]], false), .35) }); }
+    put(seg); }
+  return it;
+}
+
+/* ---------- the pedal: tread, lever, fulcrum, spring, rod (inside the pedal box) ---------- */
+const TREAD = [[-62, 19], [-14, 18], [-14, 26], [-58, 25.5]];
+function trapwork(st, insideToo){
+  const it = [], b = st.ped * BMAX, T = p => pRot(p, PPV, b);
+  const tr = pPrism(TREAD.map(T), 41, 59, PM.brass, 1.1); it.push({ ...tr, svg: act('pedal', tr.svg) });
+  if (!insideToo) return it;
+  it.push(...pBar(-14, 532, 18, 26, 46, 54, PM.steel, PPV, b, [100, 200, 292, 308, 420], .8));
+  it.push(pBx(292, 308, 44, 56, 6, 18, PM.rail, .7, toneI, facing([0,1,0]) ? dotOn(pQ(PPV[0], 56.05, PPV[1]), 1.2) : ''));
+  { const top = T([200, 18])[1], pts = []; for (let i = 0; i <= 14; i++) pts.push(pQ(200 + (i % 2 ? 3.5 : -3.5) * (i && i < 14 ? 1 : 0), 50, 6 + (top - 6) * i / 14));
+    it.push({ box: [[KF - 204, 46, 6], [KF - 196, 54, top]], svg: `<path d="${pd(pts, false)}" fill="none" stroke="${INK}" stroke-width="2.2" stroke-linejoin="round"/><path d="${pd(pts, false)}" fill="none" stroke="#cfd6d8" stroke-width="1" stroke-linejoin="round"/>` }); }
+  { const e = T([TRAY_U, 26]); it.push(pRod(pQ(TRAY_U, 50, e[1]), pQ(TRAY_U, 50, 50), 2.2, PM.steel, .6, 10)); }
+  return it;
+}
+
+/* ---------- the case ---------- */
+const LH = 290;                                                    // lid hinge height (top of the rim)
+const lidPts = st => { const a = ease(st.lid) * 40 * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
+  return rectUV(0, LH, 100, LH + 6).map(([y, z]) => [y*ca - (z - LH)*sa, LH + y*sa + (z - LH)*ca]); };
+function caseItems(st, m){
+  const it = [], T = tone;
+  const ccase = (u0, u1, y0, y1, z0, z1, w = 1.6, extra = '') => it.push({ box: [[KF - u1, y0, z0], [KF - u0, y1, z1]], svg: box(KF - u1, y0, z0, KF - u0, y1, z1, m, T, w) + extra });
+  // pedal box with the keybed on top; a slot for the pedal
+  let pb = '';
+  if (facing([1,0,0])) pb += shape([pQ(-14.2, 40, 15), pQ(-14.2, 60, 15), pQ(-14.2, 60, 29), pQ(-14.2, 40, 29)], '#2b2523', .8);
+  for (const [n, pts] of [[[1,0,0], [pQ(-14.1, 0, 34), pQ(-14.1, 100, 34)]], [[0,1,0], [pQ(-14, 100.1, 34), pQ(705, 100.1, 34)]], [[0,-1,0], [pQ(-14, -.1, 34), pQ(705, -.1, 34)]], [[-1,0,0], [pQ(705.1, 0, 34), pQ(705.1, 100, 34)]]])
+    if (facing(n)) pb += ink(pd(pts, false), 1.1);
+  ccase(-14, 705, 0, 100, 0, 50, 2.2, pb);
+  for (const [y0, y1] of [[0, 30], [70, 100]]){ ccase(-14, 148, y0, y1, 50, 100, 1.6); ccase(148, 705, y0, y1, 50, LH, 2); }
+  ccase(-14, -3, 30, 70, 50, 74, 1.2);                                                     // key slip
+  // front panel with the fallboard and its name
+  let fp = '';
+  if (facing([1,0,0])){ fp += shape([pQ(147.8, 32, 98), pQ(147.8, 68, 98), pQ(147.8, 68, 170), pQ(147.8, 32, 170)], tone([1,0,0], { l: m.m, m: m.m, d: m.m }), 1)
+    + tx(KF - 147.6, 50, 139, 'GRAND', 7.5, '#f4d27a', 800) + ink(pd([pQ(147.6, 38, 132), pQ(147.6, 62, 132)], false), .8).replace(INK, '#f4d27a'); }
+  ccase(148, 160, 30, 70, 96, LH, 1.4, fp);
+  ccase(690, 705, 30, 70, 50, LH, 1.4);                                                    // back wall
+  // lid on its hinge along the straight side (y = 0), prop on the far rim when open
+  const prof = lidPts(st), A = on(PX(0), prof), B = on(PX(KF - 148), prof);
+  let ls = extrude(prof, 0, KF - 148, m);
+  if (facing([1,0,0])) ls += fill(pd(B), tone([1,0,0], m)) + ink(pd(B), 1.2);
+  if (facing([-1,0,0])) ls += fill(pd(A), tone([-1,0,0], m)) + ink(pd(A), 1.2);
+  ls += hullInk([...A, ...B], 2.4);
+  for (const hx of [KF - 250, KF - 620]) if (facing([0,-1,0]) || st.lid > .02) ls += shape(on(PY(-.3), rectUV(hx - 8, LH - 6, hx + 8, LH)), '#e2bd5c', .6);
+  it.push({ box: pBox([...A, ...B], -.01), svg: act('lid', ls) });
+  if (st.lid > .02){ const a = ease(st.lid) * 40 * Math.PI / 180, e = [92*Math.cos(a), LH + 92*Math.sin(a)];
+    it.push(pRod(pQ(600, 92, LH + .5), pQ(600, e[0], e[1]), 1.8, PM.dark, .7, 8)); }
+  return it;
+}
+
+/* ---------- labels ---------- */
+function labelItems(st){
+  const kd = st.kd, W = p => tw(p, kd), H = p => th(p, st.th), lift = damperLift(st), q = (p, y) => pQ(p[0], y, p[1]);
+  const moving = kd > .02, free = !st.jackIn, ring = st.amp > .02;
+  return [
+    { at: q(tk([100, 91], kd), 50), text:'KEY', on: moving },
+    { at: q(tk([220, 91.5], kd), 50), text:'BALANCE PIN', on: moving },
+    { at: pQ(120, 70, 60), text:'KEY FRAME', on: false },
+    { at: q(tk([300, 98], kd), 55), text:'CAPSTAN', on: moving },
+    { at: q(W([330, 114]), 55.5), text:'WIPPEN', on: moving },
+    { at: q(W([353, 126]), 54), text:'JACK', on: st.jackIn && moving },
+    { at: pQ(LET_U, 54.5, B_LO + 1), text:'LET-OFF BUTTON', on: free && kd > KLET - .02 },
+    { at: q(W([378, 132.5]), 55), text:'REPETITION LEVER', on: free && !st.checked && kd < KCHK },
+    { at: pQ(DROP_U, 50, 160), text:'DROP SCREW', on: false },
+    { at: pQ(340, 58, 156), text:'HAMMER FLANGE', on: false },
+    { at: q(H([70, 4]), 50), text:'HAMMER SHANK', on: st.th > thRep(0) + .02 },
+    { at: q(H([KN[0], KN[1] - 3]), 55), text:'KNUCKLE', on: st.jackIn && moving },
+    { at: pQ(405, 65, 140), text:'HAMMER REST RAIL', on: false },
+    { at: q(H([118, 40]), 56), text:'HAMMER', on: st.th > TH_LET - .05 },
+    { at: q(tk([BC_FACE[0] + 4, BC_FACE[1] + 9], kd), 56), text:'BACKCHECK', on: st.checked },
+    { at: pQ(237, 69, 100), text:'ACTION BRACKET', on: false },
+    { at: q(pRot([520, 104], UPV, -underA(st)), 55.5), text:'UNDERLEVER', on: lift > 1 },
+    { at: pQ(TRAY_U + 10, 65, 94 + trayLift(st)), text:'DAMPER TRAY', on: st.ped > .5 },
+    { at: pQ(DW_U, 50, 165), text:'DAMPER WIRE', on: lift > 1 },
+    { at: pQ(495, 56.5, SZ + 20 + lift), text:'DAMPER', on: lift > 1 },
+    { at: pQ(560, 50, SZ + .6), text:'STRING', on: ring },
+    { at: pQ(200, 50, SZ + 16.5), text:'TUNING PIN', on: false },
+    { at: pQ(260, 70, 210), text:'PINBLOCK', on: false },
+    { at: pQ(300, 60, 229), text:'IRON PLATE', on: false },
+    { at: pQ(387, 54, SZ + 5.5), text:'AGRAFFE', on: ring },
+    { at: pQ(636, 62, 226), text:'BRIDGE', on: ring },
+    { at: pQ(612, 70, 205), text:'SOUNDBOARD', on: ring },
+    { at: pQ(644, 70, 192), text:'RIB', on: false },
+    { at: pQ(668, 50, SZ + 5.5), text:'HITCH PIN', on: false },
+    { at: q(pRot([-40, 26], PPV, st.ped * BMAX), 59), text:'PEDAL', on: st.ped > .5 },
+    { at: pQ(TRAY_U, 52, 62), text:'PEDAL ROD', on: st.ped > .5 },
+  ];
+}
+const LB = [0, KF + 62, 25, 75, 0, LH + 6];
+// the callout columns split at the box centre on screen; centre the box on the median label so half go each side
+function pCallouts(items){
+  const xs = items.map(it => P(...it.at)[0]), mid = xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)], c = items[xs.indexOf(mid)].at;
+  const hx = (LB[1] - LB[0]) / 2, hy = (LB[3] - LB[2]) / 2;
+  return xrCallouts(items, [c[0] - hx, c[0] + hx, c[1] - hy, c[1] + hy, LB[4], LB[5]]); }
+
+/* ---------- scene ---------- */
+const keyAct = it => it.map(p => ({ ...p, svg: act('key', p.svg) }));
+function scene(st, m){
+  const k = ease(st.xr || 0), lp = lidPts(st);
+  let s = castShadow([...[0, KF + 14].flatMap(x => [[x, 0, 0], [x, 100, 0], [x, 0, LH], [x, 100, LH]]),
+    ...lp.flatMap(([y, z]) => [[0, y, z], [KF - 148, y, z]]), [KF + 62, 41, 20], [KF + 62, 59, 20]]);
+  const inside = interior(st), keyParts = new Set();
+  const all = [...caseItems(st, m), ...trapwork(st, false), ...inside.map(p => p.box[1][0] > KF - 148 && p.box[0][2] < 96 ? (keyParts.add(p), { ...p, svg: act('key', p.svg) }) : p)];
+  if (k <= 0) s += byDepth(all);
+  else s += `<g opacity="${f(1 - .8*k)}">${byDepth(all)}</g><g opacity="${f(k)}">${byDepth(trapwork(st, true).slice(1))}${byDepth([...trapwork(st, false), ...inside.map(p => keyParts.has(p) ? { ...p, svg: act('key', p.svg) } : p)])}</g>`;
+  // sound leaving the soundboard while the string rings
+  if (st.amp > .02 && (k > .3 || st.lid > .3)){ const [X, Y] = P(...pQ(620, 50, 300)), u = INK_K;
+    for (let i = 0; i < 3; i++){ const ph = (st.ring * 1.4 + i/3) % 1, r = (14 + 46*ph) * u;
+      s += `<path d="M${f(X - r)} ${f(Y)}A${f(r)} ${f(r*.55)} 0 0 1 ${f(X + r)} ${f(Y)}" fill="none" stroke="${INK}" stroke-width="1.3" stroke-linecap="round" opacity="${f(st.amp*(1 - ph))}"/>`; } }
+  if (k > .6) s += pCallouts(labelItems(st));
+  else s += xrCallouts([
+    { at: pQ(60, 50, 91), text:'KEY', on: st.kd > .02 },
+    { at: pQ(-40, 59, 26), text:'SUSTAIN PEDAL', on: st.ped > .5 },
+    { at: (([y, z]) => pQ(420, y, z))(lidPts(st)[2].map((v, i) => i ? v : v * .7)), text:'LID', on: st.lid > .5 },
+    ...(facing([1,0,0]) ? [{ at: pQ(148, 50, 150), text:'FALLBOARD', on: false }] : []),
+    { at: pQ(40, 85, 100), text:'CHEEK BLOCK', on: false } ], LB);
+  return s;
+}
+
+/* ---------- behaviour ---------- */
+let ui, loopOn = false;
+function runLoop(){
+  if (loopOn) return; loopOn = true;
+  ui.animate(dt => { const st = ui.st; simStep(st, Math.min(dt, 1/30)); if (!busy(st)){ loopOn = false; return false; } return true; });
+}
+// where the finger is heading: the last queued move, else the one under way, else where the key is
+const keyDown = st => (st.q.length ? st.q[st.q.length - 1].b : st.tw ? st.tw.b : st.kd) > .5;
+function press(st){
+  st.q = [{ b: 1, d: .3, e: eIn }]; st.tw = null; st.hold = 0; runLoop(); }
+function release(st){
+  st.q = [{ b: 0, d: .45, e: eIO }]; st.tw = null; st.hold = 0; runLoop(); }
+function repeat(st){
+  if (st.kd < .5) { st.q = [{ b: 1, d: .3, e: eIn, hold: .35 }, { b: .45, d: .22, e: eIO, hold: .25 }, { b: 1, d: .2, e: eIn }]; }
+  else st.q = [{ b: .45, d: .22, e: eIO, hold: .25 }, { b: 1, d: .2, e: eIn }];
+  st.tw = null; st.hold = 0; runLoop(); }
+const pedal = st => { st.pedT = st.pedT ? 0 : 1; runLoop(); };
+const lid = st => { st.lidT = st.lidT ? 0 : 1; runLoop(); };
+
+ui = mountFigure({
+  fig:'28', title:'Piano action', turn:'full',
+  size:[KF + 62 + 170, 100 + 170, LH + 200], center:[(KF + 62)/2, 50], palette:'cobalt',
+  state: newState(),
+  scene,
+  stats: st => [ { label:'Key dip', value:(st.kd * 10).toFixed(1) + ' mm', small:true },
+    { label:'Hammer speed', value: st.speed ? st.speed.toFixed(1) + ' m/s' : '0 m/s', small:true } ],
+  buttons:[
+    { label:'Open / close lid', onClick: st => lid(st) },
+    { label:'Press / release key', onClick: st => (keyDown(st) ? release(st) : press(st)) },
+    { label:'Quick repeat', onClick: st => repeat(st) },
+    { label:'Sustain pedal', onClick: st => pedal(st) },
+  ],
+  acts:{ key: st => (keyDown(st) ? release(st) : press(st)), pedal: st => pedal(st), lid: st => lid(st) },
+  params:(st, q) => {
+    if (q.get('lid') === '1') st.lid = st.lidT = 1;
+    if (q.get('ped') === '1') st.ped = st.pedT = 1;
+    // ?t=seconds&seq=press|repeat|pressrel : step the simulation that far at load (for screenshots and tests)
+    const seq = q.get('seq');
+    if (seq){ const ev = { press:[[0, press]], pressrel:[[0, press], [1.2, release]], repeat:[[0, press], [1.1, repeat]], staccato:[[0, press], [.36, release]] }[seq] || [];
+      const T = +(q.get('t') || 1), dt = 1/120; let t = 0; const fake = { flash(){} }, saveUI = ui; ui = { flash(){}, animate(){}, st };
+      const pendings = ev.slice(); loopOn = true;
+      while (t < T){ while (pendings.length && pendings[0][0] <= t + 1e-9) pendings.shift()[1](st); simStep(st, dt); t += dt; }
+      loopOn = false; ui = saveUI; }
+    if (q.has('kd')) st.kd = +q.get('kd');
+    if (q.has('th')) st.th = +q.get('th');
+  },
+});
+xrMount(() => ui, () => '');
+if (busy(ui.st) && !new URLSearchParams(location.search).has('seq')) runLoop();   // ?seq= states are stills
+</script></body></html>
