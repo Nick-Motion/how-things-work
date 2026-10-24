@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pour-over coffee set</title>
+<style>body .stats{flex-direction:row;gap:22px}</style></head><body>
+<script src="core.js"></script>
+<script>
+/* ---------- truth first: how a pour-over set really works ----------
+   1. GRIND. 15 g of beans sit in the hopper bowl of a box mill. The crank turns the drive shaft, which carries the
+      conical inner burr inside the fixed outer burr ring, held in the burr housing under the box top. Beans drop into
+      the gap between the burrs, are cracked by the coarse upper teeth and cut finer as the gap narrows toward the
+      bottom; the grounds fall out under the burrs into the drawer. A spring under the inner burr pushes it up; the
+      adjusting nut under the lower bracket pulls the shaft down against it (tighter = finer).
+      Beans: hopper -> burr gap -> drawer.
+   2. FILTER. A paper cone (crimped seam down one side) goes into the ceramic V60 dripper, which stands on its flange
+      on the carafe rim, its foot inside the carafe neck.
+   3. GROUNDS. The drawer is pulled out and tipped over the dripper: grounds -> filter, a bed about 3 cm deep.
+   4. POUR. The kettle sits on its base, whose control board holds the water at 94 C through the centre connector,
+      reading the sensor under the kettle floor and switching the heating element with a relay. Lifted and tilted, the
+      water in the gooseneck (it always stands at the kettle's own level: connected vessels) runs out of the tip once
+      the tip dips below the water line. 40 g first to bloom (the CO2 in fresh grounds puffs the bed up), a pause,
+      then on to 250 g in slow circles. The grounds keep about 2 g of water per gram.
+      Water: kettle -> spout inlet -> gooseneck -> stream -> slurry over the bed -> through the grounds -> paper ->
+      along the spiral ribs -> drain hole -> drips -> carafe.
+   Parts (each held by another):
+   KETTLE  body . floor plate . C-shaped heating element brazed under the floor . temperature sensor . connector plug .
+           lid . lid knob . handle . gooseneck spout from its inlet low on the body . hot water
+   BASE    housing . front block . dial (on its pot) . display (on its module) . control board . relay . chip . socket .
+           socket wires . power cord over the back edge of the board
+   GRINDER walnut box . top plate . hopper bowl . beans . crank arm . crank knob . crank nut . collar . drive shaft .
+           burr housing . outer burr . inner burr . spring . lower bracket and its two screws in the side walls .
+           adjust nut . drawer (tray, front panel, knob) . grounds
+   DRIPPER cone . spiral ribs . rim . flange . foot . drain hole . handle . paper filter . seam . coffee bed . slurry
+   CARAFE  glass body . glass handle . coffee . drips
+*/
+
+/* ---------- geometry (x = depth, y = width, z = up; 1 unit = 1 cm) ---------- */
+const BW = 40, BD = 86, BH = 2.5, BRAD = 5;
+const BTOP = boardTop(0, 0, BW, BD, BH, BRAD);
+const rad = a => a*Math.PI/180, lerp = (a, b, t) => a + (b - a)*t, clamp01 = v => Math.max(0, Math.min(1, v));
+const addv = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]], scl = (a, k) => a.map(v => v*k);
+const boxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+// a rigid pose: tip the local frame about its x axis by a (its +y side goes down), then move its origin to o
+const poRot = a => { const c = Math.cos(a), s = Math.sin(a); return p => [p[0], p[1]*c + p[2]*s, -p[1]*s + p[2]*c]; };
+const poFrame = (o, a) => { const r = poRot(a); return { p: q => addv(o, r(q)), n: r }; };
+const FR0 = poFrame([0, 0, 0], 0);
+const poSmooth = (pts, it = 3) => { for (let k = 0; k < it; k++){ const o = [pts[0]];
+    for (let i = 0; i < pts.length - 1; i++){ const a = pts[i], b = pts[i+1]; o.push(a.map((v, j) => v*.75 + b[j]*.25), a.map((v, j) => v*.25 + b[j]*.75)); }
+    o.push(pts[pts.length - 1]); pts = o; } return pts; };
+// rings of a solid of revolution about the frame's vertical through (cx, cy); prof = [[z, r], ...] bottom to top
+const poRings = (F, cx, cy, prof, n = 24) => prof.map(([z, r]) => ellUV(cx, cy, r, r, n).map(([u, v]) => F.p([u, v, z])));
+function poRev(F, cx, cy, prof, M, w = 1.2, n = 24, shade = toneI){
+  const R = poRings(F, cx, cy, prof, n), up = F.n([0, 0, 1]), top = R[R.length - 1];
+  let s = '';
+  for (let i = 0; i < R.length - 1; i++) s += loft(R[i], R[i+1], nr => shade(nr, M));
+  if (vis(up)) s += fill(pd(top), shade(up, M)) + ink(pd(top), w*.6);
+  return s + hullInk(R.flat(), w);
+}
+const poInner = (R, col) => { let s = ''; for (let i = 0; i < R.length - 1; i++) s += loft(R[i], R[i+1], col, true); return s; };
+// a box in a posed frame: every face that turns toward the viewer
+function poBoxT(F, x0, y0, z0, x1, y1, z1, M, w = .8){
+  const Q = [[[0,1,0], [[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]]], [[1,0,0], [[x1,y0,z0],[x1,y1,z0],[x1,y1,z1],[x1,y0,z1]]],
+    [[0,-1,0], [[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1]]], [[-1,0,0], [[x0,y0,z0],[x0,y1,z0],[x0,y1,z1],[x0,y0,z1]]],
+    [[0,0,1], [[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]]], [[0,0,-1], [[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0]]]];
+  return Q.map(([n, q]) => [F.n(n), q.map(F.p)]).filter(([n]) => vis(n)).map(([n, q]) => shape(q, toneI(n, M), w)).join('');
+}
+const CAPS = 'fill="none" stroke-linejoin="round"';
+const poStroke = (pts, col, w, cap = 'round', extra = '') => `<path d="${pd(pts, false)}" ${CAPS} stroke-linecap="${cap}" stroke="${col}" style="stroke-width:${f(w)}" ${extra}/>`;
+// a bent tube drawn as strokes (ink edge, body, highlight), cut into short pieces that each sort on their own.
+// pieces overlap by one segment and use butt ends, so no seam shows where they meet
+function poTube(pts, r0, r1, M, L = 2.2){
+  const out = [], n = pts.length;
+  for (let i = 0; i < n - 1; ){
+    let j = i + 1, len = 0; while (j < n - 1 && len < L){ len += Math.hypot(...sub(pts[j], pts[j-1])); j++; }
+    if (n - 1 - j < 2) j = n - 1;
+    const seg = pts.slice(Math.max(0, i - 1), j + 1), r = lerp(r0, r1, (i + j)/2/(n - 1)), w = 2*r*CAM_K, cap = j === n - 1 ? 'round' : 'butt';
+    const svg = poStroke(seg, INK, w + 1.6*INK_K, cap) + poStroke(seg, M.m, w, cap) + poStroke(seg, M.l, w*.34, cap, `transform="translate(${f(-w*.17)} ${f(-w*.2)})"`);
+    out.push({ box: boxOf(pts.slice(i, j + 1), r), svg, seg, i0: i, i1: j, w }); i = j; }
+  return out;
+}
+const poTubeSvg = (pts, r, M) => poTube(pts, r, r, M, 1e9).map(p => p.svg).join('');
+function poCord(pts, r = .55){ const d = pd(poSmooth(pts), false), c = 'fill="none" stroke-linecap="round" stroke-linejoin="round"';
+  return `<path d="${d}" ${c} stroke="${INK}" style="stroke-width:${f(2*r*CAM_K + 1.8*INK_K)}"/><path d="${d}" ${c} stroke="${DARK.l}" style="stroke-width:${f(2*r*CAM_K)}"/>`; }
+const dot2 = (p, r, col, w = .5) => { const [X, Y] = P(...p); return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r)}" fill="${col}"${w ? ` stroke="${INK}" stroke-width="${w}"` : ''}/>`; };
+
+/* ---------- materials ---------- */
+const WAL = matOf('#9a6136'), WAL2 = matOf('#b37848'), BRASS = matOf('#d9b45e'), PAPER = matOf('#f7f1e1');
+const PCB = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, RELAY = matOf('#3f7fc0');
+const COFFEE = matOf('#5b3119'), GROUND = '#6b4426', WET = '#3f2414', SLURRY = '#a0703f';
+const PALE = (n, M) => mix(toneI(n.map(v => -v), M), '#f2efe7', .55);
+
+/* ---------- the parts' places ---------- */
+// kettle base, front block with the dial and display toward +x
+const KX = 21, KY = 17, KB_R = 9.5, KZ = BH + 2.2;
+// kettle (local frame: origin at the centre of its bottom, spout toward +y, handle toward -y)
+const K_PROF = [[0, 5.8], [.5, 6.2], [9.4, 5.8], [10.1, 5.3], [10.6, 4.5]];
+const K_LID = [[10.6, 4.3], [11, 4.3]], K_KNOB = [[11, .9], [11.6, 1.25], [12.4, 1.15], [12.75, .5]];
+const K_SPOUT = poSmooth([[0, 5.9, 1.6], [0, 8.2, 2.0], [0, 9.8, 5.0], [0, 10.4, 9.5], [0, 11.4, 12.4], [0, 13.6, 13.4], [0, 15.6, 12.8]], 2);
+const K_TIP = K_SPOUT[K_SPOUT.length - 1];
+const K_HANDLE = poSmooth([[0, -5.7, 8.8], [0, -8.4, 9.4], [0, -10, 8.4], [0, -10.3, 4], [0, -9.2, 2.2], [0, -6.1, 2.2]], 2);
+const K_ML = 98.5, K_FULL = 700;                               // ml per cm of depth over the floor plate; a fill
+const kLevel = ml => 1 + ml/K_ML;
+const kNeed = ml => Math.atan2(K_TIP[2] - kLevel(ml), K_TIP[1]);   // the tilt that brings the tip down to the water line
+// carafe + dripper
+const DX = 22, DY = 45;
+const CF = [[0, 4.9], [.35, 5.3], [4.5, 5.75], [8.2, 5.2], [10.3, 4.3], [11.3, 4.15], [12, 4.4]];
+const CR = BH + 12;                                            // carafe rim
+const cfR = z => { for (let i = 0; i < CF.length - 1; i++) if (z <= CF[i+1][0]) return lerp(CF[i][1], CF[i+1][1], (z - CF[i][0])/(CF[i+1][0] - CF[i][0])); return CF[CF.length - 1][1]; };
+const CF_TAB = (() => { const t = [[.35, 0]]; let v = 0; for (let z = .35; z < 11.8; z += .05){ const r = cfR(z + .025) - .25; v += Math.PI*r*r*.05; t.push([z + .05, v]); } return t; })();
+const cfLevel = ml => { for (const [z, v] of CF_TAB) if (v >= ml) return z; return 11.8; };
+const T30 = Math.tan(rad(30)), DZ0 = CR + .5, DZ1 = DZ0 + 8;  // cone from the flange top to its rim (60 degree cone)
+const dRi = z => 1.2 + (z - DZ0)*T30, dRo = z => dRi(z) + .55, dRf = z => dRi(z) - .08;
+const F_Z0 = DZ0 + .5, F_Z1 = DZ1 + 1, F_AP = DZ0 - 1.12/T30, F_H0 = F_Z0 - F_AP;
+const zOfVol = v => F_AP + Math.cbrt(v*9/Math.PI + F_H0*F_H0*F_H0);   // level in the paper cone holding v ml
+const BED_ML = 15/.35;                                         // 15 g of medium grounds
+// grinder
+const GX = 20, GY = 72, GZ1 = 13, GZ2 = 13.6;
+const G_BOWL = [[13.6, 3.7], [14.6, 4.6], [16.4, 5.5], [17.6, 5.8]];
+const G_ARM = 8, G_ARMZ = 19.7, CRANK0 = rad(200);
+const gBowlR = z => { const b = G_BOWL; for (let i = 0; i < b.length - 1; i++) if (z <= b[i+1][0]) return lerp(b[i][1], b[i+1][1], (z - b[i][0])/(b[i+1][0] - b[i][0])); return b[b.length - 1][1]; };
+const IB = [10.9, 2.45, 14.6, 1.0];                            // inner burr: bottom z, r, top z, r
+const ibR = z => lerp(IB[1], IB[3], (z - IB[0])/(IB[2] - IB[0]));
+// drawer (local: origin at the bottom centre of its front face; tray behind it toward -x)
+const DW_HOME = [26, GY, BH + .9], DW_OUT = 10.6, DW_LIP = [-5.3, -4.1, 3.6], DW_B = rad(-75), DW_TGT = [DX, DY + 1.3, 27];
+const BEANS = Array.from({ length: 24 }, (_, i) => { const a = i*2.39996, r = Math.sqrt((i + .5)/24); return [r*Math.cos(a), r*Math.sin(a), (i*1.7) % Math.PI]; });
+
+/* ---------- poses ---------- */
+function kFrame(st){
+  const a = st.tilt, tgt = [DX + .9*Math.cos(st.sw), DY + .9*Math.sin(st.sw), 31], oP = sub(tgt, poRot(a)(K_TIP));
+  const e = ease(st.pk), ez = Math.sin(st.pk*Math.PI/2);
+  return poFrame([lerp(KX, oP[0], e), lerp(KY, oP[1], e), lerp(KZ, oP[2], ez)], a);
+}
+function dFrame(st){
+  const d = st.dw, o0 = [DW_HOME[0] + d.s, DW_HOME[1], DW_HOME[2]];
+  if (d.p <= 0) return poFrame(o0, 0);
+  const oP = sub(DW_TGT, poRot(DW_B)(DW_LIP)), ex = ease(clamp01((d.p - .4)/.6));
+  return poFrame([lerp(o0[0], oP[0], ex), lerp(o0[1], oP[1], ease(d.p)), lerp(o0[2], oP[2], Math.sin(d.p*Math.PI/2))], DW_B*ease(d.p));
+}
+const drawerHome = st => st.dw.s <= 0 && st.dw.p <= 0;
+const bedTop = st => zOfVol(st.bed/15*BED_ML*(1 + .25*st.bloom));
+const slurryTop = st => zOfVol(st.bed/15*BED_ML*(1 + .25*st.bloom) + st.free*.8);
+
+/* ---------- kettle base ---------- */
+function baseSvg(st, k){
+  const fx = facing([1, 0, 0]), onBase = st.pk <= 0;
+  const body = () => { const c = cyl(KX, KY, BH, KZ, KB_R, DARK, tone, 2.2, 40), b = box(KX + 8, KY - 3.4, BH, KX + 11.5, KY + 3.4, KZ, DARK, tone, 1.4);
+    let s = fx ? c + b : b + c;
+    if (vis([0, 0, 1])) s += shape(on(PZ(KZ + .01), ellUV(KX, KY, 1.6, 1.6, 18)), DARK.d, .7) + fill(pd(on(PZ(KZ + .02), ellUV(KX, KY, .8, .8, 12))), METAL.m);
+    return s; };
+  let front = '';
+  if (fx){ const scr = on(PX(KX + 11.51), rectUV(KY + .2, BH + .4, KY + 2.9, BH + 1.85));
+    front = cylX(KX + 11.5, KX + 12.5, KY - 1.6, BH + 1.1, .85, METAL, toneI, 1, 18) + line([[KX + 12.52, KY - 1.6, BH + 1.1], [KX + 12.52, KY - 1.6, BH + 1.8]], .9)
+      + shape(scr, '#1d2a26', 1) + tx(KX + 11.53, KY + 1.55, BH + .72, onBase ? '94C' : '--', 1.05, '#8af0ae'); }
+  if (k <= 0) return body() + front;
+  return baseMech(st) + `<g opacity="${f(1 - .8*k)}">${body()}</g>` + front;
+}
+function baseMech(st){
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg });
+  const bx = (x0, y0, z0, x1, y1, z1, M, w = .6) => put([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, M, toneI, w));
+  bx(KX - 5, KY - 4.5, BH + .3, KX + 8.5, KY + 4.5, BH + .45, PCB);
+  bx(KX - 3.8, KY + 1, BH + .45, KX - 1.4, KY + 3.4, BH + 1.7, RELAY);
+  bx(KX + 2.2, KY - 3.8, BH + .45, KX + 3.8, KY - 2.2, BH + .75, DARK);
+  bx(KX + 10.5, KY + .1, BH + .45, KX + 11.4, KY + 3, BH + 1.95, DARK);
+  put([[KX + 8.5, KY - 2.4, BH + .45], [KX + 11.5, KY - .8, BH + 1.8]], cylX(KX + 8.5, KX + 11.5, KY - 1.6, BH + 1.1, .65, DARK, toneI, .7, 14));
+  put([[KX - 1.6, KY - 1.6, BH + .45], [KX + 1.6, KY + 1.6, KZ - .05]], cyl(KX, KY, BH + .45, KZ - .05, 1.6, METAL, toneI, .8, 20)
+    + (vis([0, 0, 1]) ? fill(pd(on(PZ(KZ - .04), ellUV(KX, KY, 1.15, 1.15, 16))), '#2a2622') : ''));
+  const wire = (pts, col) => put(boxOf(pts, .3), poStroke(pts, INK, .7*CAM_K + 1.2*INK_K) + poStroke(pts, col, .7*CAM_K));
+  wire([[KX - 2.6, KY + 1, BH + 1.2], [KX - 1.6, KY + .2, BH + 1.6], [KX - 1.1, KY, BH + 1.8]], '#9a5a2c');
+  wire([[KX - 9.2, KY - 2, BH + .8], [KX - 7, KY - 2, BH + .8], [KX - 5, KY - 2.2, BH + .5]], DARK.l);
+  return byDepth(parts);
+}
+
+/* ---------- kettle ---------- */
+function kettleBody(st, KF, k, m){
+  const R = poRings(KF, 0, 0, K_PROF, 28), hFace = vis(KF.n([0, -1, 0]));
+  const handle = act('kettle', poTubeSvg(K_HANDLE.map(KF.p), .95, DARK));
+  let body = '';
+  for (let i = 0; i < R.length - 1; i++) body += loft(R[i], R[i+1], n => tone(n, m));
+  const up = KF.n([0, 0, 1]), top = R[R.length - 1];
+  if (vis(up)) body += fill(pd(top), tone(up, m)) + ink(pd(top), 1);
+  body += hullInk(R.flat(), 2.6);
+  const lid = poRev(KF, 0, 0, K_LID, m, 1.1, 28, tone) + poRev(KF, 0, 0, K_KNOB, DARK, 1, 18);
+  let s = hFace ? '' : handle;
+  if (k > 0) s += `<g opacity="${f(.5*k)}">${poInner(R, n => PALE(n, m))}</g>` + kettleMech(st, KF) + `<g opacity="${f(1 - .8*k)}">${act('kettle', body)}</g>`;
+  else s += act('kettle', body);
+  return s + lid + (hFace ? handle : '');
+}
+function kettleMech(st, KF){
+  const hot = st.pk <= 0;
+  let s = shape(poRings(KF, 0, 0, [[.95, 5.9]], 28)[0], METAL.l, .6).replace('<path', '<path opacity=".55"');
+  // the C-shaped element under the floor, its two legs down to the connector
+  const arc = arcUV(0, 0, 4.3, 25, 335, 30).map(([u, v]) => KF.p([u, v, .5]));
+  const legA = [KF.p([4.3*Math.cos(rad(25)), 4.3*Math.sin(rad(25)), .5]), KF.p([1.2, .5, .3]), KF.p([.6, .3, .1])];
+  const legB = [KF.p([4.3*Math.cos(rad(335)), 4.3*Math.sin(rad(335)), .5]), KF.p([1.2, -.5, .3]), KF.p([.6, -.3, .1])];
+  const ec = hot ? '#ff8a3a' : '#b59c84';
+  for (const p of [arc, legA, legB]) s += poStroke(p, INK, .6*CAM_K + 1.2*INK_K) + poStroke(p, ec, .6*CAM_K);
+  s += poRev(KF, 0, 0, [[-.45, 1.2], [.15, 1.2]], METAL, .7, 16);                      // connector plug
+  s += poRev(KF, 2.2, 1.4, [[.15, .4], [.95, .4]], matOf('#d9c49a'), .6, 10);        // temperature sensor
+  s += poWater(KF, kLevel(st.kettle));
+  return s;
+}
+// the water in the (maybe tilted) body: the body between floor and rim, cut by the level plane
+function poWater(KF, lvl){
+  const n = 28, wz = KF.p([0, 0, lvl])[2], A = ellUV(0, 0, 5.7, 5.7, n), B = ellUV(0, 0, 5.4, 5.4, n), below = [], surf = [];
+  for (let i = 0; i < n; i++){ const p0 = KF.p([A[i][0], A[i][1], 1]), p1 = KF.p([B[i][0], B[i][1], 9.4]);
+    if (p0[2] >= wz) continue; below.push(p0);
+    if (p1[2] <= wz) below.push(p1); else { const q = addv(p0, scl(sub(p1, p0), (wz - p0[2])/(p1[2] - p0[2]))); below.push(q); surf.push(q); } }
+  if (below.length < 3) return '';
+  return fill(sp(hull(below.map(p => P(...p)))), '#8ccbe3', 'opacity=".6"') + (surf.length > 2 ? fill(pd(surf), '#d5eff7', 'opacity=".9"') + ink(pd(surf), .6) : '');
+}
+function spoutParts(st, KF, k, m){
+  const pts = K_SPOUT.map(KF.p), wz = KF.p([0, 0, kLevel(st.kettle)])[2], wet = st.flow;
+  return poTube(pts, .8, .45, m, 2.2).map(pc => {
+    let svg = pc.svg;
+    if (pc.i1 === pts.length - 1){ const d = norm(sub(pts[pts.length - 1], pts[pts.length - 4]));
+      if (vis(d)) svg += fill(pd(ringAt(pts[pts.length - 1], d, .3, 10)), '#2a2622'); }
+    if (k > 0){ const w = pc.seg.filter(p => wet || p[2] < wz);
+      svg = `<g opacity="${f(1 - .6*k)}">${svg}</g>` + (w.length > 1 ? poStroke(w, '#3d9ad1', pc.w*.45, 'round', `opacity="${f(k)}"`) : ''); }
+    const yl = K_SPOUT[Math.round((pc.i0 + pc.i1)/2)][1];
+    return { box: pc.box, at: KF.p([0, yl, 5]), svg };
+  });
+}
+const ringAt = (c, ax, r, n = 12) => { const u = norm(cross(ax, Math.abs(ax[2]) < .9 ? [0, 0, 1] : [1, 0, 0])), v = cross(ax, u);
+  return Array.from({ length: n }, (_, i) => { const t = i/n*2*Math.PI; return addv(c, addv(scl(u, r*Math.cos(t)), scl(v, r*Math.sin(t)))); }); };
+// a falling stream from (x, y, z0) down to z1: water, or grounds
+const poStream = (x, y, z0, z1, col, w, dash = '') => { if (z0 - z1 < .05) return ''; const p = [[x, y, z0], [x, y, z1]];
+  return dash ? poStroke(p, col, w, 'round', `stroke-dasharray="${dash}"`) : poStroke(p, INK, w + 1.2*INK_K, 'butt') + poStroke(p, col, w, 'butt'); };
+
+/* ---------- carafe ---------- */
+function carafeSvg(st, k){
+  const R = poRings(FR0, DX, DY, CF.map(([z, r]) => [BH + z, r]), 32), hFace = facing([0, 1, 0]);
+  const hp = poSmooth([[DX, DY + cfR(9) - .2, BH + 9], [DX, DY + 7.6, BH + 9.4], [DX, DY + 8.6, BH + 7.5], [DX, DY + 8.2, BH + 3.6], [DX, DY + cfR(2.8) - .2, BH + 2.8]], 2);
+  const handle = poTubeSvg(hp, .55, CLEAR);
+  let s = hFace ? '' : handle;
+  s += `<g opacity=".55">${poInner(R, n => mix(toneI(n.map(v => -v), CLEAR), '#ffffff', .35))}</g>` + fill(pd(R[1]), mix(CLEAR.l, '#ffffff', .3), 'opacity=".6"');
+  // coffee, the dripper's foot in the neck, drips from the drain hole
+  if (st.carafe > .5){ const zc = cfLevel(st.carafe), zs = [.35, ...CF.map(c => c[0]).filter(z => z > .35 && z < zc), zc];
+    const CR2 = zs.map(z => on(PZ(BH + z), ellUV(DX, DY, cfR(z) - .27, cfR(z) - .27, 32)));
+    for (let i = 0; i < CR2.length - 1; i++) s += loft(CR2[i], CR2[i+1], n => toneI(n, COFFEE));
+    const top = CR2[CR2.length - 1]; s += fill(pd(top), '#7a4524') + ink(pd(top), .7); }
+  s += cyl(DX, DY, CR - .8, CR, 3.5, CERAMIC, toneI, .9, 28);
+  if (st.free > .8 && st.drip > .3){ const top = CR - .8, bot = BH + cfLevel(st.carafe);
+    if (st.drip > 30) s += poStream(DX, DY, top, bot, '#6b3a1c', .5*CAM_K);
+    else for (let i = 0; i < 3; i++){ const ph = (st.t*2.4 + i/3) % 1, z = top - (top - bot)*ph*ph; s += dot2([DX, DY, z], .45, '#6b3a1c', .5); } }
+  // the near glass, two streaks, the rim
+  s += `<g opacity=".32">${R.slice(0, -1).map((A, i) => loft(A, R[i+1], n => toneI(n, CLEAR))).join('')}</g>`;
+  const hv = norm([CAM_V[0] - .75*CAM_R[0], CAM_V[1] - .75*CAM_R[1], 0]), hv2 = norm([CAM_V[0] - .45*CAM_R[0], CAM_V[1] - .45*CAM_R[1], 0]);
+  for (const [h, z0, z1] of [[hv, 1.2, 8.6], [hv2, 2.2, 6]]){ const pts = []; for (let z = z0; z <= z1; z += .4) pts.push([DX + h[0]*cfR(z)*1.01, DY + h[1]*cfR(z)*1.01, BH + z]);
+    s += poStroke(pts, '#ffffff', 1.3, 'round', 'opacity=".55"'); }
+  s += ink(pd(R[R.length - 1]), 1.2) + ink(pd(R[R.length - 2]), .5) + hullInk(R.flat(), 2.2);
+  return s + (hFace ? handle : '');
+}
+
+/* ---------- dripper ---------- */
+function dripperSvg(st, k){
+  const n = 32, ring = (r, z) => on(PZ(z), ellUV(DX, DY, r, r, n)), hFace = facing([0, 1, 0]);
+  const Ao = ring(dRo(DZ0), DZ0), Bo = ring(dRo(DZ1), DZ1), Ai = ring(dRi(DZ0 + .4), DZ0 + .4), Bi = ring(dRi(DZ1), DZ1);
+  const hp = poSmooth([[DX, DY + dRo(DZ0 + 6.8) - .2, DZ0 + 6.8], [DX, DY + 8.4, DZ0 + 6.6], [DX, DY + 9.2, DZ0 + 5.2], [DX, DY + 8.8, DZ0 + 2.6], [DX, DY + dRo(DZ0 + 2.2) - .2, DZ0 + 2.2]], 2);
+  const handle = poTubeSvg(hp, .6, CERAMIC);
+  const rim = near => { let s = ''; for (let i = 0; i < n; i++){ const j = (i + 1) % n, th = (i + .5)/n*2*Math.PI;
+      if (vis([Math.cos(th), Math.sin(th), 0]) !== near) continue;
+      s += face(pd([Bi[i], Bo[i], Bo[j], Bi[j]]), CERAMIC.l) + line([Bo[i], Bo[j]], 1.1) + line([Bi[i], Bi[j]], .9); } return s; };
+  let s = hFace ? '' : handle;
+  s += cyl(DX, DY, CR, DZ0, 5.3, CERAMIC, toneI, 1.4, 40);
+  // far inner wall, floor and drain hole, spiral ribs, the far half of the rim
+  s += loft(Ai, Bi, nr => mix(toneI(nr.map(v => -v), CERAMIC), CERAMIC.d, .12), true);
+  s += fill(pd(Ai), CERAMIC.m) + fill(pd(ring(.75, DZ0 + .41)), '#2a2420');
+  for (let j = 0; j < 10; j++){ let seg = [];
+    const flush = () => { if (seg.length > 1) s += poStroke(seg, CERAMIC.d, 1.1); seg = []; };
+    for (let i = 0; i <= 14; i++){ const t = i/14, z = DZ0 + 1 + 6.6*t, th = j/10*2*Math.PI + t*rad(55), r = dRi(z) - .03;
+      if (vis([-Math.cos(th)*.866, -Math.sin(th)*.866, .5])) seg.push([DX + r*Math.cos(th), DY + r*Math.sin(th), z]); else flush(); }
+    flush(); }
+  s += rim(false);
+  s += filterSvg(st, k);
+  const near = loft(Ao, Bo, nr => toneI(nr, CERAMIC)) + rim(true);
+  s += k > 0 ? `<g opacity="${f(1 - .8*k)}">${near}</g>` : near;
+  s += hullInk([...Ao, ...Bo, ...ring(5.3, CR), ...ring(5.3, DZ0)], 2.4);
+  return s + (hFace ? handle : '');
+}
+// the paper cone and what's in it: grounds, slurry, the streams falling into it
+function filterSvg(st, k){
+  const n = 32, ring = (r, z) => on(PZ(z), ellUV(DX, DY, r, r, n));
+  let inner = '';
+  if (st.bed > .05){ const zb = bedTop(st), wet = clamp01(st.absorbed/30), zs = slurryTop(st);
+    if (k > 0){ // the bed as a solid: its sides, and the water's path down through it to the tip of the paper
+      inner += loft(ring(dRf(F_Z0), F_Z0), ring(dRf(zb), zb), nr => toneI(nr, matOf(mix('#7b5232', WET, wet))));
+      if (st.absorbed > .5){ const off = f(-st.t*5);
+        for (let i = -2; i <= 2; i++){ const h = norm([CAM_V[0], CAM_V[1], 0]), th = Math.atan2(h[1], h[0]) + i*.42, r = dRf(zb)*.92, pts = [];
+          for (let q = 0; q <= 8; q++){ const t = q/8, rr = r*(1 - t)*.96 + .1, z = zb - (zb - F_Z0 - .15)*t; pts.push([DX + rr*Math.cos(th), DY + rr*Math.sin(th), z]); }
+          inner += poStroke(pts, '#2f86c8', 1.1, 'round', `stroke-dasharray="1.6 1.2" stroke-dashoffset="${off}"`); } } }
+    inner += fill(pd(ring(dRf(zb), zb)), mix('#8a5a34', WET, wet)) + ink(pd(ring(dRf(zb), zb)), .7);
+    if (st.bloom > .05) for (let i = 0; i < 9; i++){ const a = i*2.4, r = dRf(zb)*.75*Math.sqrt((i + .5)/9); inner += dot2([DX + r*Math.cos(a), DY + r*Math.sin(a), zb + .05], .5 + .35*st.bloom, '#c9a070', .3); }
+    if (st.free > .8){ if (k > 0) inner += `<g opacity=".55">${loft(ring(dRf(zb), zb), ring(dRf(zs), zs), nr => toneI(nr, matOf(SLURRY)))}</g>`;
+      inner += fill(pd(ring(dRf(zs), zs)), SLURRY, 'opacity=".9"') + ink(pd(ring(dRf(zs), zs)), .6); } }
+  const surf = st.bed > .05 ? (st.free > .8 ? slurryTop(st) : bedTop(st)) : F_Z0;
+  if (st.flow){ const tp = kFrame(st).p(K_TIP); inner += poStream(tp[0], tp[1], Math.min(tp[2], F_Z1), surf, '#d7eef6', .55*CAM_K);
+    inner += shape(on(PZ(surf + .04), ellUV(tp[0], tp[1], .9, .9, 12)), '#e9f6fa', .5); }
+  if (st.gStream){ const lp = dFrame(st).p(DW_LIP); inner += poStream(lp[0], lp[1], Math.min(lp[2], F_Z1), surf, GROUND, .9*CAM_K, '.7 .5'); }
+  if (!st.filter) return inner;
+  const z0 = F_Z0 + st.fz, z1 = F_Z1 + st.fz, Af = ring(dRf(F_Z0), z0), Bf = ring(dRf(F_Z1), z1), seamTh = rad(200);
+  const seamNear = vis([Math.cos(seamTh), Math.sin(seamTh), 0]);
+  const seam = [0, 1].map(t => [DX + dRf(lerp(F_Z0, F_Z1, t))*Math.cos(seamTh), DY + dRf(lerp(F_Z0, F_Z1, t))*Math.sin(seamTh), lerp(z0, z1, t)]);
+  const seamSvg = line(seam, .7) + line(seam.map(p => [DX + (p[0] - DX)*.99 + .25*Math.cos(seamTh + 1.57), DY + (p[1] - DY)*.99 + .25*Math.sin(seamTh + 1.57), p[2]]), .5);
+  let s = `<g opacity="${f(1 - .4*k)}">${loft(Af, Bf, nr => mix(toneI(nr.map(v => -v), PAPER), PAPER.d, .1), true)}</g>` + (seamNear ? '' : seamSvg);
+  s += inner;
+  const nearP = loft(Af, Bf, nr => toneI(nr, PAPER)) + (seamNear ? seamSvg : '');
+  s += k > 0 ? `<g opacity="${f(1 - .6*k)}">${nearP}</g>` : nearP;
+  return s + ink(pd(Bf), .9);
+}
+
+/* ---------- grinder ---------- */
+const G_FACES = [[[0,1,0], [[14,(GY + 6),BH],[26,(GY + 6),BH],[26,(GY + 6),GZ1],[14,(GY + 6),GZ1]]], [[1,0,0], [[26,(GY - 6),BH],[26,(GY + 6),BH],[26,(GY + 6),GZ1],[26,(GY - 6),GZ1]]],
+  [[0,-1,0], [[14,(GY - 6),BH],[26,(GY - 6),BH],[26,(GY - 6),GZ1],[14,(GY - 6),GZ1]]], [[-1,0,0], [[14,(GY - 6),BH],[14,(GY + 6),BH],[14,(GY + 6),GZ1],[14,(GY - 6),GZ1]]]];
+function grinderSvg(st, k){
+  const fx = facing([1, 0, 0]);
+  let body = box(14, (GY - 6), BH, 26, (GY + 6), GZ1, WAL, tone, 2) + hullInk([[14,(GY - 6),BH],[26,(GY + 6),GZ1],[14,(GY + 6),BH],[26,(GY - 6),GZ1],[14,(GY - 6),GZ1],[26,(GY + 6),BH],[14,(GY + 6),GZ1],[26,(GY - 6),BH]], 2.6);
+  for (const y of [(GY - 6), (GY + 6)]) if (facing([0, Math.sign(y - GY), 0])){ const hd = on(PY(y + Math.sign(y - GY)*.01), ellUV(GX, 9.85, .45, .45, 12)); body += shape(hd, METAL.m, .6); }
+  if (fx){ if (drawerHome(st)) body += box(26, (GY - 4.6), BH + .8, 26.6, (GY + 4.6), BH + 5.2, WAL2, toneI, 1.2) + cylX(26.6, 27.5, (GY), BH + 3, .6, BRASS, toneI, .9, 14);
+    else body += shape(on(PX(26.01), rectUV((GY - 4.4), BH + .9, (GY + 4.4), BH + 5.1)), '#2a1c12', 1.2); }
+  body += box(13.6, (GY - 6.4), GZ1, 26.4, (GY + 6.4), GZ2, WAL2, tone, 1.4);
+  let s = '';
+  if (k > 0){ s += `<g opacity="${f(.5*k)}">` + G_FACES.filter(([nn]) => !vis(nn)).map(([nn, q]) => fill(pd(q), PALE(nn, WAL))).join('') + `</g>`;
+    s += grinderMech(st) + `<g opacity="${f(1 - .8*k)}">${body}</g>`; }
+  else s += body;
+  return s + bowlSvg(st) + crankSvg(st);
+}
+function bowlSvg(st){
+  const R = poRings(FR0, GX, GY, G_BOWL, 32);
+  let s = poInner(R, n => mix(toneI(n.map(v => -v), BRASS), BRASS.d, .15)) + fill(pd(R[0]), BRASS.m);
+  s += fill(pd(on(PZ(GZ2 + .01), ellUV(GX, GY, 2.8, 2.8, 24))), '#2b2118');
+  s += rod([GX, GY, GZ2], [GX, GY, IB[2]], ibR(GZ2), METAL, toneI, .8, IB[3], 20);
+  let zb = 0;
+  if (st.beans > .01){ zb = GZ2 + .25 + 1.4*st.beans; const rb = gBowlR(zb) - .1;
+    s += shape(on(PZ(zb), ellUV(GX, GY, rb, rb, 28)), '#3b2416', .6);
+    BEANS.forEach(([u, v, ph], i) => { if (i > 4 + 20*st.beans) return; const cx = GX + u*(rb - .7), cy = GY + v*(rb - .7);
+      const pts = Array.from({ length: 10 }, (_, j) => { const t = j/10*2*Math.PI; return [cx + .55*Math.cos(t)*Math.cos(ph) - .36*Math.sin(t)*Math.sin(ph), cy + .55*Math.cos(t)*Math.sin(ph) + .36*Math.sin(t)*Math.cos(ph), zb + .06]; });
+      s += shape(pts, i % 3 ? '#6a4226' : '#5a361e', .45) + line([[cx - .38*Math.cos(ph), cy - .38*Math.sin(ph), zb + .07], [cx + .38*Math.cos(ph), cy + .38*Math.sin(ph), zb + .07]], .4); }); }
+  s += rod([GX, GY, Math.max(IB[2], zb)], [GX, GY, G_BOWL[3][0]], .4, METAL, toneI, .8, .4, 12);
+  s += loft(R[0], R[1], n => tone(n, BRASS)) + loft(R[1], R[2], n => tone(n, BRASS)) + loft(R[2], R[3], n => tone(n, BRASS));
+  return s + ink(pd(R[3]), 1.3) + hullInk(R.flat(), 2.2);
+}
+function crankSvg(st){
+  const th = st.crank, e = [GX + G_ARM*Math.cos(th), GY + G_ARM*Math.sin(th), G_ARMZ];
+  let s = rod([GX, GY, G_BOWL[3][0]], [GX, GY, 18.9], .4, METAL, toneI, .8, .4, 12) + cyl(GX, GY, 18.9, 19.4, .9, METAL, toneI, .8, 16);
+  s += rod([GX + .6*Math.cos(th), GY + .6*Math.sin(th), G_ARMZ], e, .45, METAL, toneI, 1, .45, 12);
+  s += cyl(GX, GY, 19.4, 20.1, 1, METAL, toneI, .9, 16) + cyl(GX, GY, 20.1, 20.7, .75, METAL, toneI, .8, 6);
+  s += cyl(e[0], e[1], G_ARMZ - .1, G_ARMZ + .5, .55, METAL, toneI, .8, 12) + poRev(FR0, e[0], e[1], [[G_ARMZ + .5, .8], [G_ARMZ + 1.4, 1.0], [G_ARMZ + 2.6, .95], [G_ARMZ + 3.1, .5]], WAL2, 1.1, 16);
+  return act('crank', s);
+}
+function grinderMech(st){
+  let s = '';
+  if (st.dw.p <= 0 && st.dw.s < DW_OUT){ const o = DW_HOME[0] + st.dw.s; s += poTray(poFrame([o, DW_HOME[1], DW_HOME[2]], 0), -10.6, Math.min(0, 26 - o), st.drawerG); }
+  if (st.grinding){ const gz = DW_HOME[2] + .5 + 1.2*st.drawerG/15;
+    for (let i = 0; i < 34; i++){ const a = i*2.39996, r = 1.5 + (i % 5)*.24, ph = (i*.37 + st.t*1.9) % 1, z = IB[0] - (IB[0] - gz)*ph;
+      s += dot2([GX + r*Math.cos(a), GY + r*Math.sin(a), z], .55, GROUND, 0); } }
+  s += cyl(GX, GY, 9, 9.6, .85, METAL, toneI, .7, 6) + rod([GX, GY, 8.6], [GX, GY, 9], .35, METAL, toneI, .6, .35, 10);
+  s += box(GX - .7, (GY - 5.4), 9.6, GX + .7, (GY + 5.4), 10.1, METAL, toneI, .7);
+  // spring round the shaft: far turns, shaft, near turns
+  const coil = [], far = [], nearC = [];
+  for (let i = 0; i <= 64; i++){ const t = i/64, th = t*2*Math.PI*4; coil.push([GX + .75*Math.cos(th), GY + .75*Math.sin(th), 10.1 + .8*t, vis([Math.cos(th), Math.sin(th), 0])]); }
+  let cur = [], cn = null; for (const p of coil){ if (cn !== null && p[3] !== cn){ (cn ? nearC : far).push(cur); cur = [cur[cur.length - 1]]; } cn = p[3]; cur.push(p.slice(0, 3)); } (cn ? nearC : far).push(cur);
+  const sp2 = segs => segs.filter(q => q.length > 1).map(q => poStroke(q, INK, 1.4) + poStroke(q, METAL.l, .55)).join('');
+  s += sp2(far) + rod([GX, GY, 10.1], [GX, GY, IB[0]], .4, METAL, toneI, .7, .4, 12) + sp2(nearC);
+  // burrs: housing ring (far half), outer burr teeth, inner burr cone with its spiral teeth, housing near half
+  const H0 = on(PZ(11.2), ellUV(GX, GY, 3.9, 3.9, 32)), H1 = on(PZ(GZ1), ellUV(GX, GY, 3.9, 3.9, 32));
+  const O0 = on(PZ(11.4), ellUV(GX, GY, 2.6, 2.6, 32)), O1 = on(PZ(GZ2), ellUV(GX, GY, 2.6, 2.6, 32));
+  s += loft(O0, O1, n => mix(toneI(n.map(v => -v), METAL), METAL.d, .2), true);
+  for (let i = 0; i < 16; i++){ const th = i/16*2*Math.PI; if (vis([Math.cos(th), Math.sin(th), 0])) continue;
+    s += line([[GX + 2.6*Math.cos(th), GY + 2.6*Math.sin(th), 11.5], [GX + 2.6*Math.cos(th + .25), GY + 2.6*Math.sin(th + .25), GZ2 - .1]], .5); }
+  let ib = rod([GX, GY, IB[0]], [GX, GY, IB[2]], IB[1], METAL, toneI, 1, IB[3], 24);
+  for (let i = 0; i < 12; i++){ const pts = []; for (let q = 0; q <= 6; q++){ const t = q/6, z = lerp(IB[0], IB[2], t), th = i/12*2*Math.PI + t*.9; pts.push([GX + ibR(z)*Math.cos(th), GY + ibR(z)*Math.sin(th), z, vis([Math.cos(th), Math.sin(th), .4])]); }
+    const v = pts.filter(p => p[3]).map(p => p.slice(0, 3)); if (v.length > 1) ib += line(v, .45); }
+  s += act('crank', ib);
+  s += `<g opacity=".6">${loft(H0, H1, n => toneI(n, matOf('#7d7f80')))}</g>` + hullInk([...H0, ...H1], 1.2);
+  return s;
+}
+// the drawer: an open tray (bottom, back, two sides) behind a front panel with a knob; local x from xa to xb (0 = panel)
+function poTray(F, xa, xb, g){
+  const W = 4.1, T = .3, H = 3.6, back = xa <= -10.5, walls = [];
+  const wall = (n, x0, y0, z0, x1, y1, z1, M = WAL2) => walls.push({ n, svg: poBoxT(F, x0, y0, z0, x1, y1, z1, M, .7) });
+  if (xb - xa > .05){ wall([0, 0, -1], xa, -W, 0, xb, W, T);
+    if (back) wall([-1, 0, 0], xa, -W, T, xa + T, W, H);
+    wall([0, -1, 0], xa, -W, T, xb, -W + T, H); wall([0, 1, 0], xa, W - T, T, xb, W, H); }
+  if (xb >= 0) walls.push({ n: [1, 0, 0], svg: poBoxT(F, 0, -4.6, -.1, .6, 4.6, 4.3, WAL2, 1.1)
+    + (vis(F.n([1, 0, 0])) ? rod(F.p([.6, 0, 2.1]), F.p([1.5, 0, 2.1]), .6, BRASS, toneI, .9, .6, 14) : '') });
+  const isNear = w => vis(F.n(w.n));
+  let s = walls.filter(w => !isNear(w)).map(w => w.svg).join('');
+  if (g > .05 && xb - xa > .6){ const gz = T + .2 + 1.2*g/15, x0 = xa + (back ? T : 0);
+    const q = [[x0, -W + T, gz], [xb, -W + T, gz], [xb, W - T, gz], [x0, W - T, gz]].map(F.p);
+    s += shape(q, GROUND, .6);
+    for (let i = 0; i < 14; i++){ const u = lerp(x0 + .4, xb - .4, ((i*.618) % 1)), v = lerp(-W + .7, W - .7, ((i*.382 + .2) % 1)); s += dot2(F.p([u, v, gz + .02]), .5, '#4b2e19', 0); } }
+  return s + walls.filter(isNear).map(w => w.svg).join('');
+}
+function drawerPart(st){
+  const F = dFrame(st), xa = st.dw.p > 0 ? -10.6 : Math.max(-10.6, 26 - F.p([0, 0, 0])[0]);
+  const pts = [[xa, -4.6, -.1], [1.5, 4.6, 4.3]], c = []; for (const x of [pts[0][0], pts[1][0]]) for (const y of [-4.6, 4.6]) for (const z of [-.1, 4.3]) c.push(F.p([x, y, z]));
+  return { box: boxOf(c, 0), svg: poTray(F, xa, 0, st.drawerG), corners: c };
+}
+
+/* ---------- scene ---------- */
+const CORD_ON = [[KX - 9.2, KY - 2, BH + .6], [KX - 11.5, KY - 2.6, BH + .6], [6, KY - 4, BH + .6], [2.5, KY - 4.6, BH + .6], [.3, KY - 4.7, BH + .6]];
+const CORD_OFF = [[.3, KY - 4.7, BH + .6], [-1.3, KY - 4.8, BH - .5], [-1.7, KY - 5, -9]];
+function shadows(st, KF, dw){
+  const ring = (cx, cy, r, z, n = 20) => on(PZ(z), ellUV(cx, cy, r, r, n));
+  let s = castShadow([...ring(KX, KY, KB_R, BH), ...ring(KX, KY, KB_R, KZ), [KX + 11.5, KY - 3.4, KZ], [KX + 11.5, KY + 3.4, KZ]], BH);
+  s += castShadow(poRings(KF, 0, 0, K_PROF, 16).flat().concat([KF.p([0, 0, 12.7])]), BH) + castShadow(K_HANDLE.map(KF.p), BH);
+  const sp = K_SPOUT.map(KF.p); for (let i = 0; i < sp.length - 3; i += 3) s += castShadow([...ringAt(sp[i], [0, 0, 1], .8, 6), ...ringAt(sp[i + 3], [0, 0, 1], .7, 6)], BH);
+  s += castShadow([[13.6, GY - 6.4, BH], [26.4, GY + 6.4, BH], [13.6, GY + 6.4, BH], [26.4, GY - 6.4, BH], [13.6, GY - 6.4, GZ2], [26.4, GY + 6.4, GZ2], [13.6, GY + 6.4, GZ2], [26.4, GY - 6.4, GZ2], ...ring(GX, GY, 5.8, 17.6)], BH);
+  s += `<g opacity=".7">${castShadow([...ring(DX, DY, 5.75, BH), ...ring(DX, DY, 5.3, CR), ...ring(DX, DY, dRo(DZ1), DZ1)], BH)}</g>`;
+  if (dw) s += castShadow(dw.corners, BH);
+  return clipTo(BTOP, s);
+}
+function scene(st, m){
+  const k = ease(st.xr || 0), KF = kFrame(st), dw = drawerHome(st) ? null : drawerPart(st);
+  const behind = facing([-1, 0, 0]);
+  let s = (behind ? '' : poCord(CORD_OFF)) + board(0, 0, BW, BD, BH, BRAD, WOOD) + (behind ? poCord(CORD_OFF) : '');
+  s += shadows(st, KF, dw) + poCord(CORD_ON);
+  const parts = [];
+  parts.push({ box: [[KX - KB_R, KY - KB_R, BH], [KX + 12.5, KY + KB_R, KZ - .06]], svg: baseSvg(st, k) });
+  parts.push({ box: boxOf([...poRings(KF, 0, 0, K_PROF, 12).flat(), ...K_HANDLE.map(KF.p), KF.p([0, 0, 12.75])], 0), at: KF.p([0, 0, 5]), svg: kettleBody(st, KF, k, m) });
+  parts.push(...spoutParts(st, KF, k, m));
+  parts.push({ box: [[DX - 5.9, DY - 5.9, BH], [DX + 5.9, DY + 9.2, CR]], svg: carafeSvg(st, k) });
+  parts.push({ box: [[DX - 6.4, DY - 6.4, CR], [DX + 6.4, DY + 9.9, F_Z1 + st.fz]], svg: dripperSvg(st, k) });
+  parts.push({ box: [[12, GY - 8, BH], [28.4, GY + 8, 23]], svg: grinderSvg(st, k) });
+  if (dw) parts.push(dw);
+  if (st.flow){ const tp = KF.p(K_TIP); if (tp[2] > F_Z1) parts.push({ box: [[tp[0] - .4, tp[1] - .4, F_Z1], [tp[0] + .4, tp[1] + .4, tp[2]]], svg: poStream(tp[0], tp[1], tp[2], F_Z1, '#d7eef6', .55*CAM_K) }); }
+  if (st.gStream){ const lp = dFrame(st).p(DW_LIP); if (lp[2] > F_Z1) parts.push({ box: [[lp[0] - .5, lp[1] - .5, F_Z1], [lp[0] + .5, lp[1] + .5, lp[2]]], svg: poStream(lp[0], lp[1], lp[2], F_Z1, GROUND, .9*CAM_K, '.7 .5') }); }
+  s += byDepth(parts);
+  const items = k > .6 ? insideLabels(st, KF) : surfaceLabels(st, KF);
+  return s + (items.length ? xrCallouts(items, [12, 30, 10, 72, 0, 24]) : '');
+}
+
+/* ---------- labels ---------- */
+function insideLabels(st, KF){
+  const it = [], add = (at, text, on = false) => it.push({ at, text, on }), th = st.crank, grinding = !!st.grinding, hot = st.pk <= 0;
+  const DF = dFrame(st), lvl = kLevel(st.kettle), wet = st.flow || st.free > .8;
+  add([GX + 3.6*Math.cos(rad(60)), GY + 3.6*Math.sin(rad(60)) + 1.4, 16.4], 'HOPPER');
+  if (st.beans > .02) add([GX - 1.6, GY + 1.2, GZ2 + .3 + 1.4*st.beans], 'BEANS', grinding);
+  add([GX + 4.5*Math.cos(th), GY + 4.5*Math.sin(th), G_ARMZ], 'CRANK', grinding);
+  add([GX + G_ARM*Math.cos(th), GY + G_ARM*Math.sin(th), G_ARMZ + 3.1], 'CRANK KNOB');
+  add([GX, GY, 16.8], 'DRIVE SHAFT', grinding);
+  add([GX + 2.3, GY + .6, 11.2], 'INNER BURR', grinding);
+  add([GX - 1.8, GY - 1.8, 13.3], 'OUTER BURR', grinding);
+  add([GX + 2.8, GY - 2.7, 12], 'BURR HOUSING');
+  if (!wet){   // while water moves, the stream, slurry and drips labels take their room
+    add([GX + .5, GY + .55, 10.5], 'SPRING'); add([GX, GY - 4.2, 9.85], 'LOWER BRACKET'); add([GX + .6, GY - .5, 9.3], 'ADJUST NUT'); }
+  add(DF.p([-5, 3.9, 3.6]), 'DRAWER');
+  if (st.drawerG > .2) add(DF.p([-6.5, -1, .5 + 1.2*st.drawerG/15]), 'GROUNDS', grinding);
+  add(KF.p([0, 0, 11]), 'KETTLE LID'); add(KF.p([0, 0, 12.75]), 'LID KNOB');
+  if (hot) add(KF.p(K_HANDLE[Math.floor(K_HANDLE.length/2)]), 'HANDLE');
+  add(KF.p(K_SPOUT[Math.floor(K_SPOUT.length*.55)]), 'GOOSENECK SPOUT', !!st.flow);
+  if (st.kettle > 5) add(KF.p([-1.5, 2, lvl - 1]), 'HOT WATER', !!st.flow);
+  add(KF.p([-4.3, 0, .5]), 'HEATING ELEMENT', hot);
+  add(KF.p([2.2, 1.4, .9]), 'TEMP SENSOR', hot);
+  add([KX, KY + 1.5, KZ - .3], 'CONNECTOR', hot);
+  add([KX + 5, KY + 3.5, BH + .45], 'CONTROL BOARD', hot);
+  add([KX - 2.6, KY + 2.2, BH + 1.7], 'RELAY', hot);
+  if (facing([1, 0, 0]) && !wet){ add([KX + 12.5, KY - 1.6, BH + 1.1], 'DIAL'); add([KX + 11.5, KY + 1.5, BH + 1.85], 'DISPLAY', hot); }
+  add([6, KY - 4, BH + .6], 'POWER CORD');
+  add([DX + dRo(DZ0 + 4)*.7, DY - dRo(DZ0 + 4)*.7, DZ0 + 4], 'DRIPPER CONE');
+  add([DX - 4.2, DY - 2, DZ0 + 6.5], 'SPIRAL RIBS');
+  add([DX, DY, CR - .8], 'DRAIN HOLE', st.drip > .3);
+  add([DX + 3.7, DY - 3.7, CR + .5], 'FLANGE');
+  if (st.filter) add([DX - 3.9, DY + 3.9, F_Z1 + st.fz - .3], 'PAPER FILTER');
+  if (st.bed > .05) add([DX + 1.5, DY - 1, bedTop(st) - 1], 'COFFEE BED', st.absorbed > 1);
+  if (st.free > .8) add([DX - 1.5, DY + 1.5, slurryTop(st)], 'SLURRY', !!st.flow);
+  if (st.flow){ const tp = KF.p(K_TIP); add([tp[0], tp[1], (tp[2] + F_Z1)/2], 'WATER STREAM', true); }
+  if (st.free > .8 && st.drip > .3) add([DX, DY, (CR - .8 + BH + cfLevel(st.carafe))/2], 'DRIPS', true);
+  add([DX + 5.4*.7, DY - 5.4*.7, BH + 6], 'GLASS CARAFE');
+  add([DX, DY + 8.6, BH + 7.5], 'CARAFE HANDLE');
+  if (st.carafe > 2) add([DX + 3, DY + 2, BH + cfLevel(st.carafe)], 'COFFEE', st.drip > .3);
+  return it;
+}
+const surfaceLabels = (st, KF) => [{ at: [GX + 6, GY - 6, 8], text: 'HAND GRINDER' }, { at: KF.p([0, -5.9, 6]), text: 'GOOSENECK KETTLE' },
+  { at: [KX + 8, KY - 6, KZ], text: 'KETTLE BASE' }, { at: [DX + 4.5, DY - 4.5, DZ0 + 6], text: 'DRIPPER' }, { at: [DX + 4, DY - 4, BH + 5], text: 'CARAFE' }];
+
+/* ---------- behaviour ---------- */
+const poInit = () => ({ beans: 1, crank: CRANK0, drawerG: 0, grinding: false, filter: false, fz: 0, bed: 0, poured: 0, absorbed: 0, free: 0,
+  carafe: 0, drip: 0, kettle: K_FULL, pk: 0, tilt: 0, sw: 0, flow: false, bloom: 0, dw: { s: 0, p: 0 }, gStream: false, busy: '', t: 0, done: false });
+const isBusy = (st, ui) => { if (st.busy){ ui.flash('One step at a time'); return true; } return false; };
+function grind(st, ui){
+  if (isBusy(st, ui)) return;
+  if (st.done){ Object.assign(st, poInit()); ui.flash('Fresh brew: hopper refilled'); }
+  else if (st.beans <= 0) return ui.flash('The beans are ground already');
+  st.busy = 'grind'; st.grinding = true; let t = 0;
+  ui.animate(dt => { t += dt; st.t += dt; const kk = Math.min(1, t/2.4), e = ease(kk);
+    st.crank = CRANK0 + 10*Math.PI*e; st.beans = 1 - e; st.drawerG = 15*e;
+    if (kk >= 1){ st.grinding = false; st.busy = ''; st.beans = 0; st.crank = CRANK0; return false; } return true; });
+}
+function addFilter(st, ui){
+  if (isBusy(st, ui)) return;
+  if (st.filter) return ui.flash(st.done ? 'Grind beans to start a fresh brew' : 'There is a filter in already');
+  st.filter = true; st.busy = 'filter'; st.fz = 7; let t = 0;
+  ui.animate(dt => { t += dt; const kk = Math.min(1, t/.8); st.fz = 7*(1 - ease(kk));
+    if (kk >= 1){ st.fz = 0; st.busy = ''; return false; } return true; });
+}
+function addGrounds(st, ui){
+  if (isBusy(st, ui)) return;
+  if (st.bed > 0) return ui.flash(st.done ? 'Grind beans to start a fresh brew' : 'The grounds are in the filter');
+  if (st.drawerG <= 0) return ui.flash('Grind the beans first');
+  if (!st.filter) return ui.flash('Put a filter in the dripper first');
+  st.busy = 'grounds'; let t = 0; const g0 = st.drawerG;
+  ui.animate(dt => { t += dt; st.t += dt; const d = st.dw;
+    d.s = t < 2.9 ? DW_OUT*ease(clamp01(t/.5)) : DW_OUT*(1 - ease(clamp01((t - 2.9)/.5)));
+    d.p = t < 2.1 ? ease(clamp01((t - .5)/.8)) : 1 - ease(clamp01((t - 2.1)/.8));
+    const pk = clamp01((t - 1.3)/.8); st.gStream = pk > 0 && pk < 1; st.drawerG = g0*(1 - pk); st.bed = g0*pk;
+    if (t >= 3.4){ d.s = 0; d.p = 0; st.gStream = false; st.busy = ''; return false; } return true; });
+}
+const inflow = (st, q) => { const a = Math.min(q, Math.max(0, 2*st.bed - st.absorbed)); st.absorbed += a; st.free += q - a; };
+function pour(st, ui){
+  if (isBusy(st, ui)) return;
+  if (st.poured >= 249) return ui.flash(st.done ? 'Grind beans to start a fresh brew' : 'The pour is done');
+  if (!st.filter) return ui.flash('Put a filter in the dripper first');
+  if (st.bed <= 0) return ui.flash(st.drawerG > 0 ? 'Add the grounds first' : 'Grind the beans first');
+  st.busy = 'pour'; let t = 0, ph = 'lift', hold = 0;
+  ui.animate(dt => { t += dt; st.t += dt; const need = kNeed(st.kettle);
+    if (ph === 'lift'){ st.pk = Math.min(1, t/.9); st.tilt = (need - rad(4))*ease(st.pk); if (st.pk >= 1) ph = 'bloom'; }
+    else if (ph === 'bloom' || ph === 'main'){ const goal = ph === 'bloom' ? 40 : 250;
+      st.tilt += (need + rad(3) - st.tilt)*Math.min(1, dt*10); st.flow = st.tilt > need; st.sw += dt*(ph === 'main' ? 3 : 0);
+      if (st.flow){ const q = Math.min(75*dt, goal - st.poured); st.poured += q; st.kettle -= q; inflow(st, q); }
+      if (st.poured >= goal - 1e-6){ st.flow = false; ph = ph === 'bloom' ? 'wait' : 'back'; hold = 0; } }
+    else if (ph === 'wait'){ hold += dt; st.tilt += (need - rad(4) - st.tilt)*Math.min(1, dt*10); st.bloom = Math.min(1, st.bloom + dt*3); if (hold > .9) ph = 'main'; }
+    else if (ph === 'back'){ hold += dt; st.pk = Math.max(0, 1 - hold/.9); st.tilt = (need - rad(4))*ease(st.pk); st.sw *= .9;
+      if (st.pk <= 0){ st.pk = 0; st.tilt = 0; st.sw = 0; st.busy = ''; ph = 'drain'; } }
+    if (ph !== 'wait') st.bloom = Math.max(0, st.bloom - dt*.5);
+    const out = st.free*(1 - Math.exp(-1.1*dt)); st.free -= out; st.carafe += out; st.drip = dt > 0 ? out/dt : 0;
+    if (ph === 'drain' && st.free < .8){ st.carafe += st.free; st.free = 0; st.drip = 0; st.bloom = 0; st.done = true; return false; }
+    return true; });
+}
+
+const ui = mountFigure({
+  fig:'26', title:'Pour-over coffee set',
+  size:[BW, BD, 38], palette:'cobalt', turn:'full',
+  state: poInit(),
+  scene,
+  stats: st => [ { label:'Ground', value: Math.round(15*(1 - st.beans)) + ' g', small: true },
+                 { label:'Water poured', value: Math.round(st.poured) + ' g', small: true },
+                 { label:'Coffee', value: Math.round(st.carafe) + ' ml', small: true } ],
+  buttons:[
+    { label:'Grind beans', onClick: grind },
+    { label:'Add filter', onClick: addFilter },
+    { label:'Add grounds', onClick: addGrounds },
+    { label:'Pour water', onClick: pour },
+  ],
+  acts:{ crank: (st, el, ui) => grind(st, ui), kettle: (st, el, ui) => pour(st, ui) },
+  params:(st, q) => {
+    const sg = +q.get('stage') || 0;
+    if (sg >= 1){ st.beans = 0; st.drawerG = 15; }
+    if (sg >= 2) st.filter = true;
+    if (sg >= 3){ st.drawerG = 0; st.bed = 15; }
+    if (sg === 4){ st.poured = 150; st.kettle = K_FULL - 150; st.absorbed = 30; st.free = 60; st.carafe = 60; st.drip = 66; st.pk = 1; st.tilt = kNeed(st.kettle) + rad(3); st.sw = .6; st.flow = true; st.t = .4; }
+    if (sg >= 5){ st.poured = 250; st.kettle = K_FULL - 250; st.absorbed = 30; st.carafe = 220; st.done = true; }
+    if (q.has('crank')) st.crank = rad(+q.get('crank'));
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
