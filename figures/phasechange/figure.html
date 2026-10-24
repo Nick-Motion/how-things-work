@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>States of matter</title></head><body>
+<script src="core.js"></script>
+<script>
+/* ---------- Truth first: ice to water to steam in a lidded beaker on a hot / cold plate ----------
+   1. Set up: 250 g of ice cubes straight from a -10 C freezer fill a 600 mL borosilicate beaker standing on the
+      aluminium top plate of a Peltier hot / cold plate. A steel lid with a silicone gasket rests on the beaker's rim;
+      two toggle clamps on the lid can pull it down onto the gasket. Through the lid: a red-spirit glass thermometer
+      (-10 to 150 C) in a rubber stopper, its bulb among the cubes; a 3.3 mm vent pipe with an 85 g brass dead weight
+      sitting on it; a 0 to 300 kPa pressure gauge on a short stem.
+   2. Heat: current through the Peltier modules pumps heat up into the top plate and the beaker (about 400 W; the
+      figure runs about 25 times faster than life). The ice warms at 2.09 J/g K: 5.2 kJ takes it from -10 to 0 C.
+   3. Melting: at 0 C the heat goes into breaking the ice lattice, not warming it: 334 J/g, 83.5 kJ. The thermometer
+      waits at 0 C while the cubes shrink and float (ice is 0.917 g/mL, less dense than water).
+   4. The water warms at 4.18 J/g K: 104.5 kJ to 100 C.
+   5. Boiling at 101.3 kPa: at 100 C steam bubbles form on the hot floor; 2257 J/g turn water into steam and the
+      temperature waits again. With the clamps open the lid only rests on the gasket and steam leaks round the rim.
+   6. Press the lid: the clamps squeeze the gasket, so steam can leave only by lifting the dead weight off its vent:
+      0.085 kg x 9.81 / 8.55 mm2 = 98.6 kPa over the air: about 200 kPa inside. Water's vapour pressure (Antoine) is
+      200 kPa at 120.2 C, so the water warms on past 100 C (the gauge climbing with it) and boils at 120.2 C, the weight
+      rattling as the steam lifts it.
+   7. Release the clamps with the water at 120 C: the pressure falls to 101.3 kPa and the superheated water flash-boils
+      down to 100 C: 20.9 kJ make 9.3 g of steam at once.
+   8. Cool: the current through the Peltier modules is reversed; they pump heat out of the beaker down into the finned
+      heat sink, where the fan blows it away. The water cools to 0 C; freezing waits at 0 C as ice grows up from the
+      cold floor (the latent heat must be taken out again); then the ice cools to -10 C, where the plate stops.
+   9. Molecules: in ice each H2O is held by hydrogen bonds in an open lattice and can only vibrate; in water the bonds
+      keep breaking and re-forming and the molecules jostle past each other, faster when hotter; in steam they fly
+      free, about 1700 times the volume, so only a few are left in the same box. The white plumes are not steam itself
+      but droplets condensing from it in the cool air.
+   Model: enthalpy H of the beaker's contents from -10 C ice: H1 = m 2.09 x 10, H2 = H1 + m 334, H3 = H2 + m 4.18 Tb;
+   any heat above H3 boils water off (2257 J/g, the mass m falls). Heat added = the net heat the plate put in.
+   Parts (each is held by another):
+   PLATE    case on four rubber feet on the bench . aluminium top plate on the case . 4 Peltier modules under it .
+            finned aluminium heat sink under them . fan under the sink . air vents in the sides . PT100 sensor in the
+            plate . control board . power supply . mains inlet on the back and its cord . display, mode knob, heat and
+            cool lights, power switch on the front
+   BEAKER   600 mL borosilicate beaker on the top plate, graduations . ice cubes / water / steam bubbles inside
+   LID      silicone gasket on the rim . steel lid on the gasket . two toggle clamps (arm, leg, hook under the rim) .
+            vent pipe through the lid, brass dead weight on it . pressure gauge on its stem . rubber stopper holding
+            the thermometer: bulb, red spirit column, scale
+   SEE-THROUGH overlays: a box of H2O molecules zoomed from a spot in the beaker; the live heating curve */
+
+/* ---------- geometry (x = depth, y = width, z = up; 1 unit = 1 cm) ---------- */
+const BW = 32, BD = 34, BH = 2, TOPZ = 42;
+const HX0 = 3, HX1 = 29, HY0 = 4, HY1 = 30, HZ0 = BH + .6, HZ1 = 12;            // hot / cold plate case
+const AX0 = 5, AX1 = 25, AY0 = 7, AY1 = 27, PLZ = HZ1 + .6;                      // aluminium top plate
+const BCX = 15, BCY = 17, BRO = 4.6, BRI = 4.4, BF = PLZ + .3, BTOP = PLZ + 12.5, AREA = Math.PI*BRI*BRI;
+const LR = 5.4, LZ0 = BTOP + .25, LZ1 = LZ0 + .8;                                 // lid on its gasket
+const THX = 13.2, THY = 19.4, THR = .4, TB0 = 14.2, TB1 = 15.4, TTOP = 41.4, TZ0 = 28, TZ1 = 40;   // thermometer
+const WX = 16.6, WY = 15.8, WR = 1.2;                                             // vent pipe and dead weight
+const GX = 13.2, GY = 14.2, GZ = LZ1 + 3.9, GR = 1.7;                             // pressure gauge
+const KNY = 16.5, KNZ = 7.4;                                                      // mode knob
+const STEEL = { l:'#e3e6e7', m:'#b4bcbf', d:'#7d878b' }, ALU = { l:'#eef0f1', m:'#cdd3d6', d:'#9aa3a7' }, BRASS = matOf('#dcb24c');
+const ICEM = { l:'#f6fcff', m:'#d9eef8', d:'#a7cde0' }, GASK = matOf('#e0703c'), RUBBER = matOf('#4a4440'), PELM = { l:'#fbfaf5', m:'#e6e3d8', d:'#bcb7a6' };
+const PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, PSUM = matOf('#9aa3a8');
+const WATERC = '#8cc6e6', SPIRIT = '#d8342c';
+/* ---------- physics (kJ, kg, C, kPa) ---------- */
+const M0 = 250, CI = 2.09, CW = 4.18, LF = 334, LV = 2257, RATE_H = 10, RATE_C = 7, PV = 200, MBMAX = 40, QMAX = 320;
+
+/* ---------- small helpers ---------- */
+const pcLerp = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const pcAdd = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], pcScl = (a, s) => a.map(v => v*s);
+const pcClamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const pcSeed = i => { const x = Math.sin(i*127.1 + 3.7)*43758.5453; return x - Math.floor(x); };
+const pcFrac = x => x - Math.floor(x);
+const pcBoxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const pcBx = (x0, y0, z0, x1, y1, z1, M, w = .8) => box(x0, y0, z0, x1, y1, z1, M, toneI, w);
+const pcStroke = (pts, col, w, close = false) => { const d = pd(pts, close);
+  return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(w + .9)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(w)}" stroke-linecap="round" stroke-linejoin="round"/>`; };
+const pcRingZ = (cx, cy, z, r, n = 20) => on(PZ(z), ellUV(cx, cy, r, r, n));
+function pcPrismY(prof, y0, y1, M, w = .9){
+  const A = on(PY(y0), prof), B = on(PY(y1), prof), cen = avg(A.concat(B)); let s = '';
+  for (let i = 0; i < prof.length; i++){ const j = (i + 1) % prof.length, q = [A[i], A[j], B[j], B[i]];
+    let nr = norm(cross(sub(q[1], q[0]), sub(q[3], q[0]))); if (dot(nr, sub(avg(q), cen)) < 0) nr = nr.map(v => -v);
+    if (vis(nr)) s += shape(q, toneI(nr, M), w); }
+  if (vis([0,1,0])) s += shape(B, toneI([0,1,0], M), w);
+  if (vis([0,-1,0])) s += shape(A, toneI([0,-1,0], M), w);
+  return s + hullInk([...A, ...B], 1.6); }
+function pcWire(pts, col, w = .5, seg = 2.5){
+  const q = [pts[0]];
+  for (let i = 1; i < pts.length; i++){ const a = pts[i-1], b = pts[i], n = Math.max(1, Math.ceil(Math.hypot(...sub(b, a)) / seg));
+    for (let j = 1; j <= n; j++) q.push(pcLerp(a, b, j/n)); }
+  const out = [];
+  for (let i = 0; i < q.length - 1; i++) out.push({ box: pcBoxOf([q[i], q[i+1]]), svg: pcStroke([q[i], q[i+1]], col, w) });
+  return out; }
+function pcBall(c, r, M, wk = 1){ const [X, Y] = P(...c), R = r*CAM_K;
+  return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="${M.m}"/><circle cx="${f(X + .25*R)}" cy="${f(Y - .3*R)}" r="${f(.45*R)}" fill="${M.l}"/>`
+    + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="none" stroke="${INK}" stroke-width="${f(wk)}"/>`; }
+const pcSides = (cx, cy, za, zb, r, w) => { let s = ''; for (const a of nearHalf()){ const t = a*Math.PI/180, x = cx + r*Math.cos(t), y = cy + r*Math.sin(t); s += line([[x, y, za], [x, y, zb]], w); } return s; };
+function pcGlass(cx, cy, za, zb, r, inner = '', w = .8){
+  const A = pcRingZ(cx, cy, za, r), B = pcRingZ(cx, cy, zb, r);
+  const t = (YAW + 35)*Math.PI/180, sx = cx + r*.8*Math.cos(t), sy = cy + r*.8*Math.sin(t);
+  return `<g opacity=".45">${loft(A, B, () => mix(CLEAR.m, '#ffffff', .2), true)}</g>` + inner
+    + `<g opacity=".3">${loft(A, B, n => toneI(n, CLEAR))}</g>`
+    + `<path d="${pd([[sx, sy, za + .2], [sx, sy, zb - .2]], false)}" stroke="#ffffff" stroke-width=".5" opacity=".6"/>` + pcSides(cx, cy, za, zb, r, w); }
+function pcLiquid(cx, cy, za, zb, r, col, op = .6, top = true){
+  if (zb <= za) return '';
+  const A = pcRingZ(cx, cy, za, r), B = pcRingZ(cx, cy, zb, r);
+  return `<g opacity="${op}">${loft(A, B, n => mix(col, '#7fa9b5', vis(n) ? .15 : 0))}${top ? fill(pd(B), mix(col, '#ffffff', .35)) : ''}</g>`; }
+// every separated pair that overlaps on screen is an edge, then farthest-first (a robust depth sort)
+function pcSort(items){
+  items = items.filter(Boolean); const n = items.length, out = Array.from({length:n}, () => []), deg = new Array(n).fill(0);
+  const dep = items.map(p => depthOf(p.at || boxMid(p.box))), done = new Array(n).fill(false);
+  const R = items.map(p => { if (!p.box) return null; const xs = [], ys = [];
+    for (const x of [0, 1]) for (const y of [0, 1]) for (const z of [0, 1]){ const q = P(p.box[x][0], p.box[y][1], p.box[z][2]); xs.push(q[0]); ys.push(q[1]); }
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; });
+  const hit = (a, b) => a && b && a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++){ const o = hit(R[i], R[j]) ? sepOrder(items[i], items[j]) : 0;
+    if (o < 0){ out[i].push(j); deg[j]++; } else if (o > 0){ out[j].push(i); deg[i]++; } }
+  let svg = '';
+  for (let c = 0; c < n; c++){ let best = -1;
+    for (let i = 0; i < n; i++) if (!done[i] && (best < 0 || (deg[i] === 0) > (deg[best] === 0) || ((deg[i] === 0) === (deg[best] === 0) && dep[i] < dep[best]))) best = i;
+    done[best] = true; svg += items[best].svg; for (const j of out[best]) deg[j]--; }
+  return svg; }
+
+/* ---------- thermodynamics ---------- */
+const pcPsat = T => .133322*Math.pow(10, 8.07131 - 1730.63/(233.426 + T));        // water's vapour pressure, kPa (Antoine)
+const pcTsat = p => 1730.63/(8.07131 - Math.log10(p/.133322)) - 233.426;
+const TBV = pcTsat(PV);
+const pcSealed = st => st.pa > .5;
+const pcTb = st => pcSealed(st) ? TBV : 100;
+const pcMm = st => (M0 - st.mb)/1000;
+const pcHs = st => { const mm = pcMm(st), h1 = mm*CI*10, h2 = h1 + mm*LF; return [h1, h2, h2 + mm*CW*pcTb(st)]; };
+function pcT(st){ const mm = pcMm(st), [h1, h2] = pcHs(st); return st.H < h1 ? -10 + st.H/(mm*CI) : st.H < h2 ? 0 : (st.H - h2)/(mm*CW); }
+function pcFi(st){ const mm = pcMm(st), [h1, h2] = pcHs(st); return st.H <= h1 ? 1 : st.H < h2 ? 1 - (st.H - h1)/(mm*LF) : 0; }
+const pcP = st => pcSealed(st) ? Math.min(PV, Math.max(101.3, pcPsat(pcT(st)))) : 101.3;
+function pcRecord(st){ const lt = st.trace[st.trace.length - 1], T = pcT(st);
+  if (!lt || Math.abs(st.Q - lt[0]) > 1.2 || Math.abs(T - lt[1]) > .6) st.trace.push([st.Q, T]);
+  if (st.trace.length > 900) st.trace.splice(1, 1); }
+// put dQ kJ into the beaker (negative: take it out); returns the grams boiled off
+function pcHeat(st, dQ){
+  if (dQ < 0) dQ = Math.max(dQ, -st.H);
+  st.H += dQ; st.Q += dQ;
+  let boiled = 0; const h3 = pcHs(st)[2];
+  if (st.H > h3 + 1e-9){ boiled = (st.H - h3)/LV*1000; st.mb += boiled; st.H = pcHs(st)[2]; }
+  if (pcFi(st) <= 0) st.cubes = false;
+  pcRecord(st);
+  return boiled; }
+const pcPhase = st => { const T = pcT(st), fi = pcFi(st);
+  if (fi >= 1) return 'ice';
+  if (fi > 0) return st.mode === 'cool' ? 'freezing' : st.mode === 'heat' ? 'melting' : 'ice + water';
+  if (Math.max(st.boilA, st.burst) > .3) return 'boiling';
+  return 'water'; };
+
+/* ---------- the hot / cold plate ---------- */
+const HP_PROF = rrUV(HY0, HZ0, HY1, HZ1, 1.2);
+function pcPlateMat(st){ const h = pcClamp((st.plT - 35)/120), c = pcClamp((8 - st.plT)/25);
+  return { l: mix(mix(ALU.l, '#f6b585', h), '#d3ecfa', c), m: mix(mix(ALU.m, '#e59a68', h), '#b7dcf0', c), d: mix(ALU.d, '#8a7f8f', .2*c) }; }
+function pcHot(st, m, k){
+  const FRONT = facing([1,0,0]), BACK = facing([-1,0,0]); let s = '';
+  if (BACK) s += fill(pd(on(PX(HX0), HP_PROF)), tone([-1,0,0], m));
+  if (FRONT) s += fill(pd(on(PX(HX1), HP_PROF)), tone([1,0,0], m));
+  s += extrude(HP_PROF, HX0, HX1, m);
+  for (const [yy, nn] of [[HY0 - .03, [0,-1,0]], [HY1 + .03, [0,1,0]]]) if (facing(nn))
+    for (let x = 6.5; x <= 25; x += 2.2) s += shape(on(PY(yy), rrUV(x, 4.4, x + .9, 9.6, .4)), '#2b2725', .4);
+  if (FRONT){
+    s += ink(pd(on(PX(HX1), HP_PROF)), 1.6);
+    const md = st.mode === 'heat' ? 'HEAT' : st.mode === 'cool' ? 'COOL' : 'OFF';
+    s += shape(on(PX(HX1 + .03), rrUV(5.6, 6.4, 12.6, 10.4, .3)), '#1d2a26', .8);
+    s += tx(HX1 + .06, 9.1, 7.9, String(Math.round(st.plT)), 1.9, '#8af0ae', 800) + tx(HX1 + .06, 9.1, 6.9, 'PLATE C  ' + md, .6, '#8af0ae', 700);
+    s += tx(HX1 + .04, KNY, KNZ + 2.1, 'OFF', .6, INK, 800) + tx(HX1 + .04, KNY - 2.3, KNZ + 1.1, 'HEAT', .6, INK, 800) + tx(HX1 + .04, KNY + 2.3, KNZ + 1.1, 'COOL', .6, INK, 800);
+    s += shape(on(PX(HX1 + .03), ellUV(22.8, 9.3, .36, .36, 10)), st.mode === 'heat' ? '#ff5a3c' : '#4a2b26', .4)
+      + shape(on(PX(HX1 + .03), ellUV(24.6, 9.3, .36, .36, 10)), st.mode === 'cool' ? '#5ab8ff' : '#26394a', .4);
+    s += tx(HX1 + .04, 22.8, 8.1, 'HEAT', .5, INK, 800) + tx(HX1 + .04, 24.6, 8.1, 'COOL', .5, INK, 800);
+    s += tx(HX1 + .04, 17, 4.2, 'HOT / COLD PLATE', .8, mix(m.d, '#000000', .2), 800);
+  }
+  if (BACK){ s += ink(pd(on(PX(HX0), HP_PROF)), 1.6) + shape(on(PX(HX0 - .05), rrUV(25.8, 4.6, 28.6, 6.8, .3)), '#2b2725', .6);
+    for (let y = 7; y <= 20; y += 1.6) s += shape(on(PX(HX0 - .04), rrUV(y, 4.4, y + .7, 9.8, .3)), '#2b2725', .3); }
+  s += hullInk([...on(PX(HX0), HP_PROF), ...on(PX(HX1), HP_PROF)], 2.4);
+  // the aluminium top plate, warm or frosty with the plate's temperature
+  s += pcBx(AX0, AY0, HZ1, AX1, AY1, PLZ, pcPlateMat(st), 1);
+  if (!(k > 0)) return [s, ''];
+  // inside: Peltier modules under the plate, the heat sink and its fins, the fan, the board, the power supply
+  const parts = [], z1 = HZ1 - .05;
+  for (const [x, y] of [[12, 14], [12, 20], [18, 14], [18, 20]]){
+    parts.push({ box: [[x - 2, y - 2, z1 - .45], [x + 2, y + 2, z1]], svg: pcBx(x - 2, y - 2, z1 - .45, x + 2, y + 2, z1, PELM, .5) }); }
+  parts.push({ box: [[7, 9, z1 - 1.4], [23, 25, z1 - .45]], svg: pcBx(7, 9, z1 - 1.4, 23, 25, z1 - .45, ALU, .6) });
+  for (let j = 0; j < 11; j++){ const y = 9.2 + j*1.5;
+    parts.push({ box: [[7, y, 6.6], [23, y + .3, z1 - 1.4]], svg: pcBx(7, y, 6.6, 23, y + .3, z1 - 1.4, ALU, .4) }); }
+  { const fz0 = 4.2, fz1 = 6.4, a = st.fan; let fan = cyl(BCX, BCY, fz0, fz1, 3.6, DARK, toneI, .8, 28);
+    if (facing([0,0,1])) for (let b = 0; b < 5; b++){ const t = a + b*2*Math.PI/5;
+      fan += shape([[BCX, BCY, fz1 + .02], [BCX + 3.2*Math.cos(t), BCY + 3.2*Math.sin(t), fz1 + .02], [BCX + 3.2*Math.cos(t + .7), BCY + 3.2*Math.sin(t + .7), fz1 + .02]], '#5c5751', .3); }
+    fan += cyl(BCX, BCY, fz1, fz1 + .2, .9, DARK, toneI, .5, 14);
+    parts.push({ box: [[BCX - 3.6, BCY - 3.6, fz0], [BCX + 3.6, BCY + 3.6, fz1 + .2]], svg: fan }); }
+  parts.push({ box: [[23.6, 5.2, HZ0 + .2], [28.4, 14.4, HZ0 + 1.4]], svg: pcBx(23.6, 5.2, HZ0 + .2, 28.4, 14.4, HZ0 + .5, PCBM, .6)
+    + pcBx(24.6, 6.4, HZ0 + .5, 26.2, 8.4, HZ0 + .9, DARK, .4) + pcBx(25.4, 10.4, HZ0 + .5, 27.2, 12.6, HZ0 + 1.4, matOf('#3f4a8a'), .4) });
+  parts.push({ box: [[4.2, 25.8, HZ0 + .2], [10, 29.4, 8]], svg: pcBx(4.2, 25.8, HZ0 + .2, 10, 29.4, 8, PSUM, .7) });
+  parts.push({ box: [[14.6, 22.2, HZ1 + .1], [15.4, 27.2, HZ1 + .5]], svg: rod([BCX, 27.2, HZ1 + .3], [BCX, 22.4, HZ1 + .3], .2, STEEL, toneI, .5) });
+  parts.push({ box: [[HX0, 25.8, 4.6], [HX0 + 1.2, 28.6, 6.8]], svg: pcBx(HX0, 25.8, 4.6, HX0 + 1.2, 28.6, 6.8, DARK, .6) });
+  parts.push(...pcWire([[HX0 + 1.2, 27, 5.6], [4.2, 27.4, 5.6]], '#3a3632', .3, 1.2));
+  parts.push(...pcWire([[10, 26.4, 4], [18, 25.6, 4], [23.6, 14, HZ0 + .5]], '#3a3632', .3, 1.5));
+  parts.push(...pcWire([[23.6, 9, HZ0 + .5], [20, 13, 6], [18, 13.6, z1 - .5]], '#e2483d', .25, 1.2));
+  parts.push(...pcWire([[23.6, 10, HZ0 + .5], [20.6, 19, 6], [18, 20.4, z1 - .5]], '#2e2b28', .25, 1.2));
+  parts.push(...pcWire([[BCX, 27.2, HZ1 + .3], [BCX + 2, 28.6, 9], [24, 13, HZ0 + .6]], '#d8a24a', .22, 1.5));
+  parts.push(...pcWire([[BCX + 3.6, BCY, 5.3], [22, 11, HZ0 + .6]], '#2e2b28', .22, 1.5));
+  return [s, pcSort(parts)]; }
+
+/* ---------- the beaker and what is in it ---------- */
+// the cube pile: three layers round the centre, leaving room for the thermometer
+const PC_CUBES = [];
+{ const tha = Math.atan2(THY - BCY, THX - BCX);
+  for (let j = 0; j < 3; j++) for (let c = 0; c < 7; c++){ const a = c ? ((c - 1)*60 + j*30)*Math.PI/180 : 0, r = c ? 2.6 : 0;
+    if (c && Math.abs(Math.atan2(Math.sin(a - tha), Math.cos(a - tha))) < .45) continue;
+    PC_CUBES.push({ j, x: r*Math.cos(a) + .3*(pcSeed(j*7 + c) - .5), y: r*Math.sin(a) + .3*(pcSeed(j*7 + c + 40) - .5), dz: .15*pcSeed(j*7 + c + 80) }); } }
+const pcZT = T => TZ0 + (T + 10)*(TZ1 - TZ0)/160;
+function pcLevels(st){
+  const fi = pcFi(st), mw = M0 - st.mb, mi = mw*fi, ml = mw - mi;
+  if (st.cubes){ const n = PC_CUBES.length, s = mi > .05 ? Math.cbrt(mi/(.917*n)) : 0, Ap = n/3*s*s, ft = .917*3*s, h1 = ml/(AREA - Ap);
+    const h = h1 < ft ? h1 : (ml + mi)/AREA; return { fi, s, zoff: h1 < ft ? 0 : h - ft, w0: BF, w1: BF + h }; }
+  const hi = mi/.917/AREA; return { fi, s: 0, zoff: 0, slab: hi, w0: BF + hi, w1: BF + hi + ml/AREA }; }
+// a glass thermometer between two heights: its red spirit column, and the scale where it is on show
+function pcThermo(za, zb, T){
+  const zt = pcZT(T), col = pcLiquid(THX, THY, Math.max(za, TB1), Math.min(zb, zt), .15, SPIRIT, 1, false);
+  let s = pcGlass(THX, THY, za, zb, THR, col, .6);
+  if (zb > TZ0 && facing([1,0,0])){ let tk = '', num = '';
+    for (let v = -10; v <= 150; v += 2){ const z = pcZT(v); if (z < za || z > zb) continue; const span = v % 10 ? 25 : 50, pts = [];
+      for (let a = -span; a <= span; a += 10){ const t = a*Math.PI/180; if (Math.cos(t - YAW*Math.PI/180) <= 0) continue; pts.push([THX + THR*Math.cos(t) + .01, THY + THR*Math.sin(t), z]); }
+      if (pts.length > 1) tk += pd(pts, false);
+      if (v % 50 === 0) num += tx(THX + THR + .02, THY - .02, z + .12, String(v), .42, INK, 800); }
+    s += `<path d="${tk}" fill="none" stroke="${INK}" stroke-width=".3"/>` + num;
+    if (zb >= TZ1 + .6) s += tx(THX + THR + .02, THY, TZ1 + .5, 'C', .42, INK, 800); }
+  return s; }
+function pcBeaker(st, k){
+  const T = pcT(st), lv = pcLevels(st);
+  const rings = [[PLZ, BRO - .2], [PLZ + .3, BRO], [BTOP - .45, BRO], [BTOP - .2, BRO + .25], [BTOP, BRO + .25]].map(([z, r]) => [z, r, pcRingZ(BCX, BCY, z, r, 32)]);
+  let far = '', near = '';
+  for (let i = 0; i < rings.length - 1; i++){ const A = rings[i][2], B = rings[i+1][2];
+    far += loft(A, B, () => mix(CLEAR.m, '#ffffff', .25), true); near += loft(A, B, n => toneI(n, CLEAR)); }
+  let s = `<g opacity=".5">${far}</g>` + fill(pd(pcRingZ(BCX, BCY, BF, BRI, 32)), mix(CLEAR.l, '#ffffff', .3), 'opacity=".6"');
+  // the thermometer's lower end: bulb among the cubes, the spirit rising out of it
+  s += pcThermo(TB1, BTOP, T) + pcBall([THX, THY, TB0 + .5], .5, { l:'#ff8a7a', m:SPIRIT }, .6);
+  // ice: a pile of cubes (floating once the meltwater is deep enough), or a slab frozen up from the cold floor
+  if (lv.s > .05){ const cubes = PC_CUBES.map(c => { const x = BCX + c.x, y = BCY + c.y, z = BF + lv.zoff + c.j*lv.s + c.dz*lv.s; return { x, y, z, d: depthOf([x, y, z + lv.s/2]) }; }).sort((a, b) => a.d - b.d);
+    s += `<g opacity=".9">${cubes.map(c => pcBx(c.x - lv.s/2, c.y - lv.s/2, c.z, c.x + lv.s/2, c.y + lv.s/2, c.z + lv.s, ICEM, .5)).join('')}</g>`; }
+  if (lv.slab > .02) s += `<g opacity=".92">${cyl(BCX, BCY, BF, lv.w0, BRI, ICEM, toneI, .6, 32)}</g>`;
+  // the water and its surface
+  if (lv.w1 > lv.w0 + .02){ const A = pcRingZ(BCX, BCY, lv.w0, BRI, 32), B = pcRingZ(BCX, BCY, lv.w1, BRI, 32);
+    s += `<g opacity=".42">${loft(A, B, () => WATERC)}${fill(pd(B), mix(WATERC, '#ffffff', .35))}</g>` + ink(pd(B), .45); }
+  // boiling: steam bubbles born on the hot floor, growing as they rise; a mist in the headspace
+  const boil = Math.max(st.boilA, st.burst);
+  if (boil > .02 && lv.w1 - lv.w0 > .5){ const n = Math.round(18*boil);
+    for (let i = 0; i < n; i++){ const a1 = pcSeed(i), a2 = pcSeed(i + 31), a3 = pcSeed(i + 63), ph = pcFrac(st.t*(1.1 + .9*a1) + a2);
+      const rr = 3.7*Math.sqrt(a3), an = a1*Math.PI*14, p = [BCX + rr*Math.cos(an), BCY + rr*Math.sin(an), lv.w0 + .2 + ph*(lv.w1 - lv.w0 - .3)];
+      const [X, Y] = P(...p), R = (.12 + .3*ph)*CAM_K;
+      s += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="#ffffff" fill-opacity=".75" stroke="${INK}" stroke-width=".35"/>`; }
+    for (let i = 0; i < 4; i++){ const ph = pcFrac(st.t*.4 + i/4), [X, Y] = P(BCX + 2.2*Math.cos(i*1.7), BCY + 2.2*Math.sin(i*1.7), lv.w1 + .6 + ph*(BTOP - lv.w1 - 1.2));
+      s += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f((1 + 1.4*ph)*CAM_K)}" fill="#ffffff" opacity="${f(.4*boil*Math.sin(Math.PI*ph))}"/>`; } }
+  // the near glass, a streak, the outline, the printed graduations
+  s += `<g opacity=".28">${near}</g>`;
+  const t1 = (YAW + 30)*Math.PI/180;
+  s += `<path d="${pd([[BCX + BRO*Math.cos(t1), BCY + BRO*Math.sin(t1), PLZ + 1.5], [BCX + BRO*Math.cos(t1), BCY + BRO*Math.sin(t1), BTOP - 1.5]], false)}" stroke="#ffffff" stroke-width=".9" opacity=".7" stroke-linecap="round"/>`;
+  for (const a2 of nearHalf()){ const t = a2*Math.PI/180, c = Math.cos(t), sn = Math.sin(t);
+    s += line(rings.map(([z, r]) => [BCX + r*c, BCY + sn*r, z]), 1.1); }
+  { const [h0, h1] = nearHalf(), arc = []; for (let i = 0; i <= 18; i++){ const t = (h0 + (h1 - h0)*i/18)*Math.PI/180; arc.push([BCX + (BRO - .2)*Math.cos(t), BCY + (BRO - .2)*Math.sin(t), PLZ]); } s += line(arc, 1.1); }
+  if (facing([1,0,0])){ let tk = '';
+    for (let v = 50; v <= 500; v += 50){ const z = BF + v/AREA, span = v % 100 ? 6 : 12, pts = [];
+      for (let a = -span; a <= span; a += 5){ const t = a*Math.PI/180; if (Math.cos(t - YAW*Math.PI/180) <= 0) continue; pts.push([BCX + BRO*Math.cos(t) + .01, BCY + BRO*Math.sin(t), z]); }
+      if (pts.length > 1) tk += pd(pts, false);
+      if (v % 100 === 0) s += tx(BCX + BRO + .02, BCY - 1.1, z - .2, String(v), .55, INK, 800); }
+    s += `<path d="${tk}" fill="none" stroke="${INK}" stroke-width=".4"/>` + tx(BCX + BRO + .02, BCY, BF + 600/AREA + .4, '600 ML', .6, INK, 800); }
+  return { svg: s, lv }; }
+
+/* ---------- the lid and what sits on it ---------- */
+function pcLidDz(st){ return .15*(1 - ease(st.pa)) + (pcSealed(st) ? 0 : .07*st.boilA*Math.abs(Math.sin(st.t*31))); }
+function pcClamp3(st, sg, dz){
+  const a = (1 - ease(st.pa))*40*Math.PI/180, zt = LZ1 + dz + .3, y1 = BCY + sg*(LR + .3);
+  const p0 = [BCX, BCY + sg*(LR - .9), zt], p1 = [BCX, y1, zt], p2 = pcAdd(p1, pcScl([0, sg*Math.sin(a), -Math.cos(a)], 2.1));
+  const p3 = pcAdd(p2, pcScl([0, -sg*Math.cos(a), -Math.sin(a)], .75));
+  const ys = [p0[1], p1[1] + sg*.45].sort((u, v) => u - v), yl = [p1[1] - sg*.3, p2[1] + sg*.3].sort((u, v) => u - v);
+  return [
+    { box: [[BCX - .45, ys[0], zt - .3], [BCX + .45, ys[1], zt + .45]], svg: act('lid', rod(p0, p1, .3, STEEL, toneI, .6) + pcBall(p1, .42, DARK, .6)) },
+    { box: [[BCX - .3, yl[0], p2[2] - .3], [BCX + .3, yl[1], zt]], svg: act('lid', rod(p1, p2, .26, STEEL, toneI, .6)) },
+    { box: pcBoxOf([p2, p3], .2), svg: rod(p2, p3, .22, STEEL, toneI, .5) } ]; }
+
+/* ---------- see-through overlays: the molecule box and the heating curve ---------- */
+const PC_N = 24, PC_GAS = 7, PC_LAT = [], PC_BONDS = [];
+for (let r = 0; r < 4; r++) for (let c = 0; c < 6; c++) PC_LAT.push({ x: -.75 + .3*c + (r % 2 ? .15 : 0) - .075, y: -.6 + .4*r, th: (r + c) % 2 ? Math.PI/2 : -Math.PI/2, o: (3 - r)*6 + c });
+for (let i = 0; i < PC_N; i++) for (let j = i + 1; j < PC_N; j++) if (Math.hypot(PC_LAT[i].x - PC_LAT[j].x, PC_LAT[i].y - PC_LAT[j].y) < .46) PC_BONDS.push([i, j]);
+const pcTri = (x, h) => { const p = pcFrac((x + h)/(4*h))*4*h; return p < 2*h ? p - h : 3*h - p; };
+function pcMol(X, Y, R, th, op){
+  if (op < .02) return '';
+  const h = a => `<circle cx="${f(X + .95*R*Math.cos(a))}" cy="${f(Y + .95*R*Math.sin(a))}" r="${f(.52*R)}" fill="#ffffff" stroke="${INK}" stroke-width=".7"/>`;
+  return `<g opacity="${f(op)}">${h(th - .91)}${h(th + .91)}<circle cx="${f(X)}" cy="${f(Y)}" r="${f(.8*R)}" fill="#e2483d" stroke="${INK}" stroke-width=".8"/></g>`; }
+function pcMolBox(st, at, cx, cy){
+  const u = INK_K, HB = 50*u, rr = 5.6*u, [fx, fy] = P(...at), T = pcT(st), fi = pcFi(st), g = Math.max(st.boilA, st.burst), t = st.t;
+  const txt = (x, y, str, sz = 6.2, anc = 'middle') => `<text x="${f(x)}" y="${f(y)}" font-size="${f(sz*u)}" text-anchor="${anc}" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">${str}</text>`;
+  let s = '';
+  // the zoom lines from the spot in the beaker to the two nearest corners of the box
+  const cs = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => [cx + a*HB, cy + b*HB]).sort((p, q) => Math.hypot(p[0] - fx, p[1] - fy) - Math.hypot(q[0] - fx, q[1] - fy));
+  for (const c of cs.slice(0, 2)) s += `<path d="M${f(fx)} ${f(fy)}L${f(c[0])} ${f(c[1])}" stroke="${INK}" stroke-width=".8" stroke-dasharray="2 2" fill="none" opacity=".7"/>`;
+  s += `<rect x="${f(fx - 2.2*u)}" y="${f(fy - 2.2*u)}" width="${f(4.4*u)}" height="${f(4.4*u)}" fill="none" stroke="${INK}" stroke-width="1"/>`;
+  const id = 'mbox' + (++_clipN);
+  s += `<clipPath id="${id}"><rect x="${f(cx - HB)}" y="${f(cy - HB)}" width="${f(2*HB)}" height="${f(2*HB)}"/></clipPath>`;
+  const bg = mix(mix('#e4f3fb', '#d3e9f6', 1 - fi), '#f8f5ec', g);
+  let mol = `<rect x="${f(cx - HB)}" y="${f(cy - HB)}" width="${f(2*HB)}" height="${f(2*HB)}" fill="${bg}"/>`;
+  const hot = pcClamp((T + 10)/130), pos = [];
+  for (let i = 0; i < PC_N; i++){ const L0 = PC_LAT[i], s1 = pcSeed(i + 3), s2 = pcSeed(i + 50), s3 = pcSeed(i + 99);
+    const sI = pcClamp(fi*PC_N - L0.o), vib = (.012 + .02*hot)*HB;
+    const lat = [L0.x*HB + vib*Math.sin(t*13 + i*2.1), L0.y*HB + vib*Math.cos(t*11 + i*1.7), L0.th + .25*Math.sin(t*9 + i)];
+    const A = (.07 + .1*hot)*HB, sp = 1 + 1.4*hot;
+    const liq = [pcTri(L0.x*HB*.95 + (s1 - .5)*.3*HB + A*Math.sin(t*1.3*sp*(1 + s2) + 6*s3) + .25*HB*Math.sin(t*.35*sp + 6*s1), .86*HB),
+      pcTri(L0.y*HB*1.05 + (s2 - .5)*.3*HB + A*Math.cos(t*1.1*sp*(1 + s1) + 6*s2) + .2*HB*Math.cos(t*.3*sp + 6*s2), .86*HB), s3*7 + t*sp*(1.5 + s1)];
+    const v = .95*HB*Math.sqrt((T + 273)/373), va = s3*Math.PI*2;
+    const gas = [pcTri((s1*2 - 1)*.8*HB + v*Math.cos(va)*t, .88*HB), pcTri((s2*2 - 1)*.8*HB + v*Math.sin(va)*t, .88*HB), s1*6 + t*(4 + 3*s2)];
+    let p = pcLerp(liq, lat, sI); const gi = i < PC_GAS ? g : 0; p = pcLerp(p, gas, gi);
+    pos.push({ X: cx + p[0], Y: cy + p[1], th: p[2], sI, op: i < PC_GAS ? 1 : 1 - g }); }
+  // hydrogen bonds hold the lattice together
+  for (const [i, j] of PC_BONDS){ const w = Math.min(pos[i].sI, pos[j].sI)*(1 - g); if (w < .05) continue;
+    mol += `<path d="M${f(pos[i].X)} ${f(pos[i].Y)}L${f(pos[j].X)} ${f(pos[j].Y)}" stroke="#4f86d8" stroke-width="1" stroke-dasharray="1.6 1.4" opacity="${f(w)}"/>`; }
+  for (const q of pos) mol += pcMol(q.X, q.Y, rr, q.th, q.op);
+  s += `<g clip-path="url(#${id})">${mol}</g><rect x="${f(cx - HB)}" y="${f(cy - HB)}" width="${f(2*HB)}" height="${f(2*HB)}" fill="none" stroke="${INK}" stroke-width="2.2"/>`;
+  const title = g > .5 ? 'STEAM: FLYING FREE' : fi >= 1 ? 'ICE: A LOCKED LATTICE' : fi > 0 ? (st.mode === 'cool' ? 'FREEZING: LATTICE GROWS' : 'MELTING: LATTICE BREAKS') : 'WATER: JOSTLING';
+  s += txt(cx, cy - HB - 5*u, title);
+  // legend under the box
+  const ly = cy + HB + 10*u;
+  s += pcMol(cx - HB + 6*u, ly - 2*u, 4*u, -Math.PI/2, 1) + txt(cx - HB + 12*u, ly, 'H2O', 5.4, 'start');
+  s += `<path d="M${f(cx + 2*u)} ${f(ly - 2*u)}L${f(cx + 12*u)} ${f(ly - 2*u)}" stroke="#4f86d8" stroke-width="1" stroke-dasharray="1.6 1.4"/>` + txt(cx + 14*u, ly, 'H BOND', 5.4, 'start');
+  return s; }
+function pcCurve(st, x0, y0){
+  const u = INK_K, w = 118*u, h = 90*u;
+  const px0 = x0 + 17*u, px1 = x0 + w - 6*u, py0 = y0 + h - 14*u, py1 = y0 + 10*u;
+  const X = q => px0 + (px1 - px0)*pcClamp(q, 0, QMAX)/QMAX, Y = T => py0 - (py0 - py1)*(T + 20)/160;
+  const txt = (x, y, str, sz = 5.6, anc = 'middle', col = INK) => `<text x="${f(x)}" y="${f(y)}" font-size="${f(sz*u)}" text-anchor="${anc}" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${col}">${str}</text>`;
+  let s = `<rect x="${f(x0)}" y="${f(y0)}" width="${f(w)}" height="${f(h)}" rx="${f(4*u)}" fill="#fff8e6" stroke="${INK}" stroke-width="1.4"/>`;
+  const m = M0/1000, h1 = m*CI*10, h2 = h1 + m*LF;
+  for (const [Tb, op] of [[100, 1], [TBV, .7]]){ const pts = [[0, -10], [h1, 0], [h2, 0], [h2 + m*CW*Tb, Tb], [QMAX, Tb]];
+    s += `<path d="M${pts.map(([q, T]) => f(X(q)) + ' ' + f(Y(T))).join('L')}" stroke="#8f989b" stroke-width=".7" stroke-dasharray="1.2 1.2" fill="none" opacity="${op}"/>`; }
+  s += txt(px1 - 1*u, Y(100) + 5.6*u, '101 KPA', 4.2, 'end', '#6d7679') + txt(px1 - 1*u, Y(TBV) - 2*u, '200 KPA', 4.2, 'end', '#6d7679');
+  s += txt((X(h1) + X(h2))/2, Y(0) - 2.4*u, 'MELTING', 4.4) + txt(X(h2 + m*CW*TBV) + 3*u, Y(110) + 1.6*u, 'BOILING', 4.2, 'start');
+  const tr = st.trace.concat([[st.Q, pcT(st)]]), d = `M${tr.map(([q, T]) => f(X(q)) + ' ' + f(Y(T))).join('L')}`;
+  s += `<path d="${d}" stroke="${INK}" stroke-width="2.6" fill="none" stroke-linejoin="round" stroke-linecap="round"/><path d="${d}" stroke="#4f86d8" stroke-width="1.3" fill="none" stroke-linejoin="round" stroke-linecap="round"/>`;
+  s += `<circle cx="${f(X(st.Q))}" cy="${f(Y(pcT(st)))}" r="${f(3*u)}" fill="${st.mode === 'cool' ? '#9fd6ff' : '#ff8a5c'}" stroke="${INK}" stroke-width="1"/>`;
+  s += `<path d="M${f(px0)} ${f(py1)}L${f(px0)} ${f(py0)}L${f(px1)} ${f(py0)}" stroke="${INK}" stroke-width="1" fill="none"/>`;
+  for (const q of [0, 100, 200, 300]) s += txt(X(q), py0 + 6.4*u, q);
+  for (const T of [0, 50, 100]) s += txt(px0 - 2.4*u, Y(T) + 2*u, T, 5.6, 'end');
+  s += txt((px0 + px1)/2, py0 + 12.4*u, 'HEAT ADDED (KJ)', 5.2) + txt(px0 + 3*u, py1 + 1*u, 'T (C)', 5.6, 'start');
+  return s; }
+
+// the page's own controls over the figure, in drawing units, so the panels and label columns can keep clear of them
+let PC_PANELS = [];
+function pcBlocks(){
+  const svgEl = document.getElementById('fig'), M = svgEl && svgEl.getScreenCTM(); if (!M) return null;
+  const iv = M.inverse(), out = [];
+  for (const el of document.querySelectorAll('#btns, #stats, .vset, .zchip')){ const r = el.getBoundingClientRect(); if (!r.width || !r.height) continue;
+    const a = new DOMPoint(r.left, r.top).matrixTransform(iv), b = new DOMPoint(r.right, r.bottom).matrixTransform(iv); out.push([a.x, a.y, b.x, b.y]); }
+  return out; }
+const pcHit = (bx, B, m) => B.some(o => bx[0] < o[2] + m && bx[2] > o[0] - m && bx[1] < o[3] + m && bx[3] > o[1] - m);
+function pcCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0]));
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0; let fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 3*k);
+  const Lc = [], Rc = [], svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal;
+  let s = '';
+  const wMax = u ? hgt*1.3 : Math.max(...items.map(it => it.text.length))*fs*.62 + fs*1.5, Bk = (pcBlocks() || []).concat(PC_PANELS), midY = vb.y + vb.height/2;
+  const top = { [-1]: vb.y + hgt, [1]: vb.y + hgt }, bot = { [-1]: vb.y + vb.height - hgt, [1]: vb.y + vb.height - hgt };
+  for (const side of [-1, 1]){ const x0 = side < 0 ? Math.max(vb.x, xmin - 10*k - wMax) : xmax + 10*k, x1 = side < 0 ? xmin - 10*k : Math.min(vb.x + vb.width, xmax + 10*k + wMax);
+    for (const o of Bk) if (o[0] < x1 && o[2] > x0){ if ((o[1] + o[3])/2 < midY) top[side] = Math.max(top[side], o[3] + hgt/2 + 4*k); else bot[side] = Math.min(bot[side], o[1] - hgt/2 - 4*k); } }
+  const all = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  const cL = Math.max(0, bot[-1] - top[-1]), cR = Math.max(0, bot[1] - top[1]), n = all.length;
+  const slots = g => [Math.floor(cL/g) + 1, Math.floor(cR/g) + 1];
+  let sc = 1; while (sc > .76 && slots(gap*sc)[0] + slots(gap*sc)[1] < n) sc -= .05;
+  if (sc < 1){ fs *= sc; hgt *= sc; gap *= sc; }
+  const [sL, sR] = slots(gap), nL = Math.max(n - sR, Math.min(sL, Math.round(n*cL/(cL + cR || 1))));
+  all.forEach((c, i) => (i < nL ? Lc : Rc).push(c));
+  for (const [col, side] of [[Lc, -1], [Rc, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    const gp = col.length > 1 ? Math.max(hgt + k, Math.min(gap, (bot[side] - top[side])/(col.length - 1))) : gap;
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gp, top[side]); y = c.py; }
+    let yb = bot[side] + gp; for (let i = col.length - 1; i >= 0; i--){ col[i].py = Math.min(col[i].py, yb - gp); yb = col[i].py; }
+    const shift = col.length ? Math.max(0, col.reduce((a, c) => a + c.py - c.Y, 0) / col.length) : 0;
+    const room = col.length ? col[0].py - top[side] : 0; for (const c of col) c.py -= Math.min(shift, room);
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s; }
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0), items = [], T = pcT(st), dz = pcLidDz(st), sealed = pcSealed(st), boil = Math.max(st.boilA, st.burst);
+  const put = (b, svg, inside = '') => items.push({ box: b, svg: k > 0 && inside ? `<g opacity="${f(1 - .8*k)}">${svg}</g><g opacity="${f(k)}">${inside}</g>` : svg });
+  let s = castShadow([...on(PZ(0), rectUV(0, 0, BW, BD)), ...on(PZ(BH), rectUV(0, 0, BW, BD))]);
+  s += board(0, 0, BW, BD, BH, 4, WOOD);
+  { const bx = (x0, y0, z0, x1, y1, z1) => { const o = []; for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) o.push([x, y, z]); return o; };
+    const ps = [bx(HX0, HY0, BH, HX1, HY1, PLZ), [...pcRingZ(BCX, BCY, PLZ, BRO, 16), ...pcRingZ(BCX, BCY, LZ1, LR, 16)],
+      bx(THX - THR, THY - THR, LZ1, THX + THR, THY + THR, TTOP), bx(GX - .6, GY - GR, LZ1, GX + .6, GY + GR, GZ + GR), bx(WX - WR, WY - WR, LZ1, WX + WR, WY + WR, LZ1 + 3.6)];
+    s += clipTo(boardTop(0, 0, BW, BD, BH, 4), ps.map(p => castShadow(p, BH)).join('')); }
+
+  // ---- hot / cold plate: case and top plate, rubber feet, knob, power switch, mains cord
+  { const [sv, ins] = pcHot(st, m, k); put([[HX0, HY0, HZ0], [HX1, HY1, PLZ]], sv, ins); }
+  for (const [x, y] of [[HX0 + 1.6, HY0 + 1.6], [HX0 + 1.6, HY1 - 1.6], [HX1 - 1.6, HY0 + 1.6], [HX1 - 1.6, HY1 - 1.6]])
+    put([[x - .9, y - .9, BH], [x + .9, y + .9, HZ0]], cyl(x, y, BH, HZ0, .9, RUBBER, toneI, .7, 14));
+  { const near = facing([1,0,0]), ang = st.mode === 'heat' ? 1.05 : st.mode === 'cool' ? -1.05 : 0;
+    put([[HX1, KNY - 1.3, KNZ - 1.3], [HX1 + 1.2, KNY + 1.3, KNZ + 1.3]], act('knob', cylX(HX1, HX1 + 1.2, KNY, KNZ, 1.3, DARK, toneI, .8, 20)
+      + (near ? line([[HX1 + 1.22, KNY, KNZ], [HX1 + 1.22, KNY - 1*Math.sin(ang), KNZ + 1*Math.cos(ang)]], .7) : '')));
+    put([[HX1, 27, 6.4], [HX1 + .5, 28.6, 8.4]], pcPrismY([[HX1, 6.4], [HX1 + .4, 6.4], [HX1 + .1, 8.4], [HX1, 8.4]], 27, 28.6, matOf('#e2483d'), .6)); }
+  items.push(...pcWire([[HX0 - .2, 27.2, 5.7], [HX0 - 1.4, 27.6, 5.2], [HX0 - 1.8, 28.6, BH + .3], [1.2, 30.5, BH + .3], [.3, 31.5, BH + .3]], '#2e2b28', .5));
+
+  // ---- the beaker on the top plate
+  const bk = pcBeaker(st, k), lv = bk.lv;
+  put([[BCX - BRO - .25, BCY - BRO - .25, PLZ], [BCX + BRO + .25, BCY + BRO + .25, BTOP]], bk.svg);
+
+  // ---- gasket and lid, clamps, vent pipe and dead weight, gauge, thermometer in its stopper
+  put([[BCX - LR, BCY - LR, BTOP], [BCX + LR, BCY + LR, LZ1 + dz]], act('lid', cyl(BCX, BCY, BTOP, LZ0 + dz, BRO + .3, GASK, toneI, .7, 32)
+    + cyl(BCX, BCY, LZ0 + dz, LZ1 + dz, LR, STEEL, toneI, 1.3, 40)
+    + (facing([0,0,1]) ? ink(pd(pcRingZ(BCX, BCY, LZ1 + dz + .01, LR - .5, 40)), .4) : '')));
+  for (const sg of [-1, 1]) items.push(...pcClamp3(st, sg, dz));
+  { const lift = sealed ? .2*st.boilA*Math.abs(Math.sin(st.t*23)) : 0, zb = LZ1 + dz + 1 + lift;
+    put([[WX - .3, WY - .3, LZ1 + dz], [WX + .3, WY + .3, zb]], rod([WX, WY, LZ1 + dz], [WX, WY, LZ1 + dz + 1.1], .3, STEEL, toneI, .6));
+    put([[WX - WR, WY - WR, zb], [WX + WR, WY + WR, zb + 2.8]], act('lid', cyl(WX, WY, zb, zb + 2.2, WR, BRASS, toneI, 1, 24) + cyl(WX, WY, zb + 2.2, zb + 2.8, .45, BRASS, toneI, .7, 14)
+      + (facing([1,0,0]) ? tx(WX + WR*Math.cos(YAW*Math.PI/180) + .02, WY + WR*Math.sin(YAW*Math.PI/180)*.0, zb + .8, '85 G', .5, mix(BRASS.d, '#000000', .3), 800) : ''))); }
+  { const zc = GZ + dz, p = pcP(st);
+    put([[GX - .3, GY - .3, LZ1 + dz], [GX + .3, GY + .3, zc - GR + .1]], rod([GX, GY, LZ1 + dz], [GX, GY, zc - GR + .1], .28, BRASS, toneI, .6));
+    let g = cylX(GX - .6, GX + .6, GY, zc, GR, STEEL, toneI, .9, 28);
+    if (facing([1,0,0])){ const fx = GX + .62, pt = (r, a) => [fx, GY - r*Math.sin(a), zc + r*Math.cos(a)], A = v => (-135 + 270*v/300)*Math.PI/180;
+      g += shape(on(PX(fx), ellUV(GY, zc, GR - .22, GR - .22, 28)), '#fbf8ee', .5);
+      let tk = ''; for (let v = 0; v <= 300; v += 20){ const a = A(v); tk += pd([pt(GR - .3, a), pt(v % 100 ? GR - .5 : GR - .7, a)], false); }
+      g += `<path d="${tk}" stroke="${INK}" stroke-width=".35" fill="none"/>` + pcStroke([pt(GR - .3, A(200)), pt(GR - .75, A(200))], '#e2483d', .3);
+      for (const v of [0, 100, 200, 300]){ const q = pt(GR - 1.05, A(v)); g += tx(fx + .01, q[1], q[2] - .14, String(v), .36, INK, 800); }
+      g += tx(fx + .01, GY, zc - .75, 'KPA', .32, INK, 800);
+      g += line([pt(-.25, A(p)), pt(GR - .45, A(p))], .9) + shape(on(PX(fx + .02), ellUV(GY, zc, .16, .16, 8)), INK, 0); }
+    put([[GX - .6, GY - GR, zc - GR], [GX + .6, GY + GR, zc + GR]], g); }
+  put([[THX - .75, THY - .75, LZ1 + dz], [THX + .75, THY + .75, LZ1 + dz + 1]], cyl(THX, THY, LZ1 + dz, LZ1 + dz + 1, .75, RUBBER, toneI, .8, 18));
+  put([[THX - THR, THY - THR, LZ1 + dz + 1], [THX + THR, THY + THR, TTOP]], pcThermo(LZ1 + dz + 1, TTOP, T)
+    + (facing([0,0,1]) ? fill(pd(pcRingZ(THX, THY, TTOP, THR, 14)), mix(CLEAR.l, '#ffffff', .4)) + ink(pd(pcRingZ(THX, THY, TTOP, THR, 14)), .6) : ''));
+
+  s += pcSort(items);
+
+  // ---- steam: leaking round the loose lid, or lifting the dead weight once the lid is clamped
+  if (boil > .02){ const n = st.burst > .05 ? 12 : 7;
+    for (let i = 0; i < n; i++){ const ph = pcFrac(st.t*.6 + i/n + .13*pcSeed(i)), a = pcSeed(i + 9)*Math.PI*2;
+      let base; if (sealed) base = [WX, WY, LZ1 + dz + 1.2];
+      else { const an = (YAW + 160*(pcSeed(i + 17) - .5))*Math.PI/180; base = [BCX + LR*Math.cos(an), BCY + LR*Math.sin(an), BTOP + .3]; }
+      const [X, Y] = P(base[0] + 1.6*ph*Math.cos(a), base[1] + 1.6*ph*Math.sin(a), base[2] + 8*ph), R = (.4 + 1.8*ph)*CAM_K;
+      s += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="#ffffff" fill-opacity="${f(.85*boil*(1 - ph))}" stroke="${INK}" stroke-width=".5" stroke-opacity="${f(.6*boil*(1 - ph))}"/>`; } }
+
+  // ---- see-through overlays
+  const lbl = []; PC_PANELS = [];
+  const ph = pcPhase(st), heat = st.mode === 'heat', cool = st.mode === 'cool', run = st.mode !== 'off';
+  if (k > 0){
+    const u = INK_K, MW = 104*u, MH = 128*u, CW2 = 118*u, CH = 90*u, g = 8*u, Bk = pcBlocks(), vb = document.getElementById('fig').viewBox.baseVal;
+    const tops = [P(THX, THY, TTOP), P(GX, GY, GZ + GR), P(WX, WY, LZ1 + 4)];
+    const xa = Math.min(...tops.map(q => q[0])) - g, xb = Math.max(...tops.map(q => q[0])) + g, yLim = P(BCX, BCY, BTOP)[1];
+    const fit = (x0, w, h) => { if (!Bk || x0 < vb.x || x0 + w > vb.x + vb.width) return null;
+      for (let y = vb.y + 4*u; y + h <= yLim; y += 3*u) if (!pcHit([x0, y, x0 + w, y + h], Bk, g)) return y; return null; };
+    let mx, my, cx0, cy0, best = null;
+    for (const curveL of [true, false]){
+      const c = curveL ? [xa - CW2, fit(xa - CW2, CW2, CH)] : [xb, fit(xb, CW2, CH)], mm = curveL ? [xb, fit(xb, MW, MH)] : [xa - MW, fit(xa - MW, MW, MH)];
+      if (c[1] != null && mm[1] != null && (!best || Math.max(c[1], mm[1]) < best.y)) best = { y: Math.max(c[1], mm[1]), c, m: mm }; }
+    if (best){ [cx0, cy0] = best.c; mx = best.m[0] + MW/2; my = best.m[1] + 62*u; PC_PANELS = [[cx0, cy0, cx0 + CW2, cy0 + CH], [best.m[0], best.m[1], best.m[0] + MW, best.m[1] + MH]]; }
+    else { const [bx, by] = P(BCX, BCY, BTOP), sd = P(THX, THY, TTOP)[0] <= bx ? 1 : -1; mx = bx + sd*80*u; my = by - 40*u; cx0 = bx - sd*30*u - (sd > 0 ? CW2 : 0); cy0 = by - 120*u; }
+    const g2 = Math.max(st.boilA, st.burst);
+    const spot = g2 > .5 ? [BCX + 1.5, BCY - 1.5, Math.min(BTOP - 1, lv.w1 + 2)] : lv.s > .05 && lv.fi > .5 ? [BCX, BCY, BF + lv.zoff + 2.5*lv.s] : lv.slab > .5 && lv.fi > .5 ? [BCX, BCY, BF + lv.slab/2] : [BCX, BCY, (lv.w0 + lv.w1)/2];
+    s += `<g opacity="${f(k)}">${pcMolBox(st, spot, mx, my)}${pcCurve(st, cx0, cy0)}</g>`;
+  }
+  const icy = lv.fi > 0, wet = lv.w1 > lv.w0 + .1;
+  if (k > .6){
+    const fr = [1,0,0], cyc = [Math.cos(YAW*Math.PI/180), Math.sin(YAW*Math.PI/180)];
+    lbl.push(
+      { at: [BCX + BRO*cyc[0], BCY + BRO*cyc[1], BTOP - 3], text: 'BEAKER 600 ML', on: false },
+      { at: [BCX + BRO, BCY, BF + 300/AREA], text: 'GRADUATIONS', on: false },
+      { at: [THX, THY, TB0 + .5], text: 'THERMOMETER BULB', on: run },
+      { at: [THX, THY, pcZT(T) - 1], text: 'RED SPIRIT COLUMN', on: run },
+      { at: [THX + THR, THY, pcZT(50)], text: 'SCALE -10 TO 150 C', on: false },
+      { at: [THX, THY, TTOP - .5], text: 'THERMOMETER', on: false },
+      { at: [THX, THY + .75, LZ1 + .6], text: 'RUBBER STOPPER', on: false },
+      { at: [BCX + LR*cyc[0], BCY + LR*cyc[1], LZ1], text: 'STEEL LID', on: sealed },
+      { at: [BCX + (BRO + .3)*cyc[0], BCY + (BRO + .3)*cyc[1], BTOP + .1], text: 'SILICONE GASKET', on: sealed },
+      { at: [BCX, BCY + LR + .3, LZ1 + .3], text: 'TOGGLE CLAMP', on: sealed },
+      { at: [WX, WY, LZ1 + 3], text: 'DEAD WEIGHT 85 G', on: sealed && st.boilA > .3 },
+      { at: [WX, WY, LZ1 + .6], text: 'VENT PIPE', on: sealed && st.boilA > .3 },
+      { at: [GX + .6, GY, GZ], text: 'PRESSURE GAUGE', on: pcP(st) > 102 },
+      { at: [BCX, BCY, BTOP - 1.5], text: 'HEADSPACE', on: false },
+      { at: [AX1, BCY, PLZ - .3], text: 'ALUMINIUM TOP PLATE', on: run },
+      { at: [18, 14, HZ1 - .3], text: 'PELTIER MODULES', on: run },
+      { at: [23, 19, 8.5], text: 'HEAT SINK FINS', on: run },
+      { at: [BCX + 3.6, BCY, 5.3], text: 'FAN', on: run },
+      { at: [BCX, 25, HZ1 + .3], text: 'PT100 SENSOR', on: run },
+      { at: [27, 7, HZ0 + .5], text: 'CONTROL BOARD', on: run },
+      { at: [7, 29.4, 7], text: 'POWER SUPPLY', on: false },
+      { at: [HX0, 27.2, 5.7], text: 'MAINS INLET', on: false },
+      { at: [1.2, 30.5, BH + .3], text: 'MAINS CORD', on: false },
+      { at: [HX1 - 1.6, HY1 - 1.6, BH + .3], text: 'RUBBER FOOT', on: false },
+      { at: [HX1 + 1.2, KNY, KNZ], text: 'MODE KNOB', on: run },
+      { at: [HX1, 22.8, 9.3], text: 'HEAT LIGHT', on: heat },
+      { at: [HX1, 24.6, 9.3], text: 'COOL LIGHT', on: cool },
+      { at: [HX1, 9.1, 9.8], text: 'PLATE DISPLAY', on: run },
+      { at: [HX1 + .3, 27.8, 7.4], text: 'POWER SWITCH', on: true },
+      { at: [16, HY1, 8], text: 'AIR VENTS', on: run });
+    if (lv.s > .05) lbl.push({ at: [BCX + 2, BCY, BF + lv.zoff + 2*lv.s], text: 'ICE CUBES', on: ph === 'melting' || ph === 'freezing' });
+    if (lv.slab > .05) lbl.push({ at: [BCX + BRI, BCY, BF + lv.slab/2], text: 'ICE FROZEN FROM BELOW', on: ph === 'freezing' });
+    if (wet) lbl.push({ at: [BCX - 1, BCY - 2.5, (lv.w0 + lv.w1)/2], text: icy ? 'MELTWATER' : 'WATER', on: false });
+    if (boil > .3) lbl.push({ at: [BCX + 1.5, BCY - 1.5, lv.w0 + 1], text: 'STEAM BUBBLES', on: true });
+    s += pcCallouts(lbl, [0, BW, 0, BD, 0, TOPZ]);
+  } else if (k === 0){
+    s += pcCallouts([
+      { at: [THX, THY, TTOP - 2], text: 'THERMOMETER', on: run },
+      { at: [WX, WY, LZ1 + 3], text: 'DEAD WEIGHT', on: sealed },
+      { at: [GX + .6, GY, GZ], text: 'PRESSURE GAUGE', on: pcP(st) > 102 },
+      { at: [BCX, BCY + LR + .3, LZ1 + .3], text: 'TOGGLE CLAMP', on: sealed },
+      { at: [BCX + LR*Math.cos(YAW*Math.PI/180), BCY + LR*Math.sin(YAW*Math.PI/180), LZ1], text: 'LID', on: sealed },
+      { at: [BCX + BRO*Math.cos(YAW*Math.PI/180), BCY + BRO*Math.sin(YAW*Math.PI/180), BTOP - 3], text: 'BEAKER', on: false },
+      { at: [BCX + 1, BCY - 1, lv.s > .05 ? BF + lv.zoff + 2*lv.s : (lv.w0 + lv.w1)/2], text: lv.fi >= 1 ? 'ICE' : lv.fi > 0 ? 'ICE AND WATER' : boil > .3 ? 'BOILING WATER' : 'WATER', on: ph === 'boiling' || ph === 'melting' || ph === 'freezing' },
+      { at: [HX1, 17, 4.6], text: 'HOT / COLD PLATE', on: run },
+      { at: [HX1 + 1.2, KNY, KNZ], text: 'MODE KNOB', on: run } ], [0, BW, 0, BD, 0, TOPZ]);
+  }
+  return s;
+}
+
+/* ---------- behaviour (one state object, one loop) ---------- */
+let ui, pcLoopOn = false;
+const pcFresh = () => ({ H:0, Q:0, mb:0, mode:'off', press:false, pa:0, boilA:0, burst:0, fan:0, plT:-10, t:0, cubes:true, trace:[[0, -10]] });
+const pcPlTgt = st => { const T = pcT(st); return st.mode === 'heat' ? Math.min(170, T + 55) : st.mode === 'cool' ? Math.max(-25, T - 18) : T; };
+const pcBusy = st => st.mode !== 'off' || st.boilA > 0 || st.burst > 0 || st.pa !== (st.press ? 1 : 0) || Math.abs(st.plT - pcPlTgt(st)) > .5;
+function pcStep(st, dt){
+  st.t += dt;
+  st.pa = st.press ? Math.min(1, st.pa + dt/.6) : Math.max(0, st.pa - dt/.6);
+  const dQ = st.mode === 'heat' ? RATE_H*dt : st.mode === 'cool' ? -RATE_C*dt : 0, b = pcHeat(st, dQ);
+  st.boilA = b > 0 ? Math.min(1, st.boilA + dt/.4) : Math.max(0, st.boilA - dt/.8);
+  if (b > 1.5*Math.max(0, dQ)/LV*1000 + .02) st.burst = 1;          // more steam than the plate's heat makes: a flash boil
+  st.burst = Math.max(0, st.burst - dt/1.8);
+  if (st.mode !== 'off') st.fan += dt*14;
+  st.plT += (pcPlTgt(st) - st.plT)*Math.min(1, dt/.8);
+  if (st.mode === 'heat' && st.mb >= MBMAX && b > 0){ st.mode = 'off'; ui.flash('Plate off: 40 g has boiled away. Cool it, or Reset'); }
+  if (st.mode === 'cool' && st.H <= 1e-9){ st.mode = 'off'; ui.flash('Back to ice at -10 C: the plate stops cooling'); }
+}
+function pcRun(){ if (pcLoopOn) return; pcLoopOn = true;
+  ui.animate(dt => { const st = ui.st; pcStep(st, dt); if (!pcBusy(st)){ pcLoopOn = false; return false; } return true; }); }
+function pcSet(st, mode){
+  if (st.mode !== mode && mode === 'heat' && st.mb >= MBMAX - .01 && pcT(st) >= pcTb(st) - .01) return ui.flash('40 g has boiled away: cool it down, or Reset');
+  if (st.mode !== mode && mode === 'cool' && st.H <= 1e-9) return ui.flash('Already ice at -10 C, as cold as the plate goes');
+  st.mode = st.mode === mode ? 'off' : mode; pcRun(); }
+function pcKnob(st){ pcSet(st, st.mode === 'off' ? 'heat' : st.mode === 'heat' ? 'cool' : 'cool'); }
+function pcPress(st){ st.press = !st.press; pcRun(); }
+function pcReset(st){ Object.assign(st, pcFresh()); ui.render(); }
+
+ui = mountFigure({
+  fig:'C2', title:'States of matter', turn:'full',
+  size:[BW, BD, TOPZ], palette:'tomato',
+  state: pcFresh(),
+  scene,
+  stats: st => { const T = pcT(st);
+    return [ { label:'Temperature', value: T.toFixed(1) + ' °C' },
+      { label:'Pressure', value: pcP(st).toFixed(1) + ' kPa', small:true },
+      { label:'Boiling point', value: pcTb(st).toFixed(1) + ' °C', small:true },
+      { label:'State', value: pcPhase(st), small:true } ]; },
+  buttons:[
+    { label:'Heat on / off', onClick: st => pcSet(st, 'heat') },
+    { label:'Cool on / off', onClick: st => pcSet(st, 'cool') },
+    { label:'Press / release lid', onClick: st => pcPress(st) },
+    { label:'Reset', onClick: st => pcReset(st) },
+  ],
+  acts:{ knob: st => pcKnob(st), lid: st => pcPress(st) },
+  params:(st, q) => {
+    if (q.get('seal') === '1'){ st.press = true; st.pa = 1; }
+    if (q.has('Q')){ const Q = Math.min(QMAX, +q.get('Q') || 0); while (st.Q < Q - 1e-9) pcHeat(st, Math.min(.5, Q - st.Q)); }
+    if (q.has('cq')){ const c = +q.get('cq') || 0, Q1 = st.Q - c; while (st.Q > Q1 + 1e-9 && st.H > 0) pcHeat(st, -Math.min(.5, st.Q - Q1)); }
+    if (q.get('unseal') === '1'){ st.press = false; st.pa = 0; pcHeat(st, 0); st.burst = 1; }
+    if (q.has('mode')) st.mode = q.get('mode');
+    if (q.get('boil') === '1') st.boilA = 1;
+    if (q.has('t')) st.t = +q.get('t');
+    st.plT = pcPlTgt(st);
+  },
+});
+xrMount(() => ui, () => '');
+new ResizeObserver(() => ui.render()).observe(document.getElementById('fig'));
+new ResizeObserver(() => ui.render()).observe(document.getElementById('stats'));
+addEventListener('load', () => { for (const t of [0, 450, 1200]) setTimeout(() => ui.render(), t); });
+</script></body></html>
