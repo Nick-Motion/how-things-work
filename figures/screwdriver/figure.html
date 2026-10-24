@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Screwdriver</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Book page 32 teaches effort at a broad handle turning a narrow shaft and screw.
+   Hand torque passes through a fixed flanged tang, shaft and flat tip into the head slot.
+   A right-hand screw turns clockwise viewed from above and advances into wood by one pitch.
+   Reverse follows the same groove back. The tip stays seated and the hand follows the screw down.
+   Compare handles exchanges two fixed teaching handles while stopped, never expands a real handle.
+   The rigid flanged shaft anchor is representative, supported by Klein Tools 85742 documentation.
+   Case / grip. One fluted polymer handle around the shaft's embedded flanged tang.
+   Mechanism. Steel tang, round shaft, flattened tip. Slotted head, shank, helical thread and point.
+   Structure. Wood specimen rests on the bench board. The screw is already started in the specimen.
+   Power / controls. An implied hand applies 20 N tangentially. Arrows and radius lines are overlays.
+   Teaching scale. Two model units represent 4 mm. Handle diameters 24 and 48 mm, screw pitch 1.5 mm.
+   Teaching actions omit the hand and handle exchange movement. No automatic tool support is claimed.
+   Eight turns stop before the head seats. Reverse stops at the initial started position.
+*/
+const sdX=32, sdY=28, sdPitch=.75, sdLimit=8;
+const sdRadii=[6,12];
+const sdPoint=(x,y,z,a)=>[sdX+x*Math.cos(a)-y*Math.sin(a),sdY+x*Math.sin(a)+y*Math.cos(a),z];
+const sdRing=(r,z,a=0,flutes=false)=>Array.from({length:36},(_,i)=>{
+  const t=i*Math.PI/18, rr=r*(flutes?1+.045*Math.cos(6*t):1);
+  return sdPoint(rr*Math.cos(t),rr*Math.sin(t),z,a);
+});
+function sdSolid(A,B,m){
+  const top=vis([0,0,1])?B:A;
+  return loft(A,B,n=>tone(n,m))+fill(pd(top),tone([0,0,1],m))+ink(pd(top),.8)+hullInk([...A,...B],2.4);
+}
+const sdBounds=pts=>[0,1].map(j=>[0,1,2].map(k=>(j?Math.max:Math.min)(...pts.map(p=>p[k]))));
+function sdPrism(x0,y0,z0,x1,y1,z1,a,m){
+  const A=rectUV(x0,y0,x1,y1).map(([x,y])=>sdPoint(x,y,z0,a));
+  const B=rectUV(x0,y0,x1,y1).map(([x,y])=>sdPoint(x,y,z1,a));
+  return {box:sdBounds([...A,...B]),svg:sdSolid(A,B,m)};
+}
+function sdMeasurements(st){
+  const radius=sdRadii[st.handle]*.002;
+  return {radius,torque:20*radius,travel:2*Math.PI*radius*1000,advance:st.turns*1.5};
+}
+function sdScene(st,m){
+  const a=-2*Math.PI*st.turns, h=32-sdPitch*st.turns, r=sdRadii[st.handle], k=ease(st.xr||0);
+  const parts=[], put=(bounds,svg,shell=false)=>parts.push({box:bounds,svg,shell});
+  let svg=castShadow([[16,12,0],[48,44,0],...sdRing(r,h+69)]);
+  svg+=board(0,0,64,56,3,4);
+  svg+=castShadow([...sdRing(r,h+69),[sdX,sdY,25]],3,boardTop(0,0,64,56,3,4));
+  let wood=box(12,9,3,52,47,25,WOOD,tone,1.3);
+  for(let n=0;n<7;n++)wood+=line([[15,12+n*5,25.02],[27,13+n*5,25.02],[49,12+n*5,25.02]],.45).replaceAll(INK,'#9a7048');
+  put([[12,9,3],[52,47,25]],`<g opacity="${1-.87*k}">${wood}</g>`,true);
+  const metalParts=[];
+  const addMetal=(bounds,drawing)=>metalParts.push({box:bounds,svg:drawing});
+  addMetal([[sdX-1.25,sdY-1.25,h-16],[sdX+1.25,sdY+1.25,h]],rod([sdX,sdY,h-16],[sdX,sdY,h],1.25,METAL,toneI,.8));
+  addMetal([[sdX-1.25,sdY-1.25,h-19],[sdX+1.25,sdY+1.25,h-16]],rod([sdX,sdY,h-19],[sdX,sdY,h-16],.05,METAL,toneI,.8,1.25));
+  for(let i=0;i<192;i++){
+    const t0=i/16,t1=(i+1)/16;
+    const q=(t,rr)=>sdPoint(rr*Math.cos(2*Math.PI*t),rr*Math.sin(2*Math.PI*t),h-16+sdPitch*t,a);
+    const pts=[q(t0,1.24),q(t0,2),q(t1,2),q(t1,1.24)];
+    addMetal(sdBounds(pts),shape(pts,toneI(norm([Math.cos(2*Math.PI*t0+a),Math.sin(2*Math.PI*t0+a),.5]),METAL),.45));
+  }
+  put([[sdX-1.25,sdY-1.25,25],[sdX+1.25,sdY+1.25,h]],rod([sdX,sdY,25],[sdX,sdY,h],1.25,METAL,toneI,.8));
+  for(const part of metalParts)if(part.box[0][2]>=25)parts.push(part);
+  const headZ=h+2;
+  put([[sdX-3.6,sdY-3.6,h],[sdX+3.6,sdY+3.6,h+.6]],rod([sdX,sdY,h],[sdX,sdY,h+.6],3.6,METAL,toneI,1));
+  for(const sign of [-1,1]){
+    const start=Math.asin(.65/3.6), profile=Array.from({length:18},(_,i)=>{
+      const t=start+(Math.PI-2*start)*i/17;
+      return [3.6*Math.cos(t),sign*3.6*Math.sin(t)];
+    });
+    const A=profile.map(([x,y])=>sdPoint(x,y,h+.6,a)), B=profile.map(([x,y])=>sdPoint(x,y,headZ,a));
+    put(sdBounds([...A,...B]),sdSolid(A,B,METAL));
+  }
+  parts.push(sdPrism(-2.9,-.55,h+.65,2.9,.55,h+4.5,a,METAL));
+  put([[sdX-1.35,sdY-1.35,h+4.4],[sdX+1.35,sdY+1.35,h+32]],rod([sdX,sdY,h+4.4],[sdX,sdY,h+32],1.35,METAL,toneI,1.1));
+  const handleBands=[[h+32,r*.65],[h+34,r],[h+64,r],[h+68,r*.82],[h+69,r*.55]];
+  let grip='';
+  for(let i=0;i<handleBands.length-1;i++){
+    const [z0,r0]=handleBands[i],[z1,r1]=handleBands[i+1];
+    const A=sdRing(r0,z0,a,true),B=sdRing(r1,z1,a,true);
+    grip+=loft(A,B,n=>tone(n,m))+hullInk([...A,...B],2.3);
+  }
+  const cap=sdRing(r*.55,h+69,a,true);
+  grip+=shape(cap,m.l,1);
+  for(let i=0;i<6;i++){
+    const t=a+i*Math.PI/3,n=[Math.cos(t),Math.sin(t),0];
+    if(vis(n))grip+=line([[sdX+r*1.046*n[0],sdY+r*1.046*n[1],h+38],[sdX+r*1.046*n[0],sdY+r*1.046*n[1],h+61]],.8);
+  }
+  put([[sdX-r*1.05,sdY-r*1.05,h+32],[sdX+r*1.05,sdY+r*1.05,h+69]],`<g opacity="${1-.84*k}">${grip}</g>`,true);
+  // Hidden steel is drawn above both ghost shells so it stays crisp in see-through.
+  if(k>0){
+    metalParts.push({box:[[sdX-1.35,sdY-1.35,h+32],[sdX+1.35,sdY+1.35,h+59]],svg:rod([sdX,sdY,h+32],[sdX,sdY,h+59],1.35,METAL,toneI,1)});
+    metalParts.push(sdPrism(-3,-.7,h+45,3,.7,h+55,a,METAL));
+    svg+=byDepth(parts.filter(p=>p.shell))+byDepth([...parts.filter(p=>!p.shell),...metalParts.map(p=>({...p,svg:`<g opacity="${k}">${p.svg}</g>`}))]);
+  }else svg+=byDepth(parts);
+  const arrowZ=h+50, t=a+.5, contact=sdPoint(r*Math.cos(t),r*Math.sin(t),arrowZ,0);
+  const end=sdPoint(r*Math.cos(t)+8*Math.sin(t),r*Math.sin(t)-8*Math.cos(t),arrowZ,0);
+  const arrow=[end,sdPoint((end[0]-sdX)-3*Math.sin(t)+1.5*Math.cos(t),(end[1]-sdY)+3*Math.cos(t)+1.5*Math.sin(t),arrowZ,0),sdPoint((end[0]-sdX)-3*Math.sin(t)-1.5*Math.cos(t),(end[1]-sdY)+3*Math.cos(t)-1.5*Math.sin(t),arrowZ,0)];
+  svg+=`<g data-overlay="hand-force" opacity=".9"><path d="${pd([contact,end],false)}" fill="none" stroke="#ce5038" stroke-width="2.5"/>${fill(pd(arrow),'#ce5038')}<path d="${pd([[sdX,sdY,arrowZ],contact],false)}" fill="none" stroke="#ce5038" stroke-width="1" stroke-dasharray="2 2"/></g>`;
+  const labelItems=[{at:sdPoint(r,0,h+52,a),text:'HANDLE',on:st.moving},{at:[sdX,sdY,h+18],text:'SHAFT',on:st.moving},{at:sdPoint(2.2,0,h+3,a),text:'FLAT TIP',on:st.moving},{at:sdPoint(3.3,0,h+1,a),text:'SCREW HEAD',on:st.moving}];
+  if(k>.6)labelItems.push({at:[sdX,sdY,h+51],text:'FLANGED TANG',on:st.moving},{at:sdPoint(0,0,h+.7,a),text:'HEAD SLOT',on:st.moving},{at:[sdX+1.25,sdY,h-3],text:'SCREW SHANK',on:st.moving},{at:sdPoint(1.8,0,h-10,a),text:'THREAD',on:st.moving},{at:[sdX,sdY,h-18],text:'SCREW POINT',on:false},{at:[48,40,25],text:'WOOD SPECIMEN',on:false},{at:[57,48,3],text:'BENCH BOARD',on:false});
+  return svg+xrCallouts(labelItems,[18,46,14,42,3,h+69]);
+}
+function sdTurn(st,ui,direction){
+  if(st.moving)return ui.flash('Finish this turn first');
+  const target=Math.max(0,Math.min(sdLimit,st.turns+direction));
+  if(target===st.turns)return ui.flash(direction>0?'End of teaching stroke':'Screw remains started in the wood');
+  const from=st.turns;let elapsed=0;st.moving=true;
+  ui.animate(dt=>{elapsed=Math.min(1,elapsed+dt/1.4);st.turns=from+(target-from)*ease(elapsed);if(elapsed===1){st.moving=false;return false;}return true;});
+}
+const sdUI=mountFigure({
+  fig:'32',turn:'full',title:'Screwdriver',size:[64,56,104],palette:'mint',state:{turns:0,handle:0,moving:false},scene:sdScene,
+  buttons:[{label:'Turn',onClick:(st,ui)=>sdTurn(st,ui,1)},{label:'Reverse',onClick:(st,ui)=>sdTurn(st,ui,-1)},{label:'Compare handles',onClick:(st,ui)=>{if(st.moving)return ui.flash('Finish this turn before exchanging handles');st.handle=1-st.handle;}}],
+  stats:st=>{const q=sdMeasurements(st);return [{label:'Hand force',value:'20 N',small:true},{label:'Handle diameter',value:(q.radius*2000).toFixed(0)+' mm',small:true},{label:'Torque',value:q.torque.toFixed(2)+' Nm',small:true},{label:'Rim travel / turn',value:q.travel.toFixed(0)+' mm',small:true},{label:'Screw advance',value:q.advance.toFixed(1)+' mm',small:true}];},
+  params:(st,q)=>{const n=Number(q.get('turns'));if(q.has('turns')&&Number.isFinite(n))st.turns=Math.max(0,Math.min(sdLimit,n));if(q.get('handle')==='large')st.handle=1;}
+});
+xrMount(()=>sdUI,()=> '');
+addEventListener('unhandledrejection',e=>{document.documentElement.dataset.errors+=' '+String(e.reason)+';';});
+</script></body></html>
