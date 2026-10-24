@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The seasons</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   This is a hand-operated bench model, not a scale model of the solar system.
+   Move the globe on a circular track. Its north axle keeps the same world direction.
+   Solar declination is asin(axis dot direction to Sun). At the pin's 40 N latitude,
+   noon altitude is 90 - abs(latitude - declination), and geometric daylight is
+   24 acos(-tan(latitude) tan(declination)) / pi. Refraction is omitted.
+   One-day rotation turns the globe and pin together about that axle. Straightening
+   the axle makes declination zero throughout the orbit and daylight stays 12 hours.
+   A small classroom lamp has diverging light. Parallel rays here are an explicitly
+   drawn sunlight overlay representing the distant Sun, not the bench lamp's optics.
+   The orange ground patch is a tangent-plane overlay. Equal beam width covers
+   1/sin(noon altitude) times as much ground as perpendicular light.
+   Sources https://spaceplace.nasa.gov/seasons/en/ and
+   https://aa.usno.navy.mil/faq/seasons_orbit
+   Parts held by other parts.
+   Structure. Board, circular rail bolted to board, four season plaques on board,
+   sliding carriage on rail, upright on carriage, tilt pivot, lock knob, fork,
+   north and south axle ends in fork bearings, hollow globe held on axle, latitude pin.
+   Lamp. Base on board, hollow stem, socket, LED emitter, diffuser, low-voltage cable.
+   Globe markings. Equator, tropics, polar circles, poles, 40 N parallel, land and ocean.
+   Overlays are named separately from physical components. No hidden orbital drive.
+*/
+const seasonRad = Math.PI / 180;
+const seasonTable = [
+  {name:'March equinox', short:'MAR', angle:90},
+  {name:'June solstice', short:'JUN', angle:180},
+  {name:'September equinox', short:'SEP', angle:270},
+  {name:'December solstice', short:'DEC', angle:360}
+];
+const seasonCenter = [85,85,43], seasonOrbit = 61, seasonRadius = 17;
+const seasonAdd = (a,b) => a.map((v,i) => v+b[i]);
+const seasonScale = (a,k) => a.map(v => v*k);
+const seasonBox = pts => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))-.6),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i]))+.6)];
+function seasonGeo(st){
+  const angle=st.angle*seasonRad, tilt=st.tilt*seasonRad;
+  const center=[85+seasonOrbit*Math.cos(angle),85+seasonOrbit*Math.sin(angle),43];
+  const axis=[Math.sin(tilt),0,Math.cos(tilt)], sun=[-Math.cos(angle),-Math.sin(angle),0];
+  const dec=Math.asin(Math.max(-1,Math.min(1,dot(axis,sun))));
+  const noon=norm(sub(sun,seasonScale(axis,dot(axis,sun)))), east=norm(cross(axis,noon));
+  const at=(lat,lon,r=seasonRadius)=>{
+    const a=lat*seasonRad,b=(lon+st.spin)*seasonRad;
+    return seasonAdd(center,seasonAdd(seasonScale(axis,r*Math.sin(a)),seasonAdd(seasonScale(noon,r*Math.cos(a)*Math.cos(b)),seasonScale(east,r*Math.cos(a)*Math.sin(b)))));
+  };
+  const altitude=90-Math.abs(40-dec/seasonRad);
+  const day=24*Math.acos(Math.max(-1,Math.min(1,-Math.tan(40*seasonRad)*Math.tan(dec))))/Math.PI;
+  return {center,axis,sun,noon,east,at,altitude,day,dec:dec/seasonRad,pin:at(40,0,18.5)};
+}
+function seasonStroke(points,color,width=1,dash=''){
+  return `<path d="${pd(points,false)}" fill="none" stroke="${color}" stroke-width="${width}" ${dash?'stroke-dasharray="'+dash+'"':''} stroke-linecap="round"/>`;
+}
+function seasonGlobe(st,g){
+  const faces=[];
+  for(let lat=-90;lat<90;lat+=10) for(let lon=-180;lon<180;lon+=10){
+    const points=[[lat,lon],[lat+10,lon],[lat+10,lon+10],[lat,lon+10]].map(p=>g.at(...p));
+    const normal=norm(sub(avg(points),g.center));
+    if(!vis(normal)) continue;
+    const land=((lon+75)/35)**2+((lat-42)/26)**2<1 || ((lon+60)/20)**2+((lat+18)/35)**2<1 ||
+      ((lon-22)/25)**2+((lat-5)/34)**2<1 || ((lon-75)/60)**2+((lat-47)/24)**2<1 ||
+      ((lon-130)/22)**2+((lat+25)/15)**2<1 || lat < -75;
+    const light=dot(normal,g.sun), col=lat < -75 || lat > 75 ? '#eee9d8' : land?'#83b98a':'#78afd0';
+    faces.push({box:seasonBox(points),svg:face(pd(points),light>0.18?col:light>-.03?mix(col,'#263e64',.35):mix(col,'#152b4d',.72))});
+  }
+  let svg=byDepth(faces);
+  for(const latitude of [-66.56,-23.44,0,23.44,40,66.56]){
+    let segment=[];
+    for(let longitude=-180;longitude<=180;longitude+=5){
+      const p=g.at(latitude,longitude,17.12), visible=vis(sub(p,g.center));
+      if(visible) segment.push(p);
+      if((!visible||longitude===180)&&segment.length){svg+=seasonStroke(segment,latitude===40?'#e96145':'#254860',latitude===0?.8:.42);segment=[];}
+    }
+  }
+  const [x,y]=P(...g.center);
+  svg+=`<circle cx="${f(x)}" cy="${f(y)}" r="${f(seasonRadius*CAM_K)}" fill="none" stroke="${INK}" stroke-width="1.8"/>`;
+  return `<g opacity="${1-.66*ease(st.xr||0)}">${svg}</g>`;
+}
+function seasonScene(st,m){
+  const g=seasonGeo(st), parts=[], labels=[], k=ease(st.xr||0);
+  const put=(name,points,svg,active=false)=>{parts.push({box:seasonBox(points),svg});if(name) labels.push({text:name,at:avg(points),on:active});};
+  const cylinder=(name,x,y,z0,z1,r,mat)=>put(name,[[x-r,y-r,z0],[x+r,y+r,z1]],cyl(x,y,z0,z1,r,mat,toneI,.7));
+  const beam=(name,a,b,r,mat)=>put(name,[a,b],rod(a,b,r,mat,toneI,.7));
+  let svg=castShadow([[0,0,0],[170,0,0],[170,170,0],[0,170,0]])+board(0,0,170,170,3,7,WOOD);
+  labels.push({text:'BENCH BOARD',at:[155,20,3]});
+  svg+=castShadow([g.center,seasonAdd(g.center,[0,0,18]),seasonCenter],3,boardTop(0,0,170,170,3,7));
+  for(let i=0;i<72;i++){
+    const a=i*5*seasonRad,b=(i+1)*5*seasonRad;
+    const p=[85+61*Math.cos(a),85+61*Math.sin(a),4.5],q=[85+61*Math.cos(b),85+61*Math.sin(b),4.5];
+    put(i===12?'CIRCULAR TRACK':'',[p,q],rod(p,q,1.1,METAL,toneI,.6));
+  }
+  seasonTable.forEach((season,i)=>{
+    const a=season.angle*seasonRad, p=[85+75*Math.cos(a),85+75*Math.sin(a),3.2];
+    const pts=on(PZ(3.25),rectUV(p[0]-6,p[1]-4,p[0]+6,p[1]+4));
+    const o=P(...p), text=`<text transform="${txM(o,Dv(1,0,0),Dv(0,1,0))}" text-anchor="middle" font-size="2.8" font-family="monospace" font-weight="800">${season.short}</text>`;
+    put(season.short+' PLAQUE',pts,shape(pts,i===st.season?m.l:'#f3e8c9',.6)+text,i===st.season);
+  });
+  cylinder('LAMP BASE',85,85,3,7,9,m);
+  cylinder('LAMP STEM',85,85,7,30,1.6,METAL);
+  cylinder('LAMP SOCKET',85,85,30,34,3,DARK);
+  const lamp=P(...seasonCenter);
+  put('SUN LAMP DIFFUSER',[[74,74,32],[96,96,54]],`<g opacity="${1-.82*k}"><circle cx="${f(lamp[0])}" cy="${f(lamp[1])}" r="${f(11*CAM_K)}" fill="#f4bd3c" stroke="${INK}" stroke-width="1.7"/><path d="M${f(lamp[0]-7)} ${f(lamp[1]-2)}Q${f(lamp[0]-5)} ${f(lamp[1]-9)} ${f(lamp[0]+2)} ${f(lamp[1]-9)}" fill="none" stroke="#fff1a5" stroke-width="3" stroke-linecap="round"/></g>`);
+  if(k>0){
+    put('LED EMITTER',[[82,82,34],[88,88,38]],`<g opacity="${k}">${cyl(85,85,34,36,3,METAL)+box(83,83,36,87,87,37,matOf('#fff3a1'))}</g>`,true);
+  }
+  const cable=[[85,85,7],[82,81,3.5],[77,74,3.5],[42,40,3.5],[9,20,3.5]];
+  for(let i=0;i<cable.length-1;i++) put(i===2?'LOW VOLTAGE LEAD':'',[cable[i],cable[i+1]],seasonStroke([cable[i],cable[i+1]],INK,1.1));
+  const [gx,gy]=g.center;
+  cylinder('SLIDING CARRIAGE',gx,gy,5.5,8,5,DARK);
+  cylinder('GLOBE UPRIGHT',gx,gy,8,17,1.7,METAL);
+  beam('TILT PIVOT',[gx-3,gy,17],[gx+3,gy,17],1.6,DARK);
+  cylinder('TILT LOCK',gx+3,gy,16,19,2,m);
+  const bottom=seasonAdd(g.center,seasonScale(g.axis,-21)), top=seasonAdd(g.center,seasonScale(g.axis,21));
+  const forkCorner=[gx+27,gy,17];
+  beam('FORK FOOT',[gx,gy,17],forkCorner,1.2,METAL);
+  beam('FORK ARM',forkCorner,[top[0]+19,top[1],top[2]],1.2,METAL);
+  beam('UPPER BEARING',[top[0]+19,top[1],top[2]],top,1.2,METAL);
+  beam('LOWER BEARING',[gx,gy,17],bottom,1.2,METAL);
+  beam('SOUTH AXLE',bottom,seasonAdd(g.center,seasonScale(g.axis,-17)),.7,DARK);
+  beam('NORTH AXLE',seasonAdd(g.center,seasonScale(g.axis,17)),top,.7,DARK);
+  put('EARTH GLOBE',[[gx-17,gy-17,26],[gx+17,gy+17,60]],seasonGlobe(st,g));
+  const pinBase=g.at(40,0,17.2),pinTip=g.at(40,0,21);
+  const pinVisible=vis(sub(pinBase,g.center));
+  if(pinVisible||k>.01){
+    const p=P(...pinTip);
+    put('PIN AT 40 N',[pinBase,pinTip],`<g opacity="${pinVisible?1:k}">${rod(pinBase,pinTip,.5,matOf('#e96145'))}<circle cx="${f(p[0])}" cy="${f(p[1])}" r="1.8" fill="#e96145" stroke="${INK}" stroke-width=".6"/></g>`,true);
+  }
+  if(k>.01){
+    const features=[['EQUATOR',0,0],['TROPIC OF CANCER',23.44,-30],['TROPIC OF CAPRICORN',-23.44,30],['ARCTIC CIRCLE',66.56,0],['ANTARCTIC CIRCLE',-66.56,0],['40 N PARALLEL',40,35],['NORTH POLE',90,0],['SOUTH POLE',-90,0]];
+    features.forEach(([text,lat,lon])=>labels.push({text,at:g.at(lat,lon),on:false}));
+    let overlays='';
+    for(const lat of [-66.56,-23.44,0,23.44,40,66.56]) overlays+=seasonStroke(Array.from({length:73},(_,i)=>g.at(lat,i*5)),lat===40?'#df6241':'#375b76',.45,'2 2');
+    const across=g.east, offsets=[-10,-5,0,5,10];
+    offsets.forEach(offset=>{
+      const hit=seasonAdd(g.center,seasonAdd(seasonScale(across,offset),seasonScale(g.sun,Math.sqrt(17*17-offset*offset))));
+      const start=seasonAdd(hit,seasonScale(g.sun,27));
+      overlays+=seasonStroke([start,hit],'#d69a23',1);
+      const arrow=seasonAdd(hit,seasonScale(g.sun,3));
+      overlays+=seasonStroke([seasonAdd(arrow,seasonScale(across,1.2)),hit,seasonAdd(arrow,seasonScale(across,-1.2))],'#d69a23',.8);
+    });
+    labels.push({text:'PARALLEL SUNLIGHT OVERLAY',at:seasonAdd(g.center,seasonScale(g.sun,32)),on:true});
+    const noonNormal=norm(sub(g.at(40,-st.spin),g.center)), ground=seasonAdd(g.center,seasonScale(noonNormal,18));
+    const groundAlong=norm(sub(g.sun,seasonScale(noonNormal,dot(g.sun,noonNormal))));
+    const width=5/Math.sin(g.altitude*seasonRad);
+    const patch=[[-width,-2],[width,-2],[width,2],[-width,2]].map(([a,b])=>seasonAdd(ground,seasonAdd(seasonScale(groundAlong,a),seasonScale(across,b))));
+    overlays+=fill(pd(patch),'#e79745','opacity=".65"')+seasonStroke([...patch,patch[0]],'#b4602e',.7);
+    const horizon=groundAlong, arc=Array.from({length:17},(_,i)=>{
+      const a=g.altitude*seasonRad*i/16;return seasonAdd(ground,seasonAdd(seasonScale(horizon,9*Math.cos(a)),seasonScale(noonNormal,9*Math.sin(a))));
+    });
+    overlays+=seasonStroke(arc,'#cb563d',.9)+seasonStroke([ground,seasonAdd(ground,seasonScale(g.sun,15))],'#d69a23',1);
+    labels.push({text:'NOON ANGLE OVERLAY',at:arc[8],on:true},{text:'ENERGY FOOTPRINT OVERLAY',at:ground,on:true});
+    svg+=byDepth(parts)+`<g opacity="${k}">${overlays}</g>`;
+  } else svg+=byDepth(parts);
+  if(k>.6){
+    const vb=document.getElementById('fig').viewBox.baseVal;
+    const sorted=labels.slice().sort((a,b)=>P(...a.at)[0]-P(...b.at)[0]), half=Math.ceil(sorted.length/2);
+    const leaders=[],pills=[];
+    [sorted.slice(0,half),sorted.slice(half)].forEach((column,side)=>{
+      column.sort((a,b)=>P(...a.at)[1]-P(...b.at)[1]);
+      column.forEach((item,i)=>{
+        const p=P(...item.at),x=vb.width*(side?.87:.13),y=innerWidth<=560?vb.height*(.04+i*.052):vb.height*(.42+i*.029);
+        const label=tag(item.at,(x-p[0])/INK_K,(y-p[1])/INK_K,item.text,item.on),start=label.indexOf('>')+1,split=label.indexOf('<rect');
+        leaders.push(label.slice(start,split));pills.push(label.slice(0,start)+label.slice(split));
+      });
+    });
+    svg+='<g class="tag">'+leaders.join('')+'</g>'+pills.join('');
+  }
+  return svg;
+}
+function seasonMove(st,ui){
+  st.from={angle:st.angle,tilt:st.tilt,spin:st.spin};st.progress=0;
+  if(st.moving)return;
+  st.moving=true;
+  ui.animate(dt=>{
+    st.progress=Math.min(1,st.progress+dt/1.35);const t=ease(st.progress);
+    for(const key of ['angle','tilt','spin'])st[key]=st.from[key]+(st.target[key]-st.from[key])*t;
+    if(st.progress===1){st.moving=false;return false;}return true;
+  });
+}
+const seasonUI=mountFigure({
+  fig:'seasons',title:'The seasons',turn:'full',size:[170,170,68],palette:'cobalt',
+  state:{season:0,angle:90,tilt:23.44,spin:0,target:{angle:90,tilt:23.44,spin:0},moving:false},
+  scene:seasonScene,
+  stats:st=>{const g=seasonGeo(st);return [
+    {label:seasonTable[st.season].name,value:st.target.tilt===0?'No tilt':'40 N',small:true},
+    {label:'Noon sun angle',value:g.altitude.toFixed(1)+' deg',small:true},
+    {label:'Day / night',value:g.day.toFixed(1)+' / '+(24-g.day).toFixed(1)+' h',small:true},
+    {label:'Ground spread',value:(1/Math.sin(g.altitude*seasonRad)).toFixed(2)+' x',small:true}
+  ];},
+  buttons:[
+    {label:'Next season',onClick:(st,ui)=>{st.season=(st.season+1)%4;st.target.angle+=90;st.target.spin=Math.ceil(st.spin/360)*360;seasonMove(st,ui);}},
+    {label:'Turn one day',onClick:(st,ui)=>{st.target.spin+=360;seasonMove(st,ui);}},
+    {label:'Straighten tilt',onClick:(st,ui)=>{st.target.tilt=0;seasonMove(st,ui);}},
+    {label:'Restore tilt',onClick:(st,ui)=>{st.target.tilt=23.44;seasonMove(st,ui);}}
+  ],
+  params:(st,q)=>{
+    const n=Number(q.get('season'));
+    if(q.has('season')&&Number.isInteger(n)&&n>=0&&n<4){st.season=n;st.angle=seasonTable[n].angle;}
+    if(q.get('tilt')==='0')st.tilt=0;
+    const spin=Number(q.get('spin'));if(q.has('spin')&&Number.isFinite(spin))st.spin=((spin%360)+360)%360;
+    st.target={angle:st.angle,tilt:st.tilt,spin:st.spin};
+  }
+});
+const seasonSVG=document.getElementById('fig'),seasonView=seasonSVG.getAttribute('viewBox').split(' ').map(Number);
+function seasonFitLabels(){
+  seasonSVG.setAttribute('viewBox',[...seasonView.slice(0,3),seasonView[3]*(innerWidth<=560?1.6:1)].join(' '));
+  seasonUI.render();
+}
+addEventListener('resize',seasonFitLabels);
+seasonFitLabels();
+xrMount(()=>seasonUI,()=> '');
+</script></body></html>
