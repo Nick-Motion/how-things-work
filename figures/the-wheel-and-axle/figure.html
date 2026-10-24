@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The wheel and axle</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. This is a teaching adaptation of the rotating lever on printed pages 30 and 31.
+   The wheel, hub, shaft and narrow drum are rigidly fixed and share ONE angle.
+   A rope fastened to the drum winds onto it. Its free tangent runs straight down to a 10 N load.
+   Turning either the rim or drum raises the same load by r * angle. The rim travels R * angle.
+   Ideal slow lifting balances torque. 10 N * .06 m = effort * R. Friction and inertia are omitted.
+   The operator holds the assembly at rest. No brake, ratchet, motor or automatic latch is implied.
+   Compare radii exchanges a teaching fixture only when stationary, keeping the drum and load fixed.
+   Reset represents controlled hand lowering, with rope unwinding, rather than a hidden return mechanism.
+   Parts and attachments. Structure has a bench board, two posts fixed to it and bearing sleeves on the posts.
+   Mechanism has a shaft running in the bearings, a solid wheel with a fixed hub, and a fixed rope drum.
+   Rope is secured on the drum, and its lower end is tied through the load eye. All are drawn in 3D.
+   Force arrows, radius lines, travel marks and input dots are teaching overlays, excluded from anatomy.
+   Book evidence is preserved in meta.json. OpenStax Physics 9.3 Fig. 9.8 supports the rope-load adaptation.
+   shortcut: one thin rope layer uses a constant 6 cm effective radius, upgrade for multi-layer winding. */
+const waRig = { y:55, z:66, axle:6, radii:[30,45], max:Math.PI*1.5, load:10 };
+const waPoint = (x,r,a) => [x,waRig.y+r*Math.cos(a),waRig.z+r*Math.sin(a)];
+const waBounds = pts => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))-.4),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i]))+.4)];
+const waMeasures = st => ({ radius:waRig.radii[st.wheel], lift:waRig.axle*st.angle, rim:waRig.radii[st.wheel]*st.angle,
+  effort:st.input==='axle'?waRig.load:waRig.load*waRig.axle/waRig.radii[st.wheel], torque:waRig.load*waRig.axle/100 });
+function waMove(st,ui,input,target){
+  if(st.moving) return ui.flash('Hold the current input until the turn finishes');
+  if(target===st.angle) return ui.flash(target===0?'The load is already lowered':'Lower the load before another lift');
+  st.input=input; st.moving=true;
+  const from=st.angle; let elapsed=0;
+  ui.animate(dt=>{elapsed=Math.min(1,elapsed+dt/1.5); st.angle=from+(target-from)*ease(elapsed);
+    if(elapsed===1){st.moving=false;return false;} return true;});
+}
+function waArrow(a,b,color){
+  const [ax,ay]=P(...a),[bx,by]=P(...b),ang=Math.atan2(by-ay,bx-ax),len=4*INK_K;
+  return `<g data-overlay="force"><path d="M${ax} ${ay}L${bx} ${by}" fill="none" stroke="${color}" stroke-width="2"/><path d="M${bx} ${by}L${bx-len*Math.cos(ang-.5)} ${by-len*Math.sin(ang-.5)}L${bx-len*Math.cos(ang+.5)} ${by-len*Math.sin(ang+.5)}Z" fill="${color}"/></g>`;
+}
+function waScene(st,m){
+  const measure=waMeasures(st),radius=measure.radius,k=ease(st.xr||0),parts=[];
+  const put=(bounds,svg)=>parts.push({box:bounds,svg});
+  const addBox=(a,b,material,ghost=false)=>put([a,b],`<g opacity="${ghost?1-.8*k:1}">${box(...a,...b,material,toneI,1)}</g>`);
+  const addCylinder=(a,b,r,material,ghost=false)=>put([[a,55-r,66-r],[b,55+r,66+r]],`<g opacity="${ghost?1-.84*k:1}">${cylX(a,b,55,66,r,material,toneI,1.4,48)}</g>`);
+  let drawing=board(0,0,94,112,4,5,WOOD);
+  drawing+=castShadow([[22,48,4],[64,62,66],...on(PX(77),ellUV(55,66,radius,radius,40))],4,boardTop(0,0,94,112,4,5));
+  for(const x of [22,61]){
+    addBox([x-8,43,4],[x+8,67,8],DARK);
+    addBox([x-3,51,8],[x+3,59,60],PALS.cobalt,true);
+    addBox([x-5,47,60],[x+5,63,72],PALS.cobalt,true);
+    addCylinder(x-5.2,x+5.2,4.2,matOf('#d9b872'),true);
+  }
+  for(const [a,b] of [[12,16],[16,17],[17,27.3],[27.3,33],[33,51],[51,55.8],[55.8,66.3],[66.3,73],[73,80]]) addCylinder(a,b,2.5,METAL);
+  addCylinder(33,51,6,matOf('#e6bd64'),true);
+  for(const x of [32,51]) addCylinder(x,x+1,7.5,matOf('#d0a047'),true);
+  addCylinder(73,78,radius,m,true);
+  addCylinder(71,80,7,METAL,true);
+  // The attachment rotates with the drum; its tangent stays vertical and walks across the drum's width.
+  const coil=[],total=4*Math.PI+st.angle,ropeX=48-total/(2*Math.PI)*1.2;
+  for(let i=0;i<=100;i++){const phi=total*(1-i/100);coil.push(waPoint(ropeX+phi/(2*Math.PI)*1.2,6.4,phi));}
+  for(let i=0;i<coil.length-1;i++) put(waBounds([coil[i],coil[i+1]]),line([coil[i],coil[i+1]],1.3).replace(INK,'#83572c'));
+  const loadTop=24+measure.lift;
+  const rope=[[ropeX,61.4,66],[ropeX,61.4,loadTop]];
+  put(waBounds(rope),line(rope,1.6).replace(INK,'#83572c'));
+  addBox([ropeX-6,55.4,loadTop-14],[ropeX+6,67.4,loadTop-2],PALS.tomato);
+  put([[ropeX-2,59.4,loadTop-2],[ropeX+2,63.4,loadTop]],rod([ropeX,61.4,loadTop-2],[ropeX,61.4,loadTop],1.3,METAL));
+  const markerFace=facing([1,0,0])?78.1:72.9;
+  const wheelMark=waPoint(markerFace,radius*.86,st.angle),drumMark=waPoint(52.1,5,st.angle);
+  put(waBounds([wheelMark]),`<g data-overlay="wheel-position">${shape(on(PX(markerFace),ellUV(wheelMark[1],wheelMark[2],2,2,16)),'#fff4d6',.8)}</g>`);
+  put(waBounds([drumMark]),`<g data-overlay="axle-position">${shape(on(PX(52.1),ellUV(drumMark[1],drumMark[2],1.2,1.2,12)),'#e2483d',.6)}</g>`);
+  drawing+=byDepth(parts);
+  if(k>.6||st.moving){
+    const inputR=st.input==='axle'?6:radius,inputX=st.input==='axle'?40:79;
+    drawing+=waArrow(waPoint(inputX,inputR,0),[inputX,55+inputR,84],'#df653b');
+    drawing+=waArrow([ropeX+7,61.4,loadTop-2],[ropeX+7,61.4,loadTop-14],'#446fa8');
+    drawing+=`<g data-overlay="radii" stroke-dasharray="2 2">${line([[79,55,66],[79,55+radius,66]],1).replace(INK,'#df653b')}${line([[52.2,55,66],[52.2,61,66]],1).replace(INK,'#446fa8')}</g>`;
+  }
+  const labels=[{at:waPoint(markerFace,radius,-.7),text:'WHEEL'},{at:[79,55,66],text:'FIXED HUB'},
+    {at:[13,55,66],text:'SHAFT'},{at:[42,55,70],text:'ROPE DRUM'},
+    {at:[ropeX,61.4,(66+loadTop)/2],text:'ROPE'},{at:[ropeX,61.4,loadTop-8],text:'HANGING LOAD'},
+    {at:[61,55,69],text:'BEARING SLEEVE'},{at:[22,55,38],text:'SUPPORT POSTS'},
+    {at:[14,43,6],text:'SUPPORT FOOT'},{at:[10,20,4],text:'BENCH BOARD'}];
+  if(k>.6) drawing+=xrCallouts(labels.map(p=>({...p,on:st.moving&&['WHEEL','FIXED HUB','SHAFT','ROPE DRUM','ROPE','HANGING LOAD'].includes(p.text)})),[0,94,0,112,0,112]);
+  return drawing;
+}
+const waUI=mountFigure({fig:'31',title:'The wheel and axle',size:[94,112,112],palette:'mint',turn:'full',
+ state:{angle:0,wheel:1,input:'wheel',moving:false},scene:waScene,
+ buttons:[
+  {label:'Turn wheel',onClick:(st,ui)=>waMove(st,ui,'wheel',Math.min(waRig.max,st.angle+Math.PI/2))},
+  {label:'Drive axle',onClick:(st,ui)=>waMove(st,ui,'axle',Math.min(waRig.max,st.angle+Math.PI/2))},
+  {label:'Compare radii',onClick:(st,ui)=>{if(st.moving)return ui.flash('Finish turning before exchanging wheels');st.wheel=1-st.wheel;}},
+  {label:'Lower load',onClick:(st,ui)=>waMove(st,ui,st.input,0)}],
+ stats:st=>{const v=waMeasures(st);return[
+  {label:'Wheel / axle turns',value:(st.angle/(2*Math.PI)).toFixed(2)+' / '+(st.angle/(2*Math.PI)).toFixed(2),small:true},
+  {label:'Rim / drum travel',value:v.rim.toFixed(1)+' / '+v.lift.toFixed(1)+' cm',small:true},
+  {label:'Wheel / drum radius',value:v.radius+' / 6 cm',small:true},
+  {label:st.input==='axle'?'Ideal drum input':'Ideal rim effort',value:v.effort.toFixed(2)+' N',small:true},
+  {label:'Torque / load',value:v.torque.toFixed(2)+' Nm / 10 N',small:true}];},
+ params:(st,q)=>{const a=Number(q.get('angle'));if(Number.isFinite(a))st.angle=Math.max(0,Math.min(waRig.max,a));if(q.get('wheel')==='small')st.wheel=0;if(q.get('input')==='axle')st.input='axle';}
+});
+xrMount(()=>waUI,()=> '');
+</script></body></html>
