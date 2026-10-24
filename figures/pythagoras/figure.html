@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pythagoras in water</title></head><body>
+<script src="core.js"></script>
+<script>
+/* ---------- Truth first: the rotating Pythagoras water demonstrator ----------
+   A classroom apparatus (sold as a "Pythagorean theorem water wheel"): a right triangle with a sealed glass cell built
+   on each side, all in one vertical plane, turning on a horizontal axle. The cells are one closed vessel, joined only
+   by a small duct at each acute corner (A and B), where a leg square meets the hypotenuse square.
+   How it works, and where the water is after each step:
+   1. Start (upright): the hypotenuse is level with the c-square above it. The water fills both leg squares exactly
+      (a^2 + b^2 of area, 3 cm deep); the c-square holds only air. Each leg square's highest point is its duct corner.
+   2. FLIP OVER: pull the index plunger out of the index disc's notch and turn the knob half a turn. Past ~100 degrees
+      the ducts at A and B are the lowest points of the leg squares: water runs through each duct and falls into the
+      c-square while air bubbles back up the same duct. Same duct, same flow, so the smaller square empties first.
+      When both leg squares are empty the c-square is exactly full: a^2 + b^2 = c^2. The plunger drops into the
+      opposite notch and holds it.
+   3. FLIP BACK: half a turn the other way. The c-square drains through both ducts; each leg square fills until full
+      and the c-square is empty again.
+   4. SLIDE THE CORNER: the right-angle corner C rides a brass rail bent to the Thales semicircle on the hypotenuse
+      (every point on it makes a right angle with A and B). The leg battens are hinged at A and B and telescope, so
+      the triangle changes shape with c fixed; in this figure the glass squares are rebuilt to the new legs (on the
+      bench kit each shape is its own cell set) and the water still exactly fills both leg squares.
+   See-through: the wood triangle ghosts to show its hinge pins, telescoping slides, corner pin and axle; every glass
+   square gets a 3 cm grid and its area formula, and the c-square shows the four-congruent-triangles proof:
+   c^2 = 4 x (ab/2) + (b - a)^2 = a^2 + b^2.
+   Parts (each held by another):
+   STAND   base board . four rubber feet . painted upright post . two gussets . bearing block . steel axle . axle nut .
+           index disc with two notches . plunger bracket . plunger barrel . plunger pin . pull knob
+   WHEEL   brass hub flange and its four bolts . turning knob on a brass plate . wooden triangle (hypotenuse batten,
+           two telescoping leg battens on hinge pins at A and B, corner pin at C) . Thales rail on two standoffs .
+           corner carriage on the rail . corner knob
+   CELLS   three glass cells (front pane, back pane, edge walls) . duct at A . duct at B . blue water . fill plug on
+           each leg cell . air-bleed screw on the c-cell
+   OVERLAYS (see-through) area grid . area formulas . four proof triangles . inner square (b - a)^2 */
+
+/* ---------- geometry (x = depth, front at high x; y = width, +y viewer-left; z = up; 1 unit = 1 cm) ---------- */
+const PYC = 30, PYR = 15;                     // hypotenuse c = 30 cm; Thales circle radius c/2, centred on the pivot O
+const XC0 = 14, XC1 = 18, GL = .45;           // glass cells: back pane outer face .. front pane outer face; wall
+const XT0 = 13.4, XT1 = 18.6, XM = 16;        // wooden triangle stands a little proud of the glass on both faces
+const YC = 37, ZP = 43;                        // pivot axis (y, z): the device swings 36.7 cm round it
+const BZ0 = .8, BZ1 = 3.3, BX1 = 26, BY0 = YC - 19, BY1 = YC + 19;
+const QFLOW = 300;                             // cm^2 of square per second through one duct
+const LIFT_S = .3, TURN_S = 1.6, SLIDE_S = 1.3;
+const WATER = { l:'#9ad6f6', m:'#4ea3e3', d:'#2a6fb5' };
+const BRASS = matOf('#e2bc5c'), STEEL = METAL, IRON = matOf('#8e979b'), RUBBER = DARK, KNOBR = matOf('#e2483d');
+const GLASS = '#cfe9f0';
+const SHAPES = [
+  { label:'5-12-13', al: Math.asin(5/13) },
+  { label:'3-4-5', al: Math.asin(3/5) },
+  { label:'Isosceles', al: Math.PI/4 },
+  { label:'4-3-5', al: Math.asin(4/5) } ];
+
+/* ---------- 2D (device plane) helpers: u to the right, v up, origin at the pivot O ---------- */
+const add2 = (p, q) => [p[0] + q[0], p[1] + q[1]], sub2 = (p, q) => [p[0] - q[0], p[1] - q[1]], sc2 = (p, k) => [p[0]*k, p[1]*k];
+const dot2 = (p, q) => p[0]*q[0] + p[1]*q[1], len2 = p => Math.hypot(p[0], p[1]), unit2 = p => sc2(p, 1/(len2(p) || 1));
+const lerp2 = (p, q, t) => [p[0] + (q[0] - p[0])*t, p[1] + (q[1] - p[1])*t];
+const sarea = poly => { let a = 0; for (let i = 0; i < poly.length; i++){ const p = poly[i], q = poly[(i + 1) % poly.length]; a += p[0]*q[1] - q[0]*p[1]; } return a/2; };
+const ccw = poly => sarea(poly) < 0 ? poly.slice().reverse() : poly;
+const cen2 = poly => sc2(poly.reduce((s, p) => add2(s, p), [0, 0]), 1/poly.length);
+const shrinkSq = (sq, d) => { const c0 = cen2(sq), k = 1 - 2*d/len2(sub2(sq[1], sq[0])); return sq.map(p => add2(c0, sc2(sub2(p, c0), k))); };
+// keep the part of a convex polygon where p.n <= h (Sutherland-Hodgman, one plane)
+function clipBelow(poly, n, h){ const out = [];
+  for (let i = 0; i < poly.length; i++){ const p = poly[i], q = poly[(i + 1) % poly.length], dp = dot2(p, n) - h, dq = dot2(q, n) - h;
+    if (dp <= 0) out.push(p);
+    if ((dp < 0 && dq > 0) || (dp > 0 && dq < 0)) out.push(lerp2(p, q, dp/(dp - dq))); }
+  return out; }
+// the water in a convex cell: everything below a level surface (normal `up`, in the device frame) holding area V
+function waterIn(poly, up, V){
+  const ds = poly.map(p => dot2(p, up)), lo = Math.min(...ds), hi = Math.max(...ds), A = Math.abs(sarea(poly));
+  if (V <= 1e-6) return { poly: null, h: lo };
+  if (V >= A*(1 - 1e-6)) return { poly, h: hi };
+  let a = lo, b = hi;
+  for (let i = 0; i < 32; i++){ const m = (a + b)/2; if (Math.abs(sarea(clipBelow(poly, up, m))) < V) a = m; else b = m; }
+  return { poly: clipBelow(poly, up, (a + b)/2), h: (a + b)/2 };
+}
+
+/* ---------- device plane -> world: the wheel turns by pyTh about the axle (x axis through y = YC, z = ZP) ---------- */
+let pyTh = 0;
+const W3 = (p, x) => { const c = Math.cos(pyTh), s = Math.sin(pyTh); return [x, YC - (p[0]*c - p[1]*s), ZP + p[0]*s + p[1]*c]; };
+const WN = n => { const c = Math.cos(pyTh), s = Math.sin(pyTh); return [0, -(n[0]*c - n[1]*s), n[0]*s + n[1]*c]; };
+const upDev = () => [Math.sin(pyTh), Math.cos(pyTh)];          // world "up" seen in the device frame
+const edgeNs = poly => poly.map((p, i) => { const d = sub2(poly[(i + 1) % poly.length], p); return WN(unit2([d[1], -d[0]])); });
+const prismPts = (poly, x0, x1) => [...poly.map(p => W3(p, x0)), ...poly.map(p => W3(p, x1))];
+
+function pyGeo(al){
+  const A = [-PYR, 0], B = [PYR, 0], a = PYC*Math.sin(al), b = PYC*Math.cos(al);
+  const Cc = [A[0] + b*Math.cos(al), -b*Math.sin(al)];
+  const out = (p, q, away) => { const d = unit2(sub2(q, p)); let n = [d[1], -d[0]]; if (dot2(sub2(away, p), n) > 0) n = sc2(n, -1); return n; };
+  const na = out(B, Cc, A), nb = out(Cc, A, B), nc = [0, 1];
+  return { A, B, C: Cc, a, b, na, nb, nc,
+    SA: ccw([B, Cc, add2(Cc, sc2(na, a)), add2(B, sc2(na, a))]),
+    SB: ccw([Cc, A, add2(A, sc2(nb, b)), add2(Cc, sc2(nb, b))]),
+    SC: ccw([A, B, [PYR, PYC], [-PYR, PYC]]),
+    T: ccw([A, B, Cc]) };
+}
+
+/* ---------- painter's order for convex parts: any separating plane decides who is nearer ---------- */
+function pySort(items){
+  items = items.filter(Boolean);
+  const n = items.length, V = CAM_V, AX = [[1,0,0], [0,1,0], [0,0,1]];
+  const bb = items.map(it => { const q = it.pts.map(p => P(...p)); return [Math.min(...q.map(v => v[0])), Math.max(...q.map(v => v[0])), Math.min(...q.map(v => v[1])), Math.max(...q.map(v => v[1]))]; });
+  const dep = items.map(it => depthOf(avg(it.pts)));
+  const ext = (it, ax) => { let lo = 1e9, hi = -1e9; for (const p of it.pts){ const d = p[0]*ax[0] + p[1]*ax[1] + p[2]*ax[2]; if (d < lo) lo = d; if (d > hi) hi = d; } return [lo, hi]; };
+  const order = (p, q) => { for (const ax of [...AX, ...(p.ns || []), ...(q.ns || [])]){ const vd = dot(ax, V); if (Math.abs(vd) < 1e-6) continue;
+      const [pl, ph] = ext(p, ax), [ql, qh] = ext(q, ax);
+      if (ph <= ql + 1e-4) return vd > 0 ? -1 : 1; if (qh <= pl + 1e-4) return vd > 0 ? 1 : -1; }
+    return dep[items.indexOf(p)] < dep[items.indexOf(q)] ? -1 : 1; };
+  const after = items.map(() => []), indeg = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++){
+    const a = bb[i], b = bb[j]; if (a[1] < b[0] || b[1] < a[0] || a[3] < b[2] || b[3] < a[2]) continue;
+    if (order(items[i], items[j]) < 0){ after[i].push(j); indeg[j]++; } else { after[j].push(i); indeg[i]++; } }
+  const done = new Array(n).fill(false), out = [];
+  for (let c = 0; c < n; c++){
+    let pick = -1;
+    for (let i = 0; i < n; i++) if (!done[i] && !indeg[i] && (pick < 0 || dep[i] < dep[pick])) pick = i;
+    if (pick < 0) for (let i = 0; i < n; i++) if (!done[i] && (pick < 0 || dep[i] < dep[pick])) pick = i;   // a cycle: nearest-last
+    done[pick] = true; out.push(items[pick].svg); for (const j of after[pick]) indeg[j]--; }
+  return out.join('');
+}
+
+/* ---------- small drawing helpers ---------- */
+function prism(poly, x0, x1, mat, shade = tone, w = 1){
+  const A = poly.map(p => W3(p, x0)), B = poly.map(p => W3(p, x1)), fr = facing([1,0,0]), bk = facing([-1,0,0]);
+  let s = loft(A, B, n => shade(n, mat));
+  if (fr) s += fill(pd(B), shade([1,0,0], mat)) + ink(pd(B), w*.8);
+  else if (bk) s += fill(pd(A), shade([-1,0,0], mat)) + ink(pd(A), w*.8);
+  return s + hullInk([...A, ...B], w);
+}
+const rodPts = (a, b, r) => { const d = norm(sub(b, a)), u = norm(cross(d, Math.abs(d[2]) < .9 ? [0,0,1] : [1,0,0])), v = cross(d, u), o = [];
+  for (const p of [a, b]) for (let i = 0; i < 8; i++){ const t = i/8*2*Math.PI; o.push([0,1,2].map(k => p[k] + (u[k]*Math.cos(t) + v[k]*Math.sin(t))*r)); } return o; };
+const rodItem = (a, b, r, m, w = .8, extra = '') => ({ pts: rodPts(a, b, r), svg: rod(a, b, r, m, toneI, w) + extra });
+const boxItem = (x0, y0, z0, x1, y1, z1, m, shade = toneI, w = .9) => ({ pts: [[x0,y0,z0],[x1,y1,z1],[x0,y1,z0],[x1,y0,z1],[x0,y0,z1],[x1,y1,z0],[x0,y1,z1],[x1,y0,z0]], svg: box(x0, y0, z0, x1, y1, z1, m, shade, w) });
+// upright text on the face of the wheel that is toward the viewer (front plane x = xf or back plane x = xb)
+function pyText(p3, str, size, o = {}){
+  const fr = facing([1,0,0]), bk = facing([-1,0,0]); if (!fr && !bk) return '';
+  const q = P(fr ? (o.xf ?? XT1 + .05) : (o.xb ?? XT0 - .05), p3[1], p3[2]), U = fr ? Dv(0,-1,0) : Dv(0,1,0);
+  return `<text transform="${txM(q, U, Dv(0,0,-1))}" font-size="${size}" fill="${o.col || INK}" text-anchor="middle" font-family="${o.font || 'ui-monospace,Menlo,monospace'}" font-style="${o.italic ? 'italic' : 'normal'}" font-weight="${o.weight || 800}"`
+    + (o.halo ? ` stroke="#fbf8ee" style="stroke-width:${o.halo}" paint-order="stroke" stroke-linejoin="round"` : '') + ` opacity="${o.op ?? 1}">${str}</text>`;
+}
+const strokeLine = (pts, col, w, extra = '') => `<path d="${pd(pts, false)}" fill="none" stroke="${col}" style="stroke-width:${f(w)}" stroke-linecap="round" stroke-linejoin="round" ${extra}/>`;
+
+/* ---------- one glass cell: far pane, water (and an incoming stream), edge walls, near pane ---------- */
+function cellSvg(sq, frac, stream, overlay){
+  const fr = facing([1,0,0]), xN = fr ? XC1 : XC0, xF = fr ? XC0 : XC1, dI = fr ? -GL : GL;
+  const inner = shrinkSq(sq, GL);
+  let s = fill(pd(sq.map(p => W3(p, xF))), GLASS, 'opacity=".32"') + ink(pd(inner.map(p => W3(p, xF - dI))), .5).replace('<path', '<path opacity=".45"');
+  s += `<g opacity=".55">` + loft(inner.map(p => W3(p, XC0 + GL)), inner.map(p => W3(p, XC1 - GL)), n => mix(toneI(n.map(v => -v), CLEAR), '#f2efe7', .35), true) + `</g>`;
+  if (frac > 1e-5){ const w = waterIn(inner, upDev(), frac*Math.abs(sarea(inner)));
+    if (w.poly && w.poly.length > 2) s += `<g opacity=".9">` + prism(w.poly, XC0 + GL, XC1 - GL, WATER, toneI, .7) + `</g>`; }
+  if (stream) s += stream;
+  s += `<g opacity=".38">` + loft(sq.map(p => W3(p, XC0)), sq.map(p => W3(p, XC1)), n => toneI(n, CLEAR)) + `</g>`;
+  if (overlay) s += overlay;
+  const Pq = (t, u) => add2(add2(sq[0], sc2(sub2(sq[1], sq[0]), t)), sc2(sub2(sq[3], sq[0]), u));
+  s += fill(pd(sq.map(p => W3(p, xN))), GLASS, 'opacity=".16"');
+  for (const [a, b] of [[.14, .22], [.3, .34]]) s += fill(pd([Pq(a, .9), Pq(b, .9), Pq(.9, b), Pq(.9, a)].map(p => W3(p, xN + (fr ? .02 : -.02)))), '#ffffff', 'opacity=".38"');
+  s += ink(pd(sq.map(p => W3(p, xN))), 1.3) + ink(pd(inner.map(p => W3(p, xN))), .55) + hullInk(prismPts(sq, XC0, XC1), 1.8);
+  return s;
+}
+// a duct: a short glass fitting filling the wedge between a leg square and the c-square at a corner
+const ductPoly = (V0, n1, n2) => ccw([V0, add2(V0, sc2(n1, 2.6)), add2(V0, sc2(unit2(add2(n1, n2)), 3.4)), add2(V0, sc2(n2, 2.6))]);
+function ductItem(poly, wet){
+  const fr = facing([1,0,0]), xN = fr ? XC1 - .3 : XC0 + .3, A = poly.map(p => W3(p, XC0 + .3)), B = poly.map(p => W3(p, XC1 - .3));
+  let s = `<g opacity=".5">` + loft(A, B, n => toneI(n, CLEAR)) + `</g>`;
+  if (wet) s += fill(pd(shrinkQuad(poly).map(p => W3(p, xN))), WATER.m, 'opacity=".85"');
+  s += fill(pd(poly.map(p => W3(p, xN))), GLASS, 'opacity=".3"') + ink(pd(poly.map(p => W3(p, xN))), 1) + hullInk([...A, ...B], 1.1);
+  return { pts: [...A, ...B], ns: edgeNs(poly), svg: s };
+}
+const shrinkQuad = q => { const c0 = cen2(q); return q.map(p => add2(c0, sc2(sub2(p, c0), .6))); };
+// a falling stream inside a cell: from the duct mouth straight down to the water (or the floor of the cell)
+function streamSvg(mouth, sq, frac){
+  const up = upDev(), inner = shrinkSq(sq, GL), w = waterIn(inner, up, frac*Math.abs(sarea(inner)));
+  const t = Math.max(0, dot2(mouth, up) - w.h), end = sub2(mouth, sc2(up, t)), a = W3(mouth, XM), b = W3(end, XM);
+  const [X, Y] = P(...b);
+  return strokeLine([a, b], INK, 2.3) + strokeLine([a, b], WATER.l, 1.2)
+    + `<ellipse cx="${f(X)}" cy="${f(Y)}" rx="2.2" ry=".8" fill="#ffffff" opacity=".7" stroke="${INK}" stroke-width=".5"/>`;
+}
+
+/* ---------- see-through overlays on the near pane ---------- */
+const nearX = () => facing([1,0,0]) ? XC1 + .02 : XC0 - .02;
+function gridSvg(sq, k){
+  const x = nearX(), g = PYC/10, e1 = unit2(sub2(sq[1], sq[0])), e3 = unit2(sub2(sq[3], sq[0])), side = len2(sub2(sq[1], sq[0])), inner = side - 2*GL;
+  let d = '';
+  for (let t = g; t < side - .3; t += g){
+    d += pd([add2(sq[0], sc2(e1, t)), add2(add2(sq[0], sc2(e1, t)), sc2(e3, side))].map(p => W3(p, x)), false);
+    d += pd([add2(sq[0], sc2(e3, t)), add2(add2(sq[0], sc2(e3, t)), sc2(e1, side))].map(p => W3(p, x)), false); }
+  return `<path d="${d}" fill="none" stroke="#ffffff" style="stroke-width:.5" opacity="${f(.75*k)}"/><path d="${d}" fill="none" stroke="${INK}" style="stroke-width:.25" opacity="${f(.35*k)}"/>`;
+}
+function proofSvg(G, k){
+  const x = nearX(), M = [0, PYR], rot = p => add2(M, [-(p[1] - M[1]), p[0] - M[0]]);
+  let T = [G.A, G.B, [G.C[0], -G.C[1]]], s = '';
+  const cols = ['#f4b829', '#ef6a4c', '#93d3b0', '#f3a6bb'], apex = [];
+  for (let i = 0; i < 4; i++){ s += fill(pd(T.map(p => W3(p, x))), cols[i], `opacity="${f(.62*k)}"`) + `<path d="${pd(T.map(p => W3(p, x)))}" fill="none" stroke="${INK}" style="stroke-width:.6" stroke-dasharray="1.4 1" opacity="${f(k)}"/>`;
+    apex.push(T[2]); T = T.map(rot); }
+  if (Math.abs(G.b - G.a) > .3) s += fill(pd(apex.map(p => W3(p, x))), '#fff4d6', `opacity="${f(.9*k)}"`) + `<path d="${pd(apex.map(p => W3(p, x)))}" fill="none" stroke="${INK}" style="stroke-width:.8" opacity="${f(k)}"/>`;
+  return s;
+}
+
+/* ---------- the wooden triangle (and, in see-through, its insides) ---------- */
+function triItem(G, k){
+  const T = G.T, A3 = T.map(p => W3(p, XT0)), B3 = T.map(p => W3(p, XT1)), fr = facing([1,0,0]), bk = facing([-1,0,0]);
+  const xc = fr ? XT1 + .02 : XT0 - .02, cap = fr ? B3 : A3;
+  let body = loft(A3, B3, n => tone(n, WOOD));
+  if (fr || bk){
+    body += fill(pd(cap), tone(fr ? [1,0,0] : [-1,0,0], WOOD));
+    // grain, parallel to the hypotenuse batten
+    let gd = ''; for (const v of [-2.2, -5, -7.8, -10.6]){ if (v <= G.C[1] + 1.5) continue;
+      const t = v/G.C[1], p = lerp2(G.A, G.C, t), q = lerp2(G.B, G.C, t); gd += pd([lerp2(p, q, .06), lerp2(p, q, .94)].map(r => W3(r, xc)), false); }
+    body += `<path d="${gd}" fill="none" stroke="${WOOD.d}" style="stroke-width:.45" opacity=".7"/>`;
+    // the battens' joints: a line along each side, 1.6 in
+    const ins = T.map(p => add2(cen2(T), sc2(sub2(p, cen2(T)), .78)));
+    body += `<path d="${pd(ins.map(p => W3(p, xc)))}" fill="none" stroke="${WOOD.d}" style="stroke-width:.5" opacity=".6"/>`;
+    // right-angle mark at C
+    const ua = unit2(sub2(G.A, G.C)), ub = unit2(sub2(G.B, G.C)), r = 2.6;
+    body += ink(pd([add2(G.C, sc2(ua, r)), add2(add2(G.C, sc2(ua, r)), sc2(ub, r)), add2(G.C, sc2(ub, r))].map(p => W3(p, xc)), false), .9);
+    body += ink(pd(cap), 1.4);
+  }
+  body += hullInk([...A3, ...B3], 2.2);
+  // letters on the battens (upright, on whichever face is toward the viewer)
+  const lt = (p2, str) => { const p = W3(p2, XM); return pyText(p, str, 3.6, { font:'Georgia,serif', italic:true, weight:700 }); };
+  const cT = cen2(T);
+  body += lt(lerp2(lerp2(G.B, G.C, .5), cT, .38), 'a') + lt(lerp2(lerp2(G.A, G.C, .5), cT, .38), 'b') + lt(lerp2([-7.5, 0], cT, .32), 'c');
+  let svg = body;
+  if (k > 0){
+    const far = `<g opacity="${f(.5*k)}">` + loft(A3, B3, n => mix(toneI(n.map(v => -v), WOOD), '#f2efe7', .5), true) + fill(pd(fr ? A3 : B3), mix(WOOD.d, '#f2efe7', .5)) + `</g>`;
+    svg = far + `<g opacity="${f(k)}">${triInside(G)}</g>` + `<g opacity="${f(1 - .8*k)}">${body}</g>`;
+  }
+  return { pts: [...A3, ...B3], ns: edgeNs(T), svg };
+}
+function triInside(G){
+  const cT = cen2(G.T), inw = (p, d) => add2(p, sc2(unit2(sub2(cT, p)), d)), parts = [];
+  const xr = (p2, r, m, x0 = XT0 + .3, x1 = XT1 - .3) => parts.push(rodItem(W3(p2, x0), W3(p2, x1), r, m, .7));
+  const Ai = inw(G.A, 2.4), Bi = inw(G.B, 2.4), Ci = inw(G.C, 1.8);
+  xr(Ai, .55, STEEL); xr(Bi, .55, STEEL); xr(Ci, .6, BRASS);                        // hinge pins, corner pin
+  for (const S0 of [Ai, Bi]){ const mid = lerp2(S0, Ci, .55), mid2 = lerp2(S0, Ci, .45);
+    parts.push(rodItem(W3(S0, XM), W3(mid, XM), .75, IRON, .7));                    // outer slide tube
+    parts.push(rodItem(W3(mid2, XM), W3(Ci, XM), .45, STEEL, .6)); }                // inner slide rod
+  parts.push(rodItem(W3([0, -.2], XT0 - .1), W3([0, -.2], XT1 + .1), .85, STEEL, .7)); // axle through the hub bushing
+  return pySort(parts);
+}
+
+/* ---------- scene ---------- */
+let pyG = null;
+function deviceItems(st, k){
+  const G = pyG, items = [], fr = facing([1,0,0]);
+  const A2 = G.a*G.a, B2 = G.b*G.b, C2 = PYC*PYC;
+  // streams: into the c-square when it is below (flipped), into the leg squares when they are below
+  let sC = '', sA = '', sB = '';
+  if (st.qa > 0) sC += streamSvg(add2(G.B, [-2.6, 1.1]), G.SC, st.wc/C2);
+  if (st.qb > 0) sC += streamSvg(add2(G.A, [2.6, 1.1]), G.SC, st.wc/C2);
+  if (st.qa < 0) sA = streamSvg(add2(add2(G.B, sc2(G.na, 1.1)), sc2(unit2(sub2(G.C, G.B)), 2.6)), G.SA, st.wa/A2);
+  if (st.qb < 0) sB = streamSvg(add2(add2(G.A, sc2(G.nb, 1.1)), sc2(unit2(sub2(G.C, G.A)), 2.6)), G.SB, st.wb/B2);
+  const ov = sq => k > 0 ? gridSvg(sq, k) : '';
+  for (const [sq, frac, stm, extra] of [[G.SA, st.wa/A2, sA, ''], [G.SB, st.wb/B2, sB, ''], [G.SC, st.wc/C2, sC, k > 0 ? proofSvg(G, k) : '']])
+    items.push({ pts: prismPts(sq, XC0, XC1), ns: edgeNs(sq), svg: cellSvg(sq, frac, stm, ov(sq) + extra) });
+  items.push(ductItem(ductPoly(G.B, G.na, G.nc), st.qa !== 0));
+  items.push(ductItem(ductPoly(G.A, G.nb, G.nc), st.qb !== 0));
+  items.push(triItem(G, k));
+  // fill plugs on the leg cells' outer walls, the air-bleed screw on the c-cell's far wall
+  for (const [S0, n, side] of [[G.B, G.na, G.a], [G.A, G.nb, G.b]]){ const m2 = add2(lerp2(S0, G.C, .5), sc2(n, side));
+    items.push(rodItem(W3(m2, XM), W3(add2(m2, sc2(n, 1.3)), XM), 1, matOf('#f3efe4'), .8)); }
+  items.push(rodItem(W3([0, PYC], XM), W3([0, PYC + .9], XM), .7, BRASS, .7));
+  // back: Thales rail (pieces), its standoffs at A and B, the corner carriage; hub flange and bolts
+  const RX = 12.75;
+  for (let i = 0; i < 12; i++){ const a0 = Math.PI + i/12*Math.PI, a1 = Math.PI + (i + 1)/12*Math.PI;
+    items.push(rodItem(W3([PYR*Math.cos(a0), PYR*Math.sin(a0)], RX), W3([PYR*Math.cos(a1), PYR*Math.sin(a1)], RX), .38, BRASS, .6)); }
+  for (const V0 of [G.A, G.B]) items.push(rodItem(W3(V0, RX - .4), W3(V0, XT0), .55, STEEL, .6));
+  { const tg = unit2([-G.C[1], G.C[0]]), nr = unit2(G.C), q = [add2(add2(G.C, sc2(tg, 1.4)), sc2(nr, 1)), add2(add2(G.C, sc2(tg, -1.4)), sc2(nr, 1)), add2(add2(G.C, sc2(tg, -1.4)), sc2(nr, -1.2)), add2(add2(G.C, sc2(tg, 1.4)), sc2(nr, -1.2))];
+    items.push({ pts: prismPts(ccw(q), RX - .8, XT0), ns: edgeNs(ccw(q)), svg: act('corner', prism(ccw(q), RX - .8, XT0, BRASS, toneI, .8)) }); }
+  { const bolts = [0, 1, 2, 3].map(i => { const a = Math.PI/4 + i*Math.PI/2; return [2.2*Math.cos(a), 2.2*Math.sin(a)]; });
+    let hub = cylX(12, XT0, YC, ZP, 3.2, BRASS, toneI, .9, 24);
+    if (facing([-1,0,0])) for (const b of bolts) hub += cylX(11.6, 12, ...W3(b, 0).slice(1), .5, STEEL, toneI, .5, 6);
+    items.push({ pts: rodPts([11.6, YC, ZP], [XT0, YC, ZP], 3.2), svg: hub }); }
+  // front: turning knob on its plate at O, corner knob at C
+  items.push({ pts: rodPts([XT1, YC, ZP], [21.6, YC, ZP], 3), svg: act('knob', cylX(XT1, XT1 + .5, YC, ZP, 3, BRASS, toneI, .8, 24) + cylX(XT1 + .5, 21.6, YC, ZP, 2, WOOD, toneI, 1, 20)
+    + (facing([1,0,0]) ? fill(pd(on(PX(21.62), ellUV(YC, ZP, .7, .7, 10))), BRASS.m) : '')) });
+  { const c3 = W3(G.C, XT1); items.push({ pts: rodPts(c3, [XT1 + 1.6, c3[1], c3[2]], 1.2), svg: act('corner', cylX(XT1, XT1 + 1.6, c3[1], c3[2], 1.2, BRASS, toneI, .8, 16)) }); }
+  return items;
+}
+function standItems(st, m){
+  const items = [], z1 = ZP + 9;
+  items.push(boxItem(3, YC - 3, BZ1, 8, YC + 3, z1, m, tone, 1.4));                                      // upright post
+  for (const [y0, y1] of [[YC - 4.3, YC - 3], [YC + 3, YC + 4.3]]){ const pr = [[3, BZ1], [11, BZ1], [3, BZ1 + 13]];
+    const A = pr.map(([x, z]) => [x, y0, z]), B = pr.map(([x, z]) => [x, y1, z]);
+    items.push({ pts: [...A, ...B], svg: loft(A, B, n => tone(n, m)) + (facing([0,1,0]) ? fill(pd(B), tone([0,1,0], m)) + ink(pd(B), .8) : facing([0,-1,0]) ? fill(pd(A), tone([0,-1,0], m)) + ink(pd(A), .8) : '') + hullInk([...A, ...B], 1.2) }); }
+  items.push(boxItem(8, YC - 2.6, ZP - 2.6, 10.2, YC + 2.6, ZP + 2.6, IRON, toneI, 1));                 // bearing block
+  items.push({ pts: rodPts([2.2, YC, ZP], [3, YC, ZP], 1.3), svg: cylX(2.2, 3, YC, ZP, 1.3, STEEL, toneI, .7, 6) });   // axle nut at the back
+  items.push(rodItem([10.2, YC, ZP], [12, YC, ZP], .8, STEEL, .8));                                      // axle
+  { let d = cylX(10.6, 11.2, YC, ZP, 5, IRON, toneI, .9, 32);                                             // index disc, notches top and bottom
+    const xn = facing([1,0,0]) ? 11.22 : facing([-1,0,0]) ? 10.58 : null;
+    if (xn != null) for (const v of [5, -5]){ const c0 = [0, v*.86]; const q = [add2(c0, [-.45, -.7]), add2(c0, [.45, -.7]), add2(c0, [.45, .7]), add2(c0, [-.45, .7])];
+      d += fill(pd(q.map(p => W3(p, xn))), '#2a2622'); }
+    items.push({ pts: rodPts([10.6, YC, ZP], [11.2, YC, ZP], 5), svg: d }); }
+  // index plunger: bracket off the upright, barrel on top, pin down into the disc's top notch, pull knob
+  const lift = 1.6*st.lift, tip = ZP + 4.3 + lift;
+  items.push(boxItem(8, YC - 1, ZP + 7.2, 11.9, YC + 1, ZP + 8.2, IRON, toneI, .8));
+  items.push({ pts: rodPts([10.9, YC, tip], [10.9, YC, ZP + 7.2], .3), svg: cyl(10.9, YC, tip, ZP + 7.2, .3, STEEL, toneI, .6, 10) });
+  items.push({ pts: rodPts([10.9, YC, ZP + 8.2], [10.9, YC, ZP + 10.2], .85), svg: cyl(10.9, YC, ZP + 8.2, ZP + 10.2, .85, STEEL, toneI, .8, 14) });
+  items.push({ pts: rodPts([10.9, YC, ZP + 10.2], [10.9, YC, ZP + 13 + lift], 1.2), svg: cyl(10.9, YC, ZP + 10.2, ZP + 11.2 + lift, .25, STEEL, toneI, .5, 8)
+    + cyl(10.9, YC, ZP + 11.2 + lift, ZP + 12.8 + lift, 1.1, KNOBR, toneI, .9, 16) });
+  return items;
+}
+// the wheel stands turned 32 deg toward the default viewer (drawn by turning the camera the other way, so the
+// light, shading and shadows stay fixed relative to the viewer exactly as if the whole object were turned)
+const PY_TWIST = 32;
+function scene(st, m){
+  const yaw0 = YAW; setCam(YAW - PY_TWIST, PITCH);
+  try { return sceneTurned(st, m); } finally { setCam(yaw0, PITCH); }
+}
+function sceneTurned(st, m){
+  pyTh = st.th; pyG = pyGeo(st.al);
+  const G = pyG, k = ease(st.xr || 0);
+  const BRD_TOP = on(PZ(BZ1), rrUV(0, BY0, BX1, BY1, 3)), BRD_BOT = on(PZ(BZ0), rrUV(0, BY0, BX1, BY1, 3));
+  const devPts = [G.SA, G.SB, G.SC].flatMap(sq => prismPts(sq, XC0, XC1));
+  const standPts = [[3, YC - 4.3, BZ1], [11, YC - 4.3, BZ1], [3, YC + 4.3, BZ1], [11, YC + 4.3, BZ1], [3, YC - 3, ZP + 9], [8, YC + 3, ZP + 9], [3, YC + 3, ZP + 9], [8, YC - 3, ZP + 9]];
+  let s = `<g opacity=".45">${castShadow(devPts)}</g>` + castShadow([...standPts, ...BRD_TOP]);
+  for (const [x, y] of [[2.5, BY0 + 2.5], [BX1 - 2.5, BY0 + 2.5], [2.5, BY1 - 2.5], [BX1 - 2.5, BY1 - 2.5]]) s += cyl(x, y, 0, BZ0, 1.4, RUBBER, toneI, .8, 14);
+  s += loft(BRD_BOT, BRD_TOP, n => toneI(n, BOARD)) + fill(pd(BRD_TOP), BOARD.l) + ink(pd(BRD_TOP), 1) + hullInk([...BRD_BOT, ...BRD_TOP], 2);
+  s += clipTo(BRD_TOP, `<g opacity=".45">${castShadow(devPts, BZ1)}</g>` + castShadow(standPts, BZ1));
+  s += pySort([...standItems(st, m), ...deviceItems(st, k)]);
+  if (k > 0){
+    // area formulas, upright on the near pane of each square
+    const A2 = Math.round(G.a*G.a), B2 = Math.round(PYC*PYC) - A2, ab2 = Math.round(G.a*G.b/2), d2 = Math.round(PYC*PYC) - 4*ab2;
+    const ctr = sq => W3(cen2(sq), XM), o = { xf: XC1 + .05, xb: XC0 - .05, halo: 1.1, op: k };
+    const pa = ctr(G.SA), pb = ctr(G.SB), pc = ctr(G.SC);
+    s += pyText([0, pa[1], pa[2] - .8], `a² = ${A2}`, 2.5, o) + pyText([0, pb[1], pb[2] - .8], `b² = ${B2}`, 2.5, o);
+    s += pyText([0, pc[1], pc[2] + 6.2], `c² = ${PYC*PYC}`, 2.6, o) + pyText([0, pc[1], pc[2] + .4], `= 4 x ${ab2} + ${d2}`, 2.2, o) + pyText([0, pc[1], pc[2] - 5.4], `= a² + b²`, 2.2, o);
+  }
+  const all = [...devPts, ...standPts], B = [0, 22, Math.min(...all.map(p => p[1])), Math.max(...all.map(p => p[1])), 0, Math.max(...all.map(p => p[2]))];
+  s += pyCallouts(k > .6 ? insideLabels(st, G) : surfaceLabels(st, G), B);
+  return s;
+}
+function surfaceLabels(st, G){
+  const fz = (p2, x = XT1) => W3(p2, x);
+  return [
+    { at: fz(add2(G.SC[2], [-3, -3]), XC1), text:'SQUARE ON c', on: st.qa > 0 || st.qb > 0 },
+    { at: fz(add2(G.SA[2], sc2(sub2(G.SA[0], G.SA[2]), .2)), XC1), text:'SQUARE ON a', on: st.qa !== 0 },
+    { at: fz(add2(G.SB[2], sc2(sub2(G.SB[0], G.SB[2]), .2)), XC1), text:'SQUARE ON b', on: st.qb !== 0 },
+    { at: [21.6, YC, ZP], text:'TURNING KNOB', on: !!st.op && st.op.kind === 'flip' },
+    { at: fz(G.C, XT1 + 1.6), text:'CORNER KNOB', on: !!st.op && st.op.kind === 'slide' },
+    { at: [10.9, YC, ZP + 12.8 + 1.6*st.lift], text:'INDEX PLUNGER', on: st.lift > .05 } ];
+}
+function insideLabels(st, G){
+  const flip = !!st.op && st.op.kind === 'flip', slide = !!st.op && st.op.kind === 'slide', cT = cen2(G.T);
+  const inw = (p, d) => add2(p, sc2(unit2(sub2(cT, p)), d));
+  const wetCell = st.wc > st.wa + st.wb ? G.SC : st.wb > 0 ? G.SB : G.SA, deep = W3(cen2(wetCell), XC1);
+  return [
+    { at: [22, BY1 - 4, BZ1], text:'BASE BOARD', on:false },
+    { at: [BX1 - 2.5, BY0 + 2.5, .4], text:'RUBBER FOOT', on:false },
+    { at: [5.5, YC + 3, ZP - 18], text:'UPRIGHT POST', on:false },
+    { at: [7, YC - 4.3, 7], text:'GUSSET', on:false },
+    { at: [10.2, YC - 1.5, ZP - 1.8], text:'BEARING BLOCK', on: flip },
+    { at: [11.5, YC, ZP - .8], text:'STEEL AXLE', on: flip },
+    { at: W3([3.5, -3], 11.2), text:'INDEX DISC', on: flip },
+    { at: [10.9, YC, ZP + 5], text:'PLUNGER PIN', on: st.lift > .05 },
+    { at: [10.9, YC, ZP + 12.8 + 1.6*st.lift], text:'PULL KNOB', on: st.lift > .05 },
+    { at: W3([-2.2, 2.2], 12), text:'HUB FLANGE', on: flip },
+    { at: [21.6, YC, ZP], text:'TURNING KNOB', on: flip },
+    { at: W3([0, -.2], XT1), text:'AXLE THROUGH HUB', on: flip },
+    { at: W3(lerp2(G.A, G.B, .78), XT1), text:'HYPOTENUSE BATTEN', on:false },
+    { at: W3(inw(G.A, 2.4), XT1), text:'HINGE PIN A', on: slide },
+    { at: W3(inw(G.B, 2.4), XT1), text:'HINGE PIN B', on: slide },
+    { at: W3(lerp2(inw(G.B, 2.4), G.C, .3), XM), text:'LEG SLIDE', on: slide },
+    { at: W3(G.C, XT1 + 1.6), text:'CORNER KNOB', on: slide },
+    { at: W3(add2(G.C, sc2(unit2(G.C), -1)), 12), text:'CORNER CARRIAGE', on: slide },
+    { at: W3([PYR*Math.cos(Math.PI*1.12), PYR*Math.sin(Math.PI*1.12)], 12.75), text:'THALES RAIL', on: slide },
+    { at: W3(G.B, 12.75), text:'RAIL STANDOFF', on:false },
+    { at: W3(add2(G.B, sc2(unit2(add2(G.na, G.nc)), 3.4)), XC1), text:'DUCT AT B', on: st.qa !== 0 },
+    { at: W3(add2(G.A, sc2(unit2(add2(G.nb, G.nc)), 3.4)), XC1), text:'DUCT AT A', on: st.qb !== 0 },
+    { at: W3(add2(add2(lerp2(G.B, G.C, .5), sc2(G.na, G.a)), sc2(G.na, 1.3)), XM), text:'FILL PLUG a', on:false },
+    { at: W3(add2(add2(lerp2(G.A, G.C, .5), sc2(G.nb, G.b)), sc2(G.nb, 1.3)), XM), text:'FILL PLUG b', on:false },
+    { at: W3([0, PYC + .9], XM), text:'AIR-BLEED SCREW', on:false },
+    { at: W3(add2(G.SC[3], [2, -2]), XC1), text:'FRONT PANE', on:false },
+    { at: W3(add2(G.SC[2], [-1.5, -6]), XC0), text:'BACK PANE', on:false },
+    { at: deep, text:'BLUE WATER', on: st.qa !== 0 || st.qb !== 0 },
+    { at: W3(add2(G.SA[3], sc2(sub2(G.SA[0], G.SA[3]), .15)), XC1), text:'AREA GRID', on:false },
+    { at: W3(lerp2(lerp2(G.A, G.B, .5), [G.C[0], -G.C[1]], .6), XC1), text:'PROOF TRIANGLE', on:false },
+    { at: W3([0, PYR], XC1), text:'INNER SQUARE (b-a)', on:false } ];
+}
+
+/* ---------- labels: core's xrCallouts, but the right column starts under the stats and switches (top right), and a
+   column with more pills than height closes its gaps so it never runs off the bottom ---------- */
+function pyCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0])), cx = (xmin + xmax)/2;
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap0 = hgt + (u ? 3*u : 3*k);
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, ctm = svgEl.getScreenCTM();
+  const toY = el => { if (!el || !ctm) return null; const r = el.getBoundingClientRect(); if (!r.height) return null;
+    const q = new DOMPoint(r.right, r.bottom).matrixTransform(ctm.inverse()); return q.y; };
+  // the right column clears the stats and the see-through switches, whichever is lower (on a phone the switches drop
+  // below the figure, so only the stats count; the built page moves the switches above the stats)
+  const vs = document.querySelector('.vset'), yS = toY(document.getElementById('stats'));
+  const yV = vs && getComputedStyle(vs).position === 'absolute' ? toY(vs) : null;
+  const yL = toY(document.getElementById('btns')), yR = yS == null && yV == null ? null : Math.max(yS ?? -1e9, yV ?? -1e9);
+  const top = { [-1]: yL != null ? Math.max(fs, yL + hgt) : fs, [1]: yR != null ? Math.max(fs, yR + hgt) : fs + 30*k };
+  // the built page adds a zoom chip (about 30 px tall) in the figure's bottom right corner after the first render: the
+  // right column always stops above that strip
+  const bot = { [-1]: vb.y + vb.height - hgt/2, [1]: vb.y + vb.height - hgt/2 - (ctm && ctm.d ? 36/ctm.d : 0) };
+  const wOf = t => t.length*fs*.62 + fs*1.5, wMax = u ? hgt*1.3 + 12*k : Math.max(...items.map(it => wOf(it.text))) + 12*k;
+  const roomL = xmin - vb.x >= wMax, roomR = vb.x + vb.width - xmax >= wMax;
+  const Lc = [], Rc = [];
+  for (const it of items){ const [X, Y] = P(...it.at); ((X < cx && roomL) || !roomR ? Lc : Rc).push({ ...it, X, Y }); }
+  // balance the columns by their free height: move the outermost items across while one side is fuller
+  const cap = side => Math.max(1, Math.floor((bot[side] - top[side]) / gap0) + 1);
+  if (roomL && roomR){ const byX = (a, b) => a.X - b.X;
+    while (Lc.length > cap(-1) && Rc.length < cap(1)){ Lc.sort(byX); Rc.push(Lc.pop()); }
+    while (Rc.length > cap(1) && Lc.length < cap(-1)){ Rc.sort(byX); Lc.push(Rc.shift()); } }
+  let s = '';
+  for (const [col, side] of [[Lc, -1], [Rc, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    const gap = col.length > 1 ? Math.min(gap0, Math.max(hgt*1.02, (bot[side] - top[side]) / (col.length - 1))) : gap0;
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    const over = col.length ? Math.max(0, col[col.length - 1].py - bot[side]) : 0, room = col.length ? col[0].py - top[side] : 0;
+    const shift = Math.max(over, col.length ? col.reduce((a, c) => a + c.py - c.Y, 0) / col.length : 0);
+    for (const c of col) c.py -= Math.min(shift, room);
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : wOf(c.text);
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+
+/* ---------- behaviour: one state object, one clock ---------- */
+let ui, loopOn = false;
+const legs = al => [PYC*Math.sin(al), PYC*Math.cos(al)];
+const busy = st => !!st.op || st.qa !== 0 || st.qb !== 0;
+function flows(st, dt){
+  const [a, b] = legs(st.al), A2 = a*a, B2 = b*b, ct = Math.cos(st.th);
+  st.qa = st.qb = 0;
+  if (ct < -.2){                                            // leg squares above: they drain into the c-square
+    const da = Math.min(st.wa, QFLOW*dt), db = Math.min(st.wb, QFLOW*dt);
+    st.wa -= da; st.wb -= db; st.wc += da + db; if (da > 1e-9) st.qa = 1; if (db > 1e-9) st.qb = 1;
+  } else if (ct > .2){                                      // c-square above: it drains into both leg squares
+    const da = Math.min(A2 - st.wa, QFLOW*dt, st.wc); st.wa += da; st.wc -= da;
+    const db = Math.min(B2 - st.wb, QFLOW*dt, st.wc); st.wb += db; st.wc -= db;
+    if (da > 1e-9) st.qa = -1; if (db > 1e-9) st.qb = -1;
+  }
+  for (const key of ['wa', 'wb', 'wc']) if (st[key] < 1e-7) st[key] = 0;
+}
+function tick(st, dt){
+  const op = st.op;
+  if (op){ op.t += dt; const t = op.t;
+    if (op.kind === 'flip'){
+      st.lift = t < LIFT_S ? ease(t/LIFT_S) : t < LIFT_S + TURN_S ? 1 : 1 - ease(Math.min(1, (t - LIFT_S - TURN_S)/LIFT_S));
+      st.th = op.from + (op.to - op.from)*ease(Math.max(0, Math.min(1, (t - LIFT_S)/TURN_S)));
+      if (t >= 2*LIFT_S + TURN_S){ st.th = op.to; st.lift = 0; st.op = null; }
+    } else { const kk = Math.min(1, t/SLIDE_S); st.al = op.from + (op.to - op.from)*ease(kk); const [a, b] = legs(st.al); st.wa = a*a; st.wb = b*b; st.wc = 0;
+      if (kk >= 1){ st.al = op.to; st.op = null; } }
+  }
+  flows(st, dt);
+  if (!busy(st) && st.next){ const nx = st.next; st.next = null; nx(); }
+  return busy(st) || !!st.next;
+}
+function run(){ if (loopOn) return; loopOn = true; ui.animate(dt => { const go = tick(ui.st, dt); if (!go) loopOn = false; return go; }); }
+function flip(st, to){
+  if (busy(st)) return ui.flash('wait: the water is still moving');
+  if (Math.abs(st.th - to) < 1e-6) return ui.flash(to ? 'already flipped: the big square is full' : 'already upright');
+  st.op = { kind:'flip', from: st.th, to, t: 0 }; run();
+}
+function slideTo(st, al){
+  if (busy(st)) return ui.flash('wait: the water is still moving');
+  if (st.th !== 0){ flip(st, 0); st.next = () => slideTo(st, al); ui.flash('flipping back first'); return; }
+  st.op = { kind:'slide', from: st.al, to: al, t: 0 }; run();
+}
+const shapeIx = st => SHAPES.findIndex(s => Math.abs(s.al - st.al) < 1e-6);
+const r1 = v => Math.abs(v - Math.round(v)) < .05 ? String(Math.round(v)) : v.toFixed(1);
+
+ui = mountFigure({
+  fig:'M3', turn:'full', title:'Pythagoras in water',
+  size:[22, 74, ZP + 37], center:[11, YC], palette:'mustard',
+  // th: wheel angle (0 = upright, PI = flipped); al: angle at A; wa, wb, wc: water area in the a, b and c squares (cm^2)
+  state:{ th:0, al: SHAPES[1].al, wa: 324, wb: 576, wc: 0, qa:0, qb:0, lift:0, op:null, next:null },
+  scene,
+  stats: st => { const [a, b] = legs(st.al), A2 = Math.round(a*a), B2 = PYC*PYC - A2;
+    return [ { label:`Leg squares ${r1(a)}, ${r1(b)}`, value:`${A2} + ${B2}` },
+             { label:'Square on c', value:`${PYC*PYC} cm²` },
+             { label:'Water in big square', value:`${Math.round(st.wc)} cm²`, small:true } ]; },
+  buttons:[
+    { label:'Flip over', onClick: st => flip(st, Math.PI) },
+    { label:'Flip back', onClick: st => flip(st, 0) },
+    { label:'Slide the corner', choices: st => SHAPES.map((s, i) => ({ label: s.label, current: shapeIx(st) === i, onClick: st2 => slideTo(st2, s.al) })) },
+  ],
+  acts:{ knob: st => flip(st, st.th ? 0 : Math.PI), corner: st => slideTo(st, SHAPES[(Math.max(0, shapeIx(st)) + 1) % SHAPES.length].al) },
+  params:(st, q) => {
+    const sh = SHAPES.find(s => s.label.toLowerCase() === (q.get('shape') || '').toLowerCase()); if (sh) st.al = sh.al;
+    const [a, b] = legs(st.al); st.wa = a*a; st.wb = b*b; st.wc = 0;
+    if (q.get('flip') === '1'){ st.th = Math.PI; st.wa = st.wb = 0; st.wc = PYC*PYC; }
+    if (q.has('pour')){ const t = +q.get('pour'); st.th = Math.PI; st.wa = Math.max(0, a*a - QFLOW*t); st.wb = Math.max(0, b*b - QFLOW*t); st.wc = PYC*PYC - st.wa - st.wb; st.qa = st.wa > 0 ? 1 : 0; st.qb = st.wb > 0 ? 1 : 0; }
+    if (q.has('th')) st.th = +q.get('th')*Math.PI/180;
+    if (q.has('lift')) st.lift = +q.get('lift');
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
