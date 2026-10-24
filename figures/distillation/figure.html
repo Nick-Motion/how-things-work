@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Distillation</title>
+<script>
+addEventListener('error', e => { document.documentElement.dataset.errors += e.message + ';'; });
+addEventListener('unhandledrejection', e => { document.documentElement.dataset.errors += String(e.reason) + ';'; });
+</script></head><body><script src="core.js"></script><script>
+/* Truth first.
+   Heat an 80 ml charge in a supported round-bottom flask with an electric mantle.
+   Water evaporates; salt stays in the flask. Wine gives ethanol-enriched water, never pure ethanol.
+   The thermometer bulb sits at the sidearm, in vapour, not in the liquid.
+   Vapour travels down the inner tube. Cooling water enters the LOW end of the separate jacket,
+   leaves the HIGH end and drains to the sink. Condensate runs downhill and drips into an open receiver.
+   With cooling off the jacket warms; vapour leaves the open receiver vent instead of collecting.
+   This is an accelerated qualitative model at atmospheric pressure. Wine starts near 92 C,
+   increasing as alcohol is removed; salt-water vapour is near 100 C. Not a predictive VLE calculation.
+   Sources.
+   https://www.chem.rochester.edu/notvoodoo/pages/purification/simple_distillation.php
+   https://iu.pressbooks.pub/iuegenchemlabs/chapter/alcohol-production-by-fermentation-and-distillation/
+   Parts and attachments.
+   BENCH. Board supports mantle, two weighted stands, receiver and sink with tap.
+   GLASS. Round flask in mantle; neck held by a lined clamp; ground joint to still head;
+   thermometer and adapter above head; sidearm joins sloping condenser; inner tube within sealed
+   water jacket; two hose barbs; outlet joint and bent delivery adapter; open receiving flask.
+   SUPPORTS. Each base holds a vertical rod; bosshead and screw hold a cross-arm; lined jaws grip glass.
+   HEATER. Housing, insulation bowl, resistance winding, control knob, pilot light and mains lead.
+   WATER. Tap body, valve handle, spout, supply hose to lower barb; upper barb to return hose and sink drain.
+   CONTENTS. Charge, boiling chips, salt ions or wine molecules; distillate. Moving dots are overlays,
+   not apparatus. Heat is cut before the flask runs dry. Specimen selection replaces a cooled teaching setup. */
+const dstA = [38,94,72], dstB = [38,36,49];
+const dstMix = (a,b,t) => a.map((v,i) => v+(b[i]-v)*t);
+const dstBounds = (pts,r=0) => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))-r),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i]))+r)];
+const dstRing = (x,y,z,r) => on(PZ(z),ellUV(x,y,r,r,28));
+const dstAt = t => dstMix(dstA,dstB,t);
+const dstFeed = { salt:{name:'Salt water',col:'#6faeca',product:'Pure water',bp:100.5}, wine:{name:'Wine',col:'#ad4b68',product:'Ethanol-rich water',bp:92} };
+const dstState = {feed:'salt',heating:false,temp:20,head:20,cool:true,jacket:18,collected:0,escaped:0,time:0,travel:0,phase:'ready',xr:0,xrT:0};
+const dstBoil = st => dstFeed[st.feed].bp + (st.feed==='wine' ? Math.min(7,(st.collected+st.escaped)*.18) : 0);
+let dstUI, dstRunning=false;
+function dstTick(st,dt){
+  st.time+=dt;
+  const bp=dstBoil(st), used=st.collected+st.escaped;
+  st.temp=st.heating ? Math.min(bp,st.temp+18*dt) : Math.max(20,st.temp-13*dt);
+  st.jacket+=Math.sign((st.cool?18:82)-st.jacket)*Math.min(Math.abs((st.cool?18:82)-st.jacket),dt*32);
+  const boiling=st.heating && st.temp>=bp-.05 && used<60;
+  st.phase=boiling?'boiling':st.heating?'warming':st.temp>20?'cooling':'ready';
+  st.head=boiling ? Math.min(st.feed==='salt'?100:bp,st.head+80*dt) : Math.max(20,st.head-18*dt);
+  st.travel=boiling?Math.min(1,st.travel+dt/1.5):Math.max(0,st.travel-dt*2);
+  if(boiling && st.travel>=1){
+    const amount=Math.min(2*dt,60-used);
+    if(st.jacket<45) st.collected+=amount; else st.escaped+=amount;
+  }
+  if(st.collected+st.escaped>=60-1e-8) st.heating=false;
+}
+function dstKick(){
+  if(dstRunning)return; dstRunning=true;
+  dstUI.animate(dt=>{dstTick(dstState,dt);const more=dstState.heating||dstState.temp>20||dstState.head>20;dstRunning=more;return more;});
+}
+function dstHeat(st,ui){st.heating=!st.heating;if(st.collected+st.escaped>=60){st.heating=false;return ui.flash('Replace the cooled charge before heating again');}dstKick();}
+function dstSelect(st,ui){
+  if(st.heating||st.temp>25)return ui.flash('Switch off the heater and let the flask cool first');
+  st.feed=st.feed==='salt'?'wine':'salt';Object.assign(st,{temp:20,head:20,collected:0,escaped:0,travel:0,phase:'ready'});
+  ui.flash(dstFeed[st.feed].name+' charge, clean receiver');
+}
+function dstGlassEdge(rings){
+  const edges=new Map(),n=rings[0].length;
+  for(let i=0;i<rings.length-1;i++)for(let j=0;j<n;j++){
+    const ids=[i*n+j,i*n+(j+1)%n,(i+1)*n+(j+1)%n,(i+1)*n+j],p=ids.map(id=>rings[Math.floor(id/n)][id%n]);
+    let nr=norm(cross(sub(p[1],p[0]),sub(p[3],p[0])));
+    const center=avg(rings[i].concat(rings[i+1]));if(dot(nr,sub(avg(p),center))<0)nr=nr.map(v=>-v);
+    if(!vis(nr))continue;
+    for(let e=0;e<4;e++){const a=ids[e],b=ids[(e+1)%4],key=[Math.min(a,b),Math.max(a,b)].join(',');if(edges.has(key))edges.delete(key);else edges.set(key,[p[e],p[(e+1)%4]]);}
+  }
+  return ink([...edges.values()].map(p=>pd(p,false)).join(''),1.5);
+}
+function dstGlass(rings,inside,k){
+  let far='',near='';
+  for(let i=0;i<rings.length-1;i++){
+    far+=loft(rings[i],rings[i+1],()=> '#bcdde5',true);
+    near+=loft(rings[i],rings[i+1],n=>toneI(n,CLEAR));
+  }
+  return `<g opacity="${.18-.1*k}">${far}</g>`+inside+`<g opacity="${.24-.16*k}">${near}</g>`+dstGlassEdge(rings)+ink(pd(rings.at(-1)),.8);
+}
+function dstCallouts(items){
+  const omitted=/CLAMP SCREW|CLAMP ARM|LINED JAWS|STAND BASE|FLASK NECK|POWER PLUG|PILOT LIGHT|SINK BOWL|OUTLET JOINT/;
+  items=items.filter(it=>!omitted.test(it.text));
+  const fig=document.getElementById('fig'),vb=fig.viewBox.baseVal,inv=fig.getScreenCTM().inverse();
+  const mobile=window.LBL_U&&LBL_U(),unit=mobile||INK_K;
+  const point=(x,y)=>new DOMPoint(x,y).matrixTransform(inv);
+  const projected=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  let svg='';
+  for(const [side,col] of [[-1,projected.slice(0,Math.ceil(items.length/2))],[1,projected.slice(Math.ceil(items.length/2))]]){
+    const panel=document.getElementById(side<0?'btns':'stats').getBoundingClientRect();
+    const chip=document.querySelector('.zchip');
+    const top=mobile?vb.y+10*unit:point(panel.left,panel.bottom+14).y;
+    const bottom=chip?point(0,chip.getBoundingClientRect().top-10).y:vb.y+vb.height-35*unit;
+    const gap=Math.min(20*unit,(bottom-top)/Math.max(1,col.length-1)),fs=Math.min((mobile?10:8.6)*unit,gap*.5),h=fs*1.8;
+    col.sort((a,b)=>a.p[1]-b.p[1]);
+    col.forEach((it,i)=>{
+      const w=mobile?h*1.3:it.text.length*fs*.62+fs*1.5,x=side<0?vb.x+4*unit+w/2:vb.x+vb.width-4*unit-w/2,y=top+i*gap,ex=x-side*w/2;
+      const n=((window.__ln||(window.__ln={}))[it.text]||(__ln[it.text]=Object.keys(__ln).length+1));
+      svg+=`<g class="tag${it.on?' on':''}" data-n="${n}" data-t="${it.text}" pointer-events="none"><path d="M${f(it.p[0])} ${f(it.p[1])}L${f(ex)} ${f(y)}" fill="none" stroke="${INK}" stroke-width=".7"/><circle cx="${f(it.p[0])}" cy="${f(it.p[1])}" r="${f(INK_K)}" fill="${INK}"/><rect x="${f(x-w/2)}" y="${f(y-h/2)}" width="${f(w)}" height="${f(h)}" rx="${f(h/2)}" fill="${it.on?'var(--accent)':'#fff4d6'}" stroke="${INK}" stroke-width="1"/><text x="${f(x)}" y="${f(y+fs*.35)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">${mobile?n:it.text}</text></g>`;
+    });
+  }
+  return svg;
+}
+function dstTube(a,b,r,k,inside=''){
+  const axis=norm(sub(b,a)),u=norm(cross(axis,[1,0,0])),v=cross(axis,u);
+  const ring=p=>Array.from({length:24},(_,i)=>{const t=i*Math.PI/12;return p.map((q,j)=>q+r*(u[j]*Math.cos(t)+v[j]*Math.sin(t)));});
+  const aa=ring(a),bb=ring(b);
+  return `<g opacity="${.16-.08*k}">${loft(aa,bb,()=>CLEAR.m,true)}</g>`+inside+`<g opacity="${.24-.14*k}">${loft(aa,bb,n=>toneI(n,CLEAR))}</g>`+hullInk([...aa,...bb],1.5)+ink(pd(aa),.65)+ink(pd(bb),.65);
+}
+function dstDot(p,r,col){const q=P(...p);return `<circle cx="${f(q[0])}" cy="${f(q[1])}" r="${f(r)}" fill="${col}" stroke="${INK}" stroke-width=".6"/>`;}
+function dstScene(st,m){
+  const k=ease(st.xr||0),parts=[],labels=[];
+  const put=(pts,r,svg,label,at=pts[0],on=false)=>{parts.push({box:dstBounds(pts,r),svg});if(label)labels.push({at,text:label,on});};
+  const rr=(a,b,r,mat,label,active=false)=>put([a,b],r,rod(a,b,r,mat,toneI,.9),label,dstMix(a,b,.5),active);
+  const bx=(a,b,mat,label)=>put([a,b],0,box(...a,...b,mat,toneI,1),label,dstMix(a,b,.5));
+  let s=board(0,0,82,145,3,5,WOOD);
+  s+=clipTo(boardTop(0,0,82,145,3,5),castShadow([[24,94,3],[52,122,3],[24,94,47],[52,122,47],[38,108,103],dstA,dstB,[24,10,3],[52,36,38]],3));
+  for(const [y,z,name] of [[116,60,'FLASK'],[64,61,'CONDENSER']]){
+    bx([10,y-12,3],[26,y+12,6],DARK,name+' STAND BASE');
+    for(const [a,b] of [[6,31],[31,z-3],[z-3,z+3],[z+3,z+20]])rr([18,y,a],[18,y,b],1.3,METAL);
+    labels.push({at:[18,y,z+13],text:name+' SUPPORT ROD'});
+    bx([16,y-3,z-3],[22,y+3,z+3],DARK,name+' BOSSHEAD');
+    rr([22,y,z],[34,y===116?108:64,z],1,METAL,name+' CLAMP ARM');
+    rr([16,y+3,z],[16,y+7,z],.8,METAL,name+' CLAMP SCREW');
+    const cy=y===116?108:64,rad=y===116?4.9:6.1;
+    put([[38,cy,z]],rad,ink(pd(on(PZ(z),arcUV(38,cy,rad,farHalf()[0],farHalf()[1],12)),false),2.2)+ink(pd(on(PZ(z+.8),arcUV(38,cy,rad,nearHalf()[0],nearHalf()[1],12)),false),2.2),name+' LINED JAWS',[38+rad,cy,z]);
+  }
+  const heaterOuter=cyl(38,108,5,18,17,m,tone,1.8)+ink(pd(dstRing(38,108,18,14)),1);
+  let heaterInner=cyl(38,108,6,11,14,matOf('#e5d6b0'),toneI,1);
+  const coil=[];for(let i=0;i<=100;i++){const a=i*.35;coil.push([38+12*Math.cos(a),108+12*Math.sin(a),9+i*.055]);}
+  heaterInner+=`<path d="${pd(coil,false)}" fill="none" stroke="${st.heating?'#ed683c':'#84786d'}" stroke-width="1.1"/>`;
+  const heaterSvg=`<g opacity="${1-.85*k}">${heaterOuter}</g>`+`<g opacity="${k}">${heaterInner}</g>`;
+  labels.push({at:[50,117,13],text:'HEATING MANTLE',on:st.heating});
+  labels.push({at:[38,108,11],text:'RESISTANCE WINDING',on:st.heating},{at:[28,108,10],text:'INSULATION BOWL'});
+  rr([54,108,10],[57,108,10],2.5,DARK,'HEAT CONTROL',st.heating);
+  put([[55,116,12]],1,dstDot([55,116,12],1,st.heating?'#ef5b3c':'#74736b'),'PILOT LIGHT',[55,116,12],st.heating);
+  const wire=[[23,108,8],[8,108,4],[5,100,4],[5,82,4],[8,80,4]];
+  for(let i=1;i<wire.length;i++)rr(wire[i-1],wire[i],.65,DARK);
+  labels.push({at:[5,90,4],text:'MAINS LEAD'});bx([7,76,3],[14,83,7],DARK,'POWER PLUG');
+  const level=31-(st.collected+st.escaped)*.12,rs=[];
+  for(let z=17;z<=44;z+=3)rs.push(dstRing(38,108,z,Math.sqrt(Math.max(.2,196-(z-31)**2))));
+  rs.push(dstRing(38,108,46,4),dstRing(38,108,64,4));
+  const lr=[];for(let z=18;z<level;z+=2)lr.push(dstRing(38,108,z,Math.sqrt(Math.max(.2,169-(z-31)**2))));
+  lr.push(dstRing(38,108,level,Math.sqrt(Math.max(.2,169-(level-31)**2))));
+  let liquid=lr.slice(1).map((r,i)=>loft(lr[i],r,()=>dstFeed[st.feed].col)).join('')+shape(lr.at(-1),mix(dstFeed[st.feed].col,'#ffffff',.3),.6);
+  for(const a of [-1,1])liquid+=dstDot([38+a*3,108,19],1.2,'#e5dfcc');
+  if(k>.01){
+    const dots=[];for(let i=0;i<12;i++){const a=i*2.4;const z=22+(i%3)*3;dots.push({box:dstBounds([[38+6*Math.sin(a),108+6*Math.cos(a),z]],.8),svg:dstDot([38+6*Math.sin(a),108+6*Math.cos(a),z],.7,st.feed==='salt'&&i%2?'#e8ba50':'#fff4d6')});}
+    liquid+=`<g opacity="${k}">${byDepth(dots)}</g>`;
+  }
+  if(st.phase==='boiling')for(let i=0;i<8;i++){const t=(st.time*.55+i/8)%1;liquid+=dstDot([38+Math.sin(i*3)*3*(1-t),108+Math.cos(i*3)*3*(1-t),level+(68-level)*t],.6+.4*t,'#fff7e1');}
+  put([[21,91,5],[55,125,64]],0,heaterSvg+dstGlass(rs,liquid,k),'ROUND BOTTOM FLASK',[48,115,34]);
+  labels.push({at:[38,108,55],text:'FLASK NECK'},{at:[38,108,level],text:st.feed==='salt'?'SALT WATER CHARGE':'WINE CHARGE',on:st.heating},{at:[38,108,19],text:'BOILING CHIPS'});
+  put([[38,108,63],[38,108,80]],5,dstTube([38,108,63],[38,108,80],4.4,k),'STILL HEAD',[38,108,72],st.phase==='boiling');
+  rr([38,108,63],[38,108,66],4.7,CLEAR,'GROUND GLASS JOINT');
+  put([[38,108,76],dstA],2.7,dstTube([38,108,76],dstA,2.7,k),'VAPOUR SIDEARM',[38,101,74],st.phase==='boiling');
+  rr([38,108,80],[38,108,84],4,DARK,'THERMOMETER ADAPTER');
+  put([[38,108,75],[38,108,104]],1.7,dstTube([38,108,75],[38,108,104],1.7,k)+rod([38,108,75],[38,108,78+(st.head-20)*.28],.55,matOf('#df6451'),toneI,.4),'THERMOMETER STEM',[38,108,96],st.head>25);
+  put([[38,108,75]],1.2,dstDot([38,108,75],1.2,'#df6451'),'THERMOMETER BULB',[38,108,75],st.head>25);
+  const flow=[];
+  for(let i=0;i<9;i++){
+    const t=(st.time*.28+i/9)%1,p=dstAt(1-t);p[0]+=4;flow.push(dstDot(p,.8,st.cool?'#3f86c1':'#c5855c'));
+  }
+  const jacketInside=`<g opacity="${k*.85+.12}">${rod(dstA,dstB,5,matOf(st.cool?'#7cc7d8':'#d5a37a'),()=>st.cool?'#a8dbe1':'#d5b9a0',.3)}</g>`;
+  const inner=dstTube(dstA,dstB,2.2,k);
+  let molecules='';
+  if(st.phase==='boiling'&&st.travel>.01)for(let i=0;i<8;i++){
+    const t=((st.time*.38+i/8)%1)*st.travel,p=dstAt(t);
+    molecules+=dstDot(p,t>.42&&st.jacket<45?1:.65,t>.42&&st.jacket<45?'#4d9cc6':st.feed==='wine'&&i%3?'#dfb17f':'#fff8da');
+  }
+  put([dstA,dstB],6,dstTube(dstA,dstB,5.8,k,jacketInside)+inner+`<g opacity="${k}">${flow.join('')+molecules}</g>`,'WATER JACKET',dstAt(.5),st.cool);
+  labels.push({at:dstAt(.25),text:'INNER CONDENSING TUBE',on:st.travel>0&&st.jacket<45});
+  for(const t of [.02,.98]){const p=dstAt(t),q=dstAt(t+.018);put([p,q],6,rod(p,q,5.9,CLEAR,toneI,.5));}
+  const lo=dstAt(.94),hi=dstAt(.06),lowPort=[lo[0]+9,lo[1],lo[2]],highPort=[hi[0]+9,hi[1],hi[2]];
+  rr(lo,lowPort,1.6,CLEAR,'LOWER WATER INLET',st.cool);rr(hi,highPort,1.6,CLEAR,'UPPER WATER OUTLET',st.cool);
+  const inlet=[[66,24,24],[66,35,25],[56,42,35],lowPort],outlet=[highPort,[61,91,58],[69,80,24],[69,68,8]];
+  for(const [route,col,name] of [[inlet,'#6b9fc2','COLD SUPPLY HOSE'],[outlet,'#a7bcc9','WARM RETURN HOSE']]){
+    for(let i=1;i<route.length;i++)rr(route[i-1],route[i],1.3,matOf(col));
+    labels.push({at:route[1],text:name,on:st.cool});
+  }
+  put([dstB,[38,23,39]],2.4,dstTube(dstB,[38,23,44],2.4,k)+dstTube([38,23,44],[38,23,39],2.4,k),'DELIVERY ADAPTER',[38,25,44]);
+  labels.push({at:[38,34,48],text:'OUTLET JOINT'},{at:[38,23,39],text:'DRIP TIP',on:st.phase==='boiling'&&st.jacket<45});
+  let receive='';const rz=4+Math.min(11,st.collected*.2);
+  if(st.collected>0){const aa=dstRing(38,23,4,11),bb=dstRing(38,23,rz,11-(rz-4)*.15);receive=loft(aa,bb,()=> '#9ac9d7')+shape(bb,'#b5dce3',.6);}
+  if(st.phase==='boiling'&&st.travel>=1&&st.jacket<45){const dz=39-((st.time*1.7)%1)*(39-rz);receive+=dstDot([38,23,dz],1,'#77b6cf');}
+  const recRings=[[3,11],[6,12],[10,12],[28,4],[36,4],[38,4.6]].map(([z,r])=>dstRing(38,23,z,r));
+  put([[26,11,3],[50,35,38]],0,dstGlass(recRings,receive,k),'RECEIVING FLASK',[48,23,14]);
+  labels.push({at:[38,23,37],text:'OPEN RECEIVER NECK'},{at:[38,23,rz],text:'DISTILLATE',on:st.collected>0});
+  if(st.phase==='boiling'&&st.travel>=1&&st.jacket>=45)for(let i=0;i<7;i++){const t=(st.time*.45+i/7)%1;put([[38,23,39+18*t]],1,dstDot([38+Math.sin(i)*t*4,23,39+18*t],.8,'#bc937d'));}
+  bx([59,53,3],[79,76,6],METAL,'SINK');
+  put([[62,56,6],[76,73,7]],0,shape(on(PZ(6.1),rrUV(62,56,76,73,3)),'#6c888f',1),'SINK BOWL',[73,68,6]);
+  put([[69,68,6.2]],2,shape(dstRing(69,68,6.2,2),'#3f4649',.6),'DRAIN',[69,68,6.2]);
+  rr([66,20,3],[66,20,27],2,METAL,'WATER TAP');rr([66,20,27],[66,24,27],2,METAL,'TAP SPOUT');rr([66,24,27],[66,24,24],1.5,METAL);
+  rr([66,20,22],[71,20,22],.7,METAL,'WATER VALVE',st.cool);
+  rr([71,17,22],[71,23,22],1,matOf(st.cool?'#609dcc':'#999999'));
+  s+=byDepth(parts);
+  if(k>.6)s+=dstCallouts(labels);
+  return s;
+}
+dstUI=mountFigure({fig:'37',turn:'full',title:'Distillation',size:[82,145,105],palette:'mustard',state:dstState,scene:dstScene,
+  stats:st=>[{label:dstFeed[st.feed].name+' liquid',value:st.temp.toFixed(1)+' C'},{label:'Vapour thermometer',value:st.head.toFixed(1)+' C',small:true},{label:dstFeed[st.feed].product,value:st.collected.toFixed(1)+' ml',small:true},{label:'Cooling water',value:st.cool?'Flowing':'Off',small:true}],
+  buttons:[{label:'Heater on / off',onClick:dstHeat},{label:'Salt water / wine',onClick:dstSelect},{label:'Cooling water on / off',onClick:(st,ui)=>{st.cool=!st.cool;dstKick();ui.flash(st.cool?'Cold water enters the lower end':'Jacket warming, vapour will escape');}}],
+  params:(st,q)=>{if(q.get('feed')==='wine')st.feed='wine';if(q.get('cool')==='0')st.cool=false;const take=Number(q.get('collected'));if(Number.isFinite(take))st.collected=Math.max(0,Math.min(60,take));if(q.get('hot')==='1'){st.temp=dstBoil(st);st.head=st.feed==='salt'?100:st.temp;st.heating=true;st.travel=1;}}
+});
+xrMount(()=>dstUI,()=> '');
+if(dstState.heating)dstKick();
+</script></body></html>
