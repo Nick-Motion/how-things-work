@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jet engine</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Jet engine: a two-spool high-bypass turbofan (CFM56-7B class: 1.55 m fan, 24 wide-chord blades, bypass ratio ~5.1,
+   121 kN take-off thrust) hung from an outdoor thrust stand. Scale: 1 unit ~ 2.2 cm (fan radius 40).
+   How it really works, and where everything is after each step:
+   1. Start: air from the ground cart spins the air turbine starter on the accessory gearbox; the gearbox drives the
+      radial shaft, which turns the HP spool (N2: HP compressor + HP turbine on the hollow HP shaft). The fan does not
+      turn on its own until air starts to flow through (N1 lags). At ~25% N2 the FADEC opens the fuel valve (pump on the
+      gearbox -> manifold -> 20 fuel nozzles) and fires the 2 igniter plugs: light-off, EGT jumps. The starter helps until
+      56% N2, then cuts out; the engine settles at ground idle (N2 ~60%, N1 ~21%, EGT ~450 C, ~290 kg/h, ~8 kN).
+      (A real start takes ~45 s; drawn ~3x faster.)
+   2. Running: air comes in through the inlet; the fan pushes ~5/6 of it straight back down the bypass duct, past the
+      outlet guide vanes, out of the fan nozzle (most of the thrust). The splitter sends the rest into the core:
+      LP compressor (booster, 3 stages, on the fan) -> HP compressor (9 stages, front ones with variable stator vanes,
+      ~30:1 overall at take-off, air ~550 C) -> diffuser -> annular combustion chamber (fuel burns, ~1,400 C) ->
+      HP turbine nozzle -> 1-stage HP turbine (drives the HP compressor) -> 4-stage LP turbine (drives the fan and
+      booster through the LP shaft, which runs inside the HP shaft) -> turbine rear frame -> core nozzle around the
+      exhaust cone. Hot core jet and cool bypass jet push the engine forward.
+   3. Throttle: more fuel -> hotter gas -> the turbines speed both spools up (idle to take-off in ~5 s, the spool-up lag).
+      Idle N2 60 / N1 21 / 8.5 kN; part power N2 86 / N1 72 / 55 kN / 1,900 kg/h; take-off N2 99 / N1 100
+      (5,380 rpm fan, 14,460 rpm core) / 121 kN / EGT ~880 C / ~4,700 kg/h.
+   4. The thrust stand: the engine hangs from a pylon on a live bed, held under the fixed frame by thin flexure plates
+      that let it slide fore-aft; a load cell in the fore-aft link reads the thrust.
+   5. Shut down: fuel valve shut, flame out, both spools run down, EGT falls.
+   Parts:
+   STAND   concrete pad . 4 posts . 2 cross beams . main beam . 2 flexures . live bed . thrust load cell + lug . fuel line
+   OUTSIDE inlet cowl (lip) . fan cowl . fan (bypass) nozzle . core cowl . core nozzle . exhaust cone . pylon
+   INSIDE  spinner . fan (24 blades) . fan case . outlet guide vanes . splitter . booster (3 rotor + stator rows) . fan frame
+           struts . LP shaft . HP shaft . bearings . HP compressor (9 rotor + stator rows, VSVs) . diffuser . combustion
+           chamber (liner) . fuel manifold . 20 fuel nozzles . 2 igniter plugs . HP turbine nozzle . HP turbine . LP turbine
+           (4 rotor + stator rows) . turbine rear frame . front + rear mount . accessory gearbox . radial drive shaft .
+           air turbine starter . fuel pump . FADEC . oil tank */
+
+/* ---------- world (x = along the engine, inlet at +x; y = width; z = up) ---------- */
+const JW = 190, JD = 140, JH = 152, JPAD = 3;
+const YC = 70, ZC = 70;                                   // engine axis
+const jR = (x, r, t) => [x, YC + r*Math.cos(t), ZC + r*Math.sin(t)];
+const jRing = (x, r, n = 28, ph = 0) => Array.from({length:n}, (_, i) => jR(x, r, ph + i/n*2*Math.PI));
+const LPM = PALS.cobalt, HPM = PALS.tomato, STANDM = PALS.mustard;
+const HOTM = matOf('#e2a35f'), CASEM = matOf('#b4bcbf'), AGBM = matOf('#99a3a8'), FADM = matOf('#5f6c74'), OILM = matOf('#c8ad72');
+const CONC = { l:'#e3dfd5', m:'#c9c4b8', d:'#a29c90' };
+// profiles [x, r] (front to back)
+const J_OUT = [[174, 43.2], [173, 45.6], [170.5, 47.6], [165, 49.4], [155, 50.6], [142, 50.8], [128, 50], [112, 48], [96, 45], [80, 41.5]];
+const J_IN  = [[174, 43.2], [172.5, 41.2], [168, 40.4], [150, 40.2], [139, 40.2]];
+const J_CORE = [[136, 22], [128, 25], [112, 27.5], [80, 28], [64, 27], [52, 24.5], [44, 21.5]];   // splitter -> core nozzle lip
+const J_PLUG = [[52, 12], [46, 11.6], [38, 9], [32, 5.5], [28, 1.5], [27.5, 0]];
+const J_FX = 140, J_FT = 148;                             // fan blade trailing / leading edge
+
+/* ---------- small helpers ---------- */
+const jf2 = v => v.toFixed(2);
+const jop = (k, svg) => k >= .999 ? svg : `<g opacity="${jf2(k)}">${svg}</g>`;
+const jLerp = (tab, x) => { if (x <= tab[0][0]) return tab[0].slice(1); for (let i = 1; i < tab.length; i++) if (x <= tab[i][0]){ const a = tab[i-1], b = tab[i], t = (x - a[0])/(b[0] - a[0]); return a.slice(1).map((v, k) => v + (b[k+1] - v)*t); } return tab[tab.length-1].slice(1); };
+const jProfR = (prof, x) => jLerp(prof.slice().sort((a, b) => a[0] - b[0]), x)[0];
+const jFront = () => facing([1, 0, 0]);
+const jView = () => Math.atan2(CAM_V[2], CAM_V[1]);       // angle about the axis that points at the viewer
+const jBoxOf = pts => [[0,1,2].map(i => Math.min(...pts.map(p => p[i]))), [0,1,2].map(i => Math.max(...pts.map(p => p[i])))];
+const jIt = (pts, svg) => svg ? { box: jBoxOf(pts), svg } : null;
+const jCorners = b => { const o = []; for (const x of [b[0][0], b[1][0]]) for (const y of [b[0][1], b[1][1]]) for (const z of [b[0][2], b[1][2]]) o.push([x,y,z]); return o; };
+// order only pairs that overlap on screen, then back to front through that graph (ties and cycles by depth)
+function jSort(items){
+  items = items.filter(Boolean); const n = items.length;
+  const sb = items.map(it => { const q = jCorners(it.box).map(c => P(...c)); return [Math.min(...q.map(v => v[0])), Math.max(...q.map(v => v[0])), Math.min(...q.map(v => v[1])), Math.max(...q.map(v => v[1]))]; });
+  const dep = items.map(it => depthOf(it.at || boxMid(it.box))), out = items.map(() => []), indeg = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++){
+    const a = sb[i], b = sb[j]; if (a[1] < b[0] || b[1] < a[0] || a[3] < b[2] || b[3] < a[2]) continue;
+    const c = sepOrder(items[i], items[j]);
+    if (c < 0){ out[i].push(j); indeg[j]++; } else if (c > 0){ out[j].push(i); indeg[i]++; } }
+  const done = new Array(n).fill(false), res = [];
+  for (let k = 0; k < n; k++){
+    let b = -1; for (let i = 0; i < n; i++) if (!done[i] && (b < 0 || (indeg[i] === 0) > (indeg[b] === 0) || ((indeg[i] === 0) === (indeg[b] === 0) && dep[i] < dep[b]))) b = i;
+    done[b] = true; res.push(items[b].svg); for (const j of out[b]) indeg[j]--; }
+  return res.join('');
+}
+// solid of revolution about the engine axis; segments drawn far to near along x
+function jRev(prof, M, sh = toneI, w = 1.2, n = 28, flip = false, caps = true){
+  const R = prof.map(([x, r]) => jRing(x, Math.max(r, .01), n)), idx = R.map((_, i) => i);
+  const fr = jFront(), lowFirst = (prof[0][0] > prof[prof.length-1][0]) === fr;
+  const seg = lowFirst ? idx.slice(0, -1).reverse() : idx.slice(0, -1);
+  let o = ''; for (const i of seg) o += loft(R[i], R[i+1], nn => sh(nn, M), flip);
+  if (caps && !flip){ const hi = prof[0][0] > prof[prof.length-1][0] ? 0 : R.length - 1, lo = R.length - 1 - hi;
+    if (fr && prof[hi][1] > .05) o += fill(pd(R[hi]), sh([1,0,0], M)) + ink(pd(R[hi]), w*.6);
+    if (!fr && prof[lo][1] > .05) o += fill(pd(R[lo]), sh([-1,0,0], M)) + ink(pd(R[lo]), w*.6); }
+  return o + (flip ? '' : hullInk(R.flat(), w));
+}
+// annulus face at x between r0 and r1
+const jAnn = (x, r0, r1, c, n = 32) => `<path d="${pd(jRing(x, r1, n))}${pd(jRing(x, r0, n))}" fill="${c}" fill-rule="evenodd"/>`;
+// a row of blades (rotor or stator) between hub rh and tip rt from x0 to x1; tw = twist (rad across the chord)
+function jBlades(x0, x1, rh, rt, nb, ph, M, tw, sel = 0, w = .45){
+  const out = [], vd = depthOf([0, YC, ZC]);
+  for (let i = 0; i < nb; i++){
+    const t = ph + i/nb*2*Math.PI, q = [jR(x0, rh, t), jR(x1, rh, t + tw), jR(x1, rt, t + tw*.8), jR(x0, rt, t)];
+    const nn = norm(cross(sub(q[1], q[0]), sub(q[3], q[0]))), d = depthOf(avg(q)) - vd;
+    if (sel && Math.sign(d) !== sel) continue;
+    out.push([d, shape(q, toneI(vis(nn) ? nn : nn.map(v => -v), M), w)]);
+  }
+  return out.sort((a, b) => a[0] - b[0]);
+}
+// a blade row drawn as a disc: the face toward you and the rim carry the blade marks (they turn with the spool)
+function jStage(x0, x1, rh, rt, nb, ph, M, tw = .5){
+  const fr = jFront(), xa = Math.max(x0, x1), xb = Math.min(x0, x1), xc = fr ? xa : xb, n = Math.min(nb, 18);
+  let s = jRev([[xa, rt], [xb, rt]], M, toneI, .8, 26), d = '';
+  for (let i = 0; i < n; i++){ const t = ph + i/n*2*Math.PI;
+    d += pd([jR(xc, rh + .6, t), jR(xc, rt - .2, t + (fr ? tw : -tw)*.25)], false);
+    if (vis([0, Math.cos(t + tw/2), Math.sin(t + tw/2)])) d += pd([jR(xa, rt, t), jR(xb, rt, t + tw)], false); }
+  s += `<path d="${d}" fill="none" stroke="${M.d}" stroke-width=".7" stroke-linecap="round"/>` + ink(pd(jRing(xc, rh, 20)), .5);
+  return jIt([jR(x0, rt, 0), [x1, YC - rt, ZC - rt], [x1, YC + rt, ZC + rt]], s);
+}
+// ring of a line (manifold, flow ring) split into far / near halves
+function jHalfRing(x, r, sel, draw, n = 36){
+  const vd = depthOf([0, YC, ZC]), pts = jRing(x, r, n); let o = '';
+  for (let i = 0; i < n; i++){ const a = pts[i], b = pts[(i+1) % n]; if (Math.sign(depthOf(avg([a, b])) - vd || 1) === sel) o += 'M' + P(...a).map(f).join(' ') + 'L' + P(...b).map(f).join(' '); }
+  return o ? draw(o) : '';
+}
+
+/* ---------- prisms (pylon) ---------- */
+// profile in the x-z plane (any winding), extruded across y0..y1
+function jPrismY(prof, y0, y1, M, sh = tone, w = 1.2){
+  const c = avg(prof.map(([x, z]) => [x, 0, z])); let s = '';
+  for (let i = 0; i < prof.length; i++){ const [ax, az] = prof[i], [bx, bz] = prof[(i+1) % prof.length];
+    let nn = norm([bz - az, 0, -(bx - ax)]); if (nn[0]*((ax + bx)/2 - c[0]) + nn[2]*((az + bz)/2 - c[2]) < 0) nn = nn.map(v => -v);
+    if (vis(nn)) s += shape([[ax, y0, az], [bx, y0, bz], [bx, y1, bz], [ax, y1, az]], sh(nn, M), .7); }
+  for (const [y, n] of [[y1, [0,1,0]], [y0, [0,-1,0]]]) if (vis(n)) s += shape(prof.map(([x, z]) => [x, y, z]), sh(n, M), .9);
+  const all = prof.flatMap(([x, z]) => [[x, y0, z], [x, y1, z]]);
+  return s + hullInk(all, w);
+}
+const jPylF = () => { const b = []; for (let x = 84; x <= 138; x += 6) b.push([x, ZC + jProfR(J_OUT, x) - .6]); return [...b, [138, ZC + 58], [96, ZC + 58]]; };
+const J_PYLA = [[52, ZC + 24.2], [64, ZC + 26.6], [84, ZC + 27.6], [84, ZC + 58], [62, ZC + 58], [52, ZC + 36]];
+
+/* ---------- fan, spinner ---------- */
+const SPINM = matOf('#3f4753');
+function jSpinner(ph){
+  const prof = [[158.5, 0], [157.5, 3], [155, 6.6], [151.5, 9.8], [148, 11.8], [146, 12.3]];
+  let s = jRev(prof, SPINM, toneI, 1, 24, false, false);
+  const sp = []; for (let i = 0; i <= 14; i++){ const u = i/14, x = 158.5 - 12.5*u, r = jProfR(prof, x) + .05, t = ph + 3.4*u;
+    if (vis(norm([.7, Math.cos(t), Math.sin(t)]))) sp.push(jR(x, r, t)); else if (sp.length) break; }
+  if (sp.length > 1) s += `<path d="${pd(sp, false)}" fill="none" stroke="#f4f1e8" stroke-width="1.6" stroke-linecap="round"/>`;
+  return s;
+}
+function jFan(st, k){
+  const ph = st.ph1*Math.PI/180, fr = jFront();
+  const bl = jBlades(J_FT, J_FX, 12, 40, 24, ph, METAL, .36, 0, .55).map(b => b[1]).join('');
+  const hub = jRev([[148, 12.4], [138, 12.4]], LPM, toneI, .8, 24, false, false);
+  const bg = k > 0 ? '' : fill(pd(jRing(J_FX - .5, 40.3, 32)), '#2d3039');
+  const fan = jop(1 - .68*k, bl);
+  return bg + (fr ? hub + fan + jSpinner(ph) : jSpinner(ph) + hub + fan);
+}
+
+/* ---------- outside (the case, cowls and pylon) ---------- */
+const DUCT = '#2d3039';
+function jNacelle(m, inside){
+  const fr = jFront(); let s = '';
+  if (fr && inside) s += jRev(J_IN, CASEM, (n, M) => mix(toneI(n, M), '#000000', .18), 1, 32, true);
+  return s;
+}
+function jOuter(m){ return jRev(J_OUT, m, tone, 2.6, 36, false, false); }
+function jRear(m){ // cowl trailing edge, core cowl, core nozzle (the exhaust cone is drawn with the insides)
+  const fr = jFront(), cc = jRev(J_CORE.filter(p => p[0] <= 80), CASEM, tone, 1.8, 30, false, false);
+  return fr ? cc : jAnn(80, 37, 41.5, m.d) + jAnn(80, 0, 37, DUCT) + cc + fill(pd(jRing(44, 21.5, 30)), DUCT) + jAnn(44, 20.3, 21.5, CASEM.d);
+}
+const jPlug = () => jRev(J_PLUG, CASEM, toneI, 1.2, 24, false, false);
+const jPylonF = m => jPrismY(jPylF(), YC - 4, YC + 4, m);
+const jPylonA = m => jPrismY(J_PYLA, YC - 3.6, YC + 3.6, m);
+
+/* ---------- the insides ---------- */
+function jCompressors(st){
+  const p1 = st.ph1*Math.PI/180, p2 = st.ph2*Math.PI/180, it = [];
+  // booster: 3 rotors on the fan (LP), stators between
+  const bo = [[135.5, 133.5, 'r'], [133, 131.6, 's'], [131, 129, 'r'], [128.5, 127.1, 's'], [126.5, 124.5, 'r'], [124, 122.8, 's']];
+  bo.forEach(([a, b, t], i) => { const u = i/5, rh = 12.6 + .5*u, rt = 20.2 - 1.8*u;
+    it.push(t === 'r' ? jStage(a, b, rh, rt, 22, p1 + i, LPM, .55) : jStage(a, b, rh + .4, rt + .4, 26, 0, CASEM, -.4)); });
+  // HP compressor: 9 rotors (HP), stators between (the front 4 rows variable)
+  for (let i = 0; i < 9; i++){ const x = 118 - i*2.9, u = i/8, rh = 12.6 + 2.2*u, rt = 18.6 - 2*u;
+    it.push(jStage(x, x - 1.5, rh, rt, 26, p2 + i*.7, HPM, .5));
+    it.push(jStage(x - 1.65, x - 2.75, rh + .3, rt + .2, 30, 0, i < 4 ? matOf('#d0d6d8') : CASEM, -.45)); }
+  return it;
+}
+function jTurbines(st){
+  const p1 = st.ph1*Math.PI/180, p2 = st.ph2*Math.PI/180, it = [];
+  it.push(jStage(76, 74.6, 13.8, 18.5, 24, 0, HOTM, -.5));                 // HP turbine nozzle
+  it.push(jStage(74.2, 71.8, 13.9, 18.7, 30, p2, HPM, .55));                     // HP turbine
+  for (let i = 0; i < 4; i++){ const x = 70.6 - i*4.5, u = i/3, rh = 14.2 + .9*u, rt = 19.6 + 3.4*u;
+    it.push(jStage(x, x - 1.5, rh, rt, 26, 0, HOTM, -.45));
+    it.push(jStage(x - 1.9, x - 3.7, rh, rt + .3, 28, p1 + i*.6, LPM, .5)); }
+  return it;
+}
+// one half (far -1 / near +1) of a radial set of rods, as a sortable item placed on that side
+function jSpokes(x, r0, r1, nb, rad, M, sel, ph = 0, x1 = x){
+  const vd = depthOf([0, YC, ZC]), parts = [];
+  for (let i = 0; i < nb; i++){ const t = ph + i/nb*2*Math.PI, a = jR(x, r0, t), b = jR(x1, r1, t);
+    if (Math.sign(depthOf(b) - vd || 1) === sel) parts.push([depthOf(b), rod(a, b, rad, M, toneI, .7, rad, 6)]); }
+  return parts.sort((p, q) => p[0] - q[0]).map(p => p[1]).join('');
+}
+const jSideAt = (x, r, sel) => jR(x, r, jView() + (sel > 0 ? 0 : Math.PI));
+const jHalfItem = (x0, x1, r, sel, svg) => svg ? { box:[[x0, YC - r, ZC - r], [x1, YC + r, ZC + r]], at: jSideAt((x0 + x1)/2, r, sel), svg } : null;
+// a thin shell about the axis: far half (inside faces) or near half (outside faces, see-through)
+const jShell = (prof, M, sel, o = .3) => sel < 0 ? jRev(prof, M, (n, m) => mix(toneI(n, m), '#ffffff', .25), .8, 32, true) : jop(o, jRev(prof, M, toneI, 1, 32, false, false));
+
+function jCombustor(st){
+  const lit = st.lit, it = [];
+  const OUTW = [[88, 18.9], [84, 19.8], [79, 19.5], [76.2, 18.6]], INW = [[88, 14.4], [84, 13.4], [79, 13.5], [76.2, 13.9]];
+  let s = jRev(OUTW, HOTM, (n, M) => mix(toneI(n, M), '#000000', .25), 1, 30, true);
+  s += jop(.55, jRev(INW, HOTM, toneI, .9, 30, false, false));
+  if (lit){ const g = .55 + .25*Math.sin(st.t*31) * Math.sin(st.t*17);
+    for (const [r, c, o] of [[18.2, '#ff8a1e', .5], [16.6, '#ffc640', .55], [15, '#ff6a1a', .45]])
+      s += `<path d="${pd(jRing(84 - (18.2 - r)*.6, r, 30))}" fill="none" stroke="${c}" stroke-width="${f(3.2*INK_K)}" opacity="${jf2(o*g + .2)}"/>`;
+    s += `<g opacity="${jf2(.35 + .2*g)}">${loft(jRing(87, 16.6, 30), jRing(77, 16.3, 30), () => '#ff9a2a')}</g>`; }
+  s += jop(.4, jRev(OUTW, HOTM, toneI, 1, 30, false, false));
+  if (jFront()) s += jop(.75, jAnn(88.2, 14.4, 18.9, toneI([1,0,0], HOTM)));
+  it.push(jIt([[76, YC - 20, ZC - 20], [88, YC + 20, ZC + 20]], s));
+  // diffuser, fuel manifold and nozzles, at the front of the chamber
+  const fuel = matOf('#d6ae3e'), man = (sel) => jHalfRing(91.2, 23.6, sel, d => `<path d="${d}" fill="none" stroke="${INK}" stroke-width="2.4" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${fuel.l}" stroke-width="1.3" stroke-linecap="round"/>`);
+  const noz = sel => jSpokes(91, 23.4, 16.8, 20, .5, fuel, sel, .16, 88.6);
+  const dif = jop(.6, jRev([[92.4, 18.4], [88.4, 19.4]], CASEM, toneI, .8, 28, false, false));
+  it.push({ box:[[88.4, YC - 24, ZC - 24], [92.6, YC + 24, ZC + 24]], svg: man(-1) + noz(-1) + dif + noz(1) + man(1) });
+  // igniter plugs (2), sparking while the ignition is on
+  [-.35, Math.PI + .35].forEach(t => { const a = jR(83, 25.5, t), b = jR(83, 19.6, t);
+    let g = rod(a, b, .75, CASEM, toneI, .8, .75, 8) + rod(a, jR(83, 27, t), 1.1, matOf('#e9e5da'), toneI, .8, 1.1, 8);
+    if (st.ign && Math.sin(st.t*40) > -.2){ const q = P(...jR(83, 18.6, t)), R = 2.6*INK_K;
+      g += `<path d="M${f(q[0] - R)} ${f(q[1])}L${f(q[0] + R)} ${f(q[1])}M${f(q[0])} ${f(q[1] - R)}L${f(q[0])} ${f(q[1] + R)}M${f(q[0] - R*.7)} ${f(q[1] - R*.7)}L${f(q[0] + R*.7)} ${f(q[1] + R*.7)}" stroke="#fff2a8" stroke-width="1.6"/><circle cx="${f(q[0])}" cy="${f(q[1])}" r="${f(1.4*INK_K)}" fill="#ffffff"/>`; }
+    it.push(jIt([a, b, jR(83, 27, t)], g)); });
+  return it;
+}
+function jAccessories(st){
+  const it = [], s2 = st.ph2*Math.PI/180;
+  it.push(jIt([[106, YC - 6.5, ZC - 47], [136, YC + 6.5, ZC - 43]], box(106, YC - 6.5, ZC - 47, 136, YC + 6.5, ZC - 43, AGBM)));    // accessory gearbox
+  it.push(jIt([[100.5, YC - 6.5, ZC - 47.5], [106, YC - .5, ZC - 41.5]], cylX(100.5, 106, YC - 3.5, ZC - 44.5, 3, CASEM)
+    + line([[100.4, YC - 3.5 + 2.4*Math.cos(s2*3), ZC - 44.5 + 2.4*Math.sin(s2*3)], [100.4, YC - 3.5, ZC - 44.5]], 1)));             // air turbine starter
+  it.push(jIt([[136, YC + 1, ZC - 47.4], [141, YC + 6, ZC - 42.6]], cylX(136, 141, YC + 3.5, ZC - 45, 2.4, matOf('#d6ae3e'))));     // fuel pump
+  it.push(jIt([[136, YC - 6, ZC - 47], [139.5, YC - 1, ZC - 43]], cylX(136, 139.5, YC - 3.5, ZC - 45, 2, CASEM)));                   // oil pump
+  it.push(jIt([[113, YC - 1, ZC - 43.2], [119, YC + 1, ZC - 6]], rod([118.6, YC, ZC - 6.5], [114, YC, ZC - 43.2], .9, HPM, toneI, .8, .9, 8))); // radial drive shaft
+  it.push(jIt([[124, YC + 43.4, ZC - 7], [140, YC + 47, ZC + 5]], box(124, YC + 43.4, ZC - 7, 140, YC + 47, ZC + 5, FADM)));          // FADEC
+  it.push(jIt([[120, YC - 48.4, ZC - 1.2], [138, YC - 41.6, ZC + 5.2]], cylX(120, 138, YC - 45, ZC + 2, 3.2, OILM)));                 // oil tank
+  it.push(jIt([[120, YC - 3, ZC + 42.6], [126, YC + 3, ZC + 50]], box(120, YC - 3, ZC + 42.6, 126, YC + 3, ZC + 50, METAL)));          // front mount
+  it.push(jIt([[54, YC - 2.5, ZC + 22.5], [58, YC + 2.5, ZC + 26]], box(54, YC - 2.5, ZC + 22.5, 58, YC + 2.5, ZC + 26, METAL)));      // rear mount
+  return it;
+}
+function jMech(st, k){
+  const it = [...jCompressors(st), ...jTurbines(st), ...jCombustor(st), ...jAccessories(st)];
+  const fan = jFan(st, k);
+  it.push(jIt([[138, YC - 40, ZC - 40], [158.5, YC + 40, ZC + 40]], fan));
+  it.push(jIt([[136, YC - 12.5, ZC - 12.5], [140, YC + 12.5, ZC + 12.5]], jRev([[140, 12.6], [136, 12.6]], LPM, toneI, .8, 24, false, false)));   // fan disc
+  for (const sel of [-1, 1]){
+    it.push(jHalfItem(122.5, 128, 40, sel, jBlades(128, 124.4, 28, 40.3, 40, 0, CASEM, -.3, sel, .4).map(b => b[1]).join('')));     // outlet guide vanes
+    it.push(jHalfItem(119, 121, 40, sel, jSpokes(120, 17, 40.3, 8, 1, METAL, sel, .2)));                                           // fan frame struts
+    it.push(jHalfItem(48, 51.6, 24.5, sel, jSpokes(49.8, 11.8, 24.6, 8, .85, HOTM, sel, .4)));                                      // turbine rear frame
+    it.push(jHalfItem(118, 150, 43, sel, jShell([[150, 43], [118, 43]], CASEM, sel, .28)));                                          // fan case
+    it.push(jHalfItem(80, 136, 28, sel, jShell(J_CORE.filter(p => p[0] >= 80), CASEM, sel, .22)));                                   // splitter + core fairing
+  }
+  it.push(jIt([[27.5, YC - 12, ZC - 12], [52, YC + 12, ZC + 12]], jPlug()));
+  it.push(jIt([[46, YC - 12, ZC - 12], [52, YC + 12, ZC + 12]], jRev([[52, 11.8], [46.4, 11.8]], HOTM, toneI, .8, 24, false, false)));
+  // shafts first: LP shaft inside the hollow HP shaft
+  const sh = rod([150, YC, ZC], [47, YC, ZC], 3, LPM, toneI, .9, 3, 14) + rod([118.4, YC, ZC], [70.4, YC, ZC], 6, HPM, toneI, .9, 6, 18);
+  return sh + jSort(it);
+}
+
+/* ---------- air flow (lit) and the exhaust jets ---------- */
+const FL_BY = [[182, 33], [150, 32], [128, 33], [104, 33.5], [80, 33], [60, 33.6], [30, 34.5]];
+const FL_CO = [[182, 16], [150, 15.6], [140, 16.6], [136, 17.4], [124, 16.6], [118, 16], [92, 15.8], [88, 16.2], [76, 16.2], [72, 16.4], [56, 19.4], [44, 16.6], [22, 14.6]];
+const COLD = '#4fb0ff', WARM = '#ffd447', HOT = '#ff5a1e', EXH = '#ff9d4a';
+const jCoreCol = x => x > 124 ? COLD : x > 92 ? mix(COLD, WARM, (124 - x)/32) : x > 88 ? WARM : x > 74 ? mix(WARM, HOT, (88 - x)/14) : x > 44 ? mix(HOT, EXH, (74 - x)/30) : EXH;
+function jFlow(st, sel){
+  const v = jView(), a1 = Math.min(1, st.n1/8), a2 = Math.min(1, st.n2/12); let s = '';
+  const paths = [[FL_BY, () => COLD, st.fb, 6, a1], [FL_CO, jCoreCol, st.fc, 9, a2]];
+  const angs = sel > 0 ? [v + 1.25, v - 1.25] : [v + Math.PI + .6, v + Math.PI - .6];
+  angs.forEach((t, i) => {
+    for (const [pth, col, ph, N, a] of paths){
+      const x0 = pth[0][0], x1 = pth[pth.length-1][0], at = u => { const x = x0 + (x1 - x0)*u; return jR(x, jProfR(pth, x), t); };
+      s += `<path d="${pd(pth.map(([x, r]) => jR(x, r, t)), false)}" fill="none" stroke="${col(100)}" stroke-width="1" opacity=".3"/>`;
+      if (a <= .01) continue;
+      for (let j = 0; j < N; j++){ const u = ((j + i*.5)/N + ph) % 1, u0 = Math.max(0, u - .03), x = x0 + (x1 - x0)*u;
+        const p = P(...at(u)), q = P(...at(u0));
+        s += `<path d="M${f(q[0])} ${f(q[1])}L${f(p[0])} ${f(p[1])}" stroke="${col(x)}" stroke-width="${f(2*INK_K)}" stroke-linecap="round" opacity="${jf2(.9*a)}"/>`; } } });
+  return s;
+}
+function jPlume(st){
+  if (st.n1 < 2) return '';
+  const q = st.thrust/121, hot = st.lit ? 1 : 0, rings = (xa, xb, ra, rb, c, o) => { let s = '';
+    for (let i = 0; i < 5; i++){ const u = (i/5 + st.fp) % 1; s += `<path d="${pd(jRing(xa + (xb - xa)*u, ra + (rb - ra)*u, 26))}" fill="none" stroke="${c}" stroke-width="1.3" opacity="${jf2((1 - u)*o)}"/>`; } return s; };
+  const by = fill(sp(hull([...jRing(80, 39.5, 24), ...jRing(4, 41 + 5*q, 24)].map(p => P(...p)))), '#a9d6ff', `opacity="${jf2(.06 + .16*q)}"`) + rings(80, 4, 39.5, 41 + 5*q, '#8cc6f5', .12 + .2*q);
+  const co = hot ? fill(sp(hull([...jRing(44, 20.5, 24), ...jRing(-6, 24 + 7*q, 24)].map(p => P(...p)))), '#ffab5c', `opacity="${jf2(.12 + .22*q)}"`) + rings(44, -6, 20.5, 24 + 7*q, '#ff9a45', .15 + .25*q) : '';
+  return by + co;
+}
+
+/* ---------- the stand ---------- */
+const J_POSTS = [[45, 10], [145, 10], [45, 130], [145, 130]];
+function jStandItems(st, m, k = 0){
+  const it = [], S = STANDM, fuel = matOf('#d6ae3e'), fo = 1 - .6*k;
+  for (const [x, y] of J_POSTS) it.push(jIt([[x - 2.5, y - 2.5, JPAD], [x + 2.5, y + 2.5, 147]], box(x - 2.5, y - 2.5, JPAD, x + 2.5, y + 2.5, 147, S, tone, 1.1)
+    + box(x - 5, y - 5, JPAD, x + 5, y + 5, JPAD + 1.2, CONC, tone, .8)));
+  it.forEach(i => i.svg = jop(fo, i.svg));
+  for (const x of [45, 145]) it.push(jIt([[x - 2.5, 7.5, 141], [x + 2.5, 132.5, 147]], jop(fo, box(x - 2.5, 12.5, 141, x + 2.5, 127.5, 147, S, tone, 1.2))));
+  it.push(jIt([[36, YC - 3, 135], [160, YC + 3, 141]], box(36, YC - 3, 135, 160, YC + 3, 141, S, tone, 1.3)));                       // main beam
+  for (const x of [62, 126]) it.push(jIt([[x - .4, YC - 4, 131], [x + .4, YC + 4, 135]], box(x - .4, YC - 4, 131, x + .4, YC + 4, 135, CASEM, tone, .7)));   // flexures
+  it.push(jIt([[50, YC - 5, 128], [142, YC + 5, 131]], box(50, YC - 5, 128, 142, YC + 5, 131, matOf('#8d969a'), tone, 1)));        // live bed
+  it.push(jIt([[148, YC - 2, 128.6], [152, YC + 2, 135]], box(148, YC - 2, 128.6, 152, YC + 2, 135, matOf('#8d969a'), tone, .9)));  // lug
+  it.push(jIt([[142, YC - 1.5, 128.5], [148, YC + 1.5, 131.5]], cylX(142, 148, YC, 130, 1.5, FADM, tone, .9)
+    + cylX(144.2, 145.8, YC, 130, 1.8, matOf('#e2dccd'), tone, .8)));                                                                // load cell
+  // fuel supply: along the cross beam, down, a flexible hose onto the pylon
+  it.push(jIt([[146, 76, 138.5], [148, 128, 140]], rod([147.4, 128, 139.4], [147.4, 76, 139.4], .8, fuel, tone, .8)));
+  it.push(jIt([[146.5, 75, 131], [148.4, 77, 140]], rod([147.4, 76, 139.4], [147.4, 76, 131.4], .8, fuel, tone, .8)));
+  const hose = []; for (let i = 0; i <= 8; i++){ const u = i/8; hose.push([147.4 - 9*u, 76 - 1.5*u, 131.4 - 3.2*u + 2.2*Math.sin(u*Math.PI)]); }
+  it.push(jIt([[138, 74, 128.2], [148, 77, 133.6]], `<path d="${pd(hose, false)}" fill="none" stroke="${INK}" stroke-width="2.4" stroke-linecap="round"/><path d="${pd(hose, false)}" fill="none" stroke="#3b3a38" stroke-width="1.3" stroke-linecap="round"/>`));
+  return it;
+}
+
+/* ---------- the engine, closed or see-through ---------- */
+const jGhostCol = (n, M) => mix(toneI(n, M), '#f2efe7', .55);
+function jEngine(st, m, k){
+  const fr = jFront(), core = jRev(J_CORE.filter(p => p[0] <= 80), CASEM, tone, 1.8, 30, false, false);
+  const hole = fill(pd(jRing(44, 21.5, 30)), DUCT) + jAnn(44, 20.3, 21.5, CASEM.d), trail = jAnn(80, 37, 41.5, m.d) + jAnn(80, 0, 37, DUCT);
+  if (k <= 0) return fr ? jPlug() + core + jPylonA(m) + jNacelle(m, true) + jFan(st, 0) + jOuter(m) + jPylonF(m)
+                        : jOuter(m) + trail + jPylonF(m) + core + hole + jPlug() + jPylonA(m);
+  const far = jop(.5*k, jRev(J_OUT, m, jGhostCol, 1, 36, true) + jRev(J_CORE.filter(p => p[0] <= 80), CASEM, jGhostCol, 1, 30, true));
+  const body = fr ? core + jPylonA(m) + jOuter(m) + jPylonF(m) : jOuter(m) + trail + jPylonF(m) + core + hole + jPylonA(m);
+  const outl = hullInk([...jRing(174, 43.2, 24), ...jRing(155, 50.6, 24), ...jRing(80, 41.5, 24), ...jRing(44, 21.5, 24)], 2.8);
+  return far + jop(k, jFlow(st, -1) + jMech(st, k) + jFlow(st, 1)) + jop(1 - .8*k, body) + jop(.6*k, outl);
+}
+
+/* ---------- labels ---------- */
+function jLabels(st, k){
+  const v = jView(), A = (x, r, d = 0) => jR(x, r, v + d), L = [];
+  const add = (text, at, on = false) => L.push({ text, at, on });
+  if (k > .6){
+    add('Spinner', A(153, 7)); add('Fan blades', A(144, 31, .5), st.n1 > 1); add('Fan case', A(132, 43, -.9)); add('Outlet guide vanes', A(126, 36, .9));
+    add('Bypass duct', A(104, 35, -.35), st.n1 > 1);  add('LP compressor', A(129, 19, .3));
+     add('LP shaft', A(120.5, 3, .3)); add('HP shaft', A(85, 6, .2));
+    add('HP compressor', A(104, 17, .1), st.n2 > 1); add('Variable stators', A(112.6, 18.6, -.5)); 
+    add('Combustor', A(82, 19.8, .45), st.lit); add('Fuel nozzles', A(90.4, 21, .1), st.fuel); add('Fuel manifold', A(91.2, 23.6, -.6));
+    add('Igniter plug', jR(83, 27, Math.cos(v) > 0 ? -.35 : Math.PI + .35), st.ign); add('HP turbine nozzle', A(75.3, 18.6, -.2)); add('HP turbine', A(73, 18.6, .45));
+    add('LP turbine', A(60, 22, .1)); add('Turbine rear frame', A(49.8, 24, -.5)); add('Exhaust cone', A(38, 9.2)); add('Core nozzle', A(44.6, 21.5, .6));
+    add('Fan nozzle', A(80, 40, .35)); add('Core cowl', A(66, 27.3, -.35)); add('Accessory gearbox', [128, YC, ZC - 47]);
+    add('Radial drive shaft', [116.4, YC, ZC - 25]); add('Starter', [101, YC - 3.5, ZC - 47.5], st.starter); add('Fuel pump', [139, YC + 3.5, ZC - 47.4], st.fuel);
+    add('FADEC', [132, YC + 47, ZC + 2]);  add('Engine mount', [123, YC, ZC + 46]); 
+    add('Pylon', [100, YC, ZC + 56]); add('Thrust load cell', [145, YC, 131.5], st.thrust > 1); add('Flexures', [62, YC, 133]);
+  } else {
+    add('Inlet cowl', A(173.5, 45, .9)); add('Spinner', A(156, 5)); add('Fan cowl', A(112, 48, .4)); add('Fan nozzle', A(80, 41.5, .6));
+    add('Core cowl', A(66, 27.3, -.3)); add('Exhaust cone', A(36, 7.4)); add('Pylon', [110, YC, ZC + 56]);
+    add('Thrust load cell', [145, YC, 131.5], st.thrust > 1); add('Flexures', [62, YC, 133]); add('Test-stand frame', [145, 130, 100]); add('Fuel supply line', [147.4, 100, 139.4]);
+  }
+  return L;
+}
+
+/* ---------- callouts: the kit's two columns, balanced, the right one kept under the stats ---------- */
+function jCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0])), cx = (xmin + xmax)/2;
+  // on a phone (LBL_U = drawing units per screen px) each label is a numbered badge and the names go in a legend under the figure
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 7.8*k, hgt = u ? 17*u : fs*1.75, gap = hgt + (u ? 3*u : 2.4*k);
+  const L = [], R = [];
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, btn = document.getElementById('btns');
+  const wMax = u ? hgt*1.3 + 12*k : Math.max(...items.map(it => it.text.length))*fs*.62 + fs*1.5 + 12*k;
+  const roomL = xmin - vb.x >= wMax, roomR = vb.x + vb.width - xmax >= wMax;
+  // balanced: the left half (by screen x) to the left column, the rest to the right
+  const pl = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  pl.forEach((c, i) => ((i < pl.length/2 && roomL) || !roomR ? L : R).push(c));
+  let s = '';
+  let top = { [-1]: fs, [1]: fs + 30*k };
+  if (btn && svgEl.getScreenCTM()){ const r = btn.getBoundingClientRect(), q = new DOMPoint(r.right, r.bottom + 50).matrixTransform(svgEl.getScreenCTM().inverse());
+    if (q.y > 0) top[-1] = q.y + hgt; }
+  // the right column starts under the stats and the see-through switches (whichever ends lower)
+  for (const el of [document.querySelector('.vset'), document.getElementById('stats')]) if (el && svgEl.getScreenCTM() && getComputedStyle(el).position === 'absolute'){
+    const r = el.getBoundingClientRect(), q = new DOMPoint(r.left, r.bottom + 8).matrixTransform(svgEl.getScreenCTM().inverse()); top[1] = Math.max(top[1], q.y + hgt/2); }
+  for (const [col, side] of [[L, -1], [R, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    const shift = col.length ? Math.max(0, col.reduce((a, c) => a + c.py - c.Y, 0) / col.length) : 0;
+    const room = col.length ? col[0].py - top[side] : 0; for (const c of col) c.py -= Math.min(shift, room);
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+
+/* ---------- scene ---------- */
+const J_EBOX = [[27, YC - 51, ZC - 51], [174.5, YC + 51, ZC + 58]];
+function scene(st, m){
+  const k = ease(st.xr || 0), top = boardTop(0, 0, JW, JD, JPAD, 6);
+  let s = board(0, 0, JW, JD, JPAD, 6, CONC);
+  const eng = [...jRing(174, 44, 16), ...jRing(150, 51, 16), ...jRing(80, 41.5, 16), ...jRing(44, 21.5, 12), [27.5, YC, ZC], [138, YC, ZC + 58], [52, YC, ZC + 58]];
+  s += castShadow(eng, JPAD, top);
+  for (const [x, y] of J_POSTS) s += castShadow([[x - 2.5, y - 2.5, JPAD], [x + 2.5, y + 2.5, JPAD], [x - 2.5, y - 2.5, 147], [x + 2.5, y + 2.5, 147], [x + 2.5, y - 2.5, 147], [x - 2.5, y + 2.5, 147]], JPAD, top);
+  for (const x of [45, 145]) s += castShadow([[x - 2.5, 12.5, 141], [x + 2.5, 12.5, 141], [x - 2.5, 127.5, 147], [x + 2.5, 127.5, 147]], JPAD, top);
+  const items = [...jStandItems(st, m, k), { box: J_EBOX, svg: jEngine(st, m, k) }, { box: [[-8, YC - 46, ZC - 46], [80, YC + 46, ZC + 46]], at: [20, YC, ZC], svg: jPlume(st) }];
+  s += jSort(items);
+  const L = jLabels(st, k);
+  return s + jCallouts(L, [20, 175, 8, 132, ZC - 51, 147]);
+}
+
+/* ---------- behaviour (real numbers, CFM56-7B27 class) ---------- */
+const THR = [{ n:'Idle', n2:60 }, { n:'Part power', n2:86 }, { n:'Take-off', n2:99 }];
+const J_SPOOL = [[0, 0, 0], [20, 4, 0], [25, 6, .4], [45, 13, 3], [60, 21, 8.5], [86, 72, 55], [99, 100, 121]];   // N2 % -> N1 %, thrust kN (burning)
+const J_FF = [[20, 140], [25, 160], [45, 230], [60, 290], [86, 1900], [99, 4700]];                              // kg/h
+const J_EGT = [[20, 480], [30, 640], [42, 705], [52, 600], [60, 450], [86, 640], [99, 880]];                   // C, burning
+const N1_RPM = 5380, N2_RPM = 14460, AMB = 15;
+const CAPS = {
+  off:'The engine is cold and still. Start sends air to the starter, which spins the HP spool through the gearbox and radial shaft.',
+  motor:'Motoring: the starter turns the HP spool. Air begins to move through the core and the fan slowly follows.',
+  light:'Fuel on at 25% N2: the pump feeds the manifold and 20 nozzles, the igniter plugs spark, and the chamber lights.',
+  accel:'The burning gas drives the turbines; with the starter helping, both spools speed up towards idle.',
+  run:'Running: the fan blows most of the air down the bypass duct (cold, blue). The rest is squeezed, burned and expanded through the turbines (hot, red).',
+  down:'Shut down: the fuel valve is shut, the flame goes out and both spools run down.'
+};
+let ui, loopOn = false, STILL = false;
+function jPhase(st){ return st.mode === 'start' ? (!st.fuel ? 'motor' : !st.lit || st.lightT < 2 ? 'light' : 'accel') : st.mode; }
+function jStep(st, dt){
+  st.t += dt;
+  if (st.mode === 'start'){
+    if (!st.fuel){ st.n2 = Math.min(25, st.n2 + 5*dt); if (st.n2 >= 25){ st.fuel = st.ign = true; st.lightT = 0; ui.flash('25% N2: fuel on, igniters firing', 2200); } }
+    else { st.lightT += dt;
+      if (!st.lit){ st.n2 += .6*dt; if (st.lightT > .9){ st.lit = true; ui.flash('Light-off! The EGT jumps', 2000); } }
+      else if (st.starter){ st.n2 += 3.4*dt; if (st.n2 >= 56){ st.starter = false; ui.flash('56% N2: the starter cuts out', 2000); } }
+      else { st.n2 += (60.3 - st.n2)*(1 - Math.exp(-1.4*dt)); if (st.n2 >= 59.6){ st.mode = 'run'; st.ign = false; ui.flash('Stable at ground idle', 2000); } } }
+  } else if (st.mode === 'run'){ const tg = THR[st.thr].n2; st.n2 += (tg - st.n2)*(1 - Math.exp(-dt/(tg > st.n2 ? 1.6 : 2))); }
+  else if (st.mode === 'down'){ st.n2 = Math.max(0, st.n2 - (st.n2/5 + .8)*dt); if (st.n2 <= 0) st.mode = 'off'; }
+  jDerive(st, dt);
+  return st.mode !== 'off' || st.egt > AMB + .5;
+}
+function jDerive(st, dt){
+  const [n1, th] = jLerp(J_SPOOL, st.n2);
+  st.n1 = n1; st.thrust = st.lit ? th : 0; st.ff = st.fuel ? jLerp(J_FF, st.n2)[0] : 0;
+  const eg = st.lit ? jLerp(J_EGT, st.n2)[0] : AMB;
+  st.egt = dt < 0 ? eg : st.egt + (eg - st.egt)*(1 - Math.exp(-dt/(st.lit ? 1 : 4)));
+  const d = Math.max(dt, 0);
+  st.ph1 = (st.ph1 + st.n1*1.6*d) % 360; st.ph2 = (st.ph2 + st.n2*2.4*d) % 360;
+  st.fb = (st.fb + d*st.n1/100*.8) % 1; st.fc = (st.fc + d*st.n2/100*.55) % 1; st.fp = (st.fp + d*(.3 + st.thrust/121)) % 1;
+}
+function runLoop(){ if (loopOn || STILL) return; loopOn = true; ui.animate(dt => { const b = jStep(ui.st, Math.min(dt, .1)); if (!b) loopOn = false; return b; }); }
+function jStart(st){
+  if (st.mode === 'run' || st.mode === 'start') return ui.flash('Already running');
+  if (st.mode === 'down' && st.n2 > 5) return ui.flash('Let it run down first');
+  Object.assign(st, { mode:'start', starter:true, fuel:false, ign:false, lit:false, thr:0, lightT:0 });
+  ui.flash('Starter air on: the starter spins the HP spool', 2400); runLoop();
+}
+function jThrottle(st, i){ st.thr = i; ui.flash(`${THR[i].n}: the FADEC sets the fuel flow, the spools follow`, 2200); runLoop(); }
+function jStop(st){
+  if (st.mode === 'off' || st.mode === 'down') return ui.flash('Already shut down');
+  Object.assign(st, { mode:'down', starter:false, fuel:false, ign:false, lit:false, thr:0 });
+  ui.flash('Fuel shut off: flame out, the spools run down', 2400); runLoop();
+}
+const jNum = v => Math.round(v).toLocaleString('en-US');
+
+ui = mountFigure({
+  fig:'J1', turn:'full', title:'Jet engine', size:[JW*1.3, JD*1.3, JH*1.12], center:[JW/2 - 5, JD/2], palette:'mint',
+  state:{ mode:'off', n2:0, n1:0, thrust:0, egt:AMB, ff:0, thr:0, starter:false, fuel:false, ign:false, lit:false, lightT:0, ph1:0, ph2:0, fb:0, fc:0, fp:0, t:0 },
+  scene,
+  buttons:[
+    { label:'Start', onClick:st => jStart(st) },
+    { label:'Throttle', choices:st => THR.map((t, i) => ({ label:t.n, current:st.mode === 'run' && st.thr === i, disabled:st.mode !== 'run', why:'Start the engine first, and wait for idle', onClick:st => jThrottle(st, i) })) },
+    { label:'Shut down', onClick:st => jStop(st) },
+  ],
+  stats:st => [
+    { label:'Thrust', value:`${st.thrust.toFixed(1)} kN` },
+    { label:'N1 fan', value:`${st.n1.toFixed(0)}% · ${jNum(st.n1/100*N1_RPM)} rpm`, small:true },
+    { label:'N2 core', value:`${st.n2.toFixed(0)}% · ${jNum(st.n2/100*N2_RPM)} rpm`, small:true },
+    { label:'EGT · fuel flow', value:`${jNum(st.egt)} °C · ${jNum(st.ff)} kg/h`, small:true },
+  ],
+  params:(st, q) => {
+    if (q.has('n2')){ st.n2 = +q.get('n2'); st.mode = 'run'; st.fuel = st.lit = st.n2 >= 25; st.thr = st.n2 > 92 ? 2 : st.n2 > 70 ? 1 : 0; jDerive(st, -1); }
+    if (q.get('ign') === '1'){ st.ign = true; st.t = .04; }
+    if (q.has('ph')) st.ph1 = st.ph2 = +q.get('ph');
+    if (q.has('fl')) st.fb = st.fc = st.fp = +q.get('fl');
+    if (q.get('still') === '1') STILL = true;
+  },
+});
+xrMount(() => ui, st => CAPS[jPhase(st)]);
+if (ui.st.mode !== 'off') runLoop();
+</script></body></html>
