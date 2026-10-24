@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Photosynthesis</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   CO2 diffuses through stomata into mesophyll. Roots absorb soil water; xylem carries it
+   to leaves. Chlorophyll in thylakoid membranes absorbs light. Water splitting supplies O2.
+   Carbon fixation in the stroma makes carbohydrate, exported through phloem or stored as
+   starch. Oxygen diffuses out through stomata into the air inside the bell jar.
+   Sources https://openstax.org/books/biology-2e/pages/8-1-overview-of-photosynthesis
+   https://openstax.org/books/biology-2e/pages/8-2-the-light-dependent-reactions-of-photosynthesis
+   Teaching adaptations. Leaf tissues are enlarged in place in see-through. Molecules,
+   rays and sugar markers are overlays. Terrestrial leaves release O2 into air, not bubbles.
+   The bubble column is an electronic model readout driven by the O2 probe, not gas collection
+   or a selective oxygen pump. Rates and compressed time are illustrative, not calibrated.
+   Green light is less effective here, not useless. Respiration and temperature are omitted.
+   Parts and support.
+   BENCH board supports lamp base, switch, post, hinge, arm, shade, socket, LED, power cord.
+   JAR plate supports gasket, glass bell and knob, pot, rim, soil and two sealed probe mounts.
+   PLANT roots and root hairs in soil support stem, xylem, petioles, blades, midrib and veins.
+   LEAF cuticle and epidermis enclose palisade cells, spongy mesophyll and air spaces.
+   Guard cells surround a stoma. Bundle sheath encloses xylem and phloem. Chloroplast envelope
+   encloses stroma, thylakoid stacks, connecting lamella and a starch granule in mesophyll.
+   MEASUREMENT CO2 meter, display, probe and cable; O2 probe and cable, model bubble column,
+   liquid and counter base. Both cables exit sealed plate feedthroughs to their readouts.
+   Data shape. One experiment state and two setting tables drive every rate and moving overlay.
+   Throughput checkpoint. Build, inspect yaws, exercise buttons, then at most three repair rounds.
+   Model the Domain selected setting tables. Prove It Works selected checks on the built page.
+*/
+const photoColours={White:'#ffe6a0',Red:'#f59b85',Green:'#9de18d'};
+const photoEfficiency={White:1,Red:.9,Green:.045}, photoLevels={Dim:.3,Bright:1};
+const photoGreen=matOf('#70b66c');
+const photoBounds=pts=>[0,1].map(end=>[0,1,2].map(i=>(end?Math.max:Math.min)(...pts.map(p=>p[i]))+(end?.3:-.3)));
+const photoPart=(pts,svg)=>({box:photoBounds(pts),svg});
+const photoRate=st=>st.power?24*photoLevels[st.brightness]*photoEfficiency[st.colour]*Math.max(0,Math.min(1,(st.co2-180)/250)):0;
+const photoPoint=(p,r,colour)=>{const [x,y]=P(...p);return `<circle cx="${f(x)}" cy="${f(y)}" r="${r}" fill="${colour}" stroke="${INK}" stroke-width=".45"/>`;};
+const photoRoute=(pts,colour,width=.65)=>`<path d="${pd(pts,false)}" fill="none" stroke="${colour}" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round"/>`;
+const photoLeaves=[
+  {a:[59,48,33],b:[40,40,41],w:6},{a:[59,48,40],b:[53,66,48],w:7},
+  {a:[59,48,49],b:[43,52,60],w:7},{a:[59,48,59],b:[54,33,69],w:6},
+  {a:[59,48,65],b:[64,52,78],w:5},{a:[59,48,49],b:[79,57,59],w:8,cut:true}
+];
+function photoLeaf(leaf,ghost=0){
+  const {a,b,w}=leaf,d=sub(b,a),side=norm([-d[1],d[0],0]),edge=[];
+  for(let i=0;i<20;i++){const t=i/20*2*Math.PI,u=(1-Math.cos(t))/2;
+    edge.push(a.map((v,k)=>v+d[k]*u+side[k]*Math.sin(t)*w));}
+  const lower=edge.map(p=>[p[0],p[1],p[2]-.7]);
+  let s=loft(lower,edge,n=>toneI(n,photoGreen))+shape(edge,toneI([0,0,1],photoGreen),.9);
+  s+=photoRoute([a,b],'#d0e2a3',.65);
+  for(const u of [.3,.5,.7])for(const sign of [-1,1]){
+    const mid=a.map((v,k)=>v+d[k]*u),tip=a.map((v,k)=>v+d[k]*(u+.12)+side[k]*sign*w*.7);
+    s+=photoRoute([mid,tip],'#b6d592',.38);
+  }
+  return photoPart([...edge,...lower],`<g opacity="${1-.88*ghost}">${s}</g>`);
+}
+function photoSection(){
+  const parts=[],add=(pts,svg)=>parts.push(photoPart(pts,svg));
+  const bx=(a,b,c)=>add([a,b],box(...a,...b,matOf(c),toneI,.55));
+  bx([64,49,54],[79,62,55],'#a6c781');
+  add([[64,49,63],[79,62,64.1]],`<g opacity=".16">${box(64,49,63,79,62,63.8,matOf('#a6c781'),toneI,.55)+box(64,49,63.8,79,62,64.1,matOf('#e1d990'),toneI,.55)}</g>`);
+  for(const x of [66,69,72,75,78])for(const y of [51,55,59]){
+    if(x>=75&&y===51)continue;
+    add([[x-.9,y-.9,59],[x+.9,y+.9,63]],cyl(x,y,59,63,.9,matOf('#b6d77c'),toneI,.5,10));
+    add([[x-.6,y-.6,60],[x+.6,y+.6,61.5]],cyl(x,y,60,61.5,.6,photoGreen,toneI,.4,10));
+  }
+  for(const [x,y]of [[66,52],[69,58],[73,51],[77,58]])
+    add([[x-1,y-1,55.6],[x+1,y+1,58]],rod([x-1,y,56],[x+1,y,57.2],1.1,matOf('#97c78b'),toneI,.55));
+  add([[64,55,56],[79,57,59]],rod([64,56,57.4],[79,56,57.4],1.3,matOf('#d3cc8b'),toneI,.6));
+  add([[64,55,57.6],[79,56,58.5]],rod([64,55.5,58],[79,55.5,58],.4,matOf('#6ebacf'),toneI,.5));
+  add([[64,56,56.3],[79,57,57.1]],rod([64,56.5,56.7],[79,56.5,56.7],.4,matOf('#e6b97c'),toneI,.5));
+  for(const x of [70,73])add([[x-1,59,54],[x+1,61,55.1]],rod([x,59.2,54.6],[x,60.8,54.6],.75,photoGreen,toneI,.5));
+  add([[71,59.5,54],[72,60.5,55]],shape(on(PZ(55.05),ellUV(71.5,60,.38,.8,12)),'#33352a',.3));
+  add([[74,49.5,56.5],[79,54.5,59]],`<g opacity=".38">${cyl(76.5,52,56.5,59,2.5,photoGreen,toneI,.6,18)}</g>`);
+  add([[74.2,49.7,56.6],[78.8,54.3,56.9]],cyl(76.5,52,56.6,56.9,2.3,matOf('#d1e5a7'),toneI,.4,18));
+  for(const [x,y]of [[75.3,51],[77.6,52.6]])for(let i=0;i<4;i++)
+    add([[x-.65,y-.65,57+i*.35],[x+.65,y+.65,57.3+i*.35]],cyl(x,y,57+i*.35,57.25+i*.35,.65,matOf('#3d9362'),toneI,.3,12));
+  add([[75.3,51,57.3],[77.6,52.6,57.5]],photoRoute([[75.3,51,57.4],[77.6,52.6,57.4]],'#478353',.5));
+  add([[76,51.6,57],[77,52.5,58]],photoPoint([76.5,52,57.6],.55,'#f5db94'));
+  return byDepth(parts);
+}
+function photoScene(st,m){
+  const k=ease(st.xr||0),rate=photoRate(st),parts=[],labels=[];
+  const add=(a,b,svg)=>parts.push(photoPart([a,b],svg));
+  const label=(text,at,active=false)=>labels.push({text,at,on:active});
+  const tube=(a,b,r,material)=>parts.push(photoPart([a.map(v=>v-r),b.map(v=>v+r)],rod(a,b,r,material,toneI,.8)));
+  let s=board(0,0,116,94,3,5);
+  s+=castShadow([[29,18,3],[90,18,3],[90,78,3],[29,78,3],[59,48,88]],3,boardTop(0,0,116,94,3));
+  add([27,16,3],[91,80,5],cyl(59,48,3,5,32,METAL,toneI,1.4,40));
+  add([28,17,5],[90,79,5.8],cyl(59,48,5,5.8,31,DARK,toneI,.8,40));
+  const potA=on(PZ(6),ellUV(59,48,10,10,28)),potB=on(PZ(27),ellUV(59,48,14,14,28));
+  const pot=loft(potA,potB,n=>toneI(n,m))+fill(pd(potB),'#66513c')+hullInk([...potA,...potB],1.7);
+  add([45,34,6],[73,62,27],`<g opacity="${1-.88*k}">${pot}</g>`);
+  add([44.5,33.5,25],[73.5,62.5,28],`<g opacity="${1-.85*k}">${loft(on(PZ(25),ellUV(59,48,14.5,14.5,28)),on(PZ(28),ellUV(59,48,14.5,14.5,28)),n=>toneI(n,m))+ink(pd(on(PZ(28),ellUV(59,48,14.5,14.5,28))),1)}</g>`);
+  if(k>0){
+    const roots=[];
+    for(let i=0;i<7;i++){const a=i*Math.PI*2/7,b=[59+8*Math.cos(a),48+8*Math.sin(a),10];
+      roots.push(photoPart([[59,48,26],b],rod([59,48,26],b,.65,matOf('#dfd2a5'),toneI,.6)));
+      for(const t of [.55,.8]){const p=[59+(b[0]-59)*t,48+(b[1]-48)*t,26-16*t];
+        const q=[p[0]+3*Math.cos(a+.5),p[1]+3*Math.sin(a+.5),p[2]-2];roots.push(photoPart([p,q],rod(p,q,.22,matOf('#dfd2a5'),toneI,.4)));}
+    }
+    add([48,37,8],[70,59,27],`<g opacity="${k}">${byDepth(roots)}</g>`);
+  }
+  for(let z=26;z<77;z+=8)tube([59,48,z],[59,48,Math.min(77,z+8)],.9,photoGreen);
+  for(const leaf of photoLeaves){tube([59,48,leaf.a[2]-2],leaf.a,.6,photoGreen);parts.push(photoLeaf(leaf,leaf.cut?k:0));}
+  if(k>0){
+    add([63,48,53],[80,63,65],`<g opacity="${k}">${photoSection()}</g>`);
+    for(let z=15;z<59;z+=7)tube([59.4,48,z],[59.4,48,Math.min(59,z+7)],.3,matOf('#6bbbd7'));
+    tube([59.4,48,49],[64,55.5,58],.3,matOf('#6bbbd7'));
+  }
+  const rings=[[6,31],[68,31],[77,28],[84,19],[88,6],[88.5,0]].map(([z,r])=>on(PZ(z),ellUV(59,48,r,r,36)));
+  let bell='';for(let i=0;i<rings.length-1;i++)bell+=loft(rings[i],rings[i+1],()=> '#c6e8e9');
+  bell=`<g opacity="${.12-.09*k}">${bell}</g>`+`<g opacity="${.65-.35*k}">${hullInk(rings.flat(),1.6)+ink(pd(rings[0]),.8)}</g>`;
+  const inside=byDepth(parts);parts.length=0;
+  add([28,17,6],[90,79,89],inside+bell);
+  add([56,45,88],[62,51,93],cyl(59,48,88.5,91,2,METAL,toneI,.7)+cyl(59,48,91,93,3,CLEAR,toneI,.8));
+  add([4,9,3],[25,30,7],cyl(15,20,3,7,11,m,tone,1.4));
+  tube([15,20,7],[15,20,73],1.4,METAL);
+  tube([15,20,73],[33,28,95],1.6,m);
+  tube([33,28,95],[48,35,95],1.4,METAL);
+  add([11,16,70],[19,24,76],cylX(12,18,20,73,3,DARK,toneI,.8));
+  const shadeA=on(PZ(88),ellUV(48,35,9,9,28)),shadeB=on(PZ(99),ellUV(48,35,3.5,3.5,28));
+  add([39,26,88],[57,44,99],`<g opacity="${1-.85*k}">${loft(shadeA,shadeB,n=>tone(n,m))+shape(shadeB,tone([0,0,1],m),.8)+hullInk([...shadeA,...shadeB],1.5)}</g>`+
+    (k>0?`<g opacity="${k}">${cyl(48,35,94,98,1.5,DARK,toneI,.6)+cyl(48,35,90,94,2,METAL,toneI,.6)}</g>`:'')+
+    shape(on(PZ(88),ellUV(48,35,7,7,24)),st.power?photoColours[st.colour]:'#f0ead5',.7));
+  add([18,17,7],[22,21,8.5],cyl(20,19,7,8.5,1.8,DARK,toneI,.8));
+  const cord=[[6,20,4],[4,20,3.5],[4,5,3.5],[20,5,3.5]];
+  for(let i=0;i<cord.length-1;i++)parts.push(photoPart([cord[i],cord[i+1]],photoRoute([cord[i],cord[i+1]],'#343532',1)));
+  add([20,3,3],[24,7,5],box(20,3,3,24,7,5,DARK,toneI,.7));
+  add([93,12,3],[112,34,20],box(93,12,3,112,34,20,METAL,toneI,1)+
+    (vis([1,0,0])?shape(on(PX(112.1),rectUV(14,7,32,18)),'#263c34',.6)+tx(112.2,23,13,'CO2',2.6,'#a0e7ab')+tx(112.2,23,8.5,Math.round(st.co2)+' ppm',2.5,'#a0e7ab'):''));
+  add([95,66,3],[111,82,6],box(95,66,3,111,82,6,m,toneI,1));
+  let column=`<g opacity=".22">${cyl(103,74,6,35,4,CLEAR,toneI,.8)+cyl(103,74,6.2,29,3.5,matOf('#8bc5dd'),toneI,.5)}</g>`;
+  if(rate>.01)for(let i=0;i<4;i++){const p=(st.flow/4+i/4)%1;column+=photoPoint([103,74,9+p*21],.7,'#e6f7f8');}
+  column+=ink(pd(on(PZ(35),ellUV(103,74,4,4,20))),.7);
+  add([99,70,6],[107,78,35],column);
+  add([99,70,35],[107,78,37],cyl(103,74,35,37,4,METAL,toneI,.7));
+  for(const [x,y,z,name,end]of [[83,35,30,'CO2',[93,24,12]],[84,59,27,'O2',[103,70,6]]]){
+    tube([x,y,6],[x,y,z],.5,METAL);
+    add([x-1.4,y-1.4,z],[x+1.4,y+1.4,z+4],cyl(x,y,z,z+4,1.4,DARK,toneI,.6));
+    const route=[[x,y,6],[x,y,4.5],[end[0]-2,y,4.5],[end[0]-2,end[1],4.5],end];
+    for(let i=0;i<route.length-1;i++)parts.push(photoPart([route[i],route[i+1]],photoRoute([route[i],route[i+1]],'#4d5960',.7)));
+    label(name+' PROBE',[x,y,z+2],st.power);
+  }
+  s+=byDepth(parts);
+  if(st.power){
+    for(const end of [[43,52,60],[64,52,78],[76,56,63]])s+=`<g opacity="${.18+photoLevels[st.brightness]*.35}">${photoRoute([[48,35,88],end],photoColours[st.colour],1.3)}</g>`;
+    for(let i=0;i<4;i++){
+      const t=(st.flow/4+i/4)%1,cp=[87-15*t,66-6*t,51+3*t];
+      s+=photoPoint(cp,.7,'#9aa7b3')+photoPoint([cp[0]-1,cp[1],cp[2]],.5,'#ecaa8a')+photoPoint([cp[0]+1,cp[1],cp[2]],.5,'#ecaa8a');
+      s+=photoPoint([72+11*t,60+7*t,54+10*t],.65,'#afd5ea')+photoPoint([73+11*t,60+7*t,54+10*t],.65,'#afd5ea');
+      if(k>.1){s+=photoPoint([59.4,48,20+34*t],.65,'#75b9e5');s+=shape(on(PZ(57),ellUV(76-10*t,56.5,.45,.45,6)),'#efc76a',.3);}
+    }
+  }
+  if(k>.6){
+    const list=[
+      ['LAMP BASE',[15,20,7]],['POWER SWITCH',[20,19,8]],['LAMP POST',[15,20,48]],['LED',[48,35,90]],
+      ['BELL JAR',[80,65,76]],['JAR KNOB',[59,48,92]],['SEALING GASKET',[84,48,5]],['POT',[47,42,17]],['SOIL',[54,51,26]],['ROOTS',[56,44,16]],['STEM',[59,48,42]],['PETIOLE',[61,51,53]],
+      ['CUTICLE',[75,55,64.1]],['UPPER EPIDERMIS',[65,51,63.5]],['PALISADE CELLS',[69,51,61]],['SPONGY MESOPHYLL',[69,58,57]],['AIR SPACE',[72,60,56]],['LOWER EPIDERMIS',[65,50,54.5]],['GUARD CELLS',[70,60,54.6]],['STOMA',[71.5,60,55]],['BUNDLE SHEATH',[70,56,57.4]],['XYLEM',[69,55.5,58]],['PHLOEM',[68,56.5,56.7]],['CHLOROPLAST ENVELOPE',[78.8,52,58]],['STROMA',[76.5,53,57]],['THYLAKOID STACK',[75.3,51,58]],['STROMA LAMELLA',[76.4,51.8,57.4]],['STARCH GRANULE',[76.5,52,57.6]],
+      ['CO2 METER',[103,23,19]],['MODEL O2 COUNTER',[103,74,5]]
+    ];
+    list.forEach(([text,at])=>label(text,at,st.power&&['LED','XYLEM','PHLOEM','STROMA','THYLAKOID STACK'].includes(text)));
+    s+=photoCallouts(labels);
+  }
+  return s;
+}
+let photoLoop=false;
+function photoCallouts(labels){
+  const vb=document.getElementById('fig').viewBox.baseVal;
+  const items=labels.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  let result='';
+  for(const side of [0,1]){
+    const col=items.slice(side?Math.ceil(items.length/2):0,side?items.length:Math.ceil(items.length/2)).sort((a,b)=>a.p[1]-b.p[1]);
+    const top=vb.height*(innerWidth<=560?.03:side?.43:.24);
+    const bottom=vb.height*(side?.84:.96);
+    col.forEach((it,i)=>{
+      const x=vb.width*(side?.84:.16),y=top+(bottom-top)*i/Math.max(1,col.length-1);
+      result+=tag(it.at,(x-it.p[0])/INK_K,(y-it.p[1])/INK_K,it.text,it.on);
+    });
+  }
+  return result;
+}
+function photoRun(st,ui){
+  if(photoLoop)return;photoLoop=true;
+  ui.animate(dt=>{
+    if(!st.power){photoLoop=false;return false;}
+    const rate=photoRate(st);st.flow+=dt*rate/60;st.co2=Math.max(180,st.co2-dt*rate*.12);st.sugar+=dt*rate/360;
+    return true;
+  });
+}
+const photoUI=mountFigure({
+  fig:'01',turn:'full',title:'Photosynthesis',size:[116,94,101],palette:'tomato',
+  state:{power:false,brightness:'Bright',colour:'White',co2:800,sugar:0,flow:0},scene:photoScene,
+  stats:st=>[{label:'Jar CO2 / model',value:Math.round(st.co2)+' ppm'},
+    {label:'O2 / model bubbles',value:photoRate(st).toFixed(1)+' / min'},
+    {label:'Sugar / model',value:st.sugar.toFixed(2)+' units',small:true}],
+  buttons:[
+    {label:'Lamp on / off',onClick:(st,ui)=>{st.power=!st.power;if(st.power)photoRun(st,ui);}},
+    {label:'Brightness',choices:st=>Object.keys(photoLevels).map(name=>({label:name,current:st.brightness===name,onClick:st=>{st.brightness=name;}}))},
+    {label:'Lamp colour',choices:st=>Object.keys(photoColours).map(name=>({label:name,current:st.colour===name,onClick:st=>{st.colour=name;}}))}
+  ],
+  params:(st,q)=>{st.power=q.get('on')==='1';if(photoColours[q.get('colour')])st.colour=q.get('colour');if(photoLevels[q.get('brightness')])st.brightness=q.get('brightness');}
+});
+xrMount(()=>photoUI,()=> '');
+if(photoUI.st.power)photoRun(photoUI.st,photoUI);
+</script></body></html>
