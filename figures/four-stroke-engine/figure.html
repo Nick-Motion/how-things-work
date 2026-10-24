@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Four-stroke engine</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Four-stroke engine: a single-cylinder, air-cooled OHV petrol engine (the 163 cc kind on a mower or generator),
+   bolted to a test stand with a 12 V battery and a key switch.
+   x = depth (front at high x), y = width (+y is viewer-left at the front view), z = up. 1 unit ≈ 3.5 mm.
+
+   Truth: the crankshaft lies across the engine (along y). A connecting rod joins the crankpin to the gudgeon pin in the
+   piston, so each turn of the crank moves the piston down and up once. Four strokes take two turns (720°):
+   INTAKE (0–180°, intake valve open, piston down, mixture drawn in from the carburettor), COMPRESSION (180–360°, both
+   valves shut), POWER (360–540°: the plug fires ~15° before top, the burning gas pushes the piston down) and EXHAUST
+   (540–720°, exhaust valve open, burnt gas pushed out through the muffler). A crank gear drives a cam gear twice its size,
+   so the camshaft turns once per cycle; each cam lobe lifts a tappet, a pushrod and one end of a rocker arm, whose other
+   end pushes its valve open against a spring. The flywheel on the other end of the crank stores energy between power
+   strokes, its fins blow cooling air over the finned barrel, and a magnet in its rim sweeps past the ignition coil once
+   a turn, so the plug sparks every turn (the extra "wasted spark" falls at the end of exhaust and does nothing). The key
+   switch at START feeds the solenoid, which throws the starter's pinion into the ring gear on the flywheel and runs the
+   starter motor; once the engine fires the key springs back to ON. OFF earths the coil's kill wire, so there's no spark.
+   The throttle lever pulls a link that opens the carburettor's throttle plate; more mixture, more speed.
+   Parts (each sits on, or is held by, another part):
+   STAND   four legs and feet . top and bottom rails . shelf . plywood deck with three cable holes . battery and its two
+           terminals . key switch box, display, key, OFF/ON/START marks . battery, key-feed, start and kill wires
+   CASE    base flange and its bolts . crankcase . PTO boss, shaft and pulley . oil filler cap . finned barrel . two pushrod
+           tubes . cylinder head and bolts . rocker cover . spark plug (thread, hex, insulator, boot) and HT lead
+   AIR/FUEL fuel tank and cap . two tank brackets . fuel tap . fuel line . carburettor (intake stub, body, float bowl, air
+           horn, throttle arm) and its throttle link . air filter and wing nut
+   EXHAUST exhaust stub . muffler . tailpipe
+   COOLING blower housing . rotating screen . throttle plate SLOW/FAST and lever
+   START   starter motor and nose . solenoid and terminals . bracket . battery and S wires
+   INSIDE  crankshaft (main journals, two webs with counterweights, crankpin) . two main bearings . connecting rod and big
+           end . piston, rings, gudgeon pin . crank gear . cam gear . camshaft and two lobes . two tappets . two pushrods
+           . two rocker studs and rockers . two valves, springs and retainers . intake and exhaust ports . chamber gas .
+           flywheel (ring gear, disc, magnet, fan blades, nut) . ignition coil, its bracket, kill wire and inner HT lead .
+           starter pinion . venturi, throttle plate, choke plate, float, fuel in the bowl, main jet . filter element .
+           fuel in the tank . oil in the sump */
+
+const CX = 45, CZ = 66, CYL = 55, THROW = 6.5, ROD = 24, BORE = 8.8;
+const CAMX = 28, CAMZ = 61, CAM_BASE = 3.5, CAM_LIFT = 2.5, EXV = 50, INV = 60;
+const PLUG0 = [53, 49, 106.5], PLUG1 = [70, 47, 114];
+const CRANK_RPM = 520, VS = 1/38;
+const STROKES = ['INTAKE', 'COMPRESSION', 'POWER', 'EXHAUST'];
+const THR = [{ n:'Idle', rpm:1400, plate:12, lever:-30, pct:15 }, { n:'Half', rpm:2500, plate:45, lever:0, pct:55 }, { n:'Full', rpm:3600, plate:80, lever:30, pct:100 }];
+
+const ALU = { l:'#e6e7e1', m:'#c3c6bf', d:'#8f948d' }, STEEL = { l:'#d9dee0', m:'#a9b1b5', d:'#6f787d' }, FLY = { l:'#b9bfc2', m:'#959ca0', d:'#62696d' };
+const FRAME = { l:'#7f8fa0', m:'#5f6e7e', d:'#3b4652' }, CHAR = { l:'#8a847d', m:'#6c665f', d:'#48433e' }, MUF = { l:'#9a9289', m:'#766e66', d:'#4d4741' };
+const BATT = { l:'#5d6168', m:'#44484e', d:'#2c2f33' }, CREAM = { l:'#f6edd5', m:'#e0d4b4', d:'#b9ab88' };
+const BRASS = matOf('#d8b25a'), COPPER = matOf('#c0703a'), FUELM = matOf('#f2c14e'), OILM = matOf('#9a6424'), PORT = matOf('#d9cfbb');
+const PAPER = matOf('#efe3b8'), CAPY = matOf('#f2c230'), BOOT = matOf('#3a3632'), LAM = matOf('#6f7378'), EXM = matOf('#c7b3a3'), REDM = matOf('#d2453a');
+
+/* ---------- maths ---------- */
+const rad = d => d*Math.PI/180, mod = (a, n) => ((a % n) + n) % n, lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const toward = (v, to, d) => v + Math.max(-d, Math.min(d, to - v));
+const crossed = (a, b, at) => Math.floor((b - at)/720) > Math.floor((a - at)/720);
+const pinX = th => CX + THROW*Math.sin(rad(th)), pinZ = th => CZ + THROW*Math.cos(rad(th));
+const gudZ = th => pinZ(th) + Math.sqrt(ROD*ROD - (THROW*Math.sin(rad(th)))**2);
+const liftOf = (th, peak) => { const d = mod((th - peak)/2 + 180, 360) - 180; return Math.abs(d) < 52.5 ? CAM_LIFT*Math.cos(rad(d/52.5*90))**2 : 0; };
+const liftIn = th => liftOf(th, 100), liftEx = th => liftOf(th, 620);
+const thrAt = (k, key) => { const i = Math.min(1, Math.floor(k)), t = k - i; return THR[i][key]*(1 - t) + THR[i + 1][key]*t; };
+const strokeIdx = st => Math.floor(mod(st.th - 1e-3, 720)/180);
+const plugAt = u => lerp3(PLUG0, PLUG1, u);
+
+/* ---------- drawing helpers ---------- */
+const BB = (x0, y0, z0, x1, y1, z1) => [[x0, y0, z0], [x1, y1, z1]];
+const it = (box, svg) => ({ box, svg });
+const boxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const rodY = (x, z, y0, y1, r, m, sh = toneI, w = 1, n = 18) => rod([x, y0, z], [x, y1, z], r, m, sh, w, r, n);
+const ringXZ = (cx, cz, r, n = 24, a0 = 0) => Array.from({ length:n }, (_, i) => { const a = rad(a0 + i*360/n); return [cx + r*Math.cos(a), cz + r*Math.sin(a)]; });
+const gearUV = (cx, cz, r, nT, rot, dep = .9) => Array.from({ length:4*nT }, (_, i) => { const a = rad(rot + i*90/nT), rr = i % 4 < 2 ? r : r - dep; return [cx + rr*Math.cos(a), cz + rr*Math.sin(a)]; });
+const arcPts = (cx, cy, z, r, a0, a1, n = 14) => Array.from({ length:n + 1 }, (_, i) => { const a = rad(a0 + (a1 - a0)*i/n); return [cx + r*Math.cos(a), cy + r*Math.sin(a), z]; });
+const nearPt = (cx, cy, z, r) => [cx + r*Math.cos(rad(YAW)), cy + r*Math.sin(rad(YAW)), z];
+// prism along y (profile u = x, v = z) / along x (profile u = y, v = z), with the facing end capped
+function exY(prof, y0, y1, m, sh = toneI, w = 1.2){ const A = on(PY(y0), prof), B = on(PY(y1), prof), up = vis([0,1,0]);
+  return loft(A, B, n => sh(n, m)) + shape(up ? B : A, sh([0, up ? 1 : -1, 0], m), .8) + hullInk([...A, ...B], w); }
+function exX(prof, x0, x1, m, sh = tone, w = 1.6){ const A = on(PX(x0), prof), B = on(PX(x1), prof), fr = vis([1,0,0]);
+  return loft(A, B, n => sh(n, m)) + shape(fr ? B : A, sh([fr ? 1 : -1, 0, 0], m), .8) + hullInk([...A, ...B], w); }
+// coaxial parts along y: the far ones first
+const stackY = list => list.sort((a, b) => vis([0,1,0]) ? a[0] - b[0] : b[0] - a[0]).map(e => e[1]).join('');
+const strokeW = (pts, col, w) => { const d = pd(pts, false); return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w + .9)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linecap="round" stroke-linejoin="round"/>`; };
+// round each interior corner of a route (a cable bends, it doesn't kink)
+const bend = (pts, r = 1.2) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k]) * d/la), q = c.map((v, k) => b[k] + (v - b[k]) * d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+// a cable cut into short pieces, each with its own box, so byDepth puts it behind or in front of the solids it passes
+const wireParts = (pts, col, w = .3, L = 4) => { const q = bend(pts, 1.6), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < L){ len += Math.hypot(...q[j].map((v, k) => v - q[j - 1][k])); j++; }
+    if (len < L) while (j < q.length - 1) j++;
+    const seg = q.slice(i, j + 1); out.push(it(boxOf(seg), strokeW(seg, col, w))); i = j; }
+  return out; };
+
+/* ---------- the stand ---------- */
+function standItems(st){
+  const out = [], bx = (x0, y0, z0, x1, y1, z1, m = FRAME, w = 1.1) => out.push(it(BB(x0, y0, z0, x1, y1, z1), box(x0, y0, z0, x1, y1, z1, m, tone, w)));
+  for (const [x0, y0] of [[5, 8], [82, 8], [5, 99], [82, 99]]){ bx(x0, y0, 2, x0 + 3, y0 + 3, 44, FRAME, 1.3); out.push(it(BB(x0 - .8, y0 - .8, 0, x0 + 3.8, y0 + 3.8, 2), cyl(x0 + 1.5, y0 + 1.5, 0, 2, 2.3, DARK, tone, 1))); }
+  for (const z0 of [8, 41]){ bx(82, 11, z0, 85, 99, z0 + 3); bx(5, 11, z0, 8, 99, z0 + 3); bx(8, 8, z0, 82, 11, z0 + 3); bx(8, 99, z0, 82, 102, z0 + 3); }
+  bx(8, 11, 10, 82, 99, 11, FRAME, .9);
+  // battery on the shelf
+  out.push(it(BB(52, 72, 11, 76, 96, 31.6), box(52, 72, 11, 76, 96, 30, BATT, tone, 1.6) + tx(76.1, 84, 18, '12V', 4.2, '#e9e4d8')
+    + cyl(72, 76, 30, 31.6, 1.3, REDM, toneI, .9, 12) + cyl(72, 92, 30, 31.6, 1.3, DARK, toneI, .9, 12)
+    + (vis([1,0,0]) ? tx(76.1, 77.5, 26, '+', 3.5, '#e9e4d8') + tx(76.1, 90.5, 26, '−', 3.5, '#e9e4d8') : '')));
+  // key switch box hung on the front leg
+  const k = rad(st.key), on_ = st.mode === 'run' || st.mode === 'crank', rot = ([u, v]) => [17 + u*Math.cos(k) - v*Math.sin(k), 23 + u*Math.sin(k) + v*Math.cos(k)];
+  let kb = box(85, 6, 15, 91, 28, 40, CREAM, tone, 1.5);
+  if (vis([1,0,0])){
+    kb += shape(on(PX(91.05), rrUV(9, 33.6, 25, 39, .8)), '#1d2a26', .9)
+      + tx(91.1, 17, 35.2, `${Math.round(st.rpm/10)*10} RPM`, 3, on_ ? '#8af0ae' : '#4f6f60')
+      + [['OFF', -55], ['ON', 0], ['START', 55]].map(([s, a]) => tx(91.1, 17 - 7*Math.sin(rad(a)), 22.4 + 7*Math.cos(rad(a)), s, 2, INK)).join('')
+      + act('key', cylX(91, 91.6, 17, 23, 3.2, STEEL, toneI, 1) + exX(rrUV(-2, -.8, 2, 5.2, 1).map(rot), 91.6, 92.8, BRASS, toneI, 1));
+  }
+  out.push(it(BB(85, 6, 15, 92.8, 28, 40), kb));
+  // wires under the deck: battery +, battery −, key feed, start (S) wire, kill wire
+  out.push(...wireParts([[72, 76, 31.4], [72, 75, 38], [71, 73, 43.9]], '#d2453a', .5));
+  out.push(...wireParts([[72, 92, 31.4], [74, 94, 38], [81.8, 96, 42.5]], '#2f2b28', .5));
+  out.push(...wireParts([[72, 76, 31.4], [76, 74, 37], [80, 60, 42.4], [80, 26, 42.4], [84.9, 24, 37]], '#d2453a', .3));
+  out.push(...wireParts([[84.9, 20, 34], [80.5, 20, 41.5], [80.5, 60, 42.6], [70, 69.5, 43.2], [70, 69.5, 43.9]], '#e3b23c', .3));
+  out.push(...wireParts([[84.9, 12, 34], [79.5, 13, 41.5], [79.5, 80, 42.8], [62, 84, 43.2], [62, 84, 43.9]], '#3c6fb4', .3));
+  return out;
+}
+const deckSvg = () => box(3, 6, 44, 87, 104, 46, WOOD, tone, 1.6)
+  + [[71, 73], [70, 69.5], [62, 84]].map(([x, y]) => fill(pd(on(PZ(46.05), ellUV(x, y, .9, .9, 10))), '#2b2523')).join('');
+
+/* ---------- the engine, outside ---------- */
+function throttleLever(st){
+  const a = rad(thrAt(st.tk, 'lever')), tip = [69.2, 89 - 11*Math.sin(a), 84 - 11*Math.cos(a)];
+  return it(BB(68, 82, 71, 71.4, 96, 86.6), act('thr', rod([69, 89, 84], tip, .6, STEEL, toneI, 1) + cylX(68, 69.6, 89, 84, 1.4, DARK, toneI, 1)
+    + rod(tip, [71.4, tip[1], tip[2]], 1.1, REDM, toneI, 1)));
+}
+function bodyItems(st, m){
+  const out = [], push = (b, svg) => out.push(it(b, svg)), fr = vis([1,0,0]), up = vis([0,1,0]);
+  // base flange + crankcase
+  push(BB(12, 30, 46, 62, 80, 48), box(12, 30, 46, 62, 80, 48, ALU, tone, 1.4) + [[14, 32], [60, 32], [14, 78], [60, 78]].map(([x, y]) => cyl(x, y, 48, 48.8, 1, STEEL, toneI, .8, 10)).join(''));
+  push(BB(16, 32, 48, 58, 80, 82), exY(rrUV(16, 48, 58, 82, 6), 32, 80, ALU, tone, 2.2)
+    + (fr ? tx(58.1, 46, 70, '163 cc OHV', 2.8) + tx(58.1, 46, 65.5, '4-STROKE', 2.2, '#5f625c') : ''));
+  // PTO boss, shaft and pulley (with a mark that turns with the crank)
+  const pa = rad(st.th), mk = [CX + 5.6*Math.sin(pa), 18.95, CZ + 5.6*Math.cos(pa)];
+  push(BB(38, 18, 59, 52, 32, 73), stackY([[30.5, rodY(CX, CZ, 32, 29, 7, ALU, tone, 1.6)], [23.5, rodY(CX, CZ, 29, 18, 3, STEEL, toneI, 1)],
+    [20.3, rodY(CX, CZ, 21.6, 19, 7, STEEL, toneI, 1.4) + (vis([0,-1,0]) ? `<circle cx="${f(P(...mk)[0])}" cy="${f(P(...mk)[1])}" r=".9" fill="${INK}"/>` : '')],
+    [22.5, rodY(CX, CZ, 23.4, 21.6, 5.2, STEEL, toneI, 1)], [24.7, rodY(CX, CZ, 26, 23.4, 7, STEEL, toneI, 1.4)]]));
+  push(BB(50.4, 27, 51.4, 55.6, 32, 56.6), rodY(53, 54, 32, 27, 2.6, CAPY, toneI, 1, 12));
+  // finned barrel, bottom to top
+  let br = '', z = 82;
+  for (let n = 0; n < 8; n++){ const zf = 84 + 2.4*n; br += cyl(CX, CYL, z, zf, 10, ALU, tone, 1.2) + cyl(CX, CYL, zf, zf + .8, 14, ALU, tone, 1.2, 28); z = zf + .8; }
+  push(BB(31, 41, 82, 59, 69, 105), br + cyl(CX, CYL, z, 105, 10, ALU, tone, 1.4));
+  for (const y of [EXV, INV]) push(BB(26.4, y - 1.6, 82, 29.6, y + 1.6, 105), cyl(CAMX, y, 82, 105, 1.6, ALU, tone, 1, 12));
+  // head
+  let hd = box(27, 39, 105, 61, 71, 115, ALU, tone, 1.6);
+  for (const zz of [107.5, 110, 112.5]){
+    if (fr) hd += line([[61.05, 40, zz], [61.05, 70, zz]], .5); else hd += line([[26.95, 40, zz], [26.95, 70, zz]], .5);
+    if (up) hd += line([[28, 71.05, zz], [60, 71.05, zz]], .5); else hd += line([[28, 38.95, zz], [60, 38.95, zz]], .5);
+  }
+  hd += [[30, 40], [30, 70], [57.5, 40], [57.5, 70]].map(([x, y]) => cyl(x, y, 115, 116, .9, STEEL, toneI, .8, 8)).join('');
+  push(BB(27, 39, 105, 61, 71, 116), hd);
+  push(BB(27, 41, 116, 59, 69, 128), exX(rrUV(41, 115.6, 69, 128, 4), 27, 59, m, tone, 2) + (fr ? tx(59.1, 55, 120.6, 'OHV', 4.4, '#fff4d6') : ''));
+  out.push(plugItem(false));
+  // exhaust: stub from the head, muffler, tailpipe
+  push(BB(42, 35, 107, 48, 39, 113), rod([CX, 35, 110], [CX, 37.6, 110], 2, MUF, toneI, 1) + box(42, 37.6, 107, 48, 39, 113, MUF, tone, 1));
+  push(BB(30, 19, 99, 62, 35, 115), rod([30, 27, 107], [62, 27, 107], 8, MUF, tone, 2) + (vis([0,-1,0]) || vis([0,0,1]) ? [38, 46, 54].map(x => line(Array.from({ length:13 }, (_, i) => { const a = rad(60 + i*12.5); return [x, 27 + 8.05*Math.cos(a), 107 + 8.05*Math.sin(a)]; }), .6)).join('') : ''));
+  push(BB(62, 20.6, 100.6, 68, 23.4, 103.4), rod([62, 22, 102], [68, 22, 102], 1.4, MUF, toneI, 1));
+  // carburettor and air filter
+  const b = rad(thrAt(st.tk, 'plate')), arm = [65.5 - 3*Math.sin(b), 64.7, 110 - 3*Math.cos(b)];
+  push(BB(61, 57.6, 107.6, 64, 62.4, 112.4), rod([61, 60, 110], [64, 60, 110], 2.4, ALU, toneI, 1));
+  push(BB(64, 56, 106, 71, 64, 114), box(64, 56, 106, 71, 64, 114, ALU, tone, 1.3));
+  push(BB(63.9, 56.4, 99, 71.1, 63.6, 106), cyl(67.5, 60, 99, 106, 3.6, ALU, tone, 1.2));
+  push(BB(71, 57, 107, 72.2, 63, 113), rod([71, 60, 110], [72.2, 60, 110], 2.8, ALU, toneI, 1));
+  push(BB(62, 64, 106, 69, 65.2, 114), rod([65.5, 64.1, 110], [65.5, 64.9, 110], .9, STEEL, toneI, .8) + rod([65.5, 64.7, 110], arm, .45, STEEL, toneI, .8));
+  push(BB(72.2, 49, 100, 85.6, 71, 122), exX(rrUV(49, 100, 71, 122, 4), 72.2, 84, CHAR, tone, 2)
+    + (fr ? cylX(84, 85, 60, 111, 1.4, STEEL, toneI, .9) + shape([[85.3, 56.5, 110.2], [85.3, 63.5, 110.2], [85.3, 62.5, 111.8], [85.3, 57.5, 111.8]], STEEL.l, .8) : ''));
+  // blower housing: rotating screen on the side, throttle plate on the front
+  let bh = exY(rrUV(22, 46.2, 68, 95, 9), 81, 96, m, tone, 2.4);
+  if (up){
+    const g = PY(96.05), sa = st.th;
+    let scr = fill(pd(on(g, ringXZ(CX, CZ, 13.5, 28))), '#3d3935') + ink(pd(on(g, ringXZ(CX, CZ, 13.5, 28))), 1.1);
+    for (let i = 0; i < 8; i++){ const a = rad(90 - sa - i*45); scr += line([[CX + 3*Math.cos(a), 96.1, CZ + 3*Math.sin(a)], [CX + 12.5*Math.cos(a), 96.1, CZ + 12.5*Math.sin(a)]], 1.4); }
+    for (const r of [7.5, 12.5]) scr += ink(pd(on(PY(96.1), ringXZ(CX, CZ, r, 28))), r > 10 ? 1.4 : .9);
+    scr += shape(on(PY(96.15), ringXZ(CX, CZ, 3, 12)), STEEL.m, 1);
+    bh += act('hand', scr);
+  }
+  if (fr) bh += shape(on(PX(68.05), rrUV(82.5, 69, 95.5, 86, 2)), '#3d3935', .9) + tx(68.1, 93, 70.3, 'SLOW', 2.2, '#f2efe7') + tx(68.1, 84.5, 70.3, 'FAST', 2.2, '#f2efe7');
+  push(BB(22, 81, 46.2, 68, 96, 95), bh);
+  out.push(throttleLever(st));
+  // starter motor, solenoid, bracket
+  push(BB(58, 58, 50, 59, 76, 61), box(58, 58, 50, 59, 76, 61, ALU, tone, 1));
+  push(BB(59, 60, 52, 69, 78.2, 62), stackY([[68.5, rodY(64, 57, 60, 77, 5, DARK, tone, 1.6)], [77.6, rodY(64, 57, 77, 78.2, 3, STEEL, toneI, 1)]]));
+  push(BB(61.2, 66, 62.2, 68, 76, 67.8), rodY(64, 65, 66, 76, 2.8, DARK, tone, 1.2) + cylX(66.6, 68, 69.5, 65.4, .7, BRASS, toneI, .8, 8) + cylX(66.6, 68, 73, 65, .7, BRASS, toneI, .8, 8));
+  // fuel tank, cap, brackets, tap
+  push(BB(0, 36, 96, 25, 86, 118), exY(rrUV(0, 96, 25, 118, 5), 36, 86, m, tone, 2.2) + (up ? txY(12.5, 86.05, 105.5, 'PETROL', 3.4, '#fff4d6') : ''));
+  push(BB(10.1, 58.6, 118, 14.9, 63.4, 120.4), cyl(12.5, 61, 118, 120.4, 2.4, DARK, toneI, 1.1, 14));
+  for (const y of [40, 79]) push(BB(12, y, 70, 16, y + 3, 96), box(12, y, 70, 16, y + 3, 96, FRAME, tone, 1));
+  push(BB(17, 71, 93, 23, 77, 96), box(17, 71, 93, 23, 77, 96, BRASS, toneI, 1) + rod([23, 74, 94.5], [25.5, 74, 94.5], .5, REDM, toneI, .8));
+  return out;
+}
+function plugItem(full){
+  const d = sub(PLUG1, PLUG0), segs = [];
+  if (full) segs.push([0, rod(plugAt(.02), plugAt(.47), .9, STEEL, toneI, .9)]);
+  segs.push([1, rod(plugAt(.47), plugAt(.57), 1.9, STEEL, toneI, 1, 1.9, 6)], [2, rod(plugAt(.57), plugAt(.76), 1.2, CERAMIC, toneI, 1, 1)], [3, rod(plugAt(.76), plugAt(1), 1.7, BOOT, toneI, 1, 1.5)]);
+  const pts = [plugAt(full ? 0 : .47), PLUG1];
+  return it(boxOf([...pts.map(p => p.map(v => v - 1.9)), ...pts.map(p => p.map(v => v + 1.9))]), segs.sort((a, b) => vis(d) ? a[0] - b[0] : b[0] - a[0]).map(e => e[1]).join(''));
+}
+// cables on the outside of the engine: shown with the case when closed and with the insides in see-through
+function sharedItems(st){
+  const out = [], a = rad(thrAt(st.tk, 'lever')), b = rad(thrAt(st.tk, 'plate')), arm = [65.5 - 3*Math.sin(b), 64.7, 110 - 3*Math.cos(b)];
+  out.push(...wireParts([[20, 74, 93], [20, 74.5, 90], [24, 75, 88], [60, 75, 88], [65.5, 70, 96], [66, 63.7, 101]], '#d9b36a', .45));
+  out.push(...wireParts([PLUG1, [71, 48.5, 118.5], [66, 70, 121], [60, 79, 105], [55, 83, 95.4]], '#3a3632', .65));
+  out.push(...wireParts([[69.2, 89 + 2.5*Math.sin(a), 84 + 2.5*Math.cos(a)], [69.6, 89 + 2.5*Math.sin(a), 87], [69.6, 86, 96], [69.6, 68, 104], [66.5, 64.8, 106.5], arm], STEEL.m, .22));
+  out.push(...wireParts([[71, 73, 46.1], [71, 73, 62], [68, 73, 65]], '#d2453a', .5));
+  out.push(...wireParts([[70, 69.5, 46.1], [70, 69.5, 63], [68, 69.5, 65.4]], '#e3b23c', .3));
+  out.push(...wireParts([[62, 84, 46.1], [62, 84, 47.4]], '#3c6fb4', .3));
+  return out;
+}
+
+/* ---------- the engine, inside ---------- */
+function gasCol(st){
+  const a = mod(st.th, 720), M0 = '#a9dfc9', M1 = '#6fc3a8';
+  if (st.lit && a >= 345){
+    if (a < 380) return mix('#fff6b0', '#ffb02e', (a - 345)/35);
+    if (a < 450) return mix('#ffb02e', '#e0602a', (a - 380)/70);
+    return mix('#e0602a', '#9b8f84', Math.min(1, (a - 450)/90));
+  }
+  if (a >= 180 && a < 360) return mix(M0, M1, Math.min(1, (a - 180)/165));
+  if (a >= 360) return mix(M1, M0, Math.min(1, (a - 360)/180));
+  return M0;
+}
+const lobeUV = (th, peak) => { const dA = 90 + (th - peak)/2;
+  return Array.from({ length:48 }, (_, i) => { const ph = -180 + i*7.5, r = CAM_BASE + (Math.abs(ph) < 52.5 ? CAM_LIFT*Math.cos(rad(ph/52.5*90))**2 : 0);
+    return [CAMX + r*Math.cos(rad(dA + ph)), CAMZ + r*Math.sin(rad(dA + ph))]; }); };
+function springSvg(y, z0, z1){
+  const N = 90, pts = Array.from({ length:N + 1 }, (_, i) => { const a = i/N*5*2*Math.PI; return [CX + 2.1*Math.cos(a), y + 2.1*Math.sin(a), z0 + (z1 - z0)*i/N, vis([Math.cos(a), Math.sin(a), 0])]; });
+  const near = [], far = []; let cur = [pts[0]];
+  for (let i = 1; i <= N; i++){ cur.push(pts[i]); if (pts[i][3] !== pts[i - 1][3] || i === N){ (pts[i - 1][3] ? near : far).push(cur.map(p => p.slice(0, 3))); cur = [pts[i]]; } }
+  return { far: far.map(s => strokeW(s, STEEL.l, .3)).join(''), near: near.map(s => strokeW(s, STEEL.l, .3)).join('') };
+}
+function mechItems(st){
+  const out = [], push = (b, svg) => out.push(it(b, svg)), th = st.th, px = pinX(th), pz = pinZ(th), gz = gudZ(th), cr = gz + 7, sk = gz - 7.5;
+  // crank train: journals, bearings, crank gear, webs with counterweights, crankpin + big end + rod
+  const pinA = 90 - th, web = hull([...arcPts(CX, CZ, 0, 8.5, pinA + 180 - 75, pinA + 180 + 75, 10).map(p => [p[0], p[1]]), ...ringXZ(px, pz, 3.4, 12), ...ringXZ(CX, CZ, 4, 12)]);
+  const beam = hull([...ringXZ(px, pz, 3, 12), ...ringXZ(CX, gz, 2, 12)]);
+  const cList = [[29, 32], [35, 37], [40, 49], [61, 77], [80, 82]].map(([a, b]) => [(a + b)/2, rodY(CX, CZ, a, b, 3, STEEL, toneI, 1)]);
+  cList.push([33.5, rodY(CX, CZ, 32, 35, 5.2, LAM, toneI, 1.1)], [78.5, rodY(CX, CZ, 77, 80, 5.2, LAM, toneI, 1.1)],
+    [38.5, exY(gearUV(CX, CZ, 5.9, 16, -th), 37, 40, STEEL, toneI, 1.1)],
+    [50, exY(web, 49, 51, STEEL, toneI, 1.3)], [60, exY(web, 59, 61, STEEL, toneI, 1.3)],
+    [55, rodY(px, pz, 51, 59, 2.2, STEEL, toneI, .9) + exY(beam, 53.6, 56.4, ALU, toneI, 1.1) + rodY(px, pz, 52, 58, 4.2, ALU, toneI, 1.2)]);
+  push(BB(36, 29, 57, 54, 82, 76), stackY(cList));
+  // piston, rings, gudgeon pin end; chamber gas above it
+  const sideY = vis([0,1,0]) ? CYL + 8.75 : CYL - 8.75, [h0, h1] = nearHalf();
+  push(BB(36.2, 46.2, sk, 53.8, 63.8, cr), cyl(CX, CYL, sk, cr, BORE - .1, ALU, toneI, 1.3, 28)
+    + [1.2, 2.1, 3].map(d => line(arcPts(CX, CYL, cr - d, BORE - .05, h0, h1), .55)).join('')
+    + shape(on(PY(sideY), ringXZ(CX, gz, 1.9, 14)), STEEL.d, .8));
+  push(BB(36.2, 46.2, cr, 53.8, 63.8, 105), `<g opacity=".82">${cyl(CX, CYL, cr, 105, BORE - .1, matOf(gasCol(st)), toneI, .9, 28)}</g>`);
+  // ports
+  push(boxOf([[42.8, 57.8, 105.3], [63.2, 62.2, 112.2]]), rod([CX, INV, 107.5], [61, INV, 110], 2.2, PORT, toneI, .9));
+  push(boxOf([[42.6, 39, 105.1], [47.4, 52.4, 112.4]]), rod([CX, EXV, 107.5], [CX, 39, 110], 2.4, PORT, toneI, .9));
+  // camshaft, lobes, cam gear
+  const camList = [[34, 37], [40, 48.5], [51.5, 58.5], [61.5, 63]].map(([a, b]) => [(a + b)/2, rodY(CAMX, CAMZ, a, b, 1.6, STEEL, toneI, .9)]);
+  const ga = rad(th/2), dot0 = [CAMX + 9*Math.cos(ga), 36.9, CAMZ + 9*Math.sin(ga)];
+  camList.push([38.5, exY(gearUV(CAMX, CAMZ, 11.8, 32, th/2), 37, 40, BRASS, toneI, 1.2) + (vis([0,-1,0]) ? `<circle cx="${f(P(...dot0)[0])}" cy="${f(P(...dot0)[1])}" r=".8" fill="${INK}"/>` : '')],
+    [EXV, exY(lobeUV(th, 620), EXV - 1.5, EXV + 1.5, STEEL, toneI, 1)], [INV, exY(lobeUV(th, 100), INV - 1.5, INV + 1.5, STEEL, toneI, 1)]);
+  push(BB(16.2, 33, 49.2, 39.8, 63, 72.8), stackY(camList));
+  // valve trains
+  for (const [y, Lf, vm] of [[EXV, liftEx(th), EXM], [INV, liftIn(th), STEEL]]){
+    push(BB(26.4, y - 1.6, 64.5 + Lf, 29.6, y + 1.6, 123.5 + Lf), cyl(CAMX, y, 64.5 + Lf, 69.5 + Lf, 1.6, STEEL, toneI, 1, 14) + rod([CAMX, y, 69.5 + Lf], [CAMX, y, 123.5 + Lf], .6, STEEL, toneI, .8, .6, 8));
+    push(BB(41.6, y - 3.4, 104.2 - Lf, 48.4, y + 3.4, 115), cyl(CX, y, 104.3 - Lf, 105 - Lf, 3.4, vm, toneI, 1, 20) + rod([CX, y, 105 - Lf], [CX, y, 115], .55, vm, toneI, .8, .55, 8));
+    const sp_ = springSvg(y, 115, 121.6 - Lf);
+    push(BB(42.4, y - 2.6, 115, 47.6, y + 2.6, 123.5 - Lf), sp_.far + rod([CX, y, 115], [CX, y, 123.5 - Lf], .55, vm, toneI, .8, .55, 8) + sp_.near + cyl(CX, y, 121.6 - Lf, 122.2 - Lf, 2.5, STEEL, toneI, .9, 16));
+    push(BB(35.9, y - .6, 115, 37.1, y + .6, 124.6), rod([36.5, y, 115], [36.5, y, 124.6], .55, STEEL, toneI, .8, .55, 8));
+    push(BB(27.1, y - 1.3, 123.5 - Lf, 45.9, y + 1.3, 126.5 + Lf), rod([CAMX, y, 124.4 + Lf], [CX, y, 124.4 - Lf], .9, STEEL, toneI, 1, .9, 10) + rodY(36.5, 125.3, y - 1.2, y + 1.2, 1.2, STEEL, toneI, .9, 12));
+  }
+  out.push(plugItem(true));
+  // flywheel: ring gear, disc, magnet, fan blades, nut
+  const ma = th - 345, rimPt = (a, y) => [CX + 18.6*Math.sin(rad(a)), y, CZ + 18.6*Math.cos(rad(a))];
+  const ring = exY(gearUV(CX, CZ, 19.3, 60, -th, .9), 82, 84, STEEL, toneI, 1.2), disc = exY(ringXZ(CX, CZ, 18.5, 36), 84, 89, FLY, toneI, 1.8);
+  const mag = vis([Math.sin(rad(ma)), 0, Math.cos(rad(ma))]) ? shape([rimPt(ma - 10, 84.5), rimPt(ma + 10, 84.5), rimPt(ma + 10, 88.5), rimPt(ma - 10, 88.5)], '#3b3f45', .8) : '';
+  const blades = Array.from({ length:12 }, (_, i) => { const a = rad(th + i*30), rd = [Math.sin(a), 0, Math.cos(a)], tg = [Math.cos(a), 0, -Math.sin(a)];
+    const q = (r, y) => [CX + r*rd[0], y, CZ + r*rd[2]], quad = [q(8, 89), q(17.6, 89), q(17.6, 92.6), q(8, 92.6)];
+    return { at:q(13, 90.8), svg:shape(quad, toneI(vis(tg) ? tg : tg.map(v => -v), FLY), .7) }; });
+  const fan = byDepth(blades), nut = rodY(CX, CZ, 89, 93.5, 2.5, STEEL, toneI, 1, 6);
+  push(BB(25.7, 82, 46.7, 64.3, 93.5, 85.3), vis([0,1,0]) ? ring + disc + mag + fan + nut : fan + nut + disc + mag + ring);
+  // ignition coil and bracket, starter pinion
+  push(BB(42, 79, 82, 48, 80.6, 91), box(42, 79, 82, 48, 80.6, 91, STEEL, toneI, 1));
+  push(BB(41, 80.6, 85.4, 49, 89.2, 93.6), box(42, 80.6, 89.6, 48, 84.2, 91, STEEL, toneI, .9) + box(41, 84.2, 85.4, 49, 88.8, 89.5, LAM, toneI, 1.1) + box(42.4, 83.8, 89.5, 47.6, 89.2, 93.6, COPPER, toneI, 1.1));
+  const py0 = 78.2 + 3.3*st.pin;
+  push(BB(61.5, py0, 54.5, 66.5, py0 + 2.5, 59.5), exY(gearUV(64, 57, 2.5, 9, th*19.3/2.5, .6), py0, py0 + 2.5, STEEL, toneI, 1));
+  // carburettor insides
+  const b = rad(thrAt(st.tk, 'plate')), plate = (x, bb) => { const e2 = [-Math.sin(bb), 0, Math.cos(bb)];
+    return shape(Array.from({ length:16 }, (_, i) => { const t = i/16*2*Math.PI; return [x + 1.7*Math.sin(t)*e2[0], 60 + 1.7*Math.cos(t), 110 + 1.7*Math.sin(t)*e2[2]]; }), BRASS.l, .8); };
+  push(BB(64, 56, 99, 72.2, 64, 114), `<g opacity=".8">${cyl(67.5, 60, 99.5, 102.4, 3.2, FUELM, toneI, .7)}</g>` + box(65.5, 58, 100.6, 69.5, 62, 102.6, CREAM, toneI, .9)
+    + rod([67.5, 60, 101], [67.5, 60, 108], .4, BRASS, toneI, .7, .4, 8) + rod([64, 60, 110], [71.6, 60, 110], 1.8, PORT, toneI, .9) + plate(65.2, b) + plate(70.2, rad(90)));
+  push(BB(74, 52, 102, 82, 68, 120), box(74, 52, 102, 82, 68, 120, PAPER, toneI, 1) + (vis([1,0,0]) ? Array.from({ length:9 }, (_, i) => line([[82.05, 53.5 + i*1.6, 103], [82.05, 53.5 + i*1.6, 119]], .45)).join('') : ''));
+  push(BB(1.5, 37.5, 97, 23.5, 84.5, 107), `<g opacity=".55">${box(1.5, 37.5, 97, 23.5, 84.5, 107, FUELM, toneI, .7)}</g>`);
+  push(BB(17.5, 33.5, 48.6, 56.5, 78.5, 53), `<g opacity=".5">${box(17.5, 33.5, 48.6, 56.5, 78.5, 53, OILM, toneI, .7)}</g>`);
+  out.push(...wireParts([[62, 84, 47.2], [67, 81.6, 52], [67, 81.6, 84], [50, 83, 88.5]], '#3c6fb4', .3));
+  out.push(...wireParts([[55, 83, 95.4], [50, 85, 94.6], [46, 86.5, 93.8]], '#3a3632', .6));
+  return out;
+}
+const FLOW_IN = [[80, 60, 111], [72, 60, 110], [64, 60, 110], [61, 60, 110], [52, 60, 108.5], [45, 60, 107], [45, 60, 103]];
+const FLOW_EX = [[45, 50, 103], [45, 50, 107.5], [45, 39, 110], [45, 33, 108], [40, 27, 107], [62, 27, 104], [70, 22, 102]];
+const along = (pts, s) => { const L = pts.slice(1).map((p, i) => Math.hypot(...sub(p, pts[i]))), T = L.reduce((a, b) => a + b, 0); let d = s*T;
+  for (let i = 0; i < L.length; i++){ if (d <= L[i]) return lerp3(pts[i], pts[i + 1], d/L[i]); d -= L[i]; } return pts[pts.length - 1]; };
+function flowSvg(st){
+  let s = '';
+  for (const [pts, lift, col] of [[FLOW_IN, liftIn(st.th), '#3f9f7f'], [FLOW_EX, liftEx(st.th), st.lit ? '#6f655c' : '#3f9f7f']]){
+    if (lift < .15) continue;
+    for (let i = 0; i < 8; i++){ const [X, Y] = P(...along(pts, mod(st.th/90 + i/8, 1))); s += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(.55 + .25*lift)}" fill="${col}" stroke="${INK}" stroke-width=".4"/>`; }
+  }
+  return s;
+}
+function sparkSvg(st){
+  if (st.sparkT <= 0) return '';
+  const [X, Y] = P(...PLUG0), r = 3.2*Math.min(1, st.sparkT/.1), pts = Array.from({ length:16 }, (_, i) => { const a = i/16*2*Math.PI, rr = i % 2 ? r*.4 : r; return [X + rr*Math.cos(a), Y + rr*Math.sin(a)]; });
+  return fill(sp(pts), '#fff36b', `stroke="${INK}" stroke-width=".7"`);
+}
+const puffSvg = st => st.puffs.map(p => { const t = p.t, [X, Y] = P(68.5 + 7*t, 22 - 2*t, 102 + 6*t);
+  return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(1.4 + 4.2*t)}" fill="#c9c2b8" fill-opacity="${f(.7*(1 - t/1.3))}" stroke="${INK}" stroke-opacity="${f(.6*(1 - t/1.3))}" stroke-width=".7"/>`; }).join('');
+
+/* ---------- labels ---------- */
+function insideLabels(st){
+  const th = st.th, gz = gudZ(th), cr = gz + 7, Li = liftIn(th), Le = liftEx(th), ph = mod(th, 720), burn = st.lit && ph >= 345 && ph < 540, ma = th - 345, pa = 90 - th + 180;
+  return [
+    { at:nearPt(CX, CYL, cr - 6, BORE), text:'PISTON', on:burn },
+    { at:nearPt(CX, CYL, cr - 2.1, BORE), text:'PISTON RINGS' },
+    { at:[CX, vis([0,1,0]) ? CYL + 8.8 : CYL - 8.8, gz], text:'GUDGEON PIN' },
+    { at:[(pinX(th) + CX)/2, CYL, (pinZ(th) + 4 + gz - 7.5)/2], text:'CONNECTING ROD' },
+    { at:[CX, 70, CZ + 3], text:'CRANKSHAFT' },
+    { at:[CX + 8*Math.cos(rad(pa)), 61, CZ + 8*Math.sin(rad(pa))], text:'COUNTERWEIGHT' },
+    { at:[CX, 38.5, CZ + 5.9], text:'CRANK GEAR' },
+    { at:[CAMX, 38.5, CAMZ + 11.8], text:'CAM GEAR' },
+    { at:[CAMX, 55, CAMZ + 1.6], text:'CAMSHAFT' },
+    { at:[CAMX, INV, 67 + Li], text:'TAPPET', on:Li > 0 },
+    { at:[CAMX, INV, 96], text:'PUSHROD', on:Li > 0 },
+    { at:[36.5, INV, 125.3], text:'ROCKER ARM', on:Li > 0 },
+    { at:nearPt(CX, INV, 118, 2.1), text:'VALVE SPRING' },
+    { at:[CX, INV, 105 - Li], text:'INTAKE VALVE', on:Li > 0 },
+    { at:[CX, EXV, 105 - Le], text:'EXHAUST VALVE', on:Le > 0 },
+    { at:nearPt(CX, CYL, (cr + 105)/2, BORE), text:'COMBUSTION CHAMBER', on:burn },
+    { at:plugAt(.66), text:'SPARK PLUG', on:st.sparkT > 0 },
+    { at:[CX, 84, 91.5], text:'IGNITION COIL', on:st.sparkT > 0 },
+    { at:[CX + 18.6*Math.sin(rad(ma)), 86.5, CZ + 18.6*Math.cos(rad(ma))], text:'FLYWHEEL MAGNET' },
+    { at:[CX + 18.5, 86.5, CZ], text:'FLYWHEEL' },
+    { at:[CX, 92.6, CZ + 13], text:'COOLING FAN' },
+    { at:[64, 68, 62], text:'STARTER MOTOR', on:st.mode === 'crank' },
+    { at:[67.5, 60, 114], text:'CARBURETTOR' },
+    { at:[65.2, 60, 111.7], text:'THROTTLE VALVE' },
+    { at:[78, 60, 120], text:'AIR FILTER' },
+    { at:[53, INV, 109.5], text:'INTAKE PORT', on:Li > 0 },
+    { at:[CX, 42, 111.5], text:'EXHAUST PORT', on:Le > 0 },
+    { at:[46, 19, 107], text:'MUFFLER' },
+    { at:[12.5, 86, 110], text:'FUEL TANK' },
+    { at:[76, 84, 25], text:'BATTERY' },
+    { at:[91, 17, 27], text:'KEY SWITCH', on:st.mode === 'crank' },
+    { at:nearPt(CX, CYL, 93.6, 14), text:'COOLING FINS' },
+  ];
+}
+function surfaceLabels(st){
+  const a = rad(thrAt(st.tk, 'lever'));
+  return [
+    { at:[91, 17, 23], text:'KEY SWITCH' }, { at:[71.4, 89 - 11*Math.sin(a), 84 - 11*Math.cos(a)], text:'THROTTLE LEVER' },
+    { at:[12.5, 61, 118], text:'FUEL TANK' }, { at:[84, 64, 116], text:'AIR FILTER' }, { at:[71, 60, 112], text:'CARBURETTOR' },
+    { at:plugAt(.88), text:'SPARK PLUG' }, { at:[46, 27, 115], text:'MUFFLER' }, { at:[64, 68, 62], text:'STARTER MOTOR' },
+    { at:[64, 84, 30], text:'BATTERY' }, { at:[CX, 96, 72], text:'FLYWHEEL SCREEN' }, { at:[43, 55, 128], text:'ROCKER COVER' },
+    { at:nearPt(CX, CYL, 95.6, 14), text:'COOLING FINS' }, { at:[CX, 18, CZ], text:'PTO SHAFT' },
+  ];
+}
+
+// core's xrCallouts, except that the right-hand column starts below the stats panel and the See-through / Labels switches
+function engCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0]));
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0;
+  let fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 3*k);
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, btn = document.getElementById('btns');
+  let s = '';
+  let top = { [-1]: fs, [1]: fs + 30*k };
+  if (btn && svgEl.getScreenCTM()){ const r = btn.getBoundingClientRect(), q = new DOMPoint(r.right, r.bottom + 50).matrixTransform(svgEl.getScreenCTM().inverse());
+    if (q.y > 0) top[-1] = q.y + hgt; }
+  // the right column starts under the stats and the See-through / Labels switches, and stops above the zoom chip
+  const ctm = svgEl.getScreenCTM(), sr = svgEl.getBoundingClientRect(), px2u = sr.width ? vb.width/sr.width : 1;
+  for (const el of u ? [] : [document.querySelector('.vset'), document.getElementById('stats')]) if (el && ctm){ const r = el.getBoundingClientRect();
+    if (r.height && r.bottom < sr.top + .5*sr.height){ const q = new DOMPoint(r.left, r.bottom + 14).matrixTransform(ctm.inverse()); top[1] = Math.max(top[1], q.y + hgt/2); } }
+  const bot = vb.y + vb.height - hgt, hL = Math.max(1, bot - top[-1]), botR = bot - (u ? 0 : 34*px2u), hR = Math.max(1, botR - top[1]);
+  const all = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  const nL = Math.round(all.length*hL/(hL + hR)), Lc = all.slice(0, nL), Rc = all.slice(nL);
+  const sc = Math.min(1, hL/Math.max(1, Lc.length - 1)/gap, hR/Math.max(1, Rc.length - 1)/gap); fs *= sc; hgt *= sc; gap *= sc;
+  for (const [col, side] of [[Lc, -1], [Rc, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    const over = col.length ? Math.max(0, col[col.length-1].py - (side > 0 ? botR : bot)) : 0, room = col.length ? col[0].py - top[side] : 0;
+    for (const c of col) c.py -= Math.min(over, room);
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+
+/* ---------- scene ---------- */
+const SHADOW_PTS = [[3, 6, 46], [87, 6, 46], [3, 104, 46], [87, 104, 46], [5, 8, 0], [85, 8, 0], [5, 102, 0], [85, 102, 0],
+  [0, 36, 118], [25, 86, 118], [0, 86, 96], [84, 49, 122], [84, 71, 122], [27, 41, 128], [59, 69, 128], [30, 19, 115], [62, 19, 115], [22, 96, 95], [68, 96, 95]];
+function scene(st, m){
+  const k = ease(st.xr || 0), body = bodyItems(st, m), shared = sharedItems(st);
+  let s = castShadow(SHADOW_PTS, 0) + byDepth(standItems(st)) + deckSvg(), eng;
+  if (k <= 0) eng = byDepth([...body, ...shared]);
+  else eng = `<g opacity="${f(1 - .74*k)}">${byDepth(k < .5 ? [...body, ...shared] : body)}</g><g opacity="${f(k)}">${byDepth(k < .5 ? mechItems(st) : [...mechItems(st), ...shared])}${flowSvg(st)}${sparkSvg(st)}</g>`;
+  eng += puffSvg(st);
+  if (st.mode === 'run') eng = `<g transform="translate(${f(.25*Math.sin(rad(st.th*2)))} ${f(.15*Math.cos(rad(st.th*2)))})">${eng}</g>`;
+  const items = k > .6 ? insideLabels(st) : surfaceLabels(st);
+  return s + eng + engCallouts(items, [0, 92, 18, 96, 40, 128]);
+}
+
+/* ---------- behaviour ---------- */
+const CAPS = [
+  'Intake: the piston moves down with the intake valve open and draws petrol-and-air mixture in from the carburettor.',
+  'Compression: both valves are shut and the rising piston squeezes the mixture into the small space under the head.',
+  'Power: the plug sparks just before the top, the mixture burns, and the hot gas drives the piston down, turning the crank.',
+  'Exhaust: the exhaust valve opens and the rising piston pushes the burnt gas out through the muffler.',
+];
+const HAND_MSG = [
+  'Intake stroke: piston down, intake valve open, mixture in',
+  'Compression stroke: both valves shut, mixture squeezed',
+  'Power stroke: spark, burn, the gas pushes the piston down',
+  'Exhaust stroke: exhaust valve open, burnt gas out',
+];
+let ui, loopOn = false, STILL = false;
+const keyTarget = st => st.mode === 'crank' ? 55 : st.mode === 'run' ? 0 : -55;
+function startStop(st){
+  const v0 = Math.max(40, st.rpm*6*VS), need = .6*v0, m0 = mod(st.th + need, 720);
+  const D = need + (m0 >= 225 && m0 <= 320 ? 0 : mod(225 + 20 - m0, 720));
+  st.mode = 'stop'; st.sTo = st.th + D; st.sA = v0*v0/(2*D);
+}
+function engStep(st, dt){
+  const th0 = st.th;
+  st.key = toward(st.key, keyTarget(st), 300*dt);
+  st.pin = toward(st.pin, st.mode === 'crank' ? 1 : 0, 6*dt);
+  st.tk = toward(st.tk, st.thr, 2*dt);
+  st.sparkT = Math.max(0, st.sparkT - dt);
+  for (const p of st.puffs) p.t += dt;
+  st.puffs = st.puffs.filter(p => p.t < 1.3);
+  if (st.mode === 'hand'){
+    st.handT = Math.min(1, st.handT + dt/.9); st.th = st.hFrom + (st.hTo - st.hFrom)*ease(st.handT); st.rpm = 0;
+    if (st.handT >= 1) st.mode = 'off';
+  } else if (st.mode === 'stop'){
+    const D = st.sTo - st.th, v = Math.sqrt(Math.max(0, 2*st.sA*D));
+    st.th = Math.min(st.sTo, st.th + Math.max(v, 4)*dt); st.rpm = v/(6*VS);
+    if (st.th >= st.sTo - 1e-6){ st.th = st.sTo; st.mode = 'off'; st.rpm = 0; }
+  } else if (st.mode !== 'off'){
+    const tgt = st.mode === 'crank' ? CRANK_RPM : thrAt(st.tk, 'rpm');
+    st.rpm += (tgt - st.rpm)*(1 - Math.exp(-(st.mode === 'crank' ? 4 : 1.6)*dt));
+    st.th += st.rpm*6*VS*dt;
+  }
+  const ign = st.mode === 'crank' || st.mode === 'run';
+  if (crossed(th0, st.th, 0)) st.lit = false;
+  if (ign && (crossed(th0, st.th, 345) || crossed(th0, st.th, 705))) st.sparkT = .14;
+  if (ign && crossed(th0, st.th, 345)){ st.lit = true;
+    if (st.mode === 'crank'){ st.mode = 'run'; st.rpm = Math.max(st.rpm, 900); ui.flash('It fires! The key springs back to ON', 2200); } }
+  if (st.lit && crossed(th0, st.th, 560)) st.puffs.push({ t:0 });
+  return st.mode !== 'off' || st.sparkT > 0 || st.puffs.length > 0 || Math.abs(st.key - keyTarget(st)) > .01 || st.pin > 0 || Math.abs(st.tk - st.thr) > 1e-4;
+}
+function runLoop(){
+  if (loopOn) return; loopOn = true;
+  ui.animate(dt => { const busy = engStep(ui.st, dt); if (!busy) loopOn = false; return busy; });
+}
+function keyTurn(st){
+  if (st.mode === 'run' || st.mode === 'crank'){ startStop(st); ui.flash('Key OFF: the coil is shorted, no spark', 2200); }
+  else if (st.mode === 'stop') return ui.flash('Still spinning down');
+  else { st.mode = 'crank'; ui.flash('START: the solenoid throws the pinion in and the starter spins the flywheel', 2600); }
+  runLoop();
+}
+function setThrottle(st, i){
+  st.thr = i;
+  ui.flash(st.mode === 'run' ? `${THR[i].n}: the throttle plate opens to ${THR[i].plate}°, more mixture, more speed` : 'Throttle set. Turn the key to start', 2200);
+  runLoop();
+}
+function handTurn(st){
+  if (st.mode === 'run' || st.mode === 'crank') return ui.flash('Turn the key to OFF first');
+  if (st.mode === 'stop') return ui.flash('Still spinning down');
+  const from = st.mode === 'hand' ? st.hTo : st.th, n = Math.floor(from/180 + 1e-6);
+  st.hFrom = st.th; st.hTo = (n + 1)*180; st.handT = 0; st.mode = 'hand';
+  ui.flash(HAND_MSG[mod(n, 4)], 2600);
+  runLoop();
+}
+
+ui = mountFigure({
+  fig:'E4', turn:'full', title:'Four-stroke engine', size:[92, 110, 130], palette:'tomato',
+  state:{ mode:'off', th:250, rpm:0, thr:0, tk:0, key:-55, pin:0, sparkT:0, lit:false, puffs:[], hFrom:0, hTo:0, handT:0, sTo:0, sA:0 },
+  scene,
+  buttons:[
+    { label:'Turn the key', onClick:st => keyTurn(st) },
+    { label:'Throttle', choices:st => THR.map((t, i) => ({ label:t.n, current:st.thr === i, onClick:st => setThrottle(st, i) })) },
+    { label:'Turn by hand', onClick:st => handTurn(st) },
+  ],
+  stats:st => [
+    { label:'Engine speed', value:`${(Math.round(st.rpm/10)*10).toLocaleString('en-US')} rpm` },
+    { label:'Stroke', value:STROKES[strokeIdx(st)], small:true },
+    { label:'Throttle', value:`${THR[st.thr].n} ${THR[st.thr].pct}%`, small:true },
+  ],
+  acts:{ key:st => keyTurn(st), thr:st => setThrottle(st, (st.thr + 1) % 3), hand:st => handTurn(st) },
+  params:(st, q) => {
+    if (q.has('th')) st.th = +q.get('th');
+    if (q.has('thr')) st.thr = st.tk = Math.max(0, Math.min(2, +q.get('thr') | 0));
+    if (q.get('run') === '1'){ st.mode = 'run'; st.rpm = thrAt(st.tk, 'rpm'); st.key = 0; st.lit = mod(st.th, 720) >= 345; }
+    if (q.get('crank') === '1'){ st.mode = 'crank'; st.rpm = CRANK_RPM; st.key = 55; st.pin = 1; }
+    if (q.get('spark') === '1'){ if (!q.has('th')) st.th = 345; st.mode = 'run'; st.rpm = thrAt(st.tk, 'rpm'); st.key = 0; st.sparkT = .14; st.lit = true; }
+    if (q.get('still') === '1') STILL = true;
+  },
+});
+xrMount(() => ui, st => CAPS[strokeIdx(st)]);
+if (!STILL && ui.st.mode !== 'off') runLoop();
+</script></body></html>
