@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HC-SR04 ultrasonic sensor</title></head><body>
+<script src="core.js"></script>
+<script>
+/* ============================================================
+   HC-SR04 ultrasonic distance sensor in a breadboard, read by an Arduino Nano, facing a wooden block on a cutting mat.
+
+   HOW IT REALLY WORKS
+   1. Power: a USB power bank feeds the Nano through a mini-USB cable; the Nano's 5V pin feeds the sensor's VCC through
+      a red jumper, and a black jumper joins the grounds. The sensor's own MCU runs from a 4 MHz crystal on its front.
+   2. Trigger: the Nano drives TRIG (D3) high for 10 us.
+   3. Burst: the sensor's MCU sends 8 cycles of 40 kHz; the MAX232 charge pump swings them to about +-10 V across the
+      transmitter's piezo disc, whose cone resonator pushes the sound out through the mesh. ECHO (D2) goes high.
+   4. Flight: the ping travels at 343 m/s (20 C), bounces off the block and comes back.
+   5. Receive: the receiver's cone and piezo turn the echo into a few millivolts; the LM324 op-amps amplify and filter it
+      and a comparator stage tells the MCU, which drops ECHO low. ECHO stayed high for the round trip.
+   6. Read: the Nano's pulseIn() times the ECHO pulse; distance cm = us x 0.0343 / 2 (about us / 58).
+      10 cm = 583 us, 25 cm = 1458 us, 50 cm = 2915 us. No echo: ECHO times out after about 38 ms.
+
+   PARTS (each held by another)
+   MAT      green cutting mat with grid . wooden block standing on it in the beam
+   SENSOR   HC-SR04 PCB (45 x 20 mm) . right-angle 4-pin header (VCC TRIG ECHO GND) into the breadboard .
+            transmitter T and receiver R: aluminium can, mesh grille, plastic base, piezo bimorph disc, cone resonator,
+            two leads . 4 MHz crystal on the front between them . back: MCU (SOIC-8), MAX232 (SOIC-16), LM324 (SOIC-14),
+            charge-pump capacitors, resistors, solder joints . four mounting holes
+   BOARD    400-point breadboard: body, 300 holes, centre channel, power rails, spring clips inside
+   NANO     PCB on two 15-pin header strips . ATmega328P . 16 MHz resonator . reset button . PWR and L LEDs . mini-USB
+            port . underneath: CH340 USB-serial chip, AMS1117 regulator
+   WIRES    red 5V -> VCC . black GND -> GND . yellow D3 -> TRIG . green D2 -> ECHO (male jumpers in the strips)
+   POWER    power bank: shell, button, four level LEDs, USB-A port, micro-USB input; inside a Li-ion pouch cell, PCB with
+            boost converter chip and inductor . USB cable from its USB-A port to the Nano's mini-USB
+   ============================================================ */
+
+/* ---------- local frame: lx along the beam, ly to the beam's left, z up (1 unit = 1 mm; the range is drawn at
+   1.3 units per cm so the 45 mm sensor stays readable next to a 50 cm throw). The whole bench is turned 105 deg so
+   the beam runs across the view and the block never hides the sensor. ---------- */
+const uTH = 105*Math.PI/180, uc = Math.cos(uTH), usn = Math.sin(uTH);
+const MX0 = -56, MX1 = 110, MY0 = -134, MY1 = 42, MZ = 3;          // cutting mat
+let UO = [0, 0];
+const uT = p => [UO[0] + uc*p[0] - usn*p[1], UO[1] + usn*p[0] + uc*p[1], p[2]];
+const uTn = n => [uc*n[0] - usn*n[1], usn*n[0] + uc*n[1], n[2]];
+// the engine frames the box [0,S/2]x[0,S/2]: centre the mat's on-screen footprint (x-y across, x+y down at the front
+// view) in that box's footprint, so the turned mat fills the frame instead of its much larger axis-aligned bounds
+const SB = (() => { const w = [[MX0, MY0], [MX0, MY1], [MX1, MY0], [MX1, MY1]].map(([x, y]) => uT([x, y, 0])), u = w.map(p => p[0] - p[1]), v = w.map(p => p[0] + p[1]);
+  const S = Math.max(Math.max(...u) - Math.min(...u), Math.max(...v) - Math.min(...v)), du = -(Math.max(...u) + Math.min(...u))/2, dv = S/2 - (Math.max(...v) + Math.min(...v))/2;
+  UO = [(du + dv)/2, (dv - du)/2]; return S/2; })();
+
+const KD = 1.3, VS = 120, T_EMIT = .2, T_BURST = .45, HOLD = .9, BEAM = 15*Math.PI/180, EBEAM = 24*Math.PI/180;
+const BZ = 11.5;                                                     // breadboard top
+const BBX = [-41.47, 13.53], BBY = [-51.16, 30.84];
+const rowX = k => k < 5 ? -10.16 + 2.54*k : -17.78 - 2.54*(k - 5);  // hole rows: 0..4 beam half, 5..9 back half
+const strY = c => -46.99 + 2.54*c;                                   // the 30 strips
+const SX = 2.05, PX0 = 1.25, PX1 = 2.85, PZ0 = 12.5, PZ1 = 32.5;     // sensor PCB
+const X0 = 14.85, TZ = 22.5, TR = 8, TY = -13, RY = 13;              // transducer fronts, axis height, can radius
+const NX = [-21.7, -3.7], NY = [-50.7, -7.7], NZ0 = 14, NZ1 = 15.6;   // Nano PCB
+const nanoY = i => strY(i);                                          // Nano pin i from the USB end
+const PB = [-45, -126, 45, -66], PBZ = 17;                           // power bank
+const BLK = { dx: 24, y: 26, h: 47 };                                // wooden block
+const blkX = d => X0 + d*KD;
+
+const M = { mat: { l:'#5aa37c', m:'#468a66', d:'#2c5a43' }, pcb: matOf('#2f62c4'), nano: matOf('#2a7ab8'), chip: matOf('#2b2a2d'),
+  hdr: matOf('#2f2c29'), bb: matOf('#f3f1ea'), clip: matOf('#dde1e4'), steel: matOf('#d5dadd'), can: matOf('#dfe3e6'),
+  mesh: '#45484c', base: matOf('#34312e'), piezo: matOf('#e9d9b4'), cone: matOf('#cfd4d8'), gold: matOf('#e2b84c'),
+  cell: matOf('#c5ccd2'), board: matOf('#2f8a52'), coil: matOf('#3a3734'), usb: matOf('#3b3936'), wood: WOOD };
+const PING = '#2f9fd6', ECHO = '#f08a2b';
+
+/* ---------- helpers in the local frame ---------- */
+const upd = (pts, close = true) => pd(pts.map(uT), close);
+const uBoxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+function uBox(x0, y0, z0, x1, y1, z1, m, shade = toneI, w = .7){
+  const F = [[[0,1,0], [[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]]], [[1,0,0], [[x1,y0,z0],[x1,y1,z0],[x1,y1,z1],[x1,y0,z1]]],
+    [[0,-1,0], [[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1]]], [[-1,0,0], [[x0,y0,z0],[x0,y1,z0],[x0,y1,z1],[x0,y0,z1]]],
+    [[0,0,1], [[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]]], [[0,0,-1], [[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0]]]];
+  return F.filter(([n]) => vis(uTn(n))).map(([n, q]) => shape(q.map(uT), shade(uTn(n), m), w)).join('');
+}
+function uSlab(uv, z0, z1, m, shade = tone, w = 1.4){
+  const A = uv.map(([a, b]) => uT([a, b, z0])), B = uv.map(([a, b]) => uT([a, b, z1]));
+  return loft(A, B, n => shade(n, m)) + (vis([0,0,1]) ? fill(pd(B), shade([0,0,1], m)) + ink(pd(B), w*.7) : fill(pd(A), shade([0,0,-1], m))) + hullInk([...A, ...B], w);
+}
+const uRing = (c, a, b, r, n = 18) => Array.from({length:n}, (_, i) => { const t = i/n*2*Math.PI, p = Math.cos(t)*r, q = Math.sin(t)*r;
+  return [c[0] + a[0]*p + b[0]*q, c[1] + a[1]*p + b[1]*q, c[2] + a[2]*p + b[2]*q]; });
+const uRod = (a, b, r, m, w = .6, r1 = r, n = 16) => rod(uT(a), uT(b), r, m, toneI, w, r1, n);
+const uCyl = (x, y, z0, z1, r, m, w = .6, n = 16) => { const p = uT([x, y, 0]); return cyl(p[0], p[1], z0, z1, r, m, toneI, w, n); };
+const uTxtTop = (x, y, z, str, size, col = INK, wt = 700) => { const o = P(...uT([x, y, z]));
+  return `<text transform="${txM(o, Dv(...uTn([-1,0,0])), Dv(...uTn([0,-1,0])))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${wt}">${str}</text>`; };
+// text on a face lx = const: front (facing +lx, reads toward +ly) or back (facing -lx, reads toward -ly)
+const uTxtX = (x, y, z, str, size, back = false, col = INK, wt = 700) => { const o = P(...uT([x, y, z]));
+  return `<text transform="${txM(o, Dv(...uTn([0, back ? -1 : 1, 0])), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${wt}">${str}</text>`; };
+function uSort(items){
+  const V = [uc*CAM_V[0] + usn*CAM_V[1], -usn*CAM_V[0] + uc*CAM_V[1], CAM_V[2]];
+  const sep = (p, q) => { for (let k = 0; k < 3; k++){ if (p.b[1][k] <= q.b[0][k] + 1e-6) return V[k] >= 0 ? -1 : 1; if (q.b[1][k] <= p.b[0][k] + 1e-6) return V[k] >= 0 ? 1 : -1; } return 0; };
+  return items.filter(Boolean).sort((p, q) => sep(p, q) || dot(boxMid(p.b), V) - dot(boxMid(q.b), V));
+}
+const uBend = (pts, r = 1.6) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i-1], pts[i], pts[i+1]];
+    const la = Math.hypot(...sub(a, b)), lc = Math.hypot(...sub(c, b)), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k])*d/la), q = c.map((v, k) => b[k] + (v - b[k])*d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+function uWire(pts, col, kind, r = .55, Lseg = 4, glow = 0){
+  const q = uBend(pts), out = [], cap = 'fill="none" stroke-linecap="round" stroke-linejoin="round"';
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = Math.hypot(...sub(q[j], q[i])); while (j < q.length - 1 && len < Lseg){ j++; len += Math.hypot(...sub(q[j], q[j-1])); }
+    const seg = q.slice(i, j + 1), d = upd(seg, false);
+    out.push({ b: uBoxOf(seg, r), kind, svg: (glow > 0 ? `<path d="${d}" ${cap} stroke="${col}" style="stroke-width:${f(2*r + 3*INK_K)}" opacity="${f(.35*glow)}"/>` : '')
+      + `<path d="${d}" ${cap} stroke="${INK}" style="stroke-width:${f(2*r + 1.2*INK_K)}"/><path d="${d}" ${cap} stroke="${glow > 0 ? mix(col, '#ffffff', .35*glow) : col}" style="stroke-width:${f(2*r)}"/>` });
+    i = j; }
+  return out; }
+
+/* ---------- the ping: phase of the measuring cycle ---------- */
+function phase(st){
+  const on = st.pwr && st.boot >= 1, D = st.dd*KD, s = (st.tau - T_EMIT)*VS;
+  return { on, D, s, trig: on && st.tau < T_EMIT, burst: on && st.tau >= T_EMIT && st.tau < T_BURST,
+    echoHi: on && st.tau >= T_BURST && !st.got, recv: on && st.got && st.tau - st.tGot < .35,
+    hit: on && s >= D - 4 && s <= D + 10 };
+}
+// expanding rings of the ping (out along the beam from T) and the echo (back from the block toward R)
+function waveItems(st){
+  const ph = phase(st), out = []; if (!ph.on || st.tau < T_EMIT) return out;
+  const ring = (lx, ly, r, col, a) => { const pts = uRing([lx, ly, TZ], [0,1,0], [0,0,1], r, 30).map(p => [p[0], p[1], Math.max(MZ + .4, p[2])]);
+    out.push({ b: uBoxOf(pts, .3), kind: 'w', svg: `<path d="${upd(pts)}" fill="none" stroke="#ffffff" style="stroke-width:${f(2.6*INK_K)}" opacity="${f(.55*a)}"/><path d="${upd(pts)}" fill="none" stroke="${col}" style="stroke-width:${f(1.5*INK_K)}" opacity="${f(a)}"/>` }); };
+  for (let i = 0; i < 3; i++){ const s = ph.s - i*3.2; if (s <= .5) continue;
+    if (s < ph.D) ring(X0 + s, TY, 3 + s*Math.tan(BEAM), PING, 1 - .35*i/2);
+    else if (s < 2*ph.D){ const b = s - ph.D; ring(X0 + ph.D - b, 0, 3 + s*Math.tan(EBEAM)*.7, ECHO, (1 - .35*i/2)*(1 - .4*b/ph.D)); } }
+  return out;
+}
+
+/* ---------- the bench, part by part. kind: 'case' fades in see-through, 'in' = inside part (only in see-through),
+   'xr' = see-through only, '' = always (drawn again over the ghost), 'w' = waves (drawn once) ---------- */
+function benchItems(st, m, k){
+  const it = [], put = (b, svg, kind = '') => it.push({ b, svg, kind });
+  const bx = (x0, y0, z0, x1, y1, z1, mm, kind = '', w = .6, extra = '') => put([[x0, y0, z0], [x1, y1, z1]], uBox(x0, y0, z0, x1, y1, z1, mm, toneI, w) + extra, kind);
+  const ph = phase(st), pwr = st.pwr;
+  const fr = vis(uTn([1,0,0])), bk = vis(uTn([-1,0,0]));
+
+  // ---- breadboard: body with holes, channel and rail stripes; spring clips inside (see-through)
+  let bb = uBox(BBX[0], BBY[0], MZ, BBX[1], BBY[1], BZ, M.bb, toneI, 1.1), holes = '';
+  const hole = (x, y) => upd([[x - .5, y - .5, BZ + .02], [x + .5, y - .5, BZ + .02], [x + .5, y + .5, BZ + .02], [x - .5, y + .5, BZ + .02]]);
+  for (let r = 0; r < 10; r++) for (let c = 0; c < 30; c++) holes += hole(rowX(r), strY(c));
+  const RAILX = [5.6, 8.14, -33.54, -36.08];
+  for (const x of RAILX) for (let c = 1; c < 29; c++) if (c % 6) holes += hole(x, strY(c));
+  bb += `<path d="${holes}" fill="#5d574d"/>` + fill(upd([[-15.2, BBY[0] + 1.5, BZ + .02], [-12.74, BBY[0] + 1.5, BZ + .02], [-12.74, BBY[1] - 1.5, BZ + .02], [-15.2, BBY[1] - 1.5, BZ + .02]]), M.bb.d);
+  for (const [x, col] of [[3.8, '#3e86d9'], [10, '#e2483d'], [-31.7, '#3e86d9'], [-37.9, '#e2483d']])
+    bb += `<path d="${upd([[x, BBY[0] + 2, BZ + .03], [x, BBY[1] - 2, BZ + .03]], false)}" stroke="${col}" style="stroke-width:${f(.7*INK_K)}"/>`;
+  put([[BBX[0], BBY[0], MZ], [BBX[1], BBY[1], BZ]], bb, 'case');
+  if (k > 0){ for (const [a, b] of [[0, 4], [5, 9]]) for (let c = 0; c < 30; c++){ const y = strY(c), xa = Math.min(rowX(a), rowX(b)), xb = Math.max(rowX(a), rowX(b));
+      bx(xa - .9, y - .3, BZ - 3.6, xb + .9, y + .3, BZ - 1.2, M.clip, 'xr', .25); }
+    for (const x of RAILX) bx(x - .3, strY(1) - 1, BZ - 3.6, x + .3, strY(28) + 1, BZ - 1.2, M.clip, 'xr', .25); }
+
+  // ---- HC-SR04: PCB, header, transducers, crystal, the chips on the back
+  let pcb = uBox(PX0, -22.5, PZ0, PX1, 22.5, PZ1, M.pcb, toneI, 1);
+  for (const [y, z] of [[-20.6, 14.4], [20.6, 14.4], [-20.6, 30.6], [20.6, 30.6]]) for (const [x, on] of [[PX1 + .02, fr], [PX0 - .02, bk]]) if (on){
+    const rg = uRing([x, y, z], [0,1,0], [0,0,1], 1.25, 12), rh = uRing([x, y, z], [0,1,0], [0,0,1], .7, 10);
+    pcb += fill(upd(rg), M.steel.l) + fill(upd(rh), '#f2efe7') + ink(upd(rg), .3); }
+  if (fr) pcb += uTxtX(PX1 + .03, TY, 31, 'T', 1.6, false, '#f4f4ec', 800) + uTxtX(PX1 + .03, RY, 31, 'R', 1.6, false, '#f4f4ec', 800)
+    + uTxtX(PX1 + .03, 0, 13.6, 'VCC TRIG ECHO GND', .72, false, '#f4f4ec', 700) + uTxtX(PX1 + .03, 0, 18.5, 'HC-SR04', 1.15, false, '#f4f4ec', 800);
+  if (bk){ pcb += uTxtX(PX0 - .03, 0, 31, 'HC-SR04', 1.5, true, '#f4f4ec', 800);
+    for (const y of [-15.5, -10.5, 10.5, 15.5, -2.44, 2.44]){ const z = Math.abs(y) > 5 ? TZ : 30.2, rg = uRing([PX0 - .03, y, z], [0,1,0], [0,0,1], .8, 10);
+      pcb += fill(upd(rg), '#d9dcdc') + ink(upd(rg), .25); } }                                        // solder joints: transducer and crystal leads
+  put([[PX0, -22.5, PZ0], [PX1, 22.5, PZ1]], pcb, 'case');
+  // right-angle header: plastic bar on the back, pins down into the beam-side row
+  bx(-1.25, -5.08, 13.5, PX0, 5.08, 16, M.hdr, '', .6);
+  for (let i = 0; i < 4; i++){ const y = -3.81 + 2.54*i; put([[-.35, y - .35, BZ], [.35, y + .35, 13.5]], uRod([0, y, BZ], [0, y, 13.5], .32, M.gold, .3)); }
+  // back of the board (faces -lx): MAX232 behind T, LM324 behind R, MCU top centre, caps and resistors
+  const chip = (y0, y1, z0, z1, name, glow) => { const leads = []; const n = Math.round((y1 - y0)/1.27);
+    for (let j = 0; j < n; j++){ const y = y0 + .6 + j*(y1 - y0 - 1.2)/(n - 1); for (const z of [z0 - .9, z1]) leads.push(uBox(-.25, y - .22, z, PX0, y + .22, z + .9, M.steel, toneI, .2)); }
+    put([[-.6, y0, z0 - .9], [PX0, y1, z1 + .9]], leads.join('') + uBox(-.6, y0, z0, PX0, y1, z1, glow ? matOf('#5a3b2a') : M.chip, toneI, .5)
+      + (vis(uTn([-1,0,0])) ? uTxtX(-.63, (y0 + y1)/2, (z0 + z1)/2 + .5, name, 1.05, true, glow ? '#ffd2a8' : '#a8a49c', 700) : '')); };
+  chip(-15, -5, 17, 20.5, 'MAX232', ph.burst);
+  chip(5.5, 14.2, 17, 20.5, 'LM324', ph.recv);
+  chip(-2.5, 2.5, 24.5, 28, 'MCU', ph.trig || ph.burst || ph.recv);
+  for (const y of [-19.5, -16.6, -8.6, -5.7]) bx(-.3, y - .7, 25, PX0, y + .7, 26.6, matOf('#c99a62'), '', .3);      // charge-pump caps
+  for (const y of [5.6, 8.2, 10.8, 13.4, 16, 18.6]) bx(-.2, y - .8, 25.4, PX0, y + .8, 26.3, M.chip, '', .3,
+    fill(upd([[-.22, y - .5, 25.6], [-.22, y + .5, 25.6], [-.22, y + .5, 26.1], [-.22, y - .5, 26.1]]), '#e8e2d2'));     // resistors
+  // transducers: aluminium can with a mesh front; inside a plastic base, piezo disc and cone resonator
+  for (const [ty, isT] of [[TY, true], [RY, false]]){
+    const act = isT ? ph.burst : ph.recv, buzz = act ? .35*Math.sin(st.clock*70) : 0;
+    let can = uRod([PX1, ty, TZ], [X0, ty, TZ], TR, M.can, .9, TR, 24);
+    if (fr){ const rim = uRing([X0 + .03, ty, TZ], [0,1,0], [0,0,1], 6.9, 24); let hatch = '';
+      for (let o = -6; o <= 6.01; o += 1.2){ const h = Math.sqrt(Math.max(0, 6.7*6.7 - o*o));
+        hatch += upd([[X0 + .05, ty + o, TZ - h], [X0 + .05, ty + o, TZ + h]], false) + upd([[X0 + .05, ty - h, TZ + o], [X0 + .05, ty + h, TZ + o]], false); }
+      can += fill(upd(rim), act ? mix(M.mesh, isT ? PING : ECHO, .35) : M.mesh) + `<path d="${hatch}" fill="none" stroke="#9aa1a6" style="stroke-width:${f(.28*INK_K)}"/>` + ink(upd(rim), .7)
+        + ink(upd(uRing([X0 + .03, ty, TZ], [0,1,0], [0,0,1], 7.5, 24)), .35); }
+    put([[PX1, ty - TR, TZ - TR], [X0, ty + TR, TZ + TR]], can, 'case');
+    put([[PX1, ty - 7.6, TZ - 7.6], [4.6, ty + 7.6, TZ + 7.6]], uRod([PX1 + .01, ty, TZ], [4.6, ty, TZ], 7.5, M.base, .5, 7.5, 20), 'in');
+    put([[4.6, ty - 4.3, TZ - .4], [7.4, ty + 4.3, TZ + .4]], [-4, 4].map(o => uRod([4.6, ty + o*.6, TZ], [7.4 + buzz, ty + o, TZ], .22, M.gold, .25)).join(''), 'in');
+    put([[7.4 + buzz, ty - 5.2, TZ - 5.2], [8 + buzz, ty + 5.2, TZ + 5.2]], uRod([7.4 + buzz, ty, TZ], [8 + buzz, ty, TZ], 5.2, act ? matOf(mix('#e9d9b4', isT ? PING : ECHO, .4)) : M.piezo, .5, 5.2, 20)
+      + (fr ? fill(upd(uRing([8.02 + buzz, ty, TZ], [0,1,0], [0,0,1], 3.4, 16)), M.steel.l) : ''), 'in');
+    put([[8 + buzz, ty - 6.2, TZ - 6.2], [12.6 + buzz, ty + 6.2, TZ + 6.2]], uRod([8 + buzz, ty, TZ], [12.6 + buzz, ty, TZ], .9, M.cone, .5, 6.2, 20), 'in');
+  }
+  // 4 MHz crystal (HC-49S) lying on the front between the cans
+  put([[PX1, -5.5, 27], [6.3, 5.5, 31.5]], uBox(PX1, -5.5, 27, 6.3, 5.5, 31.5, M.steel, toneI, .6)
+    + (vis(uTn([0,0,1])) ? ink(upd([[PX1 + .6, -4.9, 31.52], [5.7, -4.9, 31.52], [5.7, 4.9, 31.52], [PX1 + .6, 4.9, 31.52]]), .3) : '')
+    + (fr ? uTxtX(6.33, 0, 29.6, '4.000', 1.1, false, '#6f777b', 800) : ''), '');
+
+  // ---- Arduino Nano on its two header strips
+  for (const x of [-20.32, -5.08]) bx(x - 1.27, nanoY(0) - 1.27, BZ, x + 1.27, nanoY(14) + 1.27, NZ0, M.hdr, '', .6);
+  let nano = uBox(NX[0], NY[0], NZ0, NX[1], NY[1], NZ1, M.nano, toneI, .9), pads = '';
+  for (const x of [-20.32, -5.08]) for (let i = 0; i < 15; i++) pads += upd(uRing([x, nanoY(i), NZ1 + .02], [1,0,0], [0,1,0], .75, 8));
+  nano += `<path d="${pads}" fill="#e2b84c"/>` + uTxtTop(-12.7, -12.6, NZ1 + .03, 'NANO', 2.4, '#f4f4ec', 800);
+  put([[NX[0], NY[0], NZ0], [NX[1], NY[1], NZ1]], nano, 'case');
+  bx(-16.2, -29.5, NZ1, -9.2, -22.5, NZ1 + 1, M.chip, '', .5, uTxtTop(-12.7, -26, NZ1 + 1.02, 'MEGA328P', 1, '#9a968e', 700));   // ATmega328P
+  bx(-8.6, -35, NZ1, -6.4, -30.5, NZ1 + 1.4, M.steel, '', .4);                                                             // 16 MHz resonator
+  bx(-14.5, -17.5, NZ1, -10.9, -14, NZ1 + 1.4, M.bb, '', .5, fill(upd(uRing([-12.7, -15.75, NZ1 + 1.45], [1,0,0], [0,1,0], 1, 10)), '#d94f86'));   // reset
+  [['PWR', pwr ? '#e2483d' : '#e6cfc8'], ['L', pwr && ph.echoHi ? '#f2a33a' : '#ece0c6']].forEach(([n, col], i) => bx(-19, -42 + 2.6*i, NZ1, -17.8, -40.8 + 2.6*i, NZ1 + .6, matOf(col), '', .3));
+  bx(-16.5, -52.4, NZ1, -8.9, -43.4, NZ1 + 4, M.steel, '', .7);                                                            // mini-USB port
+  bx(-17.7, -24, NZ0 - 1.2, -12.7 + 4.9, -13.6, NZ0, M.chip, '', .4);                                                       // CH340 underneath
+  bx(-16, -40.5, NZ0 - 1.6, -9.4, -36.8, NZ0, M.chip, '', .4);                                                              // AMS1117 underneath
+
+  // ---- jumpers: male ends in the strips, arcs over the Nano, landing behind the sensor in its pins' strips
+  const wire = (hx, hy, ty, zt, col, glow) => {
+    bx(hx - 1.2, hy - 1.2, BZ, hx + 1.2, hy + 1.2, 17.5, M.chip, '', .4); bx(-3.74, ty - 1.2, BZ, -1.34, ty + 1.2, 17.5, M.chip, '', .4);
+    it.push(...uWire([[hx, hy, 17.5], [hx, hy, zt - 1.5], [(hx - 2.54)/2 - 2, (hy + ty)/2, zt], [-4.6, ty, zt - 2], [-2.54, ty, 17.5]], col, '', .55, 4, glow)); };
+  const v5 = pwr ? 1 : 0;
+  bx(-3.74, -20.25, BZ, -1.34, -17.85, 17.5, M.chip, '', .4); bx(-3.74, -5.01, BZ, -1.34, -2.61, 17.5, M.chip, '', .4);
+  it.push(...uWire([[-2.54, -19.05, 17.5], [-3.3, -19.05, 19.4], [-3.3, -6, 19.4], [-2.54, -3.81, 17.5]], '#e2483d', '', .55, 4, .5*v5));
+  wire(-22.86, nanoY(11), 3.81, 21.5, '#2a2826', 0);
+  wire(-25.4, nanoY(9), -1.27, 23, '#f2c230', ph.trig ? 1 : 0);
+  wire(-27.94, nanoY(10), 1.27, 24.5, '#43c25c', ph.echoHi ? 1 : 0);
+
+  // ---- USB cable: mini-B plug in the Nano, a loop on the mat, USB-A plug in the power bank
+  bx(-16.4, -60, NZ1 + .2, -9, -52.4, NZ1 + 3.8, M.usb, '', .7);
+  bx(19, -66, 5.75, 31, -53, 10.25, M.usb, '', .7);
+  it.push(...uWire([[25, -53, 8], [25, -50, 6.5], [18, -49.5, MZ + 1.6], [12, -55, MZ + 1.6], [-4, -58, MZ + 1.6], [-12.7, -64, 6], [-12.7, -64, 13], [-12.7, -60, 17.6]], '#3b3936', '', 1.3, 6));
+
+  // ---- power bank: rounded shell, button and level LEDs on top; inside a pouch cell and the boost board
+  const pbUV = rrUV(PB[0], PB[1], PB[2], PB[3], 8);
+  let pb = uSlab(pbUV, MZ, PBZ, m, tone, 1.6);
+  if (vis([0,0,1])){ pb += uTxtTop(-8, -98, PBZ + .03, '5000mAh', 5, mix(m.d, '#000000', .2), 800);
+    for (let i = 0; i < 4; i++) pb += fill(upd(uRing([6 + 6*i, -78, PBZ + .03], [1,0,0], [0,1,0], 1.4, 10)), pwr && i < 3 ? '#4aa8ff' : mix(m.m, '#ffffff', .4)) + ink(upd(uRing([6 + 6*i, -78, PBZ + .03], [1,0,0], [0,1,0], 1.4, 10)), .35); }
+  if (vis(uTn([0,1,0]))) pb += shape([[18.4, -65.95, 5.2], [31.6, -65.95, 5.2], [31.6, -65.95, 10.8], [18.4, -65.95, 10.8]].map(uT), '#2a2826', .5)
+    + shape([[-25, -65.95, 7], [-17, -65.95, 7], [-17, -65.95, 9.5], [-25, -65.95, 9.5]].map(uT), '#2a2826', .4);
+  put([[PB[0], PB[1], MZ], [PB[2], PB[3], PBZ]], pb, 'case');
+  put([[26.5, -97.5, PBZ], [33.5, -90.5, PBZ + 1.3]], uCyl(30, -94, PBZ, PBZ + 1.3 - (st.press > 0 ? .8 : 0), 3.5, matOf('#f3efe4'), .6), '');
+  put([[-40, -121, MZ + 1], [10, -71, PBZ - 1.5]], uBox(-40, -121, MZ + 1, 10, -71, PBZ - 1.5, M.cell, toneI, .6)
+    + uTxtTop(-15, -96, PBZ - 1.48, '3.7V 5000mAh', 3, '#5c6369', 800), 'in');
+  put([[13, -120, MZ + 1], [41, -70, MZ + 2.6]], uBox(13, -120, MZ + 1, 41, -70, MZ + 2.6, M.board, toneI, .5), 'in');
+  bx(22, -94, MZ + 2.6, 29, -87, MZ + 4, M.chip, 'in', .4);                                                                // boost converter IC
+  put([[14, -86, MZ + 2.6], [24, -76, MZ + 7]], uBox(14, -86, MZ + 2.6, 24, -76, MZ + 7, M.coil, toneI, .5), 'in');          // inductor
+  bx(18.4, -78, MZ + 2.4, 31.6, -66.2, 10.8, M.steel, 'in', .5);                                                            // USB-A receptacle
+  bx(-26, -72, MZ + 3, -16, -66.2, 10, M.steel, 'in', .4);                                                                  // micro-USB input
+  it.push(...uWire([[-30, -71, MZ + 2], [-30, -68, MZ + 2], [16, -68, MZ + 2]], '#e2483d', 'in', .4), ...uWire([[-34, -71, MZ + 2], [-34, -67.4, MZ + 2.2], [16, -67.4, MZ + 2.2]], '#2a2826', 'in', .4));
+
+  // ---- the wooden block, sliding along the beam
+  { const x0 = blkX(st.dd), x1 = x0 + BLK.dx, y = BLK.y, h = BLK.h;
+    let blk = uBox(x0, -y, MZ, x1, y, h, M.wood, tone, 1.2);
+    if (vis([0,0,1])) for (const gy of [-17, -6, 4, 15]) blk += `<path d="${upd([[x0 + 1.5, gy, h + .03], [x0 + 10, gy + 1.2, h + .03], [x0 + 20, gy - .6, h + .03], [x1 - 1.5, gy + .8, h + .03]], false)}" fill="none" stroke="${WOOD.d}" style="stroke-width:${f(.5*INK_K)}"/>`;
+    if (vis(uTn([1,0,0]))) for (const gz of [12, 24, 36]) blk += `<path d="${upd([[x1 + .03, -y + 2, gz], [x1 + .03, -4, gz + 1], [x1 + .03, y - 2, gz - .5]], false)}" fill="none" stroke="${WOOD.d}" style="stroke-width:${f(.45*INK_K)}"/>`;
+    if (ph.hit && vis(uTn([-1,0,0]))) blk += fill(upd(uRing([x0 - .05, 0, TZ], [0,1,0], [0,0,1], 9, 20).map(p => [p[0], p[1], Math.max(MZ + .5, p[2])])), ECHO, 'opacity=".35"');
+    put([[x0, -y, MZ], [x1, y, h]], blk, ''); }
+
+  return it.concat(waveItems(st));
+}
+function benchSvg(st, m, k){
+  const items = uSort(benchItems(st, m, k));
+  const g = (o, svg) => o >= .999 ? svg : o <= .001 ? '' : `<g opacity="${f(o)}">${svg}</g>`;
+  const op = p => p.kind === 'case' ? 1 - .78*k : p.kind === 'in' ? 0 : 1;
+  const s = items.filter(p => p.kind !== 'xr').map(p => g(op(p), p.svg)).join('');
+  return k <= 0 ? s : s + items.filter(p => p.kind !== 'case' && p.kind !== 'w').map(p => g(k, p.svg)).join('');
+}
+
+/* ---------- mat, shadows ---------- */
+const MATTOP = [[MX0, MY0], [MX1, MY0], [MX1, MY1], [MX0, MY1]].map(([x, y]) => uT([x, y, MZ]));
+function matSvg(){
+  const uv = rrUV(MX0, MY0, MX1, MY1, 6);
+  let s = uSlab(uv, 0, MZ, M.mat, toneI, 1.8), g = '';
+  for (let x = MX0 + 10; x < MX1 - 4; x += 10) g += upd([[x, MY0 + 3, MZ + .02], [x, MY1 - 3, MZ + .02]], false);
+  for (let y = MY0 + 10; y < MY1 - 4; y += 10) g += upd([[MX0 + 3, y, MZ + .02], [MX1 - 3, y, MZ + .02]], false);
+  s += `<path d="${g}" fill="none" stroke="#d6efe1" style="stroke-width:${f(.35*INK_K)}" opacity=".6"/>`;
+  return s;
+}
+function shadows(st){
+  const box3 = (x0, y0, x1, y1, z) => [[x0, y0, z], [x1, y0, z], [x0, y1, z], [x1, y1, z]].map(uT);
+  const x0 = blkX(st.dd);
+  return castShadow([...box3(BBX[0], BBY[0], BBX[1], BBY[1], BZ), ...box3(PX0, -22.5, X0, 22.5, PZ1), ...box3(NX[0], NY[0], NX[1], -48, NZ1 + 4)], MZ, MATTOP)
+    + castShadow(box3(PB[0], PB[1], PB[2], PB[3], PBZ), MZ, MATTOP)
+    + castShadow(box3(x0, -BLK.y, x0 + BLK.dx, BLK.y, BLK.h), MZ, MATTOP);
+}
+
+/* ---------- labels ---------- */
+function labelItems(st){
+  const ph = phase(st), pwr = st.pwr, x0 = blkX(st.dd), A = p => uT(p);
+  const out = [
+    { at: A([X0, TY, TZ + 5]), text: 'TRANSMITTER', on: ph.burst },
+    { at: A([X0, RY, TZ + 5]), text: 'RECEIVER', on: ph.recv },
+    { at: A([7.7, TY, TZ - 4.5]), text: 'PIEZO DISC', on: ph.burst },
+    { at: A([11, RY, TZ - 4]), text: 'CONE RESONATOR', on: ph.recv },
+    { at: A([X0, RY + 4, TZ - 3]), text: 'MESH GRILLE', on: false },
+    { at: A([3.5, TY, TZ - 7]), text: 'TRANSDUCER BASE', on: false },
+    { at: A([6.3, 0, 29.5]), text: 'CRYSTAL 4 MHZ', on: false },
+    { at: A([-.6, 0, 26]), text: 'MCU', on: ph.trig || ph.burst || ph.recv },
+    { at: A([-.6, -10, 19]), text: 'MAX232 DRIVER', on: ph.burst },
+    { at: A([-.6, 10, 19]), text: 'LM324 OP-AMP', on: ph.recv },
+    { at: A([-.3, -16.6, 25.8]), text: 'CHARGE PUMP CAPS', on: ph.burst },
+    { at: A([-.2, 16, 25.8]), text: 'RESISTORS', on: false },
+    { at: A([0, 0, 12.5]), text: 'HEADER PINS', on: false },
+    { at: A([NX[1], -32, NZ1]), text: 'ARDUINO NANO', on: false },
+    { at: A([-12.7, -26, NZ1 + 1]), text: 'ATMEGA328P', on: ph.echoHi },
+    { at: A([-7.5, -32.7, NZ1 + 1.4]), text: '16 MHZ RESONATOR', on: false },
+    { at: A([-13, -18.8, NZ0 - 1.2]), text: 'CH340 USB CHIP', on: false },
+    { at: A([-12.7, -38.6, NZ0 - 1.6]), text: 'REGULATOR', on: false },
+    { at: A([-12.7, -50, NZ1 + 4]), text: 'MINI USB PORT', on: false },
+    { at: A([BBX[1], -40, BZ]), text: 'BREADBOARD', on: false },
+    { at: A([rowX(2), strY(25), MZ + 4]), text: 'SPRING CLIPS', on: false },
+    { at: A([-3.3, -12, 19.4]), text: '5V WIRE', on: false },
+    { at: A([-14, -12.7, 23]), text: 'TRIG WIRE D3', on: ph.trig },
+    { at: A([-18, -12.4, 24.5]), text: 'ECHO WIRE D2', on: ph.echoHi },
+    { at: A([-7, -1, 21.5]), text: 'GND WIRE', on: false },
+    { at: A([4, -56.5, MZ + 1.6]), text: 'USB CABLE', on: false },
+    { at: A([-15, -96, PBZ - 1.5]), text: 'LI-ION CELL', on: false },
+    { at: A([25.5, -90.5, MZ + 4]), text: 'BOOST CONVERTER', on: false },
+    { at: A([30, -94, PBZ + 1.3]), text: 'POWER BUTTON', on: false },
+    { at: A([25, -72, 10]), text: 'USB-A PORT', on: false },
+    { at: A([x0 + BLK.dx/2, BLK.y, BLK.h]), text: 'WOODEN BLOCK', on: ph.hit },
+  ];
+  const s = (st.tau - T_EMIT)*VS, D = st.dd*KD;
+  if (ph.on && s > 2 && s < D) out.push({ at: A([X0 + s, TY, TZ + 3 + s*Math.tan(BEAM)]), text: '40 KHZ PING', on: true });
+  if (ph.on && s > D && s < 2*D) out.push({ at: A([X0 + 2*D - s, 0, TZ + 3 + s*Math.tan(EBEAM)*.7]), text: 'ECHO', on: true });
+  return out;
+}
+function surfaceLabels(st){
+  const ph = phase(st), A = p => uT(p), x0 = blkX(st.dd);
+  return [{ at: A([X0, TY, TZ + 6]), text: 'TRANSMITTER', on: ph.burst }, { at: A([X0, RY, TZ + 6]), text: 'RECEIVER', on: ph.recv },
+    { at: A([6.3, 0, 31.5]), text: 'HC-SR04', on: ph.on }, { at: A([NX[1], -32, NZ1]), text: 'ARDUINO NANO', on: st.pwr },
+    { at: A([BBX[1], -40, BZ]), text: 'BREADBOARD', on: false }, { at: A([30, -94, PBZ + 1.3]), text: 'POWER BANK', on: st.pwr },
+    { at: A([x0 + BLK.dx/2, BLK.y, BLK.h]), text: 'WOODEN BLOCK', on: ph.hit }];
+}
+// label columns at the two edges of the frame, half the labels each (split at the median on screen): xrCallouts is
+// called once per side with a bounds box whose screen edges leave room only on that side
+function labelSvg(items){
+  if (!items.length) return '';
+  const vb = document.getElementById('fig').viewBox.baseVal, k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.6*k;
+  const wMax = u ? 17*u*1.3 + 12*k : Math.max(...items.map(it => it.text.length))*fs*.62 + fs*1.5 + 12*k;
+  const per = P(...CAM_R)[0] - P(0, 0, 0)[0], at = X => { const t = (X - P(0, 0, 0)[0])/per; return CAM_R.map(v => v*t); };
+  const box = (Xa, Xb) => { const a = at(Xa), b = at(Xb); return [a[0], b[0], a[1], b[1], a[2], b[2]]; };
+  const fix = B => [Math.min(B[0], B[1]), Math.max(B[0], B[1]), Math.min(B[2], B[3]), Math.max(B[2], B[3]), Math.min(B[4], B[5]), Math.max(B[4], B[5])];
+  const X = items.map(it => P(...it.at)[0]), srt = [...X].sort((a, b) => a - b), med = srt[Math.ceil(srt.length*.58) - 1];   // the right column starts under the stats, so it takes fewer
+  const Lft = items.filter((it, i) => X[i] <= med), Rgt = items.filter((it, i) => X[i] > med);
+  return xrCallouts(Lft, fix(box(vb.x + wMax + 1, vb.x + vb.width))) + (Rgt.length ? xrCallouts(Rgt, fix(box(vb.x, vb.x + vb.width - wMax - 1))) : '');
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0);
+  let s = matSvg() + shadows(st) + benchSvg(st, m, k);
+  const L = k > .6 ? labelItems(st) : surfaceLabels(st);
+  s += labelSvg(L);
+  return s;
+}
+
+/* ---------- behaviour: one state object, one clock ---------- */
+let ui, loopOn = false;
+function cycle(st, dt){
+  if (st.freeze) return;
+  st.tau += dt;
+  const D = st.dd*KD, s = (st.tau - T_EMIT)*VS;
+  if (!st.got && s >= 2*D){ st.got = true; st.tGot = st.tau;
+    const us = Math.round(2*st.dd/100/343*1e6*(1 + (Math.random() - .5)*.006));
+    st.read = { us, cm: us*0.0343/2 }; }
+  if (st.got && st.tau - st.tGot > HOLD){ st.tau = 0; st.got = false; }
+}
+function runLoop(){
+  if (loopOn) return; loopOn = true;
+  ui.animate(dt => { const st = ui.st; st.clock += dt; st.press = Math.max(0, st.press - dt);
+    if (st.mv){ const mv = st.mv; mv.t = Math.min(1, mv.t + dt/.9); st.dd = mv.a + (mv.b - mv.a)*ease(mv.t); if (mv.t >= 1){ st.dd = mv.b; st.mv = null; } }
+    if (st.pwr){ if (st.boot < 1) st.boot = Math.min(1, st.boot + dt/.6); else cycle(st, dt); }
+    const busy = st.pwr || !!st.mv || st.press > 0; if (!busy) loopOn = false; return busy; });
+}
+function power(st){
+  st.pwr = !st.pwr; st.press = .25;
+  if (st.pwr){ st.boot = 0; st.tau = 0; st.got = false; st.read = null; }
+  runLoop();
+}
+function moveTo(st, d){
+  if (!st.pwr){ power(st); ui.flash('Powered on to measure'); }
+  st.d = d; st.mv = { a: st.dd, b: d, t: 0 }; runLoop();
+}
+
+ui = mountFigure({
+  fig:'38', title:'HC-SR04 ultrasonic sensor', turn:'full',
+  size:[SB, SB, 100], palette:'cobalt',
+  state:{ pwr:false, boot:0, d:25, dd:25, mv:null, tau:0, got:false, tGot:0, read:null, clock:0, press:0 },
+  scene,
+  buttons:[
+    { label:'Power on / off', onClick:(st) => power(st) },
+    { label:'Move block to', choices: st => [10, 25, 50].map(d => ({ label: d + ' cm', current: st.d === d && !st.mv, onClick:(st) => moveTo(st, d) })) },
+  ],
+  stats: st => {
+    if (!st.pwr) return [{ label:'Distance', value:'OFF' }];
+    const r = st.read;
+    return [{ label:'Distance', value: r ? r.cm.toFixed(1) + ' cm' : '--' },
+      { label:'Echo pulse', value: r ? r.us + ' us' : '--', small:true }];
+  },
+  params:(st, q) => {
+    if (['10', '25', '50'].includes(q.get('d'))) st.d = st.dd = +q.get('d');
+    if (q.get('pwr') === '1'){ st.pwr = true; st.boot = 1; }
+    if (q.has('tau')){ st.tau = +q.get('tau'); st.freeze = true; const D = st.dd*KD;
+      if ((st.tau - T_EMIT)*VS >= 2*D){ st.got = true; st.tGot = T_EMIT + 2*D/VS; } }
+    if (st.pwr){ const us = Math.round(2*st.dd/100/343*1e6); if (q.has('read') || st.got) st.read = { us, cm: us*0.0343/2 }; }
+  },
+});
+document.head.insertAdjacentHTML('beforeend', '<style>.stat .v.bump{animation:none}</style>');
+if (ui.st.pwr) runLoop();
+xrMount(() => ui, () => '');
+</script></body></html>
