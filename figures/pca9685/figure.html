@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PCA9685 servo board</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Sources read 2026-10-24.
+   https://learn.adafruit.com/16-channel-pwm-servo-driver/pinouts
+   https://learn.adafruit.com/16-channel-pwm-servo-driver/hooking-it-up
+   https://www.nxp.com/docs/en/data-sheet/PCA9685.pdf
+   The controller already supplies VCC and common ground. The separate 5 V pack feeds V+.
+   Connect adds SDA and SCL to the board. The controller writes I2C address 0x40.
+   PCA9685 stores independent 12-bit pulse widths at one shared frequency, here 50 Hz.
+   Center sends a nominal 1.5 ms pulse to CH0. Its servo's own feedback loop moves its horn to 90 degrees.
+   Wave writes channels 0 through 15 with delayed targets. Four attached servos show CH0, CH4, CH8, CH12.
+   Teaching adaptation. Nominal 1 to 2 ms maps to 0 to 180 degrees; real servos need endpoint calibration.
+   Parts, all held by the bench or soldered to the PCB.
+   Structure. Bench, PCB, four mounting holes with standoffs and screws, four servo mounting flanges.
+   Logic. Controller, PCA9685 package and leads, two I2C pullups, decoupling capacitor, address pads A0 to A5,
+   OE pulldown, power indicator and resistor, copper bus tracks, two six-pin control headers.
+   Power. Separate 5 V pack, terminal block and two screws, reservoir capacitor, V+ and ground rails.
+   Outputs. Four banks of four three-pin headers, sixteen 220 ohm series resistors and their PWM tracks.
+   Servos. Four cases, three-core cables and plugs, output shafts, horns and retaining screws.
+   See-through fades the PCB and servo cases to reveal copper and each servo motor, gear train and feedback pot.
+   Servo gear pitch radii 1.4 and 2.4 touch at x offsets 0 and 3.8. Output gear and horn share a shaft.
+*/
+const pcBounds = [35,83,20,146,4,11];
+const pcServos = [0,4,8,12].map((channel,i)=>({channel,x:120,y:30+35*i}));
+const pcPins = ['GND','OE','SCL','SDA','VCC','V+'];
+const pcCopper = matOf('#d4a35c'), pcBlue = matOf('#438bc1');
+const pcPulse = angle => 1000 + angle*1000/180;
+const pcBoundsOf = (pts,r=0) => [[0,1,2].map(k=>Math.min(...pts.map(p=>p[k]))-r),[0,1,2].map(k=>Math.max(...pts.map(p=>p[k]))+r)];
+const pcText = (x,y,z,text,size=2.1,col='#fff4d6') => `<text transform="${txM(P(x,y,z),Dv(0,-1,0),Dv(1,0,0))}" text-anchor="middle" font-family="monospace" font-size="${size}" font-weight="800" fill="${col}">${text}</text>`;
+function pcWire(parts,pts,col,r=.35){
+  for(let i=1;i<pts.length;i++){
+    const a=pts[i-1],b=pts[i],n=Math.max(1,Math.ceil(Math.hypot(...sub(b,a))/5));
+    for(let j=0;j<n;j++){
+      const p=a.map((v,k)=>v+(b[k]-v)*j/n),q=a.map((v,k)=>v+(b[k]-v)*(j+1)/n);
+      parts.push({box:pcBoundsOf([p,q],r),svg:rod(p,q,r,matOf(col),toneI,.55,r,6)});
+    }
+  }
+}
+function pcGear(x,y,z,r,a){
+  const uv=Array.from({length:48},(_,i)=>{const t=a+i*Math.PI/24,rr=r*(i%4<2?1:.86);return[x+rr*Math.cos(t),y+rr*Math.sin(t)];});
+  const lo=on(PZ(z),uv),hi=on(PZ(z+.8),uv);
+  return loft(lo,hi,n=>toneI(n,METAL))+shape(hi,METAL.l,.65)+cyl(x,y,z+.8,z+1.1,.5,DARK,toneI,.5,10);
+}
+function pcCallouts(items){
+  const fig=document.getElementById('fig'),vb=fig.viewBox.baseVal,ctm=fig.getScreenCTM();
+  const groups=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  const columns=[groups.slice(0,Math.ceil(groups.length/2)),groups.slice(Math.ceil(groups.length/2))];
+  const originalInk=INK_K;
+  if(!window.LBL_U||!LBL_U())INK_K*=.65;
+  let result='';
+  for(const [side,col] of columns.entries()){
+    col.sort((a,b)=>a.p[1]-b.p[1]);
+    const control=document.getElementById(side?'stats':'btns');
+    const bottom=control&&ctm?new DOMPoint(0,control.getBoundingClientRect().bottom+14).matrixTransform(ctm.inverse()).y:0;
+    const top=Math.max(vb.height*.12,bottom),end=vb.height*.93;
+    for(const [i,it] of col.entries()){
+      const x=vb.width*(side?.87:.14),y=top+(end-top)*i/Math.max(1,col.length-1);
+      result+=tag(it.at,(x-it.p[0])/INK_K,(y-it.p[1])/INK_K,it.text,it.on);
+    }
+  }
+  INK_K=originalInk;
+  return result;
+}
+function pcScene(st,m){
+  const k=ease(st.xr||0), parts=[],labels=[];
+  const label=(at,text,on=false)=>labels.push({at,text,on});
+  const add=(bounds,svg)=>parts.push({box:bounds,svg});
+  const bx=(a,b,mat,extra='')=>add([a,b],box(...a,...b,mat,toneI,.85)+extra);
+  const cy=(x,y,z0,z1,r,mat)=>add([[x-r,y-r,z0],[x+r,y+r,z1]],cyl(x,y,z0,z1,r,mat,toneI,.7,16));
+  let svg=board(0,0,145,189,3,5,WOOD);
+  svg+=castShadow([[35,20,6],[83,20,6],[83,146,6],[35,146,6],[129,20,28],[129,145,28]],3,boardTop(0,0,145,189,3,5));
+  for(const [x,y] of [[38,24],[80,24],[38,142],[80,142]]){
+    cy(x,y,3,5,1.7,METAL);cy(x,y,5,6.7,1.25,METAL);
+  }
+  let pcb=box(35,20,5,83,146,6,m,tone,1.5);
+  for(const [x,y] of [[38,24],[80,24],[38,142],[80,142]]) pcb+=shape(on(PZ(6.02),ellUV(x,y,1.8,1.8,14)),METAL.l,.7)+shape(on(PZ(6.05),ellUV(x,y,.8,.8,10)),DARK.m,.4);
+  pcb+=pcText(62,82,6.05,'PCA9685',4)+pcText(42,82,6.05,'16 x 12 BIT',2);
+  svg+=byDepth(parts.splice(0))+`<g opacity="${1-.72*k}">${pcb}</g>`;
+  label([40,55,6],'PRINTED CIRCUIT BOARD');
+  const traces=[];
+  for(let i=0;i<16;i++){
+    const y=30+i*7,live=st.connected;
+    pcWire(traces,[[60,70+i*1.4,6.15],[63,70+i*1.4,6.15],[64,y,6.15],[70,y,6.15]],live?'#e6ab35':'#b79057',.2);
+    bx([64.5,y-.8,6],[67,y+.8,7],DARK);
+    for(const x of [64.5,66.5]) bx([x,y-.8,6],[x+.5,y+.8,7.05],METAL);
+    const b=Math.floor(i/4);
+    if(i%4===0){
+      bx([69,y-2,6],[81,y+23,8.2],DARK);
+      label([75,y+10,8.2],`OUTPUT BANK ${i} TO ${i+3}`,live);
+      label([66,y,7],`PWM RESISTORS ${i} TO ${i+3}`,live);
+    }
+    for(const [j,x] of [70.5,74.5,78.5].entries()) cy(x,y,8.2,11,.55,j===0?pcCopper:j===1?matOf('#d85342'):METAL);
+    add([[71,y-1,6.1],[78,y+1,6.2]],pcText(83,y,6.2,String(i),1.8));
+  }
+  pcWire(traces,[[74.5,28,6.2],[74.5,137,6.2]],'#c94d40',.4);
+  pcWire(traces,[[78.5,28,6.2],[78.5,137,6.2]],'#777c76',.4);
+  pcWire(traces,[[42,122,6.2],[61,122,6.2],[61,137,6.2],[74.5,137,6.2]],'#c94d40',.4);
+  pcWire(traces,[[45,122,6.2],[62,122,6.2],[62,138,6.2],[78.5,138,6.2],[78.5,137,6.2]],'#777c76',.4);
+  add([[35,20,6.1],[83,146,6.3]],`<g opacity="${k}">${byDepth(traces)}</g>`);
+  label([74.5,136,6.3],'SERVO V+ RAIL',true);label([78.5,136,6.3],'COMMON GROUND RAIL',true);
+  bx([47,67,6],[60,96,9],DARK,pcText(54,82,9.1,'PCA9685',2.1));
+  for(let i=0;i<14;i++)for(const x of [45.5,60])bx([x,68+i*1.9,6],[x+1.5,69+i*1.9,7],METAL);
+  label([54,82,9],'PWM CHIP',st.connected);
+  for(let i=0;i<6;i++){
+    const x=41+i*5.6;
+    for(const y of [35,38])cy(x,y,6,6.2,.8,pcCopper);
+    label([x,36.5,6.2],`ADDRESS PAD A${i}`);
+  }
+  for(const [y,name] of [[52,'SCL PULLUP'],[57,'SDA PULLUP'],[62,'DECOUPLING CAP']]){
+    bx([41,y-1,6],[44,y+1,7],name.includes('CAP')?matOf('#d7b677'):DARK);label([42.5,y,7],name);
+  }
+  bx([38,103,6],[41,105,7],DARK);label([39.5,104,7],'OE PULLDOWN');
+  bx([38,109,6],[41,111,7],matOf('#46c878'));label([39.5,110,7],'POWER LED',true);
+  bx([43,109,6],[46,111,7],DARK);label([44.5,110,7],'LED RESISTOR');
+  bx([36,116,6],[48,132,14],pcBlue);
+  for(const [i,y] of [120,128].entries()){
+    cy(42,y,14,14.5,2.3,METAL);add([[40,y-.3,14.5],[44,y+.3,14.6]],line([[40,y,14.55],[44,y,14.55]],.8));
+    label([42,y,14.6],i?'GROUND TERMINAL':'SERVO POWER INPUT',true);
+  }
+  cy(55,122,6,17,4,matOf('#555f68'));cy(55,122,17,17.3,3.7,METAL);label([55,122,17.3],'RESERVOIR CAPACITOR');
+  for(const x of [36,82])for(let i=0;i<6;i++){
+    const y=68+i*5;
+    bx([x-1.4,y-1.4,6],[x+1.4,y+1.4,8],DARK);cy(x,y,8,11,.5,pcCopper);
+  }
+  label([82,80,9],'CHAINING HEADER');label([36,73,9],'OUTPUT ENABLE PIN');
+  bx([7,62,3],[26,105,5],matOf('#48788e'),pcText(18,84,5.1,'HOST',3));
+  bx([12,74,5],[21,91,7],DARK);label([17,82,7],'I2C CONTROLLER',st.connected);
+  for(const [i,col] of ['#3a3834','#8471b6','#398cb4','#e0b237','#d95346'].entries()){
+    const endY=68+i*5;
+    const endX=i===2||i===3?36-9*(1-st.bus):36;
+    pcWire(parts,[[26,72+i*5,5],[29+i*.7,72+i*5,4],[31+i*.6,endY,4],[endX,endY,10]],col);
+    if(i===2||i===3){bx([endX-1,endY-1,9],[endX+1,endY+1,11],DARK);label([endX,endY,10],i===2?'I2C SCL WIRE':'I2C SDA WIRE',st.connected);}
+  }
+  label([36,88,10],'LOGIC VCC 3V3',true);
+  bx([39,157,3],[73,182,13],DARK,pcText(56,170,13.1,'5 V SERVO',3));
+  for(const [y,col] of [[161,'#c94737'],[177,'#3b3834']]){
+    cy(73,y,7,8,1.2,METAL);
+    const dest=y===161?120:128;
+    pcWire(parts,[[73,y,8],[76,y,4],[85,151,4],[31,151,4],[31,dest,4],[36,dest,10]],col,.55);
+  }
+  label([56,170,13],'SERVO POWER PACK',true);
+  for(const servo of pcServos){
+    const {x,y,channel}=servo,a=st.angles[channel]*Math.PI/180;
+    bx([x-11,y-9,3],[x+11,y+9,5],pcBlue);
+    for(const dx of [-9,9])cy(x+dx,y,5,5.6,1,METAL);
+    const shell=box(x-7,y-10,5,x+7,y+10,24,pcBlue,toneI,1.1);
+    add([[x-7,y-10,5],[x+7,y+10,24]],`<g opacity="${1-.82*k}">${shell}</g>`);
+    const inside=[];
+    inside.push({box:[[x-5,y-6,7],[x+5,y+7,12]],svg:box(x-5,y-6,7,x+5,y+7,8,matOf('#5f995d'))+cyl(x-3.8,y,8,18,2,METAL)});
+    for(const [gx,r,phase] of [[x-3.8,1.4,-a*2.4/1.4],[x,2.4,a]])inside.push({box:[[gx-r,y-r,18],[gx+r,y+r,19.1]],svg:pcGear(gx,y,18,r,phase)});
+    inside.push({box:[[x-2,y-2,9],[x+2,y+2,17]],svg:cyl(x,y,9,16,2,matOf('#dba94b'))+cyl(x,y,16,24,.8,METAL)});
+    add([[x-5,y-7,7],[x+5,y+7,24]],`<g opacity="${k}">${byDepth(inside)}</g>`);
+    cy(x,y,24,26,2.5,METAL);
+    const tip=[x+10*Math.cos(a),y+10*Math.sin(a),26.5];
+    add(pcBoundsOf([[x,y,26.5],tip],1),rod([x,y,26.5],tip,1,CERAMIC,toneI,.9,1,12));
+    cy(x,y,26,27,1.2,METAL);
+    add([[x-7,y-10,24],[x+7,y+10,24.1]],pcText(x,y,24.1,`CH ${channel}`,2.4));
+    const hy=30+channel*7;
+    for(const [j,col] of ['#edb839','#d94e40','#5b483a'].entries())pcWire(parts,[[70.5+j*4,hy,11],[86+j,hy,4],[98+j,y-8+j*2,4],[113,y-8+j*2,9]],col,.35);
+    bx([69,hy-1.7,9],[80,hy+1.7,13],DARK);
+    if(channel===0){label([x,y,26.5],'SERVO HORN',st.mode!=='idle');label([x-3.8,y,13],'SERVO MOTOR',st.mode!=='idle');label([x,y,19],'REDUCTION GEARS',st.mode!=='idle');label([x,y,12],'FEEDBACK POT');}
+  }
+  svg+=byDepth(parts);
+  if(k>.6)svg+=pcCallouts(labels);
+  return svg;
+}
+function pcAnimate(st,ui,mode){
+  if(!st.connected)return ui.flash('Connect the I2C wires first');
+  const id=++st.command,from=st.angles.slice();st.mode=mode;st.time=0;
+  ui.animate(dt=>{
+    if(id!==st.command)return false;
+    st.time+=dt;
+    if(mode==='center')st.angles[0]=from[0]+(90-from[0])*ease(Math.min(1,st.time/.9));
+    else st.angles=st.angles.map((_,i)=>{const elapsed=st.time-i*.12;if(elapsed<=.25)return from[i]+(90-from[i])*ease(Math.max(0,elapsed)/.25);const t=Math.min(1,(elapsed-.25)/1.3);return 90+50*Math.sin(t*Math.PI*2);});
+    const more=st.time<(mode==='center'?.9:3.4);
+    if(!more)st.mode='idle';
+    return more;
+  });
+}
+const pcUI=mountFigure({fig:'PCA',turn:'full',title:'PCA9685 servo board',size:[145,189,32],palette:'cobalt',
+ state:{connected:false,bus:0,mode:'idle',time:0,command:0,angles:Array(16).fill(35)},scene:pcScene,
+ stats:st=>[{label:'I2C address',value:st.connected?'0x40':'offline',small:true},{label:'CH0 angle',value:Math.round(st.angles[0])+' deg'},{label:'CH0 pulse',value:st.connected?(pcPulse(st.angles[0])/1000).toFixed(2)+' ms':'off',small:true},{label:'PWM frequency',value:st.connected?'50 Hz':'off',small:true}],
+ buttons:[
+  {label:'Connect I2C wires',onClick(st,ui){if(st.connected)return ui.flash('SDA and SCL are already connected');if(st.mode==='connect')return;st.mode='connect';ui.animate(dt=>{st.bus=Math.min(1,st.bus+dt/.65);if(st.bus===1){st.connected=true;st.mode='idle';return false;}return true;});}},
+  {label:'Center servo at 90',onClick:(st,ui)=>pcAnimate(st,ui,'center')},
+  {label:'Run arm wave',onClick:(st,ui)=>pcAnimate(st,ui,'wave')}
+ ],
+ params(st,q){if(q.get('connected')==='1')st.connected=!!(st.bus=1);if(q.get('center')==='1')st.angles[0]=90;const phase=Number(q.get('phase'));if(q.has('phase')&&Number.isFinite(phase))st.angles=st.angles.map((_,i)=>90+50*Math.sin(phase-i*.45));}
+});
+xrMount(()=>pcUI,()=> '');
+</script></body></html>
