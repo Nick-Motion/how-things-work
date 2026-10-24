@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wright Flyer</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. The 1903 Flyer has a 40 ft 4 in span and a forward biplane elevator.
+   A horizontal four-cylinder engine drives two pusher propellers by chains. One chain
+   crosses, reversing its propeller. The pilot lies left of the engine. His hip cradle
+   pulls wing-warping cables and the linked twin rudders. His left hand works the elevator.
+   The engine accelerates the Flyer along a wooden monorail. Its roller dolly stays on
+   the rail at liftoff. The Flyer lands on skids after the 12 second, 120 ft first flight.
+   Sources. https://www.si.edu/object/1903-wright-flyer%3Anasm_A19610048000
+   https://airandspace.si.edu/explore/stories/researching-wright-way
+   https://sandiegoairandspace.org/collection/item/1903-wright-flyer-reproduction
+   Parts and attachments.
+   COVERING. Muslin upper/lower wings, sewn over ribs on front/rear spruce spars.
+   STRUCTURE. Interplane struts and diagonal tension wires join the spars. Skids and
+   crossmembers hold the lower wing. Forward outriggers hold the elevator frames.
+   Rear booms hold a crossbar, two rudder posts and the paired rudder surfaces.
+   POWER. Engine bearers on the lower spars, crankcase, four cylinders, four pistons,
+   connecting rods and crankshaft. Drive sprockets, straight/crossed chains, driven
+   sprockets, bearing blocks, propeller shafts and two wooden propellers. Radiator on
+   the inner strut, water pipes to the engine, gravity fuel tank on an upper strut,
+   fuel line to the intake. Ignition magneto and leads mounted at the engine.
+   CONTROLS. Hip cradle on lower-wing guides, warp cables to the outer rear spars,
+   rudder cables along rear booms, hand lever and links to the elevator torque tube.
+   LAUNCH. Wooden monorail on sleepers, roller dolly under skid crossbar, front roller.
+   shortcut: distance is shown on a compressed ground path, use a full landscape for a scale flight route.
+*/
+const flyWood = {l:'#ddb16e',m:'#bb8745',d:'#78532f'}, flySteel=matOf('#71868d');
+const flyWireMat=matOf('#74716b');
+const flyFresh=()=>({phase:'ready',engine:false,angle:0,elapsed:0,warp:0,warpTarget:0,distance:0});
+let flyUI, flyLoop=false;
+const flyBound=pts=>[0,1,2].map(i=>[Math.min(...pts.map(p=>p[i]))-.3,Math.max(...pts.map(p=>p[i]))+.3]).reduce((a,v,i)=>(a[0][i]=v[0],a[1][i]=v[1],a),[[],[]]);
+function flyPose(st){
+  const run=st.phase==='rail'?Math.min(1,st.elapsed/2):st.phase==='flight'||st.phase==='landed'?1:0;
+  const air=st.phase==='flight'?Math.sin(Math.PI*Math.min(1,st.elapsed/12)):0;
+  return {dx:run*24+st.distance*.22,dz:air*15,run};
+}
+function flyScene(st,m){
+  const pose=flyPose(st), k=ease(st.xr||0), parts=[], shell=[], labels=[];
+  const pt=p=>[p[0]+pose.dx,p[1],p[2]+pose.dz];
+  const put=(pts,svg,cover=false)=>{const item={box:flyBound(pts.map(pt)),svg};(cover?shell:parts).push(item);};
+  const label=(name,p,on=false)=>labels.push({text:name,at:pt(p),on});
+  const beam=(a,b,r=.6,mat=flyWood)=>put([a,b].flatMap(p=>[p.map(v=>v-r),p.map(v=>v+r)]),rod(pt(a),pt(b),r,mat,toneI,.8,r,8));
+  const cable=(a,b,on=false)=>{
+    for(let i=0;i<4;i++){const p=a.map((v,j)=>v+(b[j]-v)*i/4),q=a.map((v,j)=>v+(b[j]-v)*(i+1)/4);
+      put([p,q],`<path d="${pd([pt(p),pt(q)],false)}" fill="none" stroke="${on?'#d46c35':'#76716a'}" stroke-width=".65"/>`);}
+  };
+  const block=(a,b,mat=flySteel,cover=false)=>put([a,b],box(...pt(a),...pt(b),mat,toneI,.9),cover);
+  const slab=(q,mat,cover=false,thick=.45)=>{
+    const a=q.map(p=>pt(p)),b=q.map(p=>pt([p[0],p[1],p[2]+thick]));
+    put(q.concat(q.map(p=>[p[0],p[1],p[2]+thick])),loft(a,b,n=>tone(n,mat))+shape(vis([0,0,1])?b:a,tone([0,0,1],mat),.9),cover);
+  };
+  const wz=(x,y,z)=>z+st.warp*((y-92)/90)*Math.max(0,(85-x)/25)*4;
+  const wingPoint=(x,y,z)=>[x,y,wz(x,y,z)+1.2*Math.sin((x-60)/25*Math.PI)];
+  const shadowPts=[[60,2,27],[85,2,27],[85,182,27],[60,182,27],[60,2,52],[85,182,52],[127,76,19]].map(pt);
+  let ground=board(4,5,211,179,1.2,5,matOf('#e6d5a5'))+castShadow(shadowPts,1.2,boardTop(4,5,211,179,1.2,5));
+  for(let x=12;x<=194;x+=14)ground+=box(x,87,1.2,x+4,97,2.4,flyWood,toneI,.7);
+  ground+=box(10,91,2.4,203,93,4,flyWood,toneI,1.2);
+  const dollyX=pose.run*24+67;
+  ground+=box(dollyX-4,86,5.6,dollyX+4,98,7,flySteel,toneI,.8);
+  for(const x of [dollyX-2,dollyX+2])ground+=rod([x,90,5],[x,94,5],1,flySteel,toneI,.6,1,10);
+  for(const z of [27,52]){
+    for(let y=2;y<182;y+=12){
+      const q=[wingPoint(60,y,z),wingPoint(85,y,z),wingPoint(85,y+12,z),wingPoint(60,y+12,z)];
+      slab(q,{l:mix('#fbefcf',m.l,.12),m:'#e6d6ae',d:'#b7a37d'},true);
+    }
+    for(const x of [64,81])for(let y=2;y<182;y+=12)beam(wingPoint(x,y,z),wingPoint(x,y+12,z),.55);
+    for(let y=2;y<=182;y+=12){
+      for(let x=60;x<85;x+=5)beam(wingPoint(x,y,z),wingPoint(x+5,y,z),.22);
+    }
+  }
+  for(const y of [14,44,74,110,140,170])for(const x of [64,81]){
+    beam(wingPoint(x,y,27),wingPoint(x,y,52),.55);
+  }
+  for(const x of [64,81])for(const [a,b] of [[14,44],[44,74],[110,140],[140,170]]){
+    cable(wingPoint(x,a,27),wingPoint(x,b,52));cable(wingPoint(x,b,27),wingPoint(x,a,52));
+  }
+  for(const y of [86,98]){
+    beam([50,y,7],[99,y,7],.9);beam([99,y,7],[108,y,10],.9);
+    beam([64,y,7],[64,y,27],.7);beam([81,y,7],[81,y,27],.7);
+    beam([81,y,27],[126,y,18],.65);beam([64,y,27],[126,y,29],.6);
+    beam([60,y,27],[20,y,29],.65);beam([64,y,52],[20,y,40],.6);
+  }
+  for(const x of [64,81])beam([x,86,7],[x,98,7],.7);
+  beam([99,90,5],[99,94,5],1,flySteel);beam([99,92,5],[99,92,7],.5,flySteel);
+  for(const z of [18,29]){
+    const e=st.phase==='rail'?-.14:st.phase==='flight'?-.1:0;
+    const ep=(x,y)=>[x,y,z+(x-122)*e];
+    for(const [a,b] of [[75,86],[86,98],[98,109]])slab([ep(116,a),ep(129,a),ep(129,b),ep(116,b)],CERAMIC,true);
+    for(const y of [75,86,98,109])beam(ep(116,y),ep(129,y),.35);
+    beam(ep(122,75),ep(122,109),.6);
+  }
+  for(const y of [76,108])beam([122,y,18],[122,y,29],.5);
+  beam([122,86,23],[122,98,23],.6,flySteel);
+  const rudderDef=st.warp*2;
+  for(const y of [86,98]){
+    beam([20,y,29],[20,y,43],.5);
+    const a=[[16,y-rudderDef,29],[24,y+rudderDef,29],[24,y+rudderDef,43],[16,y-rudderDef,43]];
+    const b=a.map(p=>[p[0],p[1]+.5,p[2]]);
+    put(a.concat(b),loft(a.map(pt),b.map(pt),n=>tone(n,CERAMIC))+shape((CAM_V[1]>0?b:a).map(pt),CERAMIC.l,.9),true);
+  }
+  beam([20,86,29],[20,98,29],.5);beam([20,86,40],[20,98,40],.5);
+  block([61,73,27],[81,86,29],flyWood);
+  block([62,74,29],[80,82,34],flySteel,true);
+  beam([58,80,32],[82,80,32],.7,flySteel);
+  for(let i=0;i<4;i++){
+    const x=64+i*4.5;
+    put([[x-1.65,80,30.35],[x+1.65,88,33.65]],rod(pt([x,80,32]),pt([x,88,32]),1.65,flySteel,toneI,.8,1.65,10),true);
+    if(k>.01){const travel=Math.cos(st.angle*2.875+i*Math.PI)*1.2;
+      block([x-1,81+travel,31],[x+1,83+travel,33],METAL);
+      beam([x,81+travel,32],[x,80,32],.3,flySteel);}
+    beam([x,88,33],[x,88,35],.25,CERAMIC);
+    cable([x,88,35],[79,85,31],st.engine);
+  }
+  block([78,83,29],[81,86,32],DARK);
+  block([64,72,30],[76,74,36],flySteel);
+  cable([66,74,35],[66,80,34]);cable([74,74,30],[74,80,31]);
+  beam([76,74,46],[76,74,50],2,matOf('#b98e55'));
+  beam([76,74,48],[81,74,48],.4,flySteel);
+  cable([76,74,46],[77,85,34],st.engine);
+  for(const y of [52,132]){
+    const dir=y<92?1:-1,angle=st.angle*dir;
+    beam([40,y,43],[58,y,43],.7,flySteel);
+    for(const x of [48,57]){
+      beam([x,y,27],[x,y,43],.6);beam([x,y,43],[64,y,52],.6);
+      beam([x-1,y,43],[x+1,y,43],1.2,flySteel);
+    }
+    const sprocket=(yy,zz,r)=>{
+      const a=pt([57.7,yy,zz]),b=pt([58.3,yy,zz]);
+      put([[57.7,yy-r,zz-r],[58.3,yy+r,zz+r]],cylX(a[0],b[0],a[1],a[2],r,flySteel,toneI,.8,16));
+      for(let j=0;j<4;j++){const t=angle+j*Math.PI/2;
+        cable([58.35,yy,zz],[58.35,yy+Math.cos(t)*r,zz+Math.sin(t)*r]);}
+    };
+    sprocket(y,43,3.8);sprocket(80,32,1.32);
+    const crossed=y>92;
+    for(const sign of [-1,1]){
+      const a=[58.5,80,32+sign*1.32],b=[58.5,y,43+sign*(crossed?-3.8:3.8)];
+      const d=pd([pt(a),pt(b)],false);
+      put([a,b],`<path d="${d}" fill="none" stroke="${INK}" stroke-width="1.6"/><path d="${d}" fill="none" stroke="#b3b7ae" stroke-width=".8" stroke-dasharray="1.5 1.5" stroke-dashoffset="${st.angle*sign*2}"/>`);
+    }
+    for(const flip of [0,Math.PI]){
+      const blade=[[0,1.2],[4,2],[16,1],[18,-.5],[13,-1.8],[3,-1.1]].map(([r,w])=>[40+w*.22,y+r*Math.cos(angle+flip)-w*Math.sin(angle+flip),43+r*Math.sin(angle+flip)+w*Math.cos(angle+flip)]);
+      const back=blade.map(p=>[p[0]-.65,p[1],p[2]]);
+      put(blade.concat(back),loft(back.map(pt),blade.map(pt),n=>tone(n,flyWood))+shape((CAM_V[0]>0?blade:back).map(pt),flyWood.l,1.1));
+    }
+    beam([39,y,43],[41,y,43],1.5,flySteel);
+  }
+  block([68,99+st.warp,28],[75,105+st.warp,29],flyWood);
+  for(const y of [99,105])beam([68,y+st.warp,29],[75,y+st.warp,29],.6);
+  for(const y of [14,170]){
+    cable([71,102+st.warp,29],wingPoint(64,y,52),Math.abs(st.warp)>.1);
+    cable([71,102+st.warp,29],wingPoint(60,y,27),Math.abs(st.warp)>.1);
+  }
+  for(const y of [86,98]){
+    beam([20,y,35],[20,y+rudderDef,35],.25,flySteel);
+    cable([71,102+st.warp,29],[20,y+rudderDef,35],Math.abs(st.warp)>.1);
+  }
+  beam([81,107,28],[85,107,34],.45,flySteel);
+  beam([83,107,31],[122,98,23],.3,flySteel);
+  block([64,100+st.warp,29],[79,104+st.warp,32],matOf('#527e9e'),true);
+  beam([64,101+st.warp,30],[53,100,29],1.15,matOf('#526f86'));
+  beam([64,104+st.warp,30],[53,105,29],1.15,matOf('#526f86'));
+  beam([79,102+st.warp,32],[82,102+st.warp,34],1.8,matOf('#d9ab80'));
+  beam([77,104+st.warp,31],[84,107,33],.8,matOf('#527e9e'));
+  const defs=[
+    ['UPPER FRONT SPAR',[81,44,52]],['UPPER REAR SPAR',[64,140,52]],['LOWER FRONT SPAR',[81,140,27]],['LOWER REAR SPAR',[64,44,27]],
+    ['WING RIBS',wingPoint(72,170,52)],['INTERPLANE STRUT',[81,14,39]],['BRACING WIRES',[64,29,39]],['LANDING SKIDS',[100,98,7]],
+    ['ENGINE BEARERS',[70,73,28]],['CRANKCASE',[70,78,31]],['CYLINDER 1',[64,86,32]],['CYLINDER 2',[68.5,86,32]],['CYLINDER 3',[73,86,32]],['CYLINDER 4',[77.5,86,32]],
+    ['CRANKSHAFT',[60,80,32]],['DRIVE SPROCKET',[58,80,32]],['STRAIGHT CHAIN',[58,66,39]],['CROSSED CHAIN',[58,108,39]],
+    ['LEFT SHAFT',[46,132,43]],['RIGHT SHAFT',[46,52,43]],['SHAFT BEARING',[57,132,43]],['LEFT PROPELLER',[40,132,43]],['RIGHT PROPELLER',[40,52,43]],
+    ['RADIATOR',[70,73,35]],['WATER RETURN',[74,76,30]],['FUEL TANK',[76,74,48]],['FUEL LINE',[77,85,34]],['IGNITION MAGNETO',[80,85,31]],
+    ['HIP CRADLE',[71,102+st.warp,29]],['WARP CABLES',[71,102+st.warp,29]],['ELEVATOR LEVER',[85,107,34]],['ELEVATOR LINK',[104,102,27]],
+    ['ELEVATOR TUBE',[122,98,23]],['FRONT OUTRIGGERS',[105,86,22]],['RUDDER BOOMS',[40,86,28]],['RUDDER POSTS',[20,98,37]]
+  ];
+  defs.forEach(([name,p],i)=>label(name,p,st.engine&&i>=8&&i<=27||Math.abs(st.warp)>.1&&i>=28));
+  let object=k>.01?`<g opacity="${1-.88*k}">${byDepth(shell)}</g>${byDepth(parts)}`:byDepth(parts.concat(shell));
+  if(k>.6)object+=flyLabels(labels);
+  return ground+object;
+}
+function flyUpdate(st,dt){
+  if(st.engine)st.angle=(st.angle+dt*9)% (Math.PI*2);
+  st.warp+=Math.sign(st.warpTarget-st.warp)*Math.min(Math.abs(st.warpTarget-st.warp),dt*2);
+  if(st.phase==='rail'){
+    st.elapsed=Math.min(2,st.elapsed+dt);
+    if(st.elapsed>=2){st.phase='flight';st.elapsed=0;}
+  }else if(st.phase==='flight'){
+    st.elapsed=Math.min(12,st.elapsed+dt);st.distance=st.elapsed*10;
+    if(st.elapsed>=12){st.phase='landed';st.engine=false;st.warpTarget=0;}
+  }
+}
+function flyKick(){
+  if(flyLoop)return;flyLoop=true;
+  flyUI.animate(dt=>{flyUpdate(flyUI.st,dt);const st=flyUI.st;
+    flyLoop=st.engine||st.warp!==st.warpTarget||st.phase==='rail'||st.phase==='flight';return flyLoop;});
+}
+function flyLabels(items){
+  const svg=document.getElementById('fig'),vb=svg.viewBox.baseVal,rect=svg.getBoundingClientRect();
+  const unit=window.LBL_U?LBL_U():0,scale=vb.height/rect.height;
+  const top=unit?16*unit:Math.max(0,Math.max(document.getElementById('btns').getBoundingClientRect().bottom,document.getElementById('stats').getBoundingClientRect().bottom)-rect.top+18)*scale;
+  const margin=unit?16*unit:82*INK_K,bottom=vb.height-38*(unit||INK_K);
+  const projected=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  const half=Math.ceil(projected.length/2);
+  const tags=[projected.slice(0,half),projected.slice(half)].map((bank,side)=>{
+    bank.sort((a,b)=>a.p[1]-b.p[1]);
+    return bank.map((it,i)=>{const x=side?vb.width-margin:margin,y=top+(bottom-top)*i/Math.max(1,bank.length-1);
+      return tag(it.at,(x-it.p[0])/INK_K,(y-it.p[1])/INK_K,it.text,it.on);}).join('');
+  }).join('');
+  const leaders=[];
+  const pills=tags.replace(/<path\b[^>]*\/>/g,path=>{leaders.push(path);return '';});
+  return '<g class="tag fly-leaders">'+leaders.join('')+'</g>'+pills;
+}
+flyUI=mountFigure({fig:'1903',title:'Wright Flyer',size:[211,184,75],center:[106,92],palette:'mustard',turn:'full',state:flyFresh(),scene:flyScene,
+  stats:st=>[{label:'First flight',value:Math.round(st.distance)+' ft'},{label:'Time aloft',value:(st.phase==='flight'||st.phase==='landed'?st.elapsed:0).toFixed(1)+' s'},{label:'Engine',value:st.engine?'12 hp':'Stopped',small:true}],
+  buttons:[
+    {label:'Start engine',onClick:(st,ui)=>{if(st.phase==='landed')return ui.flash('Reset to return to the launch rail');if(st.engine)return ui.flash('The engine is already running');st.engine=true;flyKick();}},
+    {label:'Warp wings',onClick:st=>{st.warpTarget=st.warpTarget===1?-1:1;flyKick();}},
+    {label:'Launch flight',onClick:(st,ui)=>{if(!st.engine)return ui.flash('Start the engine first');if(st.phase!=='ready')return ui.flash('The first flight is already underway');st.phase='rail';st.elapsed=0;flyKick();}},
+    {label:'Reset',onClick:st=>{Object.assign(st,flyFresh());}}
+  ],
+  params:(st,q)=>{const val=(name,lo,hi)=>{const n=Number(q.get(name));return Number.isFinite(n)?Math.min(hi,Math.max(lo,n)):0;};
+    st.warp=st.warpTarget=val('warp',-1,1);st.angle=val('angle',0,Math.PI*2);
+    if(q.get('flight')==='1'){st.engine=true;st.phase='flight';st.elapsed=val('time',0,12);st.distance=st.elapsed*10;}
+  }
+});
+xrMount(()=>flyUI,()=> '');
+const flyStyle=document.createElement('style');flyStyle.textContent='@media(min-width:561px){.actions{flex-direction:row;max-width:none;gap:6px}.stats{flex-direction:row;gap:18px}.stat .v{font-size:24px}.stat.small .v{font-size:20px}}';document.head.appendChild(flyStyle);
+addEventListener('resize',()=>flyUI.render());flyUI.render();
+</script></body></html>
