@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Faraday's induction</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   A hand moves a bar magnet along a nonmagnetic slider into a copper coil on cardboard.
+   Its north pole enters first. The flux through each turn points toward -x and increases in magnitude.
+   Faraday's law gives emf = -N dPhi/dt. The closed copper circuit carries conventional current,
+   opposing the change in flux. Withdrawal reverses the current. A stationary magnet gives no emf.
+   The moving-coil galvanometer's fixed permanent magnet exerts torque on its coil and pointer;
+   its spiral spring returns the pointer to zero. No battery, motor or electrical supply is present.
+   Source https://www.physics.sydney.edu.au/super/physics_tut/volume3/emact.pdf, activity EI8.
+   Parts and attachments.
+   Structure: board holds two slider rails, travel stops, coil cradles and galvanometer feet.
+   Slider: carriage rides the rails; its saddle supports the magnet's south end; grip is on that end.
+   Coil: cardboard former and bore, two rims, enamelled copper helix, winding start and finish,
+   two brass binding posts and nuts on insulating blocks, red and black insulated leads to meter.
+   Meter: case and glass, dial and zero mark, pointer on spindle, two jewel bearings on frame,
+   moving coil around iron core between two pole shoes on a fixed magnet, spiral return spring,
+   frame on base plate, two input posts and nuts, flexible coil connections.
+   Field lines and moving dots are explanatory overlays, not physical components or electrons.
+   shortcut: smooth flux profile and quasistatic resistance omit inductive transients, use measured field
+   and circuit inductance if this becomes a quantitative laboratory simulator. */
+const fdCopper = matOf('#d97c3d'), fdCard = matOf('#c4a778'), fdBrass = matOf('#d5ac4d');
+const fdRed = matOf('#e86c58'), fdBlue = matOf('#6999d1');
+const fdState = { pos:0, target:0, speed:1, turns:12, moving:false, current:0, emf:0, needle:0, phase:0, peak:0 };
+const fdClamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const fdFlux = p => -60e-6 * (1 - Math.cos(Math.PI*p))/2;
+function fdStep(st, dt){
+  const old = st.pos, d = st.target - old;
+  st.pos += Math.sign(d) * Math.min(Math.abs(d), dt*st.speed/1.8);
+  st.emf = dt > 0 ? -st.turns*(fdFlux(st.pos)-fdFlux(old))/dt : 0;
+  st.current = st.emf/(50 + st.turns*.4)*1000;
+  st.peak = Math.max(st.peak, Math.abs(st.current));
+  st.needle += (st.current - st.needle)*Math.min(1, dt*14);
+  st.phase += st.current*dt*32;
+  if (st.pos === st.target && Math.abs(st.needle) < .00001){ st.needle = 0; return false; }
+  return true;
+}
+function fdMove(st, ui, goal){
+  if (st.pos === goal && !st.moving) return ui.flash(goal ? 'Magnet is inside. Hold it still: no current.' : 'Magnet is already outside. Push it in first.');
+  st.target = goal; st.peak = 0;
+  if (st.moving) return;
+  st.moving = true;
+  ui.animate(dt => { const active = fdStep(st, dt); st.moving = active; return active; });
+}
+const fdBounds = (pts, r=.15) => [[0,1,2].map(k => Math.min(...pts.map(p=>p[k]))-r), [0,1,2].map(k => Math.max(...pts.map(p=>p[k]))+r)];
+function fdStroke(pts, color, width=1){ return `<path d="${pd(pts,false)}" fill="none" stroke="${color}" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round"/>`; }
+function fdWire(parts, pts, color, width=.9, dots=0){
+  for(let i=1;i<pts.length;i++){
+    const a=pts[i-1], b=pts[i];
+    parts.push({box:fdBounds([a,b],width),svg:fdStroke([a,b],INK,width+1)+fdStroke([a,b],color,width)});
+  }
+  if(dots){
+    const lens=pts.slice(1).map((p,i)=>Math.hypot(...sub(p,pts[i]))), total=lens.reduce((a,b)=>a+b,0);
+    for(let n=0;n<9;n++){
+      let dist=((n/9+dots)%1+1)%1*total, j=0;
+      while(j<lens.length-1 && dist>lens[j]) dist-=lens[j++];
+      const p=pts[j].map((v,k)=>v+(pts[j+1][k]-v)*dist/lens[j]);
+      const [x,y]=P(...p);
+      parts.push({box:fdBounds([p],.6),svg:`<circle cx="${f(x)}" cy="${f(y)}" r=".65" fill="#fff3a1" stroke="${INK}" stroke-width=".25"/>`});
+    }
+  }
+}
+function fdDial(st, x, ghost=false){
+  let s = shape(on(PX(x),rrUV(10,10,36,36,3)), '#faf3db',.8);
+  const scale = [];
+  for(let i=-4;i<=4;i++){
+    const a=i*.19, y=23+Math.sin(a)*11, z=18+Math.cos(a)*16;
+    scale.push([[x+.08,y,z],[x+.08,23+Math.sin(a)*9.7,18+Math.cos(a)*14.5]]);
+  }
+  s+=scale.map(p=>line(p,.45)).join('')+tx(x+.12,23,33.7,'0',2.3)+tx(x+.12,13,30,'+',2.5)+tx(x+.12,33,30,'-',2.5)+tx(x+.12,23,12,'mA',2.3);
+  const a=fdClamp(st.needle/.08,-1,1)*.8;
+  s+=fdStroke([[x+.2,23,18],[x+.2,23-Math.sin(a)*10,18+Math.cos(a)*15]],'#b84033',1.1);
+  s+=cylX(x+.1,x+.4,23,18,1,fdBrass,toneI,.5,12);
+  return ghost ? `<g opacity=".32">${s}</g>` : s;
+}
+function fdMeter(st, m, k){
+  const parts=[], put=(a,b,svg)=>parts.push({box:[a,b],svg});
+  let shell=box(17,7,6,44,39,40,m,tone,1.2);
+  if(vis([1,0,0])) shell+=fdDial(st,44.1)+shape(on(PX(44.7),rrUV(9,9,37,37,3)), '#d6e8ed', .7).replace('fill="#d6e8ed"','fill="#d6e8ed" fill-opacity=".13"');
+  if(vis([-1,0,0])) shell+=shape(on(PX(16.9),rrUV(11,10,35,35,2)),tone([-1,0,0],m),.7);
+  if(!k) return shell;
+  put([20,11,7],[40,35,9],box(20,11,7,40,35,9,METAL,toneI,.6));
+  put([25,12,9],[36,34,11],box(25,12,9,36,34,11,DARK,toneI,.6));
+  for(const y of [14,30]) put([25,y,11],[36,y+2,25],box(25,y,11,36,y+2,25,fdRed,toneI,.7));
+  put([27,17,13],[34,29,23],cylX(27,34,23,18,4,METAL,toneI,.6));
+  for(const y of [17,27]) put([27,y,12],[34,y+2,26],box(27,y,12,34,y+2,26,fdBrass,toneI,.5));
+  const a=fdClamp(st.needle/.08,-1,1)*.8, rot=p=>[p[0],23+(p[1]-23)*Math.cos(a)-(p[2]-18)*Math.sin(a),18+(p[1]-23)*Math.sin(a)+(p[2]-18)*Math.cos(a)];
+  const loop=[[28,18,12],[34,18,12],[34,28,12],[34,28,25],[28,28,25],[28,18,25],[28,18,12]].map(rot);
+  fdWire(parts,loop,'#d07f43',.8);
+  put([26,22.5,17.5],[44,23.5,18.5],rod([26,23,18],[44,23,18],.45,METAL,toneI,.5));
+  for(const x of [26,39]) put([x,21,16],[x+1,25,20],cylX(x,x+1,23,18,1.7,DARK,toneI,.5));
+  const spiral=Array.from({length:65},(_,i)=>{const t=i/64*5*Math.PI,r=.4+i/64*2.5;return [37,23+Math.cos(t)*r,18+Math.sin(t)*r];});
+  fdWire(parts,spiral,'#ca9b42',.3);
+  fdWire(parts,[[36,12,10],[39,12,12],[37,20.5,18]],'#bc7045',.4);
+  fdWire(parts,[[36,34,10],[38,34,12],[34,28,18]],'#bc7045',.4);
+  return `<g opacity="${f(1-.86*k)}">${shell}</g><g opacity="${f(k)}">${byDepth(parts)}</g>`+(vis([1,0,0]) ? fdDial(st,44.9,true) : '');
+}
+function fdLabels(items){
+  const vb=document.getElementById('fig').viewBox.baseVal;
+  const sorted=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  const halves=[sorted.slice(0,Math.ceil(sorted.length/2)),sorted.slice(Math.ceil(sorted.length/2))];
+  const btn=document.getElementById('btns').getBoundingClientRect(), stats=document.getElementById('stats').getBoundingClientRect();
+  const svg=document.getElementById('fig'), top=new DOMPoint(0,Math.max(btn.bottom,stats.bottom)+16).matrixTransform(svg.getScreenCTM().inverse()).y;
+  const tags=halves.map((col,side)=>col.sort((a,b)=>a.p[1]-b.p[1]).map((it,i)=>{
+    const x=vb.width*(side ? .86 : .14), y=Math.max(top,vb.height*.22)+i*(vb.height-Math.max(top,vb.height*.22)-35*INK_K)/Math.max(1,col.length-1);
+    return tag(it.at,(x-it.p[0])/INK_K,(y-it.p[1])/INK_K,it.text,it.on);
+  })).flat();
+  return '<g class="tag">'+tags.map(s=>s.match(/<path[^>]*\/>/)[0]).join('')+'</g>'+tags.map(s=>s.replace(/<path[^>]*\/>/,'')).join('');
+}
+function fdScene(st,m){
+  const parts=[], labels=[], k=ease(st.xr||0), tip=90-42*st.pos;
+  const put=(a,b,svg)=>parts.push({box:[a,b],svg});
+  const label=(at,text,on=false)=>labels.push({at,text,on});
+  const bx=(a,b,mat,text)=>{put(a,b,box(...a,...b,mat,toneI,.7)); if(text) label([(a[0]+b[0])/2,(a[1]+b[1])/2,b[2]],text);};
+  let s=board(0,0,142,90,3,5,WOOD)+castShadow([[18,8,40],[44,39,40],[40,46,41],[70,74,41],[tip,57,30],[tip+41,63,30]],3,boardTop(0,0,142,90,3,5));
+  label([5,45,3],'BASEBOARD');
+  for(const [y,name] of [[54,'NEAR SLIDER RAIL'],[65,'FAR SLIDER RAIL']]) bx([39,y,3],[135,y+2,7],METAL,name);
+  bx([132,53,3],[136,68,9],DARK,'OUTER TRAVEL STOP');
+  bx([38,53,3],[41,68,9],DARK,'INNER TRAVEL STOP');
+  for(const [x,name] of [[42,'REAR COIL CRADLE'],[67,'FRONT COIL CRADLE']]) bx([x,45,3],[x+3,76,14],m,name);
+  bx([tip+29,53,7],[tip+39,68,10],DARK,'SLIDER CARRIAGE');
+  bx([tip+31,57,10],[tip+36,65,24],CERAMIC,'MAGNET SADDLE');
+  bx([tip+36,57,23],[tip+41,65,31],WOOD,'HAND GRIP');
+  const coilPts=Array.from({length:st.turns*24+1},(_,i)=>{const t=i/(st.turns*24),a=t*st.turns*2*Math.PI;return [40+30*t,60+14*Math.cos(a),27+14*Math.sin(a)];});
+  const fdAssembly=[];
+  // Short wall patches and winding segments sort around the magnet through the bore.
+  const fdCoilStart=parts.length;
+  for(let x=40;x<70;x+=2.5) for(let j=0;j<24;j++){
+    const a=j/24*2*Math.PI,b=(j+1)/24*2*Math.PI;
+    const q=[[x,60+13*Math.cos(a),27+13*Math.sin(a)],[x+2.5,60+13*Math.cos(a),27+13*Math.sin(a)],[x+2.5,60+13*Math.cos(b),27+13*Math.sin(b)],[x,60+13*Math.cos(b),27+13*Math.sin(b)]];
+    put(...fdBounds(q),`<g opacity="${f(1-.87*k)}">${shape(q,toneI([0,Math.cos(a),Math.sin(a)],fdCard),0)}</g>`);
+  }
+  for(const x of [40,70]){
+    const ring=on(PX(x),ellUV(60,27,13.2,13.2,48)),inner=on(PX(x+.02),ellUV(60,27,12,12,48));
+    put([x-.1,46.7,13.7],[x+.1,73.3,40.3],`<g opacity="${f(1-.7*k)}"><path d="${pd(ring)}${pd(inner)}" fill="#d5b98a" fill-rule="evenodd"/>${ink(pd(ring),.5)}${ink(pd(inner),.4)}</g>`);
+  }
+  const fdFarWire=[],fdNearWire=[];
+  for(let i=1;i<coilPts.length;i++){
+    const mid=avg([coilPts[i-1],coilPts[i]]), near=vis([0,mid[1]-60,mid[2]-27]);
+    fdWire(near?fdNearWire:fdFarWire,[coilPts[i-1],coilPts[i]],'#d98443',.8);
+  }
+  bx([tip,57,24],[tip+18,63,30],fdRed);
+  bx([tip+18,57,24],[tip+36,63,30],fdBlue);
+  if(vis([0,1,0])){
+    put([tip,63,24],[tip+36,63.1,30],txY(tip+8,63.1,25.6,'N',3,'#fff9e7')+txY(tip+27,63.1,25.6,'S',3,'#fff9e7'));
+  }
+  fdAssembly.push(...parts.splice(fdCoilStart));
+  const fdDotParts=[];
+  if(Math.abs(st.current)>.00001){
+    fdWire(fdDotParts,coilPts,'#d98443',0,st.phase);
+    fdDotParts.splice(0,coilPts.length-1);
+  }
+  put([40,46,13],[tip+36,74,41],byDepth(fdFarWire)+byDepth(fdAssembly)+byDepth(fdNearWire)+byDepth(fdDotParts));
+  for(const [x,y] of [[49,42],[66,42]]){
+    bx([x-3,y-3,3],[x+3,y+3,5],CERAMIC);
+    put([x-1,y-1,5],[x+1,y+1,8],cyl(x,y,5,8,1,fdBrass,toneI,.5));
+    put([x-1.5,y-1.5,7],[x+1.5,y+1.5,8],cyl(x,y,7,8,1.5,fdBrass,toneI,.5,6));
+  }
+  const start=[coilPts[0],[40,74,12],[49,46,4],[49,42,7]], finish=[coilPts.at(-1),[70,74,12],[72,46,4],[66,42,7]];
+  fdWire(parts,start,'#d98443',.65,st.current ? -st.phase : 0);
+  fdWire(parts,finish,'#d98443',.65,st.current ? st.phase : 0);
+  const redLead=[[49,42,7],[52,35,4],[49,5,4],[36,5,4],[36,12,7]];
+  const blackLead=[[66,42,7],[75,34,4],[75,4,4],[9,4,4],[9,43,4],[36,43,4],[36,34,7]];
+  fdWire(parts,redLead,'#c95845',1,st.current ? -st.phase : 0);
+  fdWire(parts,blackLead,'#4a4942',1,st.current ? st.phase : 0);
+  for(const y of [12,34]){
+    bx([32,y-3,3],[40,y+3,6],DARK);
+    put([35,y-1,6],[37,y+1,10],cyl(36,y,6,10,1,fdBrass,toneI,.5));
+    put([34.5,y-1.5,8],[37.5,y+1.5,9],cyl(36,y,8,9,1.5,fdBrass,toneI,.5,6));
+  }
+  put([17,7,6],[45,39,40],fdMeter(st,m,k));
+  s+=byDepth(parts);
+  if(k>.01){
+    let field='';
+    for(const ang of [0,Math.PI/2,Math.PI,Math.PI*1.5]){
+      const path=Array.from({length:65},(_,i)=>{const t=i/64,a=t*2*Math.PI;return [tip+18-34*Math.cos(a),60+Math.cos(ang)*19*Math.sin(a),27+Math.sin(ang)*19*Math.sin(a)];});
+      field+=fdStroke(path,'#498f9b',.65);
+      const arrow=[[tip-13,60,27],[tip-9,60,28.3],[tip-9,60,25.7]];
+      field+=shape(arrow,'#498f9b',0);
+    }
+    s+=`<g opacity="${f(.65*k)}" pointer-events="none">${field}</g>`;
+  }
+  const live=Math.abs(st.current)>.00001;
+  label([tip+8,60,30],'NORTH POLE',st.moving); label([tip+27,60,30],'SOUTH POLE',st.moving);
+  label([52,60,40],'CARDBOARD FORMER');
+  label([70,60,27],'TUBE BORE'); label([55,73.7,27],'COPPER WINDING',live);
+  label([49,42,7],'COIL START POST',live); label([66,42,7],'COIL FINISH POST',live); label([49,42,8],'BINDING NUT');
+  label([66,42,5],'INSULATING BLOCK'); label([51,20,4],'RED LEAD',live); label([75,20,4],'BLACK LEAD',live);
+  label([18,20,39],'METER CASE'); label([44.7,35,35],'DIAL GLASS'); label([44.2,30,30],'CENTRE ZERO SCALE');
+  label([44.3,23,24],'POINTER',live);
+  label([36,12,10],'METER INPUT POST',live); label([36,34,10],'METER RETURN POST',live);
+  label([25,13,21],'FIXED MAGNET'); label([32,18,22],'POLE SHOES');
+  label([30,23,18],'SOFT IRON CORE'); label([34,28,25],'MOVING COIL',live); label([41,23,18],'POINTER SPINDLE',live);
+  label([39,23,18],'JEWEL BEARINGS'); label([37,25,18],'RETURN SPRING',live);
+  label([28,15,10],'MOVEMENT FRAME'); label([38,13,12],'FLEXIBLE CONNECTION',live);
+  if(k>.6) s+=fdLabels(labels);
+  return s;
+}
+const fdUI=mountFigure({fig:'F',turn:'full',title:"Faraday's induction",size:[142,90,45],palette:'mint',state:fdState,scene:fdScene,
+  stats:st=>[{label:'Coil turns',value:String(st.turns),small:true},{label:'Induced current',value:(Math.abs(st.current)<.00005?'0.000':st.current.toFixed(3))+' mA',small:true},{label:'Induced emf',value:(st.emf*1000).toFixed(2)+' mV',small:true}],
+  buttons:[
+    {label:'Push magnet in',onClick:(st,ui)=>fdMove(st,ui,1)},
+    {label:'Pull magnet out',onClick:(st,ui)=>fdMove(st,ui,0)},
+    {label:'Push faster',choices:st=>[1,2.5].map(speed=>({label:speed===1?'Slow':'Fast',current:st.speed===speed,onClick:st=>{st.speed=speed;}}))},
+    {label:'Add turns',choices:st=>[12,24,36].map(turns=>({label:turns+' turns',current:st.turns===turns,disabled:st.moving,why:'Stop the magnet before rewinding the coil.',onClick:st=>{st.turns=turns;}}))}
+  ],params:(st,q)=>{
+    for(const [key,lo,hi] of [['pos',0,1],['speed',1,2.5]]) if(q.has(key) && Number.isFinite(+q.get(key))) st[key]=fdClamp(+q.get(key),lo,hi);
+    st.target=st.pos;
+    if([12,24,36].includes(+q.get('turns'))) st.turns=+q.get('turns');
+  }
+});
+xrMount(()=>fdUI,()=> '');
+</script></body></html>
