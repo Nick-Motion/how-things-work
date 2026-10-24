@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Gas laws</title>
+<script>document.documentElement.dataset.errors ??= '';</script>
+<style>@media(min-width:561px){#stats{display:grid;grid-template-columns:repeat(2,max-content);gap:8px 16px}#stats .stat .v{font-size:18px}#stats .stat .k{font-size:9px}}</style>
+</head><body><script src="core.js"></script><script>
+/* Truth first.
+   A sealed gas pushes a freely sliding, weighted piston against atmospheric pressure and its load.
+   Adding load compresses the gas isothermally. Heating speeds its molecules and lifts the piston.
+   A hand pump draws room air through an intake and delivers it through a check valve into the chamber.
+   PV/T = nR stays constant only for a fixed amount of gas. Pumping increases n and PV/T together.
+   Source: https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/equation-of-state-ideal-gas-2/
+   Teaching model: ideal gas, quasi-static equilibrium, negligible friction, controlled temperature,
+   exaggerated molecules and instrument response. Dimensions illustrate apparatus, not a calibrated build.
+   Parts and attachments.
+   Structure: bench board, stand feet, three legs, support ring and heat-spreading base under the glass cylinder.
+   Chamber: glass wall and rim, inner bore, piston, sealing ring, rod, weight pan and weights on the piston.
+   Instruments: pressure port and tube to gauge housing, Bourdon tube, link, pivot, dial and needle;
+   temperature bulb in the gas, capillary through the low side port to the external stem, liquid and scale.
+   Supply: hand-pump foot, barrel, inlet valve, plunger, rod, handle, delivery hose, check valve and gas inlet.
+   Heat: burner foot, jet, mixing barrel, air collar, air port, flame, gas hose, bench outlet and fuel tap.
+   No thermometer or pipe crosses the piston's travel. Gas remains below the piston at every state.
+*/
+const gasR=8.314, gasX=48, gasY=43, gasRadius=15, gasBottom=31;
+const gasBrass=matOf('#d9b059'), gasBlue=matOf('#5a82c6'), gasRed=matOf('#e36d50');
+const gasFresh=()=>({n:.04,T:300,P:120,targetT:300,targetP:120,hot:false,pump:0,time:0,particles:Array.from({length:28},(_,i)=>{
+ const a=i*2.39996,r=11*Math.sqrt((i+.5)/28),v=i*1.713;
+ return {x:r*Math.cos(a),y:r*Math.sin(a),z:3+(i*7.13)%26,vx:Math.cos(v)*11,vy:Math.sin(v)*11,vz:(i%2?1:-1)*(10+i%7)};
+})});
+const gasVolume=st=>st.n*gasR*st.T/st.P;
+const gasTop=st=>gasBottom+40*gasVolume(st);
+function gasStep(st,dt){
+ st.time+=dt; st.pump=Math.max(0,st.pump-dt);
+ for(const key of ['T','P']){const goal=st['target'+key],d=goal-st[key];st[key]=Math.abs(d)<.02?goal:st[key]+d*Math.min(1,dt*3);}
+ const height=gasTop(st)-gasBottom, speed=Math.sqrt(st.T/300),radius=gasRadius-1.4;
+ for(const p of st.particles){
+  p.x+=p.vx*dt*speed;p.y+=p.vy*dt*speed;p.z+=p.vz*dt*speed;
+  const r=Math.hypot(p.x,p.y);
+  if(r>radius){const nx=p.x/r,ny=p.y/r,d=p.vx*nx+p.vy*ny;p.x=nx*(2*radius-r);p.y=ny*(2*radius-r);if(d>0){p.vx-=2*d*nx;p.vy-=2*d*ny;}}
+  if(p.z<1.4){p.z=2.8-p.z;p.vz=Math.abs(p.vz);}
+  if(p.z>height-1.4){p.z=Math.max(1.4,2*(height-1.4)-p.z);p.vz=-Math.abs(p.vz);}
+ }
+}
+function gasPump(st,ui){
+ if(st.n>=.06-1e-8)return ui.flash('The chamber is full. Reset to start again.');
+ st.n=Math.min(.06,st.n+.005);st.pump=.8;
+ for(let i=0;i<4;i++)st.particles.push({x:12-i*.6,y:0,z:3+i,vx:-14,vy:5-i*3,vz:11});
+ ui.flash('Air enters through the check valve. PV/T increases with gas amount.');
+}
+function gasCallouts(items){
+ const el=document.getElementById('fig'),vb=el.viewBox.baseVal,matrix=el.getScreenCTM(),phone=innerWidth<=560;
+ const edge=id=>{const r=document.getElementById(id).getBoundingClientRect();return new DOMPoint(r.left,r.bottom+10).matrixTransform(matrix.inverse()).y;};
+ const sorted=items.map(it=>({...it,screen:P(...it.at)})).sort((a,b)=>a.screen[0]-b.screen[0]),half=Math.ceil(sorted.length/2);
+ return [sorted.slice(0,half),sorted.slice(half)].map((column,side)=>{
+  column.sort((a,b)=>a.screen[1]-b.screen[1]);
+  const start=phone?14*INK_K:Math.max(14*INK_K,edge(side?'stats':'btns')),end=vb.height-14*INK_K;
+  const originalInk=INK_K,labelInk=phone?INK_K:Math.min(INK_K,(end-start)/Math.max(1,column.length-1)/18.5);
+  return column.map((it,i)=>{const x=side?vb.width-89*INK_K:89*INK_K,y=start+(end-start)*i/Math.max(1,column.length-1);
+   INK_K=labelInk;
+   const svg=tag(it.at,(x-it.screen[0])/labelInk,(y-it.screen[1])/labelInk,it.text,it.on);
+   INK_K=originalInk;return svg;
+  }).join('');
+ }).join('');
+}
+function gasScene(st,m){
+ const k=ease(st.xr||0),pz=gasTop(st),parts=[],labels=[];
+ const put=(b,svg,text,at,on=false)=>{parts.push({box:b,svg});if(text)labels.push({text,at:at||boxMid(b),on});};
+ const block=(b,mat,text,on=false)=>put(b,box(...b[0],...b[1],mat,toneI,.8),text,null,on);
+ const cylinder=(x,y,z0,z1,r,mat,text,on=false)=>put([[x-r,y-r,z0],[x+r,y+r,z1]],cyl(x,y,z0,z1,r,mat,toneI,1),text,null,on);
+ const pipe=(pts,r,mat,text,on=false)=>{
+  for(let i=1;i<pts.length;i++){const a=pts[i-1],b=pts[i],bb=[[0,1,2].map(j=>Math.min(a[j],b[j])-r),[0,1,2].map(j=>Math.max(a[j],b[j])+r)];put(bb,rod(a,b,r,mat,toneI,.65),i===1?text:null,null,on);}
+ };
+ let svg=board(0,0,104,85,3,5,WOOD)+castShadow([[33,28,30],[63,58,30],[33,28,114],[63,58,114],[88,67,40]],3,boardTop(0,0,104,85,3,5));
+ labels.push({text:'BENCH BOARD',at:[12,70,3]});
+ for(const a of [20,140,260]){const t=a*Math.PI/180,x=gasX+20*Math.cos(t),y=gasY+20*Math.sin(t);cylinder(x,y,3,5,3,DARK,a===20?'STAND FOOT':null);pipe([[x,y,5],[gasX+16*Math.cos(t),gasY+16*Math.sin(t),29]],1.1,METAL,a===20?'TRIPOD LEG':null);}
+ const ring=(z,r,mat)=>{
+  const a=on(PZ(z),ellUV(gasX,gasY,r,r,36)),b=on(PZ(z+.9),ellUV(gasX,gasY,r,r,36));
+  return loft(a,b,n=>toneI(n,mat))+`<path d="${pd(b)}${pd(on(PZ(z+.9),ellUV(gasX,gasY,r-1.2,r-1.2,36)))}" fill="${mat.l}" fill-rule="evenodd"/>`+ink(pd(b),.7);
+ };
+ const baseStart=parts.length;
+ put([[31,26,28],[65,60,29]],ring(28,17,METAL),'SUPPORT RING',[60,53,28]);
+ cylinder(gasX,gasY,29,31,15.7,gasBrass,'HEAT SPREADER',st.hot);
+ const chamberBase=byDepth(parts.splice(baseStart));
+ const low=on(PZ(gasBottom),ellUV(gasX,gasY,gasRadius,gasRadius,40)),high=on(PZ(113),ellUV(gasX,gasY,gasRadius,gasRadius,40));
+ const chamberFar=`<g opacity="${.12-.08*k}">${loft(low,high,()=> '#cfe9f0',true)}</g>`;
+ const inside=[];
+ for(const p of st.particles){const at=[gasX+p.x,gasY+p.y,gasBottom+p.z],q=P(...at);inside.push({box:[at.map(v=>v-.8),at.map(v=>v+.8)],svg:`<circle cx="${f(q[0])}" cy="${f(q[1])}" r="1.15" fill="${st.hot?'#e36d50':'#5188bb'}" stroke="${INK}" stroke-width=".35"/>`});}
+ const piston=cyl(gasX,gasY,pz,pz+2,14.5,METAL,toneI,1.2)+ring(pz+.5,14.9,DARK);
+ const outer=loft(low,high,()=> '#cfe9f0')+ink(pd(high),1.4)+hullInk([...low,...high],1.8);
+ const chamberNear=`<g opacity="${.17-.12*k}">${outer}</g>`;
+ put([[32.4,27.4,112.5],[63.6,58.6,114]],ink(pd(high),1.1)+ring(112.5,15.6,CLEAR));
+ labels.push({text:'GLASS CYLINDER',at:[61,50,91]},{text:'CYLINDER RIM',at:[48,58,113]},{text:'GAS CHAMBER',at:[48,43,45]},{text:'PISTON',at:[48,43,pz+2],on:st.P!==st.targetP||st.T!==st.targetT},{text:'PISTON SEAL',at:[62,43,pz+1]});
+ const loadStart=parts.length;
+ cylinder(gasX,gasY,pz+2,pz+9,1.6,METAL,'PISTON ROD');cylinder(gasX,gasY,pz+9,pz+10.2,9,gasBrass,'WEIGHT PAN');
+ cylinder(gasX,gasY,pz+10.2,pz+13.2,6.3,DARK,'PISTON WEIGHT');
+ if(st.targetP>120)cylinder(gasX,gasY,pz+13.2,pz+13.2+(st.targetP-120)/30,7,gasBlue,'ADDED LOAD',true);
+ // The camera stays above the coaxial assembly, so gas, piston and attached load have one physical order.
+ const load=parts.splice(loadStart);
+ const chamber=chamberBase+byDepth(inside)+piston+byDepth(load);
+ pipe([[63,43,35],[72,43,35],[72,43,49]],.75,gasBrass,'PRESSURE TUBE');
+ cylinder(63,43,34,36,1.5,gasBrass,'PRESSURE PORT');
+ let gauge=cylX(70,74,43,56,7.7,METAL,toneI,1.2);
+ if(facing([1,0,0])){
+  gauge+=shape(on(PX(74.1),ellUV(43,56,6.7,6.7,32)),'#fff8df',.7);
+  for(let i=0;i<=8;i++){const a=(-140+i*35)*Math.PI/180;gauge+=line([[74.2,43+5.1*Math.sin(a),56+5.1*Math.cos(a)],[74.2,43+6*Math.sin(a),56+6*Math.cos(a)]],.55);}
+  const a=(-140+(st.P-100)/200*280)*Math.PI/180;
+  gauge+=line([[74.3,43,56],[74.3,43+5*Math.sin(a),56+5*Math.cos(a)]],1.1)+tx(74.3,43,52.8,'kPa abs',1.6);
+ }
+ put([[70,35,48],[74.5,51,64]],k>.1?`<g opacity="${1-.7*k}">${gauge}</g>`:gauge,'GAUGE HOUSING',[72,48,60]);
+ if(k>0){const coil=arcUV(43,56,4,-110,150,25).map(PX(72));put([[71,38,49],[73,48,61]],`<g opacity="${k}">${line([[72,43,49],coil[0]],1.7)}${line(coil,1.7)}${line([coil[coil.length-1],[72,43,56]],.8)}${cylX(71.8,72.5,43,56,.7,gasBrass)}</g>`,'BOURDON TUBE',[72,47,58],st.P!==st.targetP);}
+ labels.push({text:'PRESSURE DIAL',at:[74.1,45,56]},{text:'GAUGE NEEDLE',at:[74.4,43,56],on:st.P!==st.targetP});
+ pipe([[48,33,35],[48,22,35],[48,22,39]],.65,CLEAR,'THERMOMETER CAPILLARY');cylinder(48,33,34,37,1.5,gasRed,'TEMPERATURE BULB',st.hot);
+ block([[46.4,20.5,38],[49.6,23.5,81]],CERAMIC,'THERMOMETER SCALE');
+ const tempZ=41+(st.T-280)/200*35;
+ pipe([[49.7,22,40],[49.7,22,tempZ]],.5,gasRed,'THERMOMETER LIQUID',st.hot);
+ for(let i=0;i<8;i++)pipe([[49.9,22,42+i*5],[49.9,23,42+i*5]],.12,DARK);
+ pipe([[48,23,39],[48,28,39]],.65,METAL,'THERMOMETER CLAMP');
+ cylinder(87,62,3,5,6,gasBlue,'PUMP FOOT');
+ put([[83.2,58.2,5],[90.8,65.8,28]],`<g opacity="${1-.85*k}">${cyl(87,62,5,28,3.8,gasBlue,toneI,1)}</g>`,'PUMP BARREL',[87,62,20]);
+ const pumpZ=35-6*Math.sin(Math.PI*Math.min(1,st.pump/.8)),plungerZ=pumpZ-21;
+ cylinder(87,62,k>.1?plungerZ+2:28,pumpZ,1,METAL,'PUMP ROD',st.pump>0);pipe([[87,57,pumpZ],[87,67,pumpZ]],1.4,DARK,'PUMP HANDLE',st.pump>0);
+ if(k>0)cylinder(87,62,plungerZ,plungerZ+2,3,gasBrass,'PUMP PLUNGER',st.pump>0);
+ cylinder(89,62,6,8,1.2,gasBrass,'PUMP INTAKE');
+ pipe([[87,62,7],[77,62,7],[66,58,12],[64,43,33]],.8,DARK,'DELIVERY HOSE',st.pump>0);
+ pipe([[64,43,33],[61,43,33]],1.2,gasBrass,'CHECK VALVE',st.pump>0);
+ labels.push({text:'GAS INLET',at:[61,43,33],on:st.pump>0});
+ cylinder(gasX,gasY,3,5,8,gasBlue,'BURNER FOOT');cylinder(gasX,gasY,5,8,2.1,gasBrass,'GAS JET',st.hot);cylinder(gasX,gasY,8,21,2.5,METAL,'BURNER BARREL',st.hot);
+ cylinder(gasX,gasY,8,11,3,gasBlue,'AIR COLLAR');
+ put([[50,42,9],[51.2,44,11]],shape(on(PX(51.1),ellUV(43,10,.7,.7,10)),'#231e16',.3),'AIR PORT',[51.1,43,10]);
+ pipe([[48,43,6],[48,60,6],[25,69,4],[12,69,4]],.9,DARK,'FUEL HOSE',st.hot);
+ cylinder(12,69,3,7,3,gasBrass,'BENCH GAS OUTLET');pipe([[12,69,7],[12,69,10]],.7,gasBrass,'FUEL TAP',st.hot);pipe([[9,69,10],[15,69,10]],.7,st.hot?gasRed:DARK);
+ let flame='';
+ if(st.hot){const q=on(PZ(21),ellUV(48,43,2.4,2.4,20)),tip=on(PZ(28+Math.sin(st.time*12)*.6),ellUV(48,43,.15,.15,20));flame=loft(q,tip,()=> '#669ee4')+loft(on(PZ(21),ellUV(48,43,1,1,12)),on(PZ(25),ellUV(48,43,.05,.05,12)),()=> '#b9e3ff');labels.push({text:'FLAME',at:[48,43,25],on:true});}
+ put([[31,26,st.hot?21:28],[65,60,pz+13.2+Math.max(0,(st.targetP-120)/30)]],flame+chamber);
+ svg+=chamberFar+byDepth(parts)+chamberNear;
+ if(k>.6)svg+=gasCallouts(labels);
+ return svg;
+}
+const gasUI=mountFigure({fig:'gaslaws',title:'Gas laws',turn:'full',size:[104,85,123],palette:'cobalt',state:gasFresh(),scene:gasScene,
+ stats:st=>[{label:'P absolute',value:st.P.toFixed(0)+' kPa',small:true},{label:'V',value:gasVolume(st).toFixed(3)+' L',small:true},{label:'T',value:st.T.toFixed(0)+' K',small:true},{label:'PV/T = nR',value:(st.n*gasR).toFixed(3)+' J/K',small:true},{label:'n',value:st.n.toFixed(3)+' mol',small:true}],
+ buttons:[
+ {label:'Push piston down',onClick:(st,ui)=>{if(st.targetP===240)return ui.flash('Maximum load. Release it before adding more.');st.targetP+=60;ui.flash('Extra load pushes down. Pressure rises and volume falls.');}},
+ {label:'Release load',onClick:(st,ui)=>{st.targetP=120;ui.flash('The extra load is removed. The gas expands.');}},
+ {label:'Light / extinguish burner',onClick:st=>{st.hot=!st.hot;st.targetT=st.hot?450:300;}},
+ {label:'Pump in gas',onClick:gasPump},
+ {label:'Reset',onClick:st=>Object.assign(st,gasFresh())}],
+ params:(st,q)=>{if(q.get('hot')==='1'){st.hot=true;st.T=st.targetT=450;}if(q.get('loaded')==='1')st.P=st.targetP=180;if(q.get('pumped')==='1')gasPump(st,{flash:()=>{}});}
+});
+xrMount(()=>gasUI,()=> '');
+let gasLast=performance.now();
+setInterval(()=>{const now=performance.now();gasStep(gasUI.st,Math.min(.1,(now-gasLast)/1000));gasLast=now;gasUI.render();},80);
+</script></body></html>
