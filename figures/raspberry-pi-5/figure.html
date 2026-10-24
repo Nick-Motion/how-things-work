@@ -1,0 +1,568 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Raspberry Pi 5</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Raspberry Pi 5 on a desk. 1 unit = 1 mm. x = depth (front at high x), y = width, z = up.
+   The board is 85 x 56 mm. Board coordinates (u, v): u along the long edge from the PCIe / microSD end (u = 0) to the
+   USB / Ethernet end (u = 85), v from the edge with USB-C and micro HDMI (v = 0) to the GPIO edge (v = 56).
+   That edge faces the viewer: x = BX + 56 - v, y = BY + 85 - u (the engine's axes are left-handed, so this keeps
+   the silkscreen reading the right way round).
+
+   How it really works (where the power and the data are after each step):
+   1. Insert the microSD card: it slides contacts-up into the push-in slot under the board at the PCIe end; the slot's
+      spring fingers touch its eight pads. The card holds Raspberry Pi OS (a FAT boot partition + the Linux root).
+   2. Plug in power: 5.1 V comes in on the USB-C port. The PMIC (Renesas DA9091) negotiates up to 5 A and switches on
+      the board's power rails one by one through its power inductors; the SoC's core, the RAM and the RP1 get their
+      voltages.
+   3. It boots: the BCM2712's boot ROM loads the bootloader from the SPI boot EEPROM; the bootloader trains the LPDDR4X
+      RAM, then reads config.txt, the device tree and the kernel from the card over the SD bus. The green ACT LED
+      flickers with every card read. Linux starts, brings up the PCIe x4 link to the RP1 I/O chip, and the RP1 runs the
+      USB 3 / USB 2 ports, Gigabit Ethernet (through its PHY), the GPIO header and the camera / display connectors.
+      With no card, the bootloader finds no OS, flashes an error code on the ACT LED and keeps retrying.
+   4. Plug in HDMI: the SoC drives the micro HDMI 0 port directly (four TMDS lane pairs) and the screen gets a picture.
+   5. The power button: a short press shuts Linux down and the PMIC drops to standby (red PWR LED on); press again to
+      boot.
+
+   Parts (each held by another):
+   DESK     wooden desk top . four brass standoffs on it, an M2.5 screw through each mounting hole
+   BOARD    green 8-layer PCB . gold mounting pads . silkscreen . inner-layer traces (power rails, DRAM bus, SPI, SD bus,
+            PCIe x4, HDMI pairs, USB, Ethernet, GPIO, MIPI) . 54 MHz crystal . decoupling capacitors
+   COMPUTE  BCM2712 SoC: substrate, metal lid, ring of capacitors, quad Cortex-A76 die . LPDDR4X RAM . SPI boot EEPROM
+   I/O      RP1 I/O controller . Ethernet PHY . RJ45 jack with magnetics, contacts and link LEDs . USB 3 stack (blue
+            tongues) . USB 2 stack . 40-pin GPIO header (2 x 20 pins) . fan header . two CAM/DISP FPC connectors .
+            PCIe FFC connector . 3-pin UART header . Wi-Fi / Bluetooth module under its can . chip antenna
+   POWER    USB-C port . DA9091 PMIC . power inductors . RTC battery connector . J2 pads . power button . ACT and PWR LEDs
+   STORAGE  microSD slot (under the board) with spring contacts . microSD card
+   CABLES   USB-C power plug and cable . micro HDMI plug and cable, both off the front edge of the desk */
+
+/* ---------- layout ---------- */
+const BH = 3, MAT = [0, 0, 100, 118];
+const BX = 8, BY = 10, PBL = 85, PBW = 56;
+const PZ0 = BH + 6, PZ1 = PZ0 + 1.6;                              // PCB underside / top, on 6 mm standoffs
+const QX = v => BX + PBW - v, QY = u => BY + PBL - u;
+const Q = (u, v, z) => [QX(v), QY(u), z];
+const HOLES = [[3.5, 3.5], [61.5, 3.5], [3.5, 52.5], [61.5, 52.5]];
+const MOUTH = -.3;                                                // microSD slot mouth (u)
+const VEDGE = BX + PBW - MAT[2];                                  // v of the desk's front edge
+const USBC = { u: 11.2, w: 8.94, h: 3.16 }, HDMI0 = { u: 25.8, w: 7.2, h: 3.5 }, HDMI1 = { u: 39.2, w: 7.2, h: 3.5 };
+const ETH = { v: 10.2, w: 16, h: 13.5 }, USB3 = { v: 29.1, w: 13.2, h: 16 }, USB2 = { v: 47, w: 13.2, h: 16 };
+
+/* ---------- colours ---------- */
+const PCBG = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' };
+const BLK = { l:'#4a4642', m:'#34312e', d:'#211f1d' }, LIDM = { l:'#f1f2f2', m:'#c9cfd2', d:'#949ca0' };
+const GOLD = matOf('#d8b25a'), BRASS = matOf('#d8b25a'), SUBM = matOf('#55624a'), CAPT = matOf('#c9a46a'), WHT = matOf('#f3efe4');
+const BEIGE = matOf('#e8dcc0'), INDM = matOf('#6a6560'), DIEM = matOf('#3a4a6a'), CABLE = matOf('#3a3632');
+const SILK = '#f3efe4', HOLE = '#1d1a17', BLUET = '#2f6fd0';
+
+/* ---------- helpers ---------- */
+const clamp1 = t => Math.max(0, Math.min(1, t));
+const rpI = (b, svg) => ({ box: b, svg });
+const pbb = (u0, v0, u1, v1, z0, z1) => [[QX(v1), QY(u1), z0], [QX(v0), QY(u0), z1]];
+const pboxSvg = (u0, v0, u1, v1, z0, z1, m, w = .5) => box(QX(v1), QY(u1), z0, QX(v0), QY(u0), z1, m, toneI, w);
+const pB = (u0, v0, u1, v1, z0, z1, m, w = .5, top = '') => rpI(pbb(u0, v0, u1, v1, z0, z1), pboxSvg(u0, v0, u1, v1, z0, z1, m, w) + (vis([0,0,1]) ? top : ''));
+const prect = (u0, v0, u1, v1, z) => [Q(u0, v0, z), Q(u1, v0, z), Q(u1, v1, z), Q(u0, v1, z)];
+const pdisc = (u, v, z, r, n = 16) => ellUV(u, v, r, r, n).map(([a, b]) => Q(a, b, z));
+const ptx = (u, v, z, str, size, col = SILK, wt = 800) => `<text transform="${txM(P(...Q(u, v, z)), Dv(0,-1,0), Dv(1,0,0))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${wt}">${str}</text>`;
+const op = (k, svg) => k >= .999 ? svg : k <= .001 ? '' : `<g opacity="${k.toFixed(3)}">${svg}</g>`;
+function rpPrism(poly, z0, z1, m, w = .6, top = ''){
+  const A = poly.map(([x, y]) => [x, y, z0]), B = poly.map(([x, y]) => [x, y, z1]);
+  let s = loft(A, B, n => toneI(n, m));
+  if (vis([0,0,1])) s += fill(pd(B), toneI([0,0,1], m)) + top + ink(pd(B), w*.8);
+  return s + hullInk([...A, ...B], w);
+}
+// keep the part of a convex (u, v) polygon with u <= cut (keep = -1) or u >= cut (keep = 1)
+function clipU(poly, cut, keep){
+  const inside = p => keep < 0 ? p[0] <= cut : p[0] >= cut, out = [];
+  for (let i = 0; i < poly.length; i++){ const a = poly[i], b = poly[(i + 1) % poly.length];
+    if (inside(a)) out.push(a);
+    if (inside(a) !== inside(b)){ const t = (cut - a[0]) / (b[0] - a[0]); out.push([cut, a[1] + (b[1] - a[1])*t]); } }
+  return out.length >= 3 ? out : null;
+}
+const rpBounds = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const rpBend = (pts, r = 1.4) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...sub(a, b)), lc = Math.hypot(...sub(c, b)), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k])*d/la), q = c.map((v, k) => b[k] + (v - b[k])*d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+const cordPath = (pts, col, r) => { const d = pd(pts, false);
+  return `<path d="${d}" fill="none" stroke="${INK}" style="stroke-width:${(2*r + .5).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" style="stroke-width:${(2*r).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`; };
+// a cable cut into short pieces, each with its own box, so it sorts with the solids it passes
+function rpWire(pts, col, r, Lp = 4){
+  const q = rpBend(pts, 3), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = Math.hypot(...sub(q[j], q[i]));
+    while (j < q.length - 1 && len < Lp){ j++; len += Math.hypot(...sub(q[j], q[j - 1])); }
+    const seg = q.slice(i, j + 1), b = rpBounds(seg, r); b[0][2] = Math.max(b[0][2], BH);
+    out.push(rpI(b, cordPath(seg, col, r))); i = j; }
+  return out;
+}
+
+/* ---------- boot: stages, LEDs, which traces carry something ---------- */
+const STAGES = [
+  { t: 0,   key:'rails',  name:'PMIC RAILS', say:'The PMIC switches the power rails on, one by one' },
+  { t: .7,  key:'eeprom', name:'EEPROM',     say:'The SoC loads its bootloader from the SPI boot EEPROM' },
+  { t: 1.5, key:'sdram',  name:'SDRAM',      say:'The bootloader wakes up and trains the LPDDR4X RAM' },
+  { t: 2.1, key:'sd',     name:'SD CARD',    say:'It reads the kernel from the microSD card: the ACT LED flickers' },
+  { t: 4.3, key:'kernel', name:'KERNEL',     say:'Linux starts and wakes the RP1 over PCIe x4: USB, Ethernet and GPIO come alive' },
+  { t: 5.7, key:'run',    name:'DESKTOP',    say:'Booted. The ACT LED blinks whenever the card is read' },
+];
+const stageOf = bt => { let i = 0; for (let j = 0; j < STAGES.length; j++) if (bt >= STAGES[j].t) i = j; return i; };
+const powered = st => ['boot', 'run', 'nosd', 'down'].includes(st.phase);
+const nowS = () => performance.now() / 1000;
+function leds(st){
+  const tp = nowS() - st.t0, ph = st.phase;
+  let act = false;
+  if (ph === 'boot'){ const k = STAGES[stageOf(st.bt)].key;
+    if (k === 'sd') act = ((st.bt*23) | 0) % 3 !== 0;
+    else if (k === 'kernel') act = ((st.bt*9) | 0) % 2 === 0; }
+  else if (ph === 'run'){ const c = tp % 2.6; act = c < .1 || (c > .22 && c < .32); }
+  else if (ph === 'nosd'){ const c = tp % 3; act = c < 1.6 && (c % .4) < .2; }             // four flashes, a pause, again
+  else if (ph === 'down') act = (tp % .2) < .1;
+  return { act, red: ph === 'halt' };
+}
+function active(st, id){
+  if (!powered(st)) return 0;
+  if (st.phase === 'down') return id === 'pwr' || id === 'sd' ? 1 : 0;
+  const key = st.phase === 'boot' ? STAGES[stageOf(st.bt)].key : st.phase === 'nosd' ? 'nosd' : 'run';
+  const order = ['rails', 'eeprom', 'sdram', 'sd', 'kernel', 'run'], at = order.indexOf(key);
+  if (id === 'pwr') return 1;
+  if (id === 'spi') return key === 'eeprom' ? 2 : 0;
+  if (id === 'dram') return key === 'sdram' ? 2 : (at > 2 || key === 'nosd') ? 1 : 0;
+  if (id === 'sd') return key === 'sd' ? 2 : key === 'nosd' ? (((nowS() - st.t0) % 3) < 1.6 ? 2 : 0) : key === 'run' ? 1 : 0;
+  if (['pcie', 'usb3', 'usb2', 'eth', 'gpio', 'mipi'].includes(id)) return key === 'kernel' ? 2 : key === 'run' ? 1 : 0;
+  if (id === 'hdmi') return st.hd >= 1 && (at >= 1 || key === 'nosd') ? 2 : 0;
+  return 0;
+}
+const hdmiOn = st => st.hd >= 1 && powered(st) && st.phase !== 'down' && (st.phase !== 'boot' || st.bt >= STAGES[1].t);
+
+/* ---------- inner-layer traces (u, v polylines) ---------- */
+const lanes = (n, f0, gap) => Array.from({ length: n }, (_, i) => f0(i*gap - (n - 1)*gap/2));
+const ROUTES = [
+  { id:'pwr', w:.9, lines:[[[11.2, 6.4], [11.2, 9], [12, 12]], [[16.5, 14], [19, 16.5], [23, 22]], [[13, 18.5], [12, 23]], [[16.5, 12.5], [30, 9.5], [44, 9.5], [49, 21], [50, 27]]] },
+  { id:'spi', w:.4, lines: lanes(3, d => [[35 + d*.6, 22], [37 + d, 19.5], [39, 19 + d]], 1) },
+  { id:'dram', w:.35, lines: lanes(6, d => [[13, 29.5 + d], [22, 29.5 + d]], 1.6) },
+  { id:'sd', w:.35, lines: lanes(4, d => [[21, 38.6 + d*.3], [17, 37.2 + d], [9, 37.2 + d], [7 - d, 34.5]], .45) },
+  { id:'pcie', w:.35, lines: lanes(8, d => [[36, 30.5 + d], [47, 30.5 + d]], .9) },
+  { id:'hdmi', w:.35, lines: lanes(8, d => [[25.5 + d, 23], [25.5 + d, 14], [25.8 + d*.8, 6.5]], .55) },
+  { id:'hdmi1', w:.35, lines: lanes(8, d => [[32.5 + d, 23], [32.5 + d, 14], [39.2 + d*.8, 6.5]], .55) },
+  { id:'usb3', w:.35, lines: lanes(4, d => [[55, 32 + d], [62, 30 + d], [71, 29 + d]], .7) },
+  { id:'usb2', w:.35, lines: lanes(4, d => [[53 + d, 36], [56 + d, 42], [63, 47 + d], [71, 47 + d]], .7) },
+  { id:'eth', w:.35, lines: lanes(4, d => [[51 + d, 27], [55 + d, 17], [60.5 + d, 12.5]], .7).concat(lanes(4, d => [[63.5, 9.5 + d], [67, 9.5 + d]], .7)) },
+  { id:'gpio', w:.3, lines: lanes(6, d => [[49 + d*1.5, 37], [45 + d*3, 46], [33 + d*4, 50]], 1) },
+  { id:'mipi', w:.3, lines: [[[48, 27], [46.5, 18.5]], [[49, 27], [47.5, 18.5]], [[53, 27], [52.5, 18.5]], [[54, 27], [53.5, 18.5]]] },
+];
+function traceSvg(st, k){
+  const z = PZ1 + .015, l3 = pts => pd(pts.map(([u, v]) => Q(u, v, z)), false);
+  let s = '';
+  for (const r of ROUTES){
+    const d = r.lines.map(l3).join(''), cap = 'fill="none" stroke-linecap="round" stroke-linejoin="round"';
+    if (k < .999) s += `<path d="${d}" ${cap} stroke="${PCBG.l}" style="stroke-width:${r.w}" opacity="${f(.5*(1 - k))}"/>`;
+    if (k > 0){
+      const a = active(st, r.id === 'hdmi1' ? 'none' : r.id);
+      s += `<path d="${d}" ${cap} stroke="${a ? (r.id === 'pwr' ? '#ff7a3a' : '#f6c27a') : '#c98a52'}" style="stroke-width:${r.w}" opacity="${f(k)}"/>`;
+      if (a === 2) s += `<path d="${d}" ${cap} stroke="#fff6c0" style="stroke-width:${(r.w*1.5).toFixed(2)}" stroke-dasharray="1.2 3.6" stroke-dashoffset="${f(-st.clock*16)}" opacity="${f(k)}"/>`;
+    }
+  }
+  return s;
+}
+
+/* ---------- desk underside: standoffs, the microSD slot and the card ---------- */
+function standoffs(){
+  return HOLES.map(([u, v]) => { const [x, y] = Q(u, v, 0);
+    return rpI([[x - 2.3, y - 2.3, BH], [x + 2.3, y + 2.3, PZ0]], cyl(x, y, BH, PZ0, 2.2, BRASS, toneI, .7, 6)); });
+}
+const CARD_V = [22.5, 33.5];
+function cardGeo(st){
+  const t = st.sd, e1 = ease(clamp1(t/.35)), e2 = ease(clamp1((t - .35)/.65));
+  const z0 = BH + (PZ0 - 1.5 - BH)*e1, du = -17.5*(1 - e2), u0 = -2.5 + du, u1 = 12.5 + du;
+  const [v0, v1] = CARD_V;
+  return { z0, z1: z0 + .8, u0, u1, poly: [[u0, v0 + .9], [u0 + .9, v0], [u1 - .5, v0], [u1, v0 + .5], [u1, v1], [u0, v1]] };
+}
+function cardSvg(g, poly, m){
+  const xy = poly.map(([u, v]) => [QX(v), QY(u)]);
+  let top = '';
+  for (let i = 0; i < 8; i++){ const v = CARD_V[0] + 1.1 + i*1.2, a = Math.max(g.u1 - 3.6, poly === g.poly ? -1e9 : Math.min(...poly.map(p => p[0]))), b = Math.min(g.u1 - .6, Math.max(...poly.map(p => p[0])));
+    if (b > a + .1) top += fill(pd(prect(a, v - .4, b, v + .4, g.z1 + .01)), GOLD.l) + ink(pd(prect(a, v - .4, b, v + .4, g.z1 + .01)), .2); }
+  const ua = Math.max(g.u0 + 1.5, Math.min(...poly.map(p => p[0]))), ub = Math.min(g.u0 + 6, Math.max(...poly.map(p => p[0])));
+  if (ub > ua + .5) top += fill(pd(prect(ua, 24, ub, 32, g.z1 + .01)), mix(m.l, '#ffffff', .35));
+  return rpPrism(xy, g.z0, g.z1, m, .6, top);
+}
+function cardItem(st, m){
+  const g = cardGeo(st), part = clipU(g.poly, MOUTH, -1);
+  if (!part) return null;
+  const us = part.map(p => p[0]);
+  return rpI(pbb(Math.min(...us), CARD_V[0], Math.max(...us), CARD_V[1], g.z0, g.z1), act('card', cardSvg(g, part, m)));
+}
+function slotItem(st, m, k){
+  const z0 = PZ0 - 1.9, z1 = PZ0;
+  let shell = pboxSvg(MOUTH, 21.5, 14.5, 34.5, z0, z1, LIDM, .6);
+  if (vis([0,1,0])) shell += shape(on(PY(QY(MOUTH) + .05), rectUV(QX(34), z0 + .3, QX(22), z1 - .4)), HOLE, .4);
+  let inner = '';
+  if (k > 0){
+    for (let i = 0; i < 8; i++){ const v = 23.6 + i*1.2; inner += line([Q(13.5, v, z1 - .2), Q(8.5, v, z1 - .9)], .55).replace(INK, GOLD.d); }
+    const g = cardGeo(st), part = clipU(g.poly, MOUTH, 1);
+    if (part && g.z0 > PZ0 - 2) inner = cardSvg(g, part, m) + inner;
+  }
+  return rpI(pbb(MOUTH, 21.5, 14.5, 34.5, z0, z1), op(1 - .8*k, shell) + op(k, inner));
+}
+
+/* ---------- the PCB ---------- */
+const PCB_POLY = rrUV(0, 0, PBL, PBW, 3, 4).map(([u, v]) => [QX(v), QY(u)]);
+function pcbItem(st, k){
+  let top = '';
+  for (const [u, v] of HOLES) top += fill(pd(pdisc(u, v, PZ1 + .01, 3, 20)), GOLD.l) + ink(pd(pdisc(u, v, PZ1 + .01, 3, 20)), .3);
+  top += traceSvg(st, 0);
+  top += ptx(35, 14, PZ1 + .02, 'Raspberry Pi 5', 2.2) + ptx(35, 11.6, PZ1 + .02, '(c) 2023', 1.2);
+  top += ptx(2.6, 37.2, PZ1 + .02, 'PCIe', .95) + ptx(66.8, 48, PZ1 + .02, 'FAN', .95) + ptx(32.5, 5.3, PZ1 + .02, 'UART', .9)
+    + ptx(46.5, 19.4, PZ1 + .02, 'CAM0', .8) + ptx(52.5, 19.4, PZ1 + .02, 'CAM1', .8) + ptx(6.5, 15.8, PZ1 + .02, 'BAT', .9)
+    + ptx(5.8, 7.2, PZ1 + .02, 'J2', .8) + ptx(3.4, 12.6, PZ1 + .02, 'ACT', .7) + ptx(3.4, 14.8, PZ1 + .02, 'PWR', .7);
+  top += fill(pd(prect(7.9, 49.1, 8.85, 49.6, PZ1 + .02)), SILK);                                   // pin 1 mark
+  // J2 pads
+  for (const u of [5, 6.6]) top += fill(pd(prect(u - .5, 8.3, u + .5, 9.6, PZ1 + .02)), GOLD.l);
+  const body = rpPrism(PCB_POLY, PZ0, PZ1, PCBG, 1.2, top);
+  let svg = op(1 - .7*k, body);
+  if (k > 0) svg += op(k, traceSvg(st, 1) + HOLES.map(([u, v]) => ink(pd(pdisc(u, v, PZ1 + .01, 3, 20)), .4)).join(''));
+  const b = [[QX(PBW), QY(PBL), PZ0], [QX(0), QY(0), PZ1]];
+  return rpI(b, svg + (k > 0 ? op(.6*k, hullInk([...PCB_POLY.map(([x, y]) => [x, y, PZ0]), ...PCB_POLY.map(([x, y]) => [x, y, PZ1])], 1.6)) : ''));
+}
+function screws(){
+  return HOLES.map(([u, v]) => { const [x, y] = Q(u, v, 0), zt = PZ1 + 1.3;
+    let s = cyl(x, y, PZ1, zt, 2.2, LIDM, toneI, .6, 16);
+    if (vis([0,0,1])) s += line([[x - 1.2, y - 1.2, zt + .02], [x + 1.2, y + 1.2, zt + .02]], .4) + line([[x - 1.2, y + 1.2, zt + .02], [x + 1.2, y - 1.2, zt + .02]], .4);
+    return rpI([[x - 2.3, y - 2.3, PZ1], [x + 2.3, y + 2.3, zt]], s); });
+}
+
+/* ---------- compute: SoC, RAM, EEPROM, crystal, passives ---------- */
+function socItem(st, k){
+  const zs = PZ1 + .9, zl = PZ1 + 2.2, on1 = powered(st) && st.phase !== 'down';
+  const sub = pB(20, 22, 37, 39, PZ1, zs, SUBM, .5);
+  const ring = [];
+  for (let u = 22.6; u < 35; u += 2.1) for (const v of [22.6, 37.8]) ring.push(pB(u, v, u + .9, v + .55, zs, zs + .35, CAPT, .2));
+  for (let v = 25; v < 36; v += 2.1) for (const u of [20.6, 35.85]) ring.push(pB(u, v, u + .55, v + .9, zs, zs + .35, CAPT, .2));
+  const lidTop = ptx(28.5, 31.6, zl + .01, 'BCM2712', 2, '#5b6266') + ptx(28.5, 29.4, zl + .01, 'ZPKFSB00C0T', .95, '#7b8286') + ptx(28.5, 27.6, zl + .01, '2340', .95, '#7b8286');
+  const lid = pB(22, 24, 35, 37, zs, zl, LIDM, .6, lidTop);
+  lid.svg = op(1 - .8*k, lid.svg);
+  let die = '';
+  if (k > 0){ const dz = zs + .5;
+    let cores = '';
+    for (const [a, b] of [[25.9, 28], [28.6, 28], [25.9, 30.7], [28.6, 30.7]]) cores += fill(pd(prect(a, b, a + 2.3, b + 2.3, dz + .01)), on1 ? '#8fb3ff' : '#6d83b0') + ink(pd(prect(a, b, a + 2.3, b + 2.3, dz + .01)), .2);
+    cores += fill(pd(prect(25.9, 33.3, 31.3, 34.2, dz + .01)), '#7a6f9a');
+    die = op(k, pboxSvg(25.4, 27.4, 31.6, 34.6, zs, dz, DIEM, .4) + (vis([0,0,1]) ? cores : ''));
+  }
+  return rpI(pbb(20, 22, 37, 39, PZ1, zl), sub.svg + byDepth([...ring, lid]) + die);
+}
+function chips(st){
+  const out = [];
+  out.push(pB(5.5, 23, 16, 36, PZ1, PZ1 + 1, BLK, .5, ptx(10.75, 30.2, PZ1 + 1.01, 'LPDDR4X', 1.6, '#d9d4c7') + ptx(10.75, 28, PZ1 + 1.01, '8GB 4267', 1.05, '#a9a396')
+    + ptx(10.75, 26.2, PZ1 + 1.01, 'MICRON', 1.05, '#a9a396') + fill(pd(pdisc(6.6, 34.8, PZ1 + 1.02, .35, 8)), '#8a847a')));
+  // RP1: the I/O chip
+  { let top = ptx(51, 31.6, PZ1 + 1.01, 'RP1', 2.6, '#e9e4d8') + ptx(51, 29.4, PZ1 + 1.01, 'C0 2023', .9, '#a9a396');
+    for (const [du, dv, r, c] of [[0, 0, .55, '#d0405a'], [-.5, .5, .45, '#d0405a'], [.5, .5, .45, '#d0405a'], [0, 1.05, .4, '#4fa36a']]) top += fill(pd(pdisc(51 + du, 34 + dv, PZ1 + 1.02, r, 10)), c);
+    out.push(pB(46, 27, 56, 37, PZ1, PZ1 + 1, BLK, .5, top)); }
+  out.push(pB(10, 12, 16.5, 18.5, PZ1, PZ1 + .9, BLK, .45, ptx(13.25, 15.4, PZ1 + .91, 'DA9091', 1.05, '#d9d4c7') + ptx(13.25, 13.8, PZ1 + .91, 'RENESAS', .8, '#a9a396')));
+  for (const [u0, v0] of [[17.5, 11], [17.5, 15.5]]) out.push(pB(u0, v0, u0 + 3.5, v0 + 3.5, PZ1, PZ1 + 1.8, INDM, .45, ptx(u0 + 1.75, v0 + 1.3, PZ1 + 1.81, '1R0', .9, '#e6e1d4')));
+  out.push(pB(39, 17.5, 42.5, 20.5, PZ1, PZ1 + .8, BLK, .4, ptx(40.75, 18.7, PZ1 + .81, '25Q16', .75, '#d9d4c7')));        // SPI boot EEPROM
+  out.push(pB(39, 24, 42, 26.5, PZ1, PZ1 + .9, LIDM, .4, ptx(40.5, 25, PZ1 + .91, '54.0', .75, '#7b8286')));               // 54 MHz crystal
+  out.push(pB(57.5, 6.5, 63.5, 12.5, PZ1, PZ1 + .85, BLK, .45, ptx(60.5, 9.2, PZ1 + .86, 'BCM54213', .8, '#d9d4c7')));     // Ethernet PHY
+  for (const v of [23, 26, 29, 32, 35]) out.push(pB(43.5, v, 44.3, v + 1.2, PZ1, PZ1 + .5, CAPT, .2));
+  for (const v of [28, 31, 34]) out.push(pB(57.5, v, 58.3, v + 1.2, PZ1, PZ1 + .5, CAPT, .2));
+  for (const u of [10, 12, 14]) out.push(pB(u, 19.5, u + 1.2, 20.3, PZ1, PZ1 + .5, CAPT, .2));
+  out.push(pB(1.2, 40, 3.2, 46, PZ1, PZ1 + 1, WHT, .4));                                                                     // chip antenna
+  return out;
+}
+function wifiItem(st, k){
+  const z1 = PZ1 + 1.6;
+  const can = pB(5, 38, 16, 47.5, PZ1, z1, LIDM, .5, fill(pd(prect(6, 39, 15, 46.5, z1 + .01)), LIDM.l) + ink(pd(prect(6, 39, 15, 46.5, z1 + .01)), .25)
+    + ptx(10.5, 42.2, z1 + .02, 'Wi-Fi BT', .95, '#7b8286'));
+  let inner = '';
+  if (k > 0) inner = op(k, pboxSvg(7.8, 40, 12.8, 45, PZ1, PZ1 + .7, BLK, .4) + (vis([0,0,1]) ? ptx(10.3, 42.3, PZ1 + .71, '43455', .8, '#d9d4c7') : ''));
+  return rpI(can.box, op(1 - .8*k, can.svg) + inner);
+}
+
+/* ---------- connectors on top ---------- */
+function gpioItem(){
+  const z1 = PZ1 + 2.5, zt = PZ1 + 8.5, its = [pB(7.1, 50, 57.9, 55, PZ1, z1, BLK, .5)];
+  for (let i = 0; i < 20; i++) for (const v of [51.23, 53.77]){ const u = 8.37 + 2.54*i;
+    its.push(pB(u - .32, v - .32, u + .32, v + .32, z1, zt, GOLD, .22)); }
+  return rpI(pbb(7.1, 50, 57.9, 55, PZ1, zt), byDepth(its));
+}
+function smallConnectors(){
+  const out = [], zt = PZ1;
+  out.push(pB(64.5, 49, 69, 53.5, zt, zt + 2.9, WHT, .4, fill(pd(prect(65.1, 50.6, 68.4, 52.6, zt + 2.91)), HOLE)));               // fan header
+  out.push(pB(4.5, 11.5, 8.5, 15, zt, zt + 2.9, WHT, .4, fill(pd(prect(5, 12.8, 8, 14.4, zt + 2.91)), HOLE)));                    // RTC battery
+  { const u = pB(30.5, .6, 34.5, 4.2, zt, zt + 2.9, WHT, .4);                                                                      // UART, side entry
+    if (vis([1,0,0])) u.svg += shape(on(PX(QX(.6) + .05), rectUV(QY(34), zt + .6, QY(31), zt + 2.3)), HOLE, .3);
+    out.push(u); }
+  out.push(pB(.6, 20.5, 4.6, 35.5, zt, zt + 1.2, BLK, .45, fill(pd(prect(.9, 21, 1.6, 35, zt + 1.21)), '#8a6a3a')));                  // PCIe FFC
+  for (const u0 of [44.5, 50.5]) out.push(pB(u0, 3, u0 + 4, 18.5, zt, zt + 1.4, BLK, .45, fill(pd(prect(u0 + .3, 3.3, u0 + 1.1, 18.2, zt + 1.41)), BEIGE.l)));   // CAM/DISP FPC
+  return out;
+}
+function buttonItem(st){
+  const zc = PZ1 + 1.1, push = st.btnT > 0 ? .7 : 0;
+  const s = pboxSvg(.4, 7.5, 3.4, 11, PZ1, PZ1 + 2.2, BLK, .5) + rod(Q(.4, 9.25, zc), Q(-1 + push, 9.25, zc), .8, matOf('#d4d8da'), toneI, .5);
+  return rpI(pbb(-1, 7.5, 3.4, 11, PZ1, PZ1 + 2.2), act('button', s));
+}
+function ledItems(st){
+  const L2 = leds(st), out = [];
+  for (const [v, lit, on, off] of [[12.5, L2.act, '#5fe07a', '#cfe8d2'], [14.6, L2.red, '#ff5a4a', '#ecc6c0']]){
+    let s = pboxSvg(.6, v, 2, v + 1.2, PZ1, PZ1 + .55, matOf(lit ? on : off), .3);
+    if (lit){ const [X, Y] = P(...Q(1.3, v + .6, PZ1 + .6));
+      s += `<circle cx="${f(X)}" cy="${f(Y)}" r="3.4" fill="${on}" opacity=".35"/><circle cx="${f(X)}" cy="${f(Y)}" r="1.5" fill="#ffffff" opacity=".7"/>`; }
+    out.push(rpI(pbb(.6, v, 2, v + 1.2, PZ1, PZ1 + .6), s)); }
+  return out;
+}
+
+/* ---------- ports ---------- */
+// a port on the front edge (USB-C, micro HDMI): metal shell from v = -1.2 to v1, mouth on the +x face
+function frontPort(spec, st, k, plugT, tipLen, tipH){
+  const u0 = spec.u - spec.w/2, u1 = spec.u + spec.w/2, v1 = 6.3, z1 = PZ1 + spec.h, zc = PZ1 + spec.h/2;
+  let shell = pboxSvg(u0, -1.2, u1, v1, PZ1, z1, LIDM, .55);
+  const xf = QX(-1.2) + .05, yc = QY(spec.u);
+  if (vis([1,0,0])){ const hw = spec.w/2 - .7, hh = spec.h/2 - .5;
+    shell += shape(on(PX(xf), rrUV(yc - hw, zc - hh, yc + hw, zc + hh, Math.min(hh, 1), 4)), HOLE, .4)
+      + fill(pd(on(PX(xf + .01), rectUV(yc - hw + 1.2, zc - .3, yc + hw - 1.2, zc + .3))), '#3a3632'); }
+  if (vis([0,0,1])) shell += line([Q(u0 + .6, 1, z1 + .02), Q(u1 - .6, 1, z1 + .02)], .25);
+  let inner = '';
+  if (k > 0){
+    inner += pboxSvg(spec.u - spec.w/2 + 1.6, .2, spec.u + spec.w/2 - 1.6, 5.4, zc - .3, zc + .3, BLK, .3);
+    for (let i = 0; i < 6; i++){ const u = spec.u - spec.w/2 + 2.2 + i*(spec.w - 4.4)/5; inner += line([Q(u, .6, zc + .32), Q(u, 4.8, zc + .32)], .3).replace(INK, GOLD.m); }
+    const e2 = ease(clamp1((plugT - .4)/.6)), vf = -1.2 - 14*(1 - e2);
+    if (plugT > .4 && vf + tipLen > -1.2){ const a = Math.max(-1.2, vf), b = Math.min(v1, vf + tipLen);
+      inner += pboxSvg(spec.u - tipH[0], a, spec.u + tipH[0], b, zc - tipH[1], zc + tipH[1], METAL, .4); }
+  }
+  return rpI(pbb(u0, -1.2, u1, v1, PZ1, z1), op(1 - .8*k, shell) + op(k, inner));
+}
+// a port on the far end (USB stacks, Ethernet): metal shell from u = u0 to 88, mouth on the -y face
+function endPort(kind, spec, st, k){
+  const u0 = kind === 'eth' ? 66.5 : 70.5, v0 = spec.v - spec.w/2, v1 = spec.v + spec.w/2, z1 = PZ1 + spec.h, yf = QY(88) - .05;
+  let shell = pboxSvg(u0, v0, 88, v1, PZ1, z1, LIDM, .7);
+  const xr = (a, b) => [QX(b), QX(a)];
+  const run = st.phase === 'run', L2 = leds(st);
+  if (vis([0,-1,0])){
+    if (kind === 'eth'){
+      const [xa, xb] = xr(spec.v - 5.9, spec.v + 5.9);
+      shell += shape(on(PY(yf), rectUV(xa, PZ1 + 2.6, xb, PZ1 + 11)), HOLE, .5) + shape(on(PY(yf - .01), rectUV(QX(spec.v + 2), PZ1 + 1.2, QX(spec.v - 2), PZ1 + 2.7)), HOLE, .4);
+      for (let i = 0; i < 8; i++){ const v = spec.v - 3.5 + i; shell += line([[QX(v), yf - .02, PZ1 + 10.6], [QX(v), yf - .02, PZ1 + 9.2]], .35).replace(INK, GOLD.l); }
+      const lg = run ? '#5fe07a' : '#6d7a6f', la = run && L2.act ? '#ffb347' : '#8a7a5a';
+      shell += shape(on(PY(yf), rectUV(QX(v1 - 1), PZ1 + 11.6, QX(v1 - 3), PZ1 + 12.8)), lg, .3) + shape(on(PY(yf), rectUV(QX(v0 + 3), PZ1 + 11.6, QX(v0 + 1), PZ1 + 12.8)), la, .3);
+    } else {
+      for (const zb of [PZ1 + 1.7, PZ1 + 9.3]){ const [xa, xb] = xr(spec.v - 6.25, spec.v + 6.25);
+        shell += shape(on(PY(yf), rectUV(xa, zb, xb, zb + 5.1)), HOLE, .5);
+        shell += fill(pd(on(PY(yf - .01), rectUV(QX(spec.v + 5.5), zb + 2.9, QX(spec.v - 5.5), zb + 4.6))), kind === 'usb3' ? BLUET : '#2b2724'); }
+    }
+  }
+  if (vis([0,0,1])) for (const v of [v0 + 1.5, v1 - 1.5]) shell += line([Q(u0 + 2, v, z1 + .02), Q(86, v, z1 + .02)], .25);
+  let inner = '';
+  if (k > 0){
+    if (kind === 'eth'){
+      inner += pboxSvg(67.2, v0 + 1.5, 72, v1 - 1.5, PZ1 + .3, PZ1 + 9, BLK, .45);                                            // magnetics
+      for (let i = 0; i < 8; i++){ const v = spec.v - 3.5 + i; inner += line([Q(86, v, PZ1 + 10.6), Q(79, v, PZ1 + 8.2), Q(77.5, v, PZ1)], .45).replace(INK, GOLD.d); }
+    } else for (const zb of [PZ1 + 1.7, PZ1 + 9.3]){
+      inner += pboxSvg(73, spec.v - 5.5, 87, spec.v + 5.5, zb + 2.9, zb + 4.6, matOf(kind === 'usb3' ? BLUET : '#2b2724'), .4);
+      for (let i = 0; i < (kind === 'usb3' ? 9 : 4); i++){ const v = spec.v - 4.4 + i*8.8/((kind === 'usb3' ? 9 : 4) - 1); inner += line([Q(76, v, zb + 2.85), Q(86, v, zb + 2.85)], .3).replace(INK, GOLD.m); }
+    }
+  }
+  return rpI(pbb(u0, v0, 88, v1, PZ1, z1), op(1 - .8*k, shell) + op(k, inner));
+}
+
+/* ---------- plugs and cables ---------- */
+const PLUGS = {
+  pw: { u: USBC.u, ow: 12, oh: 3.2, len: 16, zIn: PZ1 + USBC.h/2, tip: [4.15, 1.2], tipLen: 6.6, r: 1.3, act:'power' },
+  hd: { u: HDMI0.u, ow: 10.5, oh: 2.8, len: 15, zIn: PZ1 + HDMI0.h/2, tip: [3.2, 1.1], tipLen: 6.2, r: 1.5, act:'hdmi' },
+};
+function plugItems(key, t, m){
+  const sp = PLUGS[key], e1 = ease(clamp1(t/.4)), e2 = ease(clamp1((t - .4)/.6));
+  const zr = BH + sp.oh, zc = zr + (sp.zIn - zr)*e1, vf = -1.2 - 14*(1 - e2), vb = vf - sp.len, out = [];
+  const u0 = sp.u - sp.ow/2, u1 = sp.u + sp.ow/2;
+  let body = pboxSvg(u0, vb, u1, vf, zc - sp.oh, zc + sp.oh, m, .8);
+  if (vis([0,0,1])) body += line([Q(u0 + 1.5, vb + 3, zc + sp.oh + .02), Q(u1 - 1.5, vb + 3, zc + sp.oh + .02)], .3);
+  out.push(rpI(pbb(u0, vb, u1, vf, zc - sp.oh, zc + sp.oh), act(sp.act, body)));
+  const te = Math.min(-1.2, vf + sp.tipLen);
+  if (te > vf + .05) out.push(rpI(pbb(sp.u - sp.tip[0], vf, sp.u + sp.tip[0], te, zc - sp.tip[1], zc + sp.tip[1]), pboxSvg(sp.u - sp.tip[0], vf, sp.u + sp.tip[0], te, zc - sp.tip[1], zc + sp.tip[1], METAL, .5)));
+  const rr = sp.oh*.7;
+  out.push(rpI(pbb(sp.u - rr, vb - 4, sp.u + rr, vb, zc - rr, zc + rr), act(sp.act, rod(Q(sp.u, vb, zc), Q(sp.u, vb - 4, zc), rr, m, toneI, .6, sp.r + .2))));
+  const zf = BH + sp.r, v0 = vb - 4, pts = [Q(sp.u, v0, zc)];
+  if (v0 - 7 > VEDGE + 2) pts.push(Q(sp.u, v0 - 3.5, (zc + zf)/2), Q(sp.u, v0 - 7, zf));
+  pts.push(Q(sp.u, VEDGE, zf));
+  out.push(...rpWire(pts, m.m, sp.r));
+  return out;
+}
+const tail = (key, m) => { const sp = PLUGS[key], z = BH + sp.r; return cordPath([Q(sp.u, VEDGE, z), Q(sp.u, VEDGE - 1.4, BH - .4), Q(sp.u, VEDGE - 1.7, -8)], m.m, sp.r); };
+
+/* ---------- labels ---------- */
+const LB = [BX, BX + PBW + 2, BY - 3, BY + 88, 0, 26];
+function insideLabels(st){
+  const A = id => !!active(st, id), L2 = leds(st), pw = powered(st);
+  return [
+    { at: Q(28.5, 30.5, PZ1 + 2.2), text:'SOC BCM2712', on: pw },
+    { at: Q(27, 33.5, PZ1 + 1.4), text:'QUAD A76 CPU DIE', on: pw },
+    { at: Q(10.75, 31, PZ1 + 1), text:'RAM LPDDR4X', on: active(st, 'dram') === 2 },
+    { at: Q(51, 32, PZ1 + 1), text:'RP1 I/O CHIP', on: active(st, 'pcie') === 2 },
+    { at: Q(13.25, 15, PZ1 + .9), text:'PMIC DA9091', on: pw },
+    { at: Q(19.25, 17, PZ1 + 1.8), text:'POWER INDUCTORS', on: pw },
+    { at: Q(40.75, 19, PZ1 + .8), text:'BOOT EEPROM', on: active(st, 'spi') === 2 },
+    { at: Q(40.5, 25.2, PZ1 + .9), text:'54 MHZ CRYSTAL', on: pw },
+    { at: Q(10.3, 42.5, PZ1 + .7), text:'WIFI BT CHIP', on: false },
+    { at: Q(2.2, 43, PZ1 + 1), text:'CHIP ANTENNA', on: false },
+    { at: Q(60.5, 9.5, PZ1 + .85), text:'ETHERNET PHY', on: active(st, 'eth') === 2 },
+    { at: Q(80, ETH.v, PZ1 + ETH.h), text:'ETHERNET JACK', on: st.phase === 'run' },
+    { at: Q(69.6, ETH.v + 3, PZ1 + 9), text:'MAGNETICS', on: false },
+    { at: Q(80, USB3.v, PZ1 + USB3.h), text:'USB 3 PORTS', on: active(st, 'usb3') === 2 },
+    { at: Q(80, USB2.v, PZ1 + USB2.h), text:'USB 2 PORTS', on: active(st, 'usb2') === 2 },
+    { at: Q(USBC.u, 2.5, PZ1 + USBC.h), text:'USB-C POWER IN', on: pw },
+    { at: Q(HDMI0.u, 2.5, PZ1 + HDMI0.h), text:'MICRO HDMI 0', on: hdmiOn(st) },
+    { at: Q(HDMI1.u, 2.5, PZ1 + HDMI1.h), text:'MICRO HDMI 1', on: false },
+    { at: Q(32.5, 2.4, PZ1 + 2.9), text:'UART HEADER', on: false },
+    { at: Q(46.5, 11, PZ1 + 1.4), text:'CAM DISP 0', on: false },
+    { at: Q(52.5, 11, PZ1 + 1.4), text:'CAM DISP 1', on: false },
+    { at: Q(2.6, 28, PZ1 + 1.2), text:'PCIE CONNECTOR', on: false },
+    { at: Q(10, 23, PZ0 - .4), text:'MICROSD SLOT', on: active(st, 'sd') === 2 },
+    { at: Q(cardGeo(st).u0 + 3, 28, cardGeo(st).z1), text:'MICROSD CARD', on: active(st, 'sd') === 2 },
+    { at: Q(-.6, 9.25, PZ1 + 1.1), text:'POWER BUTTON', on: st.btnT > 0 },
+    { at: Q(1.3, 13.1, PZ1 + .55), text:'ACT LED', on: L2.act },
+    { at: Q(1.3, 15.2, PZ1 + .55), text:'PWR LED', on: L2.red },
+    { at: Q(6.5, 13.2, PZ1 + 2.9), text:'RTC BATTERY', on: false },
+    { at: Q(30, 52.5, PZ1 + 8.5), text:'GPIO HEADER', on: active(st, 'gpio') === 2 },
+    { at: Q(66.8, 51.2, PZ1 + 2.9), text:'FAN HEADER', on: false },
+    { at: Q(41.5, 31, PZ1), text:'PCIE X4 LANES', on: active(st, 'pcie') === 2 },
+    { at: Q(30, 9.5, PZ1), text:'POWER RAILS', on: pw },
+    { at: Q(61.5, 3.5, PZ0 - 3), text:'STANDOFF', on: false },
+  ];
+}
+function surfaceLabels(st){
+  const L2 = leds(st);
+  return [
+    { at: Q(28.5, 30.5, PZ1 + 2.2), text:'SOC', on: powered(st) },
+    { at: Q(51, 32, PZ1 + 1), text:'RP1', on: active(st, 'pcie') === 2 },
+    { at: Q(cardGeo(st).u0 + 1, 28, cardGeo(st).z1), text:'MICROSD CARD', on: active(st, 'sd') === 2 },
+    { at: Q(USBC.u, 2.5, PZ1 + USBC.h), text:'USB-C POWER', on: powered(st) },
+    { at: Q(HDMI0.u, 2.5, PZ1 + HDMI0.h), text:'MICRO HDMI', on: hdmiOn(st) },
+    { at: Q(1.3, 13.1, PZ1 + .55), text:'ACT LED', on: L2.act },
+    { at: Q(-.6, 9.25, PZ1 + 1.1), text:'POWER BUTTON', on: st.btnT > 0 },
+    { at: Q(30, 52.5, PZ1 + 8.5), text:'GPIO HEADER', on: false },
+    { at: Q(80, USB3.v, PZ1 + USB3.h), text:'USB PORTS', on: false },
+    { at: Q(80, ETH.v, PZ1 + ETH.h), text:'ETHERNET', on: st.phase === 'run' },
+  ];
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0), plugM = m, hdM = CABLE;
+  const frontF = vis([1, 0, 0]);
+  let s = '';
+  const tails = tail('pw', plugM) + tail('hd', hdM);
+  if (!frontF) s += tails;
+  s += board(MAT[0], MAT[1], MAT[2], MAT[3], BH, 6, WOOD);
+  const top = boardTop(MAT[0], MAT[1], MAT[2], MAT[3], BH, 6);
+  const bp = PCB_POLY.map(([x, y]) => [x, y, PZ1]);
+  for (const z of [PZ1, PZ1 + 16]) for (const [u, v] of [[70.5, 22.5], [88, 22.5], [70.5, 53.6], [88, 53.6]]) bp.push(Q(u, v, z));
+  for (const z of [PZ1, PZ1 + 13.5]) for (const [u, v] of [[66.5, 2.2], [88, 2.2]]) bp.push(Q(u, v, z));
+  bp.push(...PCB_POLY.map(([x, y]) => [x, y, BH]));
+  s += castShadow(bp, BH, top);
+  const g = cardGeo(st); s += castShadow([...g.poly.map(([u, v]) => Q(u, v, g.z0)), ...g.poly.map(([u, v]) => Q(u, v, g.z1))], BH, top);
+  // everything on the board is one item (board first, then its parts): the board is never seen from below, and one
+  // box keeps the sort transitive against the cables, plugs and card around it
+  const onBoard = [...screws(), socItem(st, k), ...chips(st), wifiItem(st, k), gpioItem(), ...smallConnectors(), buttonItem(st), ...ledItems(st),
+    frontPort(USBC, st, k, st.pw, PLUGS.pw.tipLen, PLUGS.pw.tip), frontPort(HDMI0, st, k, st.hd, PLUGS.hd.tipLen, PLUGS.hd.tip), frontPort(HDMI1, st, k, 0, 0, [0, 0]),
+    endPort('eth', ETH, st, k), endPort('usb3', USB3, st, k), endPort('usb2', USB2, st, k)];
+  const pcb = pcbItem(st, k), all = [pcb, ...onBoard];
+  const asm = rpI([[0,1,2].map(i => Math.min(...all.map(p => p.box[0][i]))), [0,1,2].map(i => Math.max(...all.map(p => p.box[1][i])))], pcb.svg + byDepth(onBoard));
+  const items = [...standoffs(), slotItem(st, m, k), cardItem(st, m), asm, ...plugItems('pw', st.pw, plugM), ...plugItems('hd', st.hd, hdM)];
+  s += byDepth(items);
+  if (frontF) s += tails;
+  const lab = k > .6 ? insideLabels(st) : surfaceLabels(st);
+  return s + xrCallouts(lab, LB);
+}
+
+/* ---------- behaviour (one state object) ---------- */
+let ui, looping = false;
+function setPhase(st, ph){ st.phase = ph; st.t0 = nowS(); st.pt = 0; }
+function say(text, ms = 1700){ if (ui) ui.flash(text, ms); }
+function tick(dt){
+  const st = ui.st; let busy = false;
+  st.clock += dt; st.pt += dt;
+  for (const [a, t, rate] of [['sd', 'sdT', 1.1], ['pw', 'pwT', 1], ['hd', 'hdT', 1]])
+    if (st[a] !== st[t]){ st[a] = st[t] > st[a] ? Math.min(st[t], st[a] + dt/rate) : Math.max(st[t], st[a] - dt/rate); busy = true; }
+  if (st.pw >= 1 && st.phase === 'off'){ setPhase(st, 'boot'); st.bt = 0; st.said = -1; }
+  if (st.pw < 1 && st.phase !== 'off') setPhase(st, 'off');
+  if (st.phase === 'boot'){
+    st.bt += dt; busy = true;
+    const i = stageOf(st.bt);
+    if (STAGES[i].key === 'sd' && st.sd < 1){ setPhase(st, 'nosd'); say('No microSD card: the bootloader finds no OS, flashes an error code and keeps retrying', 2600); }
+    else if (i !== st.said){ st.said = i; say(STAGES[i].say, 1500); }
+    if (st.bt >= STAGES[5].t) setPhase(st, 'run');
+  }
+  if (st.phase === 'nosd' && st.sd >= 1){ setPhase(st, 'boot'); st.bt = STAGES[3].t; st.said = 2; }
+  if (st.phase === 'down' && st.pt > 1.4){ setPhase(st, 'halt'); say('Halted: the PMIC is in standby and the red PWR LED is on. Press the button to boot', 2400); }
+  if (st.phase === 'down') busy = true;
+  if (st.btnT > 0){ st.btnT = Math.max(0, st.btnT - dt); busy = true; }
+  return busy;
+}
+function kick(){ if (looping) return; looping = true; ui.animate(dt => { const b = tick(dt); if (!b) looping = false; return b; }); }
+function toggleSd(st){
+  if (st.sdT){
+    if (['boot', 'run', 'down'].includes(st.phase)) return say('Shut it down first: press the power button');
+    st.sdT = 0; say('Card out');
+  } else st.sdT = 1;
+  kick();
+}
+function togglePower(st){
+  if (st.pwT){ if (st.phase === 'run' || st.phase === 'boot') say('Pulled the plug while running: always shut down first, or the card can be corrupted', 2600);
+    st.pwT = 0; }
+  else st.pwT = 1;
+  kick();
+}
+function toggleHdmi(st){
+  st.hdT = st.hdT ? 0 : 1;
+  if (st.hdT && !powered(st)) setTimeout(() => say('HDMI in: the screen waits for the Pi to start'), 900);
+  kick();
+}
+function pressButton(st){
+  st.btnT = .25;
+  if (st.pw < 1) say('No power: plug in the USB-C cable first');
+  else if (st.phase === 'halt'){ setPhase(st, 'boot'); st.bt = 0; st.said = -1; }
+  else if (st.phase === 'run' || st.phase === 'nosd'){ setPhase(st, 'down'); say('Shutting down: Linux saves everything and stops'); }
+  else if (st.phase === 'boot') say('Still booting: a short press shuts down once it is up');
+  kick();
+}
+// LEDs blink on their own clock: redraw only when one changes (no animation loop needed while it just sits running)
+let ledSig = '';
+setInterval(() => { if (!ui || looping) return; const L2 = leds(ui.st), sg = `${L2.act}${L2.red}${active(ui.st, 'sd')}`; if (sg !== ledSig){ ledSig = sg; ui.render(); } }, 80);
+
+const STATUS = { off:'OFF', boot:'BOOTING', run:'RUNNING', nosd:'NO OS', down:'SHUTDOWN', halt:'STANDBY' };
+function watts(st){
+  if (st.phase === 'off') return 0;
+  if (st.phase === 'boot') return [.9, 2.1, 2.6, 3.4, 5.1, 5.1][stageOf(st.bt)];
+  return { run: 2.7 + (hdmiOn(st) ? .3 : 0), nosd: 2.2, down: 3.0, halt: 1.3 }[st.phase];
+}
+ui = mountFigure({
+  fig:'R5', title:'Raspberry Pi 5', turn:'full',
+  size:[112, 132, 64], center:[50, 57], palette:'tomato',
+  state:{ sd:0, sdT:0, pw:0, pwT:0, hd:0, hdT:0, phase:'off', t0:0, bt:0, said:-1, clock:0, pt:0, btnT:0 },
+  scene,
+  stats: st => [
+    { label:'Status', value: STATUS[st.phase] },
+    { label:'Step', value: st.phase === 'boot' ? STAGES[stageOf(st.bt)].name : st.phase === 'run' ? 'DESKTOP' : '-', small:true },
+    { label:'Power', value: st.pw >= 1 ? `${watts(st).toFixed(1)} W` : '0 W', small:true },
+    { label:'HDMI', value: st.hd < 1 ? 'NONE' : hdmiOn(st) ? '1080P' : 'NO SIGNAL', small:true },
+  ],
+  buttons:[
+    { label:'Insert microSD', onClick: st => toggleSd(st) },
+    { label:'Plug in power', onClick: st => togglePower(st) },
+    { label:'Plug in HDMI', onClick: st => toggleHdmi(st) },
+    { label:'Power button', onClick: st => pressButton(st) },
+  ],
+  acts:{ card: st => toggleSd(st), power: st => togglePower(st), hdmi: st => toggleHdmi(st), button: st => pressButton(st) },
+  params:(st, q) => {
+    for (const a of ['sd', 'pw', 'hd']) if (q.get(a) === '1') st[a] = st[a + 'T'] = 1;
+    if (q.has('phase')) st.phase = q.get('phase'); else if (st.pw >= 1) st.phase = st.sd >= 1 ? 'run' : 'nosd';
+    if (q.has('bt')){ st.bt = +q.get('bt'); st.said = stageOf(st.bt); }
+    if (q.has('clock')) st.clock = +q.get('clock');
+    st.t0 = nowS();
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
