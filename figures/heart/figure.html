@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The heart</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Enlarged teaching specimen on a stand, not a medical simulator.
+   Sources: https://www.nhlbi.nih.gov/health/heart/blood-flow
+   https://www.nhlbi.nih.gov/health/heart/heart-beats
+   1. Systemic venous blood enters the right atrium through the venae cavae.
+   2. During filling, tricuspid and mitral valves admit blood to the ventricles.
+   3. Both ventricles contract together. AV valves close; pulmonary and aortic valves open.
+      The right ventricle sends blood to the lungs. The left sends oxygenated blood to the body.
+   4. Lungs oxygenate blood; four pulmonary veins return it to the left atrium.
+      The tracked parcel takes several beats to traverse the deliberately shortened lung loop.
+   5. Valves close passively under reverse pressure. Holding all four open is a teaching fault,
+      causing AV regurgitation in systole and arterial regurgitation in diastole.
+   6. SA node excites atria; AV delay precedes His, bundle branches and Purkinje activation.
+   Blue and red denote oxygen content, not the literal colour of blood. Gold is a signal overlay.
+   Anatomy is simplified and enlarged. The separate lung lobes show the external circulation.
+   Parts held by the myocardium: four chambers, septa, four valve annuli and their leaflets,
+   papillary muscles and chordae attached to the AV leaflets, SA/AV nodes and conduction tissue.
+   Vessels join their named chambers. Coronary arteries run on the epicardium.
+   Apparatus: board supports the post and cradle under the specimen, a rate dial, and a
+   stethoscope with chestpiece, tubing, binaural tubes and eartips. No invented heart machinery.
+*/
+const heartChambers = [
+  {name:'RIGHT ATRIUM', c:[37,66,76], r:[11,13,12], colour:'#729fd3', side:'right'},
+  {name:'RIGHT VENTRICLE', c:[46,61,49], r:[12,15,23], colour:'#6f9ed1', side:'right'},
+  {name:'LEFT ATRIUM', c:[27,39,77], r:[10,12,11], colour:'#ec8b87', side:'left'},
+  {name:'LEFT VENTRICLE', c:[32,39,47], r:[13,15,27], colour:'#e77570', side:'left'}
+];
+const heartVessels = [
+  {name:'SUPERIOR VENA CAVA', p:[[35,70,76],[35,72,97],[35,72,106]], r:4, col:'#668bb9'},
+  {name:'INFERIOR VENA CAVA', p:[[34,70,75],[24,74,56],[24,74,36]], r:4.5, col:'#668bb9'},
+  {name:'PULMONARY TRUNK', p:[[46,61,59],[49,57,78],[48,52,93]], r:4, col:'#7aa9cf'},
+  {name:'RIGHT PULMONARY ARTERY', p:[[48,52,93],[29,76,91],[23,93,80]], r:3, col:'#7aa9cf'},
+  {name:'LEFT PULMONARY ARTERY', p:[[48,52,93],[33,28,94],[23,12,80]], r:3, col:'#7aa9cf'},
+  {name:'RIGHT UPPER PULMONARY VEIN', p:[[23,93,78],[19,72,81],[27,39,80]], r:2, col:'#df7774'},
+  {name:'RIGHT LOWER PULMONARY VEIN', p:[[23,93,68],[18,70,68],[27,39,73]], r:2, col:'#df7774'},
+  {name:'LEFT UPPER PULMONARY VEIN', p:[[23,12,78],[22,25,82],[27,39,80]], r:2, col:'#df7774'},
+  {name:'LEFT LOWER PULMONARY VEIN', p:[[23,12,68],[22,25,70],[27,39,73]], r:2, col:'#df7774'},
+  {name:'ASCENDING AORTA', p:[[32,39,59],[33,44,82],[33,44,99]], r:4.2, col:'#cf615d'},
+  {name:'AORTIC ARCH', p:[[33,44,99],[25,46,108],[15,56,108],[13,63,99]], r:4.2, col:'#cf615d'},
+  {name:'DESCENDING AORTA', p:[[13,63,99],[13,63,72],[13,63,35]], r:3.8, col:'#cf615d'},
+  {name:'BRACHIOCEPHALIC TRUNK', p:[[27,46,106],[28,48,119]], r:2.3, col:'#cf615d'},
+  {name:'LEFT COMMON CAROTID', p:[[21,50,108],[21,50,120]], r:1.7, col:'#cf615d'},
+  {name:'LEFT SUBCLAVIAN ARTERY', p:[[16,56,107],[12,51,117]], r:1.9, col:'#cf615d'}
+];
+const heartValves = [
+  {name:'TRICUSPID VALVE', c:[43,63,65], r:5, av:true, n:3},
+  {name:'MITRAL VALVE', c:[30,39,65], r:4.5, av:true, n:2},
+  {name:'PULMONARY VALVE', c:[47,59,70], r:3.5, av:false, n:3},
+  {name:'AORTIC VALVE', c:[33,43,70], r:3.5, av:false, n:3}
+];
+const heartSignals = [
+  {name:'SA NODE', p:[[43,72,83],[42,66,78]], start:0},
+  {name:'ATRIAL CONDUCTION', p:[[42,66,78],[35,53,77],[27,39,79]], start:.07},
+  {name:'AV NODE', p:[[42,66,78],[38,53,68]], start:.18},
+  {name:'BUNDLE OF HIS', p:[[38,53,68],[38,51,59]], start:.27},
+  {name:'RIGHT BUNDLE BRANCH', p:[[38,51,59],[43,56,40],[45,60,33]], start:.31},
+  {name:'LEFT BUNDLE BRANCH', p:[[38,51,59],[34,46,39],[31,40,25]], start:.31},
+  {name:'PURKINJE FIBRES', p:[[31,40,25],[37,31,40],[38,29,54]], start:.36}
+];
+const heartTour = [
+  {name:'Vena cava to right atrium', p:[[35,72,103],[37,66,76]], col:'#4778bd'},
+  {name:'Tricuspid to right ventricle', p:[[37,66,76],[43,63,65],[46,61,46]], col:'#4778bd'},
+  {name:'Pulmonary valve to lungs', p:[[46,61,46],[47,59,70],[48,52,93],[29,76,91],[23,93,80]], col:'#4778bd'},
+  {name:'Lungs add oxygen', p:[[23,93,80],[24,97,75],[23,93,68]], col:'#ba718f'},
+  {name:'Pulmonary veins to left atrium', p:[[23,93,68],[18,70,68],[27,39,73],[27,39,77]], col:'#dd514e'},
+  {name:'Mitral to left ventricle', p:[[27,39,77],[30,39,65],[32,39,44]], col:'#dd514e'},
+  {name:'Aortic valve to aorta', p:[[32,39,44],[33,43,70],[33,44,99],[25,46,108],[15,56,108],[13,63,99],[13,63,35]], col:'#dd514e'}
+];
+const heartState = {mode:'idle', phase:0, bpm:60, held:false, tour:-1, elapsed:0};
+let heartUI, heartLoop = false;
+const heartBounds = pts => [[0,1,2].map(k=>Math.min(...pts.map(p=>p[k]))),[0,1,2].map(k=>Math.max(...pts.map(p=>p[k])))];
+const heartPoint = (pts,t) => { const u=Math.max(0,Math.min(.999999,t))*(pts.length-1), i=Math.floor(u); return pts[i].map((v,k)=>v+(pts[i+1][k]-v)*(u-i)); };
+const heartDot = (p,r,col) => { const q=P(...p); return `<circle cx="${f(q[0])}" cy="${f(q[1])}" r="${r}" fill="${col}" stroke="${INK}" stroke-width=".6"/>`; };
+function heartEllipsoid(c,r,m){
+  const rings=Array.from({length:13},(_,i)=>{ const a=-Math.PI/2+Math.PI*i/12, rr=Math.max(.01,Math.cos(a)); return on(PZ(c[2]+r[2]*Math.sin(a)),ellUV(c[0],c[1],r[0]*rr,r[1]*rr,24)); });
+  let svg=''; for(let i=0;i<rings.length-1;i++) svg+=loft(rings[i],rings[i+1],n=>tone(n,m));
+  return svg+hullInk(rings.flat(),2.6);
+}
+function heartTube(parts,p,r,col){
+  for(let i=0;i<p.length-1;i++) {const a=p[i],b=p[i+1]; parts.push({box:heartBounds([a.map(v=>v-r),b.map(v=>v+r),a.map(v=>v+r),b.map(v=>v-r)]),svg:rod(a,b,r,matOf(col),toneI,.9,r,12)});}
+}
+function heartArrow(p,t,col){
+  const a=heartPoint(p,Math.max(0,t-.06)), b=heartPoint(p,t), q=P(...b), q0=P(...a), ang=Math.atan2(q[1]-q0[1],q[0]-q0[0]);
+  return `<path d="${pd(p,false)}" fill="none" stroke="${col}" stroke-width="1.2" stroke-dasharray="2 2" opacity=".7"/>`+heartDot(b,2.3,col)+`<path d="M${f(q[0])} ${f(q[1])}l${f(-4*Math.cos(ang-.5))} ${f(-4*Math.sin(ang-.5))}M${f(q[0])} ${f(q[1])}l${f(-4*Math.cos(ang+.5))} ${f(-4*Math.sin(ang+.5))}" fill="none" stroke="${col}" stroke-width="1.4"/>`;
+}
+function heartLabels(items){
+  const el=document.getElementById('fig'), vb=el.viewBox.baseVal, matrix=el.getScreenCTM(), original=INK_K;
+  const projected=items.map(it=>({...it,q:P(...it.at)})).sort((a,b)=>a.q[0]-b.q[0]);
+  const columns=[projected.slice(0,Math.ceil(items.length/2)),projected.slice(Math.ceil(items.length/2))];
+  let svg='', leaders='';
+  try{
+    if(innerWidth>560)INK_K*=.65;
+    columns.forEach((col,i)=>{
+      col.sort((a,b)=>a.q[1]-b.q[1]);
+      const control=document.getElementById(i?'stats':'btns').getBoundingClientRect();
+      const top=matrix?new DOMPoint(control.right,control.bottom+14).matrixTransform(matrix.inverse()).y:vb.height*.3;
+      const bottom=vb.height*.90, x=vb.width*(i?.83:.19);
+      col.forEach((it,j)=>{
+        const y=top+(bottom-top)*j/Math.max(1,col.length-1), pill=tag(it.at,(x-it.q[0])/INK_K,(y-it.q[1])/INK_K,it.text,it.on);
+        const leader=pill.match(/<path[^>]*\/><circle[^>]*\/>/)[0];
+        leaders+=leader;svg+=pill.replace(leader,'');
+      });
+    });
+  }finally{INK_K=original;}
+  return `<g class="heart-labels" pointer-events="none">${leaders}${svg}</g>`;
+}
+function heartScene(st,m){
+  const k=ease(st.xr||0), p=st.phase, systole=p>=.4&&p<.75, squeeze=systole?Math.sin((p-.4)/.35*Math.PI)*.07:0;
+  const parts=[], sceneParts=[], labels=[], put=(b,svg)=>parts.push({box:b,svg}), label=(at,text,on=false)=>labels.push({at,text,on});
+  let anatomy='';
+  let svg=board(0,0,90,112,3,5,WOOD);
+  svg+=castShadow([[20,30,25],[50,75,80],[33,44,119],[23,99,70],[23,6,70]],3,boardTop(0,0,90,112,3,5));
+  sceneParts.push({box:[[25,47,3],[31,53,20]],svg:cyl(28,50,3,20,3,METAL)},
+    {box:[[25,42,17],[35,53,29]],svg:rod([28,50,20],[32,45,26],3,METAL)});
+  label([28,50,12],'DISPLAY STAND');
+  for(const [y,name] of [[9,'LEFT LUNG'],[96,'RIGHT LUNG']]){
+    put([[15,y-8,58],[30,y+8,88]],heartEllipsoid([22,y,73],[7,8,15],matOf('#dca2a5')));
+    label([22,y,72],name,st.tour>=6&&st.tour<8);
+  }
+  const outer=[];
+  for(const ch of heartChambers){
+    const rr=ch.r.map(v=>v*(1-squeeze)), shell=heartEllipsoid(ch.c,rr,m);
+    outer.push({box:heartBounds([ch.c.map((v,i)=>v-rr[i]),ch.c.map((v,i)=>v+rr[i])]),svg:`<g opacity="${f(1-.87*k)}">${shell}</g>`});
+  }
+  parts.push(...outer);
+  for(const v of heartVessels){
+    heartTube(parts,v.p,v.r,v.col); label(v.p[Math.min(1,v.p.length-1)],v.name,st.mode!=='idle');
+  }
+  const coronaries=[{name:'RIGHT CORONARY ARTERY',p:[[36,44,83],[51,60,73],[56,69,57],[52,70,43]]},{name:'LEFT CORONARY ARTERY',p:[[34,43,82],[43,39,74],[45,33,60]]},{name:'ANTERIOR DESCENDING ARTERY',p:[[45,33,60],[48,44,48],[39,45,24]]}];
+  for(const v of coronaries){heartTube(parts,v.p,1,'#ab4d43');label(v.p[1],v.name);}
+  if(k>0){
+    const inside=[];
+    for(const ch of heartChambers){const rr=ch.r.map(v=>v*.73*(1-squeeze)); inside.push({box:heartBounds([ch.c.map((v,i)=>v-rr[i]),ch.c.map((v,i)=>v+rr[i])]),svg:`<g opacity=".62">${heartEllipsoid(ch.c,rr,matOf(ch.colour))}</g>`});label(ch.c,ch.name,st.mode!=='idle');}
+    inside.push({box:[[28,50,28],[41,53,67]],svg:box(28,50,28,41,53,67,matOf('#d9a8a0'),toneI,.8)});label([37,51,46],'VENTRICULAR SEPTUM');
+    inside.push({box:[[26,50,68],[38,52,84]],svg:box(26,50,68,38,52,84,matOf('#d9a8a0'),toneI,.7)});label([30,51,77],'ATRIAL SEPTUM');
+    for(const v of heartValves){
+      const open=st.held||(v.av?!systole:systole), c=v.c, top=on(PZ(c[2]),ellUV(c[0],c[1],v.r,v.r,20));
+      let vs=shape(top,'#a67c66',.7)+shape(on(PZ(c[2]+.2),ellUV(c[0],c[1],v.r*.82,v.r*.82,20)),'#693f42',.5);
+      for(let j=0;j<v.n;j++) {const a=2*Math.PI*j/v.n,b=2*Math.PI*(j+1)/v.n; const tip=[c[0]+(open?v.r*.75:0)*Math.cos((a+b)/2),c[1]+(open?v.r*.75:0)*Math.sin((a+b)/2),c[2]+(open?(v.av?-4:4):.5)];vs+=shape([[c[0]+v.r*Math.cos(a),c[1]+v.r*Math.sin(a),c[2]],[c[0]+v.r*Math.cos(b),c[1]+v.r*Math.sin(b),c[2]],tip],'#f2dbb2',.6);}
+      inside.push({box:[[c[0]-v.r,c[1]-v.r,c[2]-4],[c[0]+v.r,c[1]+v.r,c[2]+4]],svg:vs}); label(c,v.name,open);
+      if(v.av){const root=[c[0],c[1],c[2]-16];inside.push({box:[[c[0]-3,c[1]-3,c[2]-19],[c[0]+3,c[1]+3,c[2]]],svg:rod([root[0],root[1],root[2]-5],root,2,matOf('#c57170'))+[-1,1].map(s=>line([root,[c[0]+s*3,c[1],c[2]-(open?4:0)]],.5)).join('')});label(root,v.name==='MITRAL VALVE'?'LEFT PAPILLARY MUSCLE':'RIGHT PAPILLARY MUSCLE');label([c[0]+2,c[1],c[2]-8],v.name==='MITRAL VALVE'?'MITRAL CHORDAE':'TRICUSPID CHORDAE');}
+    }
+    anatomy+=byDepth(parts)+`<g opacity="${f(k)}">${byDepth(inside)}</g>`;
+    for(const s of heartSignals){const active=st.mode!=='idle'&&p>=s.start&&p<s.start+.12; anatomy+=`<path d="${pd(s.p,false)}" fill="none" stroke="${active?'#ffc52f':'#b99550'}" stroke-width="${active?2.4:1}" stroke-dasharray="${active?'0':'1 1'}"/>`+heartDot(s.p[0],active?2.5:1.3,active?'#ffcf42':'#b99550'); label(s.p[0],s.name,active);}
+    if(st.mode!=='idle'){
+      const u=systole?(p-.4)/.35:p<.4?p/.4:(p-.75)/.25;
+      const flows=systole?[[[46,61,46],[47,59,70],[48,52,93],[29,76,91],[23,93,80]],[[32,39,44],[33,43,70],[33,44,99]]]:[[[35,72,103],[37,66,76],[43,63,65],[46,61,46]],[[23,12,78],[27,39,77],[30,39,65],[32,39,44]]];
+      flows.forEach((path,i)=>{anatomy+=heartArrow(path,Math.min(.98,u),i?'#d73d3b':'#356fb1');});
+      if(st.held){const back=systole?[[[46,61,49],[43,63,65],[37,66,76]],[[32,39,47],[30,39,65],[27,39,77]]]:[[[48,52,93],[47,59,70],[46,61,49]],[[33,44,99],[33,43,70],[32,39,47]]];back.forEach(path=>anatomy+=heartArrow(path,Math.min(.98,u),'#c546b0'));}
+    }
+  }else anatomy+=byDepth(parts);
+  if(st.tour>=0){const i=Math.min(heartTour.length-1,Math.floor(st.tour/2)), leg=heartTour[i];anatomy+=heartArrow(leg.p,(st.tour%2)/2,leg.col);}
+  sceneParts.push({box:heartBounds(parts.flatMap(part=>part.box)),svg:anatomy});
+  const props=sceneParts;
+  heartTube(props,[[75,28,5],[78,38,5],[74,47,5],[67,49,5],[62,43,5],[65,35,5]],1.4,'#4b4c58');
+  heartTube(props,[[65,35,5],[65,29,7],[62,24,10]],.8,'#b8c1c6');
+  heartTube(props,[[65,35,5],[70,27,7],[70,22,10]],.8,'#b8c1c6');
+  props.push({box:[[71,23,3],[79,31,5.8]],svg:cyl(75,27,3,5.8,4,METAL)});
+  label([75,27,6],'STETHOSCOPE CHESTPIECE');label([75,43,5],'STETHOSCOPE TUBING');
+  for(const tip of [[62,24,10],[70,22,10]])props.push({box:heartBounds([tip.map(v=>v-1.5),tip.map(v=>v+1.5)]),svg:heartDot(tip,1.5,'#343337')});
+  let dial=cylX(70,74,82,22,11,CERAMIC);
+  const a=(-130+(st.bpm-40)/100*260)*Math.PI/180;
+  props.push({box:[[68,79,3],[74,85,12]],svg:cyl(71,82,3,12,3,METAL)});
+  if(facing([1,0,0])) dial+=shape(on(PX(74.1),ellUV(82,22,9.5,9.5,32)),'#fff5d6',.8)+tx(74.2,82,26,String(st.bpm),5)+tx(74.2,82,19,'BPM',2.6)+line([[74.3,82,22],[74.3,82+7*Math.sin(a),22+7*Math.cos(a)]],1.1);
+  props.push({box:[[70,71,11],[74.3,93,33]],svg:dial});
+  label([74,82,28],'HEART RATE DIAL');
+  svg+=byDepth(sceneParts);
+  if(k>.6)svg+=heartLabels(labels);
+  return svg;
+}
+function heartStart(st,ui){
+  if(heartLoop)return;heartLoop=true;
+  ui.animate(dt=>{
+    if(st.mode==='idle'){heartLoop=false;return false;}
+    st.elapsed+=dt;st.phase+=dt*(st.mode==='once'?.25:st.bpm/60);
+    if(st.tour>=0){st.tour+=dt;if(st.tour>=heartTour.length*2){st.tour=-1;st.mode='idle';}}
+    if(st.phase>=1){st.phase%=1;if(st.mode==='once')st.mode='idle';}
+    if(st.mode==='idle'){st.phase=0;heartLoop=false;return false;}return true;
+  });
+}
+heartUI=mountFigure({fig:'H',title:'The heart',turn:'full',size:[90,112,124],palette:'blush',state:heartState,scene:heartScene,
+  stats:st=>[{label:'Heart rate',value:st.bpm+' bpm'},{label:'Playback',value:st.mode==='once'?'4x slow':st.mode==='idle'?'Paused':'Real time',small:true},{label:'Valve flow',value:st.held?'Backflow':'One way',small:true}],
+  readout:st=>st.tour>=0?heartTour[Math.min(6,Math.floor(st.tour/2))].name:'',
+  buttons:[
+    {label:'Beat once slowly',onClick:(st,ui)=>{st.mode='once';st.phase=0;st.tour=-1;heartStart(st,ui);}},
+    {label:'Follow blood',onClick:(st,ui)=>{st.mode='run';st.phase=0;st.tour=0;if(!st.xrT)document.getElementById('xrb').click();heartStart(st,ui);}},
+    {label:'Exercise / rest',onClick:(st,ui)=>{st.bpm=st.bpm===60?120:60;st.mode='run';st.tour=-1;heartStart(st,ui);}},
+    {label:'Hold / release valves',onClick:(st,ui)=>{st.held=!st.held;st.mode='run';st.tour=-1;heartStart(st,ui);}}
+  ],params:(st,q)=>{if(q.get('exercise')==='1')st.bpm=120;st.held=q.get('held')==='1';const p=Number(q.get('phase'));if(Number.isFinite(p))st.phase=Math.max(0,Math.min(.999,p));}
+});
+xrMount(()=>heartUI,()=> '');
+</script>
+<style>html.nolabels .heart-labels{display:none}.zwrap #fig{transform:none!important}.zwrap.on #fig{overflow:hidden}.zwrap.on{overflow:hidden!important}</style>
+<script>
+// Keep the zoom raster inside the SVG viewport and preserve the shared controls and panning.
+addEventListener('DOMContentLoaded',()=>{
+  const fig=document.getElementById('fig'), base=fig.viewBox.baseVal;
+  const frame={x:base.x,y:base.y,w:base.width,h:base.height};
+  const zoom=()=>{
+    const matrix=new DOMMatrix(fig.style.transform||undefined), s=matrix.a;
+    const w=fig.clientWidth,h=fig.clientHeight,u=Math.min(w/frame.w,h/frame.h);
+    const x=frame.x+(-matrix.e-(s-1)*(w-u*frame.w)/2)/(u*s);
+    const y=frame.y+(-matrix.f-(s-1)*(h-u*frame.h)/2)/(u*s);
+    fig.setAttribute('viewBox',`${x} ${y} ${frame.w/s} ${frame.h/s}`);
+    heartUI.render();
+  };
+  new MutationObserver(zoom).observe(fig,{attributes:true,attributeFilter:['style']});
+  addEventListener('resize',zoom);
+});
+</script></body></html>
