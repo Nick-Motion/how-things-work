@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Food truck</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Food truck: a taco truck on a step-van chassis, parked with its serving window to the curb.
+   HOW A TACO TRUCK SERVES (each button is one step; things move only along these paths)
+   1. Open the hatch: the top-hinged awning hatch over the serving window swings up and two gas struts hold it; the
+      pass shelf hangs under the window outside. The generator on the rear carrier feeds the shore-power inlet on the
+      rear wall -> breaker panel -> fridges, hood fan and lights; the griddle burners are lit and the plate heats.
+   2. Order: a customer walks up to the window and orders; the ticket prints on the printer on the serving counter
+      and the cook clips it on the ticket rail above the window.
+   3. Grill: propane from two 40 lb cylinders on the rear carrier -> pigtail hoses -> regulator on the rear wall ->
+      yellow gas line under the floor -> up behind the chef base -> griddle manifold -> three burners under the steel
+      plate. The cook sears the meat; smoke goes up into the hood (baffle filters) and out through the upblast fan.
+      Then the cook builds three tacos in a paper boat on the counter beside the cutting board.
+   4. Hand out: the cook slides the boat across the counter onto the sill; the customer lifts it off and leaves.
+   Water: fill inlet on the street side -> fresh tank under the 3-bay sink -> pump -> water heater -> faucet; the sinks
+   drain through the floor into the grey tank slung between the frame rails, emptied by its drain valve.
+   PARTS
+   case      box body (rounded shell) . serving window . serving hatch + piano hinge . gas struts x2 . pass shelf on
+             braces . side door + step . menu board . roof A/C . upblast fan on its curb . cab (hood, windscreen, side
+             windows, doors, mirrors, headlights, grille, bumper)
+   structure frame rails x2 . axles + diffs . driveshaft . transmission . leaf springs . wheels (front singles, rear duals)
+             . rear carrier deck on two arms . tank rack . floor . walls
+   cooking   flat-top griddle (plate, 3 burners, manifold, knobs, backsplash) . chef base fridge (2 drawers) . steam
+             table (2 pans) . exhaust hood (baffle filters, suppression nozzles) . duct . fire suppression tank .
+             reach-in fridge (shelves, tubs) + compressor unit on top
+   serving   serving counter (cabinet doors) . cutting board . ticket printer . POS tablet . ticket rail . hand sink .
+             napkins + squeeze bottles on the shelf
+   gas       propane tanks x2 (collar, valve) . pigtail hoses . regulator . gas line . shutoff valve
+   power     generator . cord . shore power inlet . breaker panel . conduits . LED light strip
+   water     water fill . fresh water tank . pump . water heater . 3-bay sink + faucet . drains . grey water tank . drain valve
+   safety    fire extinguisher . fire suppression tank
+   x = depth (curb side at x = TW faces the viewer), y = length (rear at y = 0, cab front at y = 748), z = up; 1 unit = 1 cm. */
+const TW = 240, BY0 = 80, BY1 = 535, BZ0 = 76, BZ1 = 310, FZ = 84, CZ = 300;
+const XI0 = 5, XI1 = 235, YI0 = 85, YI1 = 530;                          // inner faces of the walls
+const OUTX = rrUV(0, BZ0, TW, BZ1, 12);                                  // box profile in (x, z), swept along y
+const WY0 = 255, WY1 = 475, WZ0 = 174, WZ1 = 284;                        // serving window (sill flush with the counter)
+const HZ = 290, HY0 = 250, HY1 = 480, HL = 120, HT = 3, HOPEN = 100;     // hatch: hinge height, ends, length, thickness, open angle
+const TRAD = 37, AXF = 650, AXR = 230;                                   // wheel radius, front and rear axle
+const CX0 = 10, CX1 = 230;                                               // cab sides
+const CABL = [[535,76],[732,76],[735,82],[735,132],[728,140],[650,153],[535,153]];   // cab, lower (hood) profile in (y, z)
+const CABU = [[535,153],[650,153],[614,238],[606,245],[535,248]];                    // cab, upper (windscreen) profile
+const NWS = norm([0, 85, 36]);                                           // windscreen normal
+const STRIPE = matOf('#e2483d'), TIRE = { l:'#4a4642', m:'#34302d', d:'#1f1c1a' }, GLASS = { l:'#d6edf2', m:'#a9cfd9', d:'#7fa9b6' };
+const WALLM = { l:'#f7f4ec', m:'#e6e2d6', d:'#cbc5b6' }, FLOORM = { l:'#bdbab1', m:'#a29f97', d:'#7d7b74' };
+const GAS = '#e8c23a', COLD = '#4f86c6', HOT = '#d9573f', GREY = '#8d9296', COND = '#a9b0b3', CORD = '#e07b2e', HOSE = '#3a3633';
+const GENM = matOf('#d0423a'), TANKM = matOf('#ece9df'), SAFEM = matOf('#d8382f'), BLK = matOf('#3a3632'), TORT = { l:'#f3d58c', m:'#ddb86a', d:'#b48d45' };
+const ftKinds = {
+  pastor: { label:'Al pastor',   raw:'#e0784a', done:'#b7461e' },
+  asada:  { label:'Carne asada', raw:'#b04a40', done:'#5c2b1b' },
+  pollo:  { label:'Pollo',       raw:'#f1cfaa', done:'#c98b3f' } };
+const ftDur  = { arrive:1.3, toGrill:.8, sear:2.6, toCounter:.8, plate:1.0, toWindow:.7, slide:1.1, take:.9, leave:1.4 };
+const ftNext = { arrive:'ordered', toGrill:'sear', sear:'toCounter', toCounter:'plate', plate:'cooked', toWindow:'slide', slide:'take', take:'leave', leave:'idle' };
+const ftServing = ['toWindow', 'slide', 'take', 'leave'];
+
+/* ---------- helpers ---------- */
+// round parts with as few sides as their size needs (thin rods 6, knobs 10, tanks 20): the scene stays light enough to animate
+const ftSides = r => r < 2 ? 6 : r < 5 ? 10 : r < 12 ? 14 : 20;
+const ftRod = (a, b, r, m, sh = toneI, w = 1, r1 = r) => rod(a, b, r, m, sh, w, r1, ftSides(Math.max(r, r1)));
+const ftCyl = (x, y, z0, z1, r, m, sh = toneI, w = 1.2) => cyl(x, y, z0, z1, r, m, sh, w, ftSides(r));
+// every part is an item {box, svg} for ftSort
+const ftL3 = (a, b, t) => [0,1,2].map(i => a[i] + (b[i] - a[i])*t);
+const ftBoxOf = (pts, pad = 0) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - pad), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + pad)];
+const ftIt = (b, svg) => ({ box: b, svg });
+// byDepth sorts with a pairwise rule that is not transitive, which breaks down over a hundred parts; this is the same
+// rule (separated boxes first, then centroid depth) applied as a topological order: farthest free part first, and on a
+// cycle (three crossing sticks) the farthest part
+function ftSort(parts){
+  const it = parts.filter(Boolean), n = it.length, d = it.map(p => depthOf(p.at || boxMid(p.box))), nx = it.map(() => []), deg = new Array(n).fill(0), done = new Array(n).fill(false);
+  const rc = it.map(p => { if (!p.box) return null; const xs = [], ys = [];
+    for (const x of [0, 1]) for (const y of [0, 1]) for (const z of [0, 1]){ const q = P(p.box[x][0], p.box[y][1], p.box[z][2]); xs.push(q[0]); ys.push(q[1]); }
+    return [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)]; });
+  // only parts whose outlines can overlap on screen are ordered against each other (the rest would only add false cycles)
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++){ const a = rc[i], b = rc[j];
+    if (!a || !b || a[1] <= b[0] || b[1] <= a[0] || a[3] <= b[2] || b[3] <= a[2]) continue;
+    const o = sepOrder(it[i], it[j]);
+    if (o < 0){ nx[i].push(j); deg[j]++; } else if (o > 0){ nx[j].push(i); deg[i]++; } }
+  let s = '';
+  for (let c = 0; c < n; c++){
+    let b = -1; for (let i = 0; i < n; i++) if (!done[i] && (b < 0 || (deg[i] === 0) > (deg[b] === 0) || ((deg[i] === 0) === (deg[b] === 0) && d[i] < d[b]))) b = i;
+    done[b] = true; s += it[b].svg; for (const j of nx[b]) deg[j]--; }
+  return s;
+}
+const ftBx = (x0, y0, z0, x1, y1, z1, m, w = .9, extra = '', sh = toneI) => ftIt([[x0,y0,z0],[x1,y1,z1]], box(x0, y0, z0, x1, y1, z1, m, sh, w) + extra);
+const ftCy = (x, y, z0, z1, r, m, w = 1, extra = '', sh = toneI) => ftIt([[x-r,y-r,z0],[x+r,y+r,z1]], ftCyl(x, y, z0, z1, r, m, sh, w) + extra);
+const ftRd = (a, b, r, m, w = .8) => ftIt(ftBoxOf([a, b], r), ftRod(a, b, r, m, toneI, w));
+const ftDot = (p, r, col, w = .5) => { const [X, Y] = P(...p); return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r*CAM_K)}" fill="${col}" stroke="${INK}" stroke-width="${w}"/>`; };
+const ftTxt = (p, U, V, str, size, col = INK, wt = 800) => `<text transform="${txM(P(...p), Dv(...U), Dv(...V))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${wt}" letter-spacing=".04em">${str}</text>`;
+const DOWN = [0, 0, -1];
+const ftOp = (o, svg) => o >= .999 ? svg : `<g opacity="${f(o)}">${svg}</g>`;
+// pipes, hoses, cords and conduits: short straight pieces (so they sort with solids), a fitting at every bend.
+// Widths are true thickness (style, not scaled with the ink).
+function ftPipe(pts, col, r = 1.2, seg = 45){
+  const out = [], wI = (2*r*CAM_K + .9*INK_K).toFixed(2), wC = (2*r*CAM_K).toFixed(2);
+  const st = (d, w, c) => `<path d="${d}" fill="none" stroke="${c}" style="stroke-width:${w}" stroke-linecap="butt"/>`;
+  for (let i = 0; i < pts.length - 1; i++){
+    const a = pts[i], b = pts[i+1], n = Math.max(1, Math.ceil(Math.hypot(...sub(b, a)) / seg));
+    for (let j = 0; j < n; j++){ const p = ftL3(a, b, j/n), q = ftL3(a, b, (j+1)/n), d = pd([p, q], false);
+      let svg = st(d, wI, INK) + st(d, wC, col);
+      if (j === 0 && i > 0){ const [X, Y] = P(...p); svg += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r*CAM_K*1.3)}" fill="${col}" stroke="${INK}" style="stroke-width:${(.7*INK_K).toFixed(2)}"/>`; }
+      out.push(ftIt(ftBoxOf([p, q], r), svg)); }
+  }
+  return out;
+}
+// culling, so frames stay light enough to animate: the screen outline of a box, and whether it lies wholly inside a convex outline
+const ftCorners = b => [0, 1].flatMap(i => [0, 1].flatMap(j => [0, 1].map(k => P(b[i][0], b[j][1], b[k][2]))));
+const ftRect = b => { const q = ftCorners(b), xs = q.map(p => p[0]), ys = q.map(p => p[1]); return [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)]; };
+function ftHull2(q){ q = [...q].sort((a, b) => a[0] - b[0] || a[1] - b[1]); const cr = (o, a, b) => (a[0] - o[0])*(b[1] - o[1]) - (a[1] - o[1])*(b[0] - o[0]), lo = [], hi = [];
+  for (const p of q){ while (lo.length > 1 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+  for (const p of q.reverse()){ while (hi.length > 1 && cr(hi[hi.length - 2], hi[hi.length - 1], p) <= 0) hi.pop(); hi.push(p); }
+  return lo.slice(0, -1).concat(hi.slice(0, -1)); }
+const ftInHull = (H, p) => H.every((a, i) => { const b = H[(i + 1) % H.length]; return (b[0] - a[0])*(p[1] - a[1]) - (b[1] - a[1])*(p[0] - a[0]) >= 0; });
+// a slab between edge vectors U, V, N from corner o (the hatch): every face that looks at the viewer
+function ftSlab(o, U, V, N, m, w = 1, outer = '', inner = ''){
+  const pt = (a, b, c) => [0,1,2].map(i => o[i] + U[i]*a + V[i]*b + N[i]*c), neg = v => v.map(x => -x);
+  const nU = norm(U), nV = norm(V), nN = norm(N);
+  const F = [[nU, [pt(1,0,0), pt(1,1,0), pt(1,1,1), pt(1,0,1)]], [neg(nU), [pt(0,0,0), pt(0,1,0), pt(0,1,1), pt(0,0,1)]],
+    [nV, [pt(0,1,0), pt(1,1,0), pt(1,1,1), pt(0,1,1)]], [neg(nV), [pt(0,0,0), pt(1,0,0), pt(1,0,1), pt(0,0,1)]],
+    [nN, [pt(0,0,1), pt(1,0,1), pt(1,1,1), pt(0,1,1)], 1], [neg(nN), [pt(0,0,0), pt(1,0,0), pt(1,1,0), pt(0,1,0)], 2]];
+  let s = '';
+  for (const [n, q, t] of F) if (facing(n)) s += shape(q, tone(n, m), w) + (t === 1 ? outer : t === 2 ? inner : '');
+  return s;
+}
+
+/* ---------- people: legs, torso (apron on the front), head with hair or cap, two-bone arms reaching for targets ---------- */
+function ftArmIK(Sh, T, L1, L2, bend){
+  let d = sub(T, Sh), D = Math.hypot(...d);
+  if (D > L1 + L2 - .05){ T = [0,1,2].map(i => Sh[i] + d[i]/D*(L1 + L2 - .05)); d = sub(T, Sh); D = L1 + L2 - .05; }
+  const u = d.map(v => v/D), a = (L1*L1 - L2*L2 + D*D)/(2*D), h = Math.sqrt(Math.max(0, L1*L1 - a*a));
+  let w = sub(bend, u.map(v => v*dot(bend, u))); w = norm(w);
+  return { E: [0,1,2].map(i => Sh[i] + u[i]*a + w[i]*h), T };
+}
+function ftPerson(o){
+  const kz = o.h/172, c = Math.cos(o.yaw), s2 = Math.sin(o.yaw), fw = [c, s2, 0], lt = [-s2, c, 0], tl = Math.tan(o.lean || 0), hipZ = 88*kz;
+  const at = (a, l, z) => { const a2 = a + Math.max(0, z - hipZ)*tl; return [o.x + fw[0]*a2 + lt[0]*l, o.y + fw[1]*a2 + lt[1]*l, o.z + z]; };
+  const SK = matOf(o.skin), SHM = matOf(o.shirt), PAM = matOf(o.pants), APM = o.apron ? matOf(o.apron) : null, op = o.op == null ? 1 : o.op;
+  const sw = o.walk ? Math.sin(o.walkPh)*o.walk : 0, near = sd => camDot(lt.map(v => v*sd), CAM_V);
+  const out = [];
+  // legs and shoes, the far leg first
+  let lg = ''; const lp = [];
+  for (const sd of [-1, 1].sort((a, b) => near(a) - near(b))){
+    const st = sd*sw*10, hip = at(0, sd*5.5, hipZ), foot = at(st, sd*6, 7);
+    lg += ftRod(hip, foot, 5.2, PAM, toneI, 1) + ftRod(at(st - 3, sd*6, 3.4), at(st + 9, sd*6, 3.4), 3.4, BLK, toneI, .9);
+    lp.push(hip, foot, at(st + 9, sd*6, 0)); }
+  const lb = ftBoxOf(lp, 5.5); lb[0][2] = o.z; lb[1][2] = o.z + 90*kz;
+  out.push(ftIt(lb, ftOp(op, lg)));
+  // torso: pants at the hips, then shirt; the apron covers the front strips
+  const ring = (z, a, b, n = 10) => Array.from({length:n}, (_, i) => { const t = i/n*2*Math.PI; return at(a*Math.cos(t), b*Math.sin(t), z*kz); });
+  const R = [ring(80, 8, 12), ring(93, 8.4, 12.6), ring(118, 8.6, 13.5), ring(138, 9, 16.5), ring(146, 7, 14)];
+  let tor = '';
+  for (let i = 0; i < 4; i++) tor += loft(R[i], R[i+1], n => i === 0 ? toneI(n, PAM) : APM && i < 3 && dot(n, fw) > .45 ? toneI(n, APM) : toneI(n, SHM));
+  if (facing([0,0,1])) tor += fill(pd(R[4]), toneI([0,0,1], SHM));
+  tor += hullInk([...R[0], ...R[4]], 1.3);
+  // neck, head, hair or cap
+  const hc = at(1, 0, 161*kz), hr = 10*kz, [HX, HY] = P(...hc);
+  tor += ftRod(at(0, 0, 144*kz), at(.5, 0, 153*kz), 4, SK, toneI, .8);
+  tor += `<circle cx="${f(HX)}" cy="${f(HY)}" r="${f(hr*CAM_K)}" fill="${SK.l}" stroke="${INK}" stroke-width="1.2"/>`;
+  if (camDot(fw, CAM_V) > -.15) tor += ftDot([hc[0] + fw[0]*hr*.96, hc[1] + fw[1]*hr*.96, hc[2] - 1], 1.2, SK.m, .4);
+  const cm = matOf(o.cap || o.hair), dome = Array.from({length:5}, (_, i) => { const a = (i/4)*80*Math.PI/180, r = (hr + .6)*Math.cos(a);
+    return ellUV(hc[0] - fw[0]*1.2, hc[1] - fw[1]*1.2, r, r, 10).map(([x, y]) => [x, y, hc[2] + 1.5 + (hr + .6)*Math.sin(a)]); });
+  for (let i = 0; i < 4; i++) tor += loft(dome[i], dome[i+1], n => toneI(n, cm));
+  if (facing([0,0,1])) tor += fill(pd(dome[4]), toneI([0,0,1], cm));
+  tor += hullInk(dome.flat(), 1);
+  const tb = ftBoxOf([...R[0], ...R[4], [hc[0], hc[1], hc[2] + hr + 2]], 1); tb[0][2] = o.z + 91*kz;
+  out.push(ftIt(tb, ftOp(op, tor)));
+  // arms: shoulder -> elbow -> hand on its target; the right hand may hold the spatula
+  for (const sd of [-1, 1]){
+    const Sh = at(0, sd*16, 140*kz), T0 = o.hands ? o.hands[sd > 0 ? 0 : 1] : at(2 - sd*sw*6, sd*18.5, 88*kz);
+    const bend = [-fw[0]*.5 + lt[0]*sd*.35, -fw[1]*.5 + lt[1]*sd*.35, -.8];
+    const { E, T } = ftArmIK(Sh, T0, 29*kz, 34*kz, bend);
+    let a = ftRod(Sh, E, 3.8, SHM, toneI, .9) + ftRod(E, T, 3.1, SK, toneI, .8) + ftDot(T, 3.3, SK.l, .8);
+    const pts = [Sh, E, T];
+    if (o.tool && sd < 0){ const tip = [T[0] + fw[0]*9, T[1] + fw[1]*9, 170.4], b0 = [tip[0] - lt[0]*3.5, tip[1] - lt[1]*3.5, tip[2]], b1 = [tip[0] + lt[0]*3.5, tip[1] + lt[1]*3.5, tip[2]];
+      a = ftRod(T, tip, .9, BLK, toneI, .6) + shape([b0, b1, [b1[0] + fw[0]*8, b1[1] + fw[1]*8, tip[2]], [b0[0] + fw[0]*8, b0[1] + fw[1]*8, tip[2]]], METAL.l, .7) + a;
+      pts.push(tip); }
+    out.push(ftIt(ftBoxOf(pts, 3.4), ftOp(op, a)));
+  }
+  return out;
+}
+const ftPoses = { counter:{ x:178, y:330, yaw:0 }, grill:{ x:100, y:300, yaw:Math.PI }, window:{ x:178, y:365, yaw:0 } };
+const ftLerpPose = (a, b, t) => ({ x: a.x + (b.x - a.x)*t, y: a.y + (b.y - a.y)*t, yaw: a.yaw + (b.yaw - a.yaw)*t, walk: Math.sin(t*Math.PI) });
+function ftCookPose(st){ const e = ease(Math.min(1, st.t)), Q = ftPoses;
+  switch (st.phase){
+    case 'toGrill':   return ftLerpPose(Q.counter, Q.grill, e);
+    case 'sear':      return { ...Q.grill, walk:0 };
+    case 'toCounter': return ftLerpPose(Q.grill, { ...Q.counter, yaw: 2*Math.PI }, e);
+    case 'toWindow':  return ftLerpPose(Q.counter, Q.window, e);
+    case 'slide': case 'take': return { ...Q.window, walk:0 };
+    case 'leave':     return ftLerpPose(Q.window, Q.counter, e);
+    default:          return { ...Q.counter, walk:0 };
+  } }
+function ftCook(st){
+  const p = ftCookPose(st), ph = st.phase, t = Math.min(1, st.t), fw = [Math.cos(p.yaw), Math.sin(p.yaw), 0], lt = [-fw[1], fw[0], 0];
+  const wp = (a, l, z) => [p.x + fw[0]*a + lt[0]*l, p.y + fw[1]*a + lt[1]*l, FZ + z];
+  let hands = null, lean = 0, tool = false;
+  if (ph === 'sear'){ const w = Math.sin(st.t*ftDur.sear*9)*5; hands = [wp(28, 13, 91), wp(27 + w, -12, 92)]; tool = true; }
+  else if (ph === 'plate'){ const w = Math.sin(t*20)*3; hands = [wp(30, 2, 95), wp(32 + w, -6 + w, 96)]; }
+  else if (ph === 'toWindow' || ph === 'slide'){ const q = ftPlatePos(st); hands = [[q[0] - 7, q[1] + 9, q[2] + 3], [q[0] - 7, q[1] - 9, q[2] + 3]]; lean = ph === 'slide' ? .5*ease(t) : 0; }
+  else if (ph === 'take'){ lean = .5*(1 - ease(t)); hands = [wp(22, 11, 94), wp(22, -11, 94)]; }
+  else if (!ftDur[ph] || ph === 'arrive') hands = [wp(22, 11, 94), wp(22, -11, 94)];
+  return ftPerson({ x:p.x, y:p.y, z:FZ, yaw:p.yaw, h:172, lean, walk:p.walk || 0, walkPh: st.t*14, hands, tool,
+    skin:'#a8714a', shirt:'#f4f1ea', pants:'#3a3633', apron:'#2f2c2a', cap:'#e2483d' });
+}
+// the customer walks up beside the truck from the cab end, orders at the window, takes the boat and walks off to the rear
+function ftCustPose(st){
+  const ph = st.phase, t = Math.min(1, st.t), e = ease(t);
+  if (ph === 'idle') return null;
+  if (ph === 'arrive'){ const w = Math.min(1, t/.8); return { x:282, y:640 - 275*ease(w), yaw: -Math.PI/2 - Math.PI/2*Math.max(0, Math.min(1, (t - .75)/.25)), walk: w < 1 ? 1 : 0, op:1 }; }
+  if (ph === 'take') return { x:282 + 18*Math.max(0, (t - .5)/.5), y:365, yaw:-Math.PI, walk:0, op:1 };
+  if (ph === 'leave'){ const w = Math.max(0, (t - .15)/.85); return { x:300, y:365 - 215*w, yaw: -Math.PI + Math.PI/2*Math.min(1, t/.2), walk: w > 0 ? 1 : 0, op: t > .6 ? 1 - (t - .6)/.4 : 1 }; }
+  return { x:282, y:365, yaw:-Math.PI, walk:0, op:1 };
+}
+const ftCarry = c => [c.x + Math.cos(c.yaw)*18, c.y + Math.sin(c.yaw)*18, 122];
+function ftCustomer(st){
+  const c = ftCustPose(st); if (!c) return [];
+  const ph = st.phase, q = ftPlatePos(st);
+  const hands = q && (ph === 'take' || ph === 'leave') ? (() => { const lt = [-Math.sin(c.yaw), Math.cos(c.yaw)];
+    return [[q[0] + lt[0]*9, q[1] + lt[1]*9, q[2] + 3], [q[0] - lt[0]*9, q[1] - lt[1]*9, q[2] + 3]]; })() : null;
+  return ftPerson({ x:c.x, y:c.y, z:0, yaw:c.yaw, h:174, walk:c.walk, walkPh: st.t*16, hands, op:c.op,
+    skin:'#d29a6e', shirt:'#3f7fbf', pants:'#3b3f58', hair:'#3a2a1e' });
+}
+
+/* ---------- the order: meat on the griddle, three tacos in a paper boat, the ticket ---------- */
+function ftPlatePos(st){ const ph = st.phase, t = Math.min(1, st.t), e = ease(t);
+  if (ph === 'plate' || ph === 'cooked') return [214, 340, 174];
+  if (ph === 'toWindow') return [214, 340 + 25*e, 174];
+  if (ph === 'slide') return [214 + 24*e, 365, 174];
+  if (ph === 'take'){ const c = ftCarry(ftCustPose(st));
+    return t < .5 ? [238 + 32*ease(t/.5), 365, 174 + 4*ease(t/.5)] : ftL3([270, 365, 178], c, ease((t - .5)/.5)); }
+  if (ph === 'leave') return ftCarry(ftCustPose(st));
+  return null; }
+function ftTaco(xc, yc, z0, col){
+  const r = 4.2, prof = arcUV(yc, z0 + r, r, 180, 360, 8), x0 = xc - 7, x1 = xc + 7;
+  let s = extrude(prof, x0, x1, TORT, (n, mm) => n[2] > .95 ? col : toneI(n, mm));
+  for (const [x, n] of [[x1, [1,0,0]], [x0, [-1,0,0]]]) if (facing(n)) s += shape(on(PX(x), prof), TORT.m, .6);
+  if (facing([0,0,1])) for (const [dx, dy, cc] of [[-4, -1.5, '#4f9a3a'], [0, 1.2, '#f6f1e4'], [4, -.8, '#4f9a3a'], [-1.5, -.4, '#c23a2c']]) s += ftDot([xc + dx, yc + dy, z0 + r + .1], .9, cc, .3);
+  return s + hullInk([...on(PX(x0), prof), ...on(PX(x1), prof)], .9);
+}
+function ftPlate(st, q, n){
+  const kind = ftKinds[st.kind || 'pastor'], [x, y, z] = q;
+  let s = box(x - 9, y - 12, z, x + 9, y + 12, z + 3, matOf('#f1ebdc'), toneI, .9);
+  if (facing([0,0,1])){ let g = ''; for (const yy of [y - 6, y, y + 6]) g += pd([[x - 8, yy, z + 3.05], [x + 8, yy, z + 3.05]], false);
+    for (const xx of [x - 4, x + 4]) g += pd([[xx, y - 11, z + 3.05], [xx, y + 11, z + 3.05]], false);
+    s += `<path d="${g}" fill="none" stroke="#e2483d" stroke-width="1.1" opacity=".75"/>`; }
+  s += ftSort([-7, 0, 7].slice(0, n).map(dy => ftIt([[x - 7, y + dy - 4.2, z + 3], [x + 7, y + dy + 4.2, z + 11.4]], ftTaco(x, y + dy, z + 3, kind.done))));
+  return ftIt([[x - 9, y - 12, z], [x + 9, y + 12, z + 12]], s);
+}
+const ftTacoCount = st => st.phase === 'plate' ? Math.min(3, Math.floor(st.t*3.4)) : 3;
+
+/* ---------- inside the box: kitchen, plumbing, gas and power ---------- */
+function ftRoom(alpha){
+  let s = '';
+  const F = [
+    [[0,0,1],  [[XI0,YI0,FZ],[XI1,YI0,FZ],[XI1,YI1,FZ],[XI0,YI1,FZ]], FLOORM],
+    [[1,0,0],  [[XI0,YI0,FZ],[XI0,YI1,FZ],[XI0,YI1,CZ],[XI0,YI0,CZ]], WALLM],
+    [[-1,0,0], [[XI1,YI0,FZ],[XI1,YI1,FZ],[XI1,YI1,CZ],[XI1,YI0,CZ]], WALLM],
+    [[0,1,0],  [[XI0,YI0,FZ],[XI1,YI0,FZ],[XI1,YI0,CZ],[XI0,YI0,CZ]], WALLM],
+    [[0,-1,0], [[XI0,YI1,FZ],[XI1,YI1,FZ],[XI1,YI1,CZ],[XI0,YI1,CZ]], WALLM],
+    [[0,0,-1], [[XI0,YI0,CZ],[XI1,YI0,CZ],[XI1,YI1,CZ],[XI0,YI1,CZ]], WALLM] ];
+  for (const [n, q, mm] of F) if (facing(n)) s += shape(q, toneI(n, mm), .8);
+  if (facing([0,0,1])){ let g = ''; for (let y = YI0 + 20; y < YI1; y += 20) g += pd([[XI0, y, FZ + .05], [XI1, y, FZ + .05]], false);
+    s += `<path d="${g}" fill="none" stroke="${FLOORM.d}" stroke-width=".6"/>`; }
+  return ftOp(alpha, s);
+}
+function ftInside(st, k){
+  const it = [], put = x => it.push(x), bx = (...a) => put(ftBx(...a)), xr = k > 0, top = facing([0,0,1]), fx = facing([1,0,0]);
+  const burn = st.temp > 40, heat = Math.max(0, Math.min(1, (st.temp - 20)/185)), ph = st.phase;
+  // 3-bay sink on four legs, backsplash, swing faucet
+  for (const [x, y] of [[12,94],[76,94],[12,234],[76,234]]) put(ftRd([x, y, FZ], [x, y, 150], 1.3, METAL, .6));
+  let sk = '';
+  if (top) for (const y0 of [96, 143, 190]) sk += shape(on(PZ(174.05), rrUV(18, y0, 72, y0 + 43, 4)), '#9aa2a5', .8) + ftDot([45, y0 + 21.5, 174.1], 1, '#6d7578', .4);
+  bx(10, 92, 150, 78, 236, 174, METAL, 1, sk);
+  bx(10, 92, 174, 14, 236, 198, METAL, .7);
+  put(ftIt([[14, 160, 184], [33, 168, 195]], ftRod([14, 164, 190], [16, 164, 193], 1.4, METAL, toneI, .6) + ftRod([16, 164, 193], [31, 164, 193], 1.3, METAL, toneI, .6) + ftRod([31, 164, 193], [31, 164, 186], 1.1, METAL, toneI, .6)));
+  // fresh water tank (translucent, water inside), pump, water heater, their pipes, the drain to the floor
+  put(ftIt([[16, 100, 84], [62, 180, 124]], box(17, 101, FZ, 61, 179, 114, matOf('#7fb3dc'), toneI, 0) + ftOp(.55, box(16, 100, FZ, 62, 180, 124, CLEAR, toneI, .9))));
+  put(ftIt([[62, 124, 84], [76, 142, 98]], box(62, 124, FZ, 76, 142, 88, BLK, toneI, .6) + ftCyl(69, 133, 88, 98, 6, matOf('#3c6fb4'), toneI, .8)));
+  put(ftCy(40, 210, FZ, 138, 14, CERAMIC, 1.1));
+  it.push(...ftPipe([[70, 142, 92], [70, 204, 92], [54, 210, 92]], COLD, 1.1));
+  it.push(...ftPipe([[40, 210, 138], [40, 210, 150]], HOT, 1.1));
+  it.push(...ftPipe([[70, 133, 98], [70, 133, 150]], COLD, 1.1));
+  it.push(...ftPipe([[60, 228, 150], [60, 228, FZ]], GREY, 1.6));
+  it.push(...ftPipe([[XI0, 150, 118], [16, 150, 118]], COLD, 1.4));                                  // from the fill inlet
+  // chef base fridge (two drawers) under the griddle and steam table
+  let cb = '';
+  if (fx) for (const [y0, y1] of [[252, 329], [331, 408]]) cb += shape(on(PX(80.1), rectUV(y0 + 2, 88, y1 - 2, 140)), METAL.l, .8) + box(80, y0 + 12, 131, 82.5, y1 - 12, 134, METAL, toneI, .6);
+  bx(12, 250, FZ, 80, 410, 144, METAL, 1, cb);
+  // flat-top griddle: body, steel plate, knobs; in see-through the burners, flames and manifold show through
+  const plateC = mix('#6a6e70', '#3b2f2a', heat);
+  let gb = box(14, 255, 144, 78, 345, 166, METAL, toneI, 1) + box(14, 255, 166, 78, 345, 169, matOf(plateC), toneI, .9);
+  if (fx) for (const y of [275, 300, 325]) gb += cylX(78, 81.5, y, 155, 3, BLK, toneI, .7, 14) + (burn ? ftDot([81.6, y, 160], .9, '#ff6a2a', .3) : '');
+  let gi = '';
+  if (xr){ gi += ftRod([14, 285, 156], [20, 285, 149], 1, matOf(GAS), toneI, .5) + ftRod([20, 285, 149], [20, 262, 149], 1, matOf(GAS), toneI, .5) + ftRod([20, 262, 149], [74, 262, 149], 1, matOf(GAS), toneI, .5) + ftRod([74, 262, 149], [74, 338, 149], 1.1, matOf(GAS), toneI, .5);
+    for (const y of [275, 300, 325]){ gi += ftRod([20, y, 152], [74, y, 152], 1.8, BLK, toneI, .6);
+      if (burn) for (let x = 26; x <= 70; x += 8){ const hh = 2 + 3*heat + Math.sin(x + st.t*13)*.6; gi += shape([[x - 1.6, y, 153.6], [x + 1.6, y, 153.6], [x, y, 153.6 + hh]], '#5aa0ff', .3); } } }
+  put(ftIt([[14, 255, 144], [81.5, 345, 169]], (xr ? ftOp(1 - .55*k, gb) : gb) + gi));
+  bx(14, 255, 169, 17, 345, 190, METAL, .7);                                                          // backsplash
+  // what is on the griddle: tortillas warming, meat searing (raw -> done), smoke rising into the hood
+  if (ph === 'toGrill' || ph === 'sear' || (ph === 'toCounter' && st.t < .2)){
+    const kd = ftKinds[st.kind || 'pastor'], d = ph === 'sear' ? ease(Math.min(1, st.t)) : ph === 'toCounter' ? 1 : 0, mc = matOf(mix(kd.raw, kd.done, d));
+    let mt = '';
+    for (const y of [266, 286, 306]) mt += shape(on(PZ(169.3), ellUV(28, y + 8, 8, 8, 16)), TORT.l, .6);
+    const ch = [];
+    for (const [dx, dy] of [[0,0],[9,4],[18,-2],[3,14],[13,16],[22,10],[6,28],[17,27]]) ch.push(ftBx(44 + dx, 286 + dy, 169, 50 + dx, 292 + dy, 171.5, mc, .5));
+    put(ftIt([[20, 258, 169], [76, 342, 172]], mt + ftSort(ch)));
+    if (ph === 'sear'){ let sm = ''; for (let i = 0; i < 6; i++){ const u = (st.t*ftDur.sear*.55 + i/6) % 1;
+        sm += ftDot([56 + 8*Math.sin(i*2.1), 300 + 12*Math.cos(i*1.7), 176 + u*78], 4 + 6*u, '#ffffff', 0).replace('fill="#ffffff"', `fill="#ffffff" opacity="${f(.55*(1 - u))}"`); }
+      put(ftIt([[34, 280, 176], [80, 320, 262]], sm)); }
+  }
+  // steam table with two pans (rice, beans)
+  let stt = '';
+  if (top) for (const [y0, y1, col] of [[355, 378, '#f1e2b0'], [381, 401, '#6e3b2a']]) stt += shape(on(PZ(169.05), rectUV(20, y0, 72, y1)), '#5b6064', .8) + fill(pd(on(PZ(169.1), rectUV(23, y0 + 2.5, 69, y1 - 2.5))), col);
+  bx(14, 350, 144, 78, 405, 169, METAL, 1, stt);
+  // exhaust hood over the line: baffle filters at its back, fire-suppression nozzles, duct up to the roof fan
+  let hd = box(5, 245, 256, 92, 415, 294, METAL, toneI, 1.1);
+  if (fx) hd += shape(on(PX(92.1), rectUV(248, 258, 412, 264)), METAL.d, .6);
+  let hi = '';
+  if (xr){ for (let i = 0; i < 5; i++){ const y0 = 250 + i*32.5; hi += shape([[8, y0, 262], [8, y0 + 31, 262], [22, y0 + 31, 290], [22, y0, 290]], '#9aa1a4', .7);
+      let g = ''; for (let j = 1; j < 6; j++) g += pd([[8 + j*14/6, y0 + 1, 262 + j*28/6], [8 + j*14/6, y0 + 30, 262 + j*28/6]], false); hi += ink(g, .4); }
+    hi += ftRod([50, 280, 292], [50, 380, 292], .8, METAL, toneI, .5);
+    for (const y of [285, 330, 375]) hi += ftRod([50, y, 292], [50, y, 284], .9, METAL, toneI, .5) + ftDot([50, y, 283.5], 1.4, '#cfd6d8', .4); }
+  put(ftIt([[5, 245, 256], [92.1, 415, 294]], (xr ? ftOp(1 - .55*k, hd) : hd) + hi));
+  put(ftCy(45, 325, 294, CZ, 12, METAL, .9));
+  // fire suppression tank beside the hood, piped into it
+  put(ftCy(14, 428, 210, 262, 6, SAFEM, 1, ftCyl(14, 428, 262, 267, 2.4, METAL, toneI, .6)));
+  it.push(...ftPipe([[14, 428, 267], [14, 428, 291], [14, 415, 291]], '#c9cfd1', .8));
+  // reach-in fridge, its compressor unit on top; in see-through the shelves and tubs
+  let rf = box(11, 438, FZ, 81, 524, 258, METAL, toneI, 1.1);
+  if (fx) rf += shape(on(PX(81.1), rectUV(441, 90, 521, 252)), METAL.l, .9) + box(81, 446, 150, 84, 450, 222, METAL, toneI, .7)
+    + shape(on(PX(81.2), rectUV(498, 232, 516, 244)), '#1d2a26', .6) + tx(81.3, 507, 235.6, '3C', 7, '#8af0ae', 800);
+  let ri = '';
+  if (xr) for (const [z, cols] of [[125, ['#d9382c', '#f4f1e4', '#4f9a3a']], [165, ['#8cc152', '#f0c94a', '#d9382c']], [205, ['#f4f1e4', '#c98b3f', '#4f9a3a']]]){
+    ri += box(14, 441, z, 78, 521, z + 1.5, METAL, toneI, .5);
+    cols.forEach((cc, i) => { ri += box(20, 446 + i*25, z + 1.5, 46, 468 + i*25, z + 12, matOf(cc), toneI, .6); }); }
+  put(ftIt([[11, 438, FZ], [84, 524, 258]], (xr ? ftOp(1 - .6*k, rf) : rf) + ri));
+  let cu = '';
+  if (fx) cu += shape(on(PX(76.1), ellUV(481, 269, 8, 8, 16)), '#2b2826', .7) + ink(pd([[76.2, 473, 269], [76.2, 489, 269]], false) + pd([[76.2, 481, 261], [76.2, 481, 277]], false), .6);
+  bx(16, 446, 258, 76, 516, 280, DARK, 1, cu);
+  // serving counter under the window (cabinet doors face the aisle), cutting board, POS tablet, ticket printer
+  let sc = '';
+  if (facing([-1,0,0])) for (const [y0, y1] of [[252, 312], [316, 376], [380, 440], [444, 478]]) sc += shape(on(PX(194.9), rectUV(y0, 92, y1, 166)), METAL.l, .8) + ftDot([194.8, y1 - 6, 150], 1, METAL.d, .4);
+  bx(195, 248, FZ, 235, 482, 174, METAL, 1.1, sc);
+  bx(200, 280, 174, 228, 322, 176.5, WOOD, .8);
+  const pn = [-.94, 0, .35];
+  put(ftIt([[196, 424, 174], [208, 446, 196]], box(200, 430, 174, 206, 440, 176, BLK, toneI, .6) + ftRod([203, 435, 176], [201, 435, 184], .8, BLK, toneI, .5)
+    + shape([[198, 424, 180], [198, 446, 180], [204, 446, 195], [204, 424, 195]], facing(pn) ? '#1d2a26' : '#4a4642', .8)
+    + (facing(pn) ? shape([[197.8, 427, 182], [197.8, 443, 182], [202.6, 443, 193], [202.6, 427, 193]].map(p => [p[0] - .3, p[1], p[2]]), ph === 'arrive' ? '#8af0ae' : '#2f4a3e', .4) : '')));
+  let pr = '';
+  if (ph === 'arrive' && fx === fx){ const h = 14*Math.min(1, st.t/.8); pr += shape(on(PX(223), rectUV(455, 186, 467, 186 + h)), '#fffdf3', .6); }
+  put(ftIt([[214, 452, 174], [232, 470, 201]], box(214, 452, 174, 232, 470, 186, DARK, toneI, .9) + (top ? shape(on(PZ(186.05), rectUV(219, 454, 227, 468)), '#1b1917', .5) : '') + pr));
+  // ticket rail above the window (on the inside of the window wall); the order ticket hangs on it
+  let tk = '';
+  if (st.kind && ph !== 'arrive' && facing([-1,0,0])) tk = shape(on(PX(228.8), rectUV(354, 268, 368, 289)), '#fffdf3', .6) + ink(pd(on(PX(228.7), rectUV(357, 282, 365, 282)), false) + pd(on(PX(228.7), rectUV(357, 277, 363, 277)), false), .5);
+  bx(229, 262, 288, 235, 468, 291, METAL, .7, tk);
+  // hand sink on its wall bracket by the cab end, soap, faucet; its drain
+  let hs = top ? shape(on(PZ(174.05), rrUV(201, 494, 229, 524, 5)), '#9aa2a5', .8) : '';
+  bx(196, 490, 150, 234, 528, 174, METAL, 1, hs);
+  bx(231, 505, 138, 235, 513, 150, METAL, .6);
+  put(ftIt([[220, 506, 180], [234, 512, 190]], ftRod([234, 509, 184], [232, 509, 188], 1.1, METAL, toneI, .5) + ftRod([232, 509, 188], [222, 509, 188], 1, METAL, toneI, .5)));
+  bx(231, 518, 186, 235, 527, 204, matOf('#7fc1d9'), .6);
+  it.push(...ftPipe([[215, 509, 150], [215, 509, FZ]], GREY, 1.5));
+  // breaker panel on the rear wall, conduits from the shore inlet and out along the ceiling, LED strip
+  let bp = '';
+  if (facing([0,1,0])) bp = shape(on(PY(90.1), rectUV(199, 193, 225, 243)), '#cfd4d6', .7) + box(221, 90, 214, 223, 92, 222, BLK, toneI, .4);
+  bx(196, 85, 190, 228, 90, 246, matOf('#b9bfc1'), .9, bp);
+  it.push(...ftPipe([[206, 88, 114], [206, 88, 190]], COND, 1));
+  it.push(...ftPipe([[212, 88, 246], [212, 88, 297], [212, 480, 297], [60, 480, 297], [60, 480, 280]], COND, 1, 40));
+  it.push(...ftPipe([[212, 345, 297], [70, 345, 297], [70, 345, 294]], COND, .9, 40));
+  bx(118, 100, 298, 126, 520, 300, matOf('#fff3b0'), .6);
+  // fire extinguisher on its bracket by the door
+  put(ftIt([[220, 184, 100], [235, 196, 150]], box(232, 186, 118, 235, 194, 126, BLK, toneI, .5) + ftCyl(226, 190, 100, 142, 6, SAFEM, toneI, 1) + ftCyl(226, 190, 142, 147, 2.4, BLK, toneI, .6) + ftRod([226, 190, 146], [231, 190, 146], .8, BLK, toneI, .5)));
+  // the gas line comes up through the floor behind the chef base into the back of the griddle; red shutoff valve
+  it.push(...ftPipe([[8, 285, FZ], [8, 285, 156], [14, 285, 156]], GAS, 1.2));
+  bx(5.5, 281, 118, 10.5, 289, 124, matOf('#d9382c'), .6);
+  // the cook, the boat of tacos while it is inside
+  it.push(...ftCook(st));
+  const q = ftPlatePos(st);
+  if (q && (xr ? q[0] < 249 : q[0] <= 226)) put(ftPlate(st, q, ftTacoCount(st)));
+  return it;
+}
+
+/* ---------- the box body: shell, facades, the window with the kitchen behind it ---------- */
+function ftShell(st, m, k){
+  const FR = facing([1,0,0]), BK = facing([-1,0,0]), RE = facing([0,-1,0]), FW = facing([0,1,0]);
+  const A = on(PY(BY0), OUTX), B = on(PY(BY1), OUTX);
+  let s = loft(A, B, n => tone(n, m));
+  if (RE){ const tb = tone([0,-1,0], m), yo = BY0 - .1;
+    s += fill(pd(A), tb) + ink(pd(A), 2.2);
+    s += shape(on(PY(yo), rectUV(BY0 > 0 ? 70 : 70, 128, 170, 300)).map(([x, , z]) => [x, yo, z]), mix(tb, '#000000', .05), 1.4) + ink(pd([[120, yo, 128], [120, yo, 300]], false), 1);
+    for (const x0 of [8, 218]) s += shape(on(PY(yo - .05), rectUV(x0, 92, x0 + 14, 116)), '#e2483d', 1) + shape(on(PY(yo - .05), rectUV(x0, 118, x0 + 14, 124)), '#fff6d0', .7);
+    s += ftTxt([120, yo - .1, 116], [-1,0,0], DOWN, 'TACOS EL SOL', 11, INK, 900); }
+  if (FW){ const yo = BY1 + .1; s += fill(pd(B), tone([0,1,0], m)) + ink(pd(B), 2.2);
+    for (const x of [100, 120, 140]) s += shape(on(PY(yo), ellUV(x, 302, 2.6, 2.6, 10)), '#f2a33a', .6); }
+  if (BK){ const xo = -.1, sm = tone([-1,0,0], m);
+    s += shape(on(PX(xo), rectUV(BY0, 96, BY1, 108)), STRIPE.l, .8);
+    s += shape(on(PX(xo - .05), ellUV(190, 222, 40, 40, 28)), '#f26b2d', 1.2);
+    let r = ''; for (let i = 0; i < 12; i++){ const a = i/12*2*Math.PI; r += pd([[xo - .1, 190 + 46*Math.cos(a), 222 + 46*Math.sin(a)], [xo - .1, 190 + 56*Math.cos(a), 222 + 56*Math.sin(a)]], false); }
+    s += `<path d="${r}" fill="none" stroke="#f26b2d" stroke-width="3" stroke-linecap="round"/>`;
+    s += ftTxt([xo - .2, 390, 214], [0,1,0], DOWN, 'TACOS', 44, STRIPE.l, 900) + ftTxt([xo - .2, 390, 172], [0,1,0], DOWN, 'EL SOL', 22, '#f6e7c1', 900); }
+  if (FR){ const xo = TW + .1, ft = tone([1,0,0], m);
+    s += shape(on(PX(xo), rectUV(BY0, 96, BY1, 108)), STRIPE.l, .8);
+    s += tx(xo + .1, 365, 122, 'TACOS EL SOL', 17, INK, 900);
+    // side door with its window and handle
+    s += shape(on(PX(xo), rrUV(100, 88, 168, 286, 3)), mix(ft, '#000000', .04), 1.6) + shape(on(PX(xo + .05), rrUV(110, 236, 158, 276, 3)), GLASS.m, 1.1)
+      + box(TW, 156, 168, TW + 2.5, 164, 172, METAL, toneI, .6);
+    // menu board
+    s += shape(on(PX(xo), rectUV(172, 178, 240, 292)), '#2b2a28', 1.4);
+    s += tx(xo + .1, 206, 279, 'MENU', 8, '#f4b829', 900);
+    [['AL PASTOR  4', 263], ['ASADA  4.5', 251], ['POLLO  4', 239], ['HORCHATA  3', 223]].forEach(([t, z]) => { s += tx(xo + .1, 206, z, t, 5, '#fff4d6', 700); });
+    // the window: when the hatch is up, the kitchen behind it (clipped to the opening), sill and jambs
+    const g = ftHatchGeo(st), winP = on(PX(TW + .05), rectUV(WY0, WZ0, WY1, WZ1));
+    if (g.a > .01 && k === 0){
+      let wv = ftRoom(1) + shape([[XI1, WY0, WZ0], [TW, WY0, WZ0], [TW, WY1, WZ0], [XI1, WY1, WZ0]], METAL.l, .6);
+      const wr = ftRect([[TW, WY0, WZ0], [TW, WY1, WZ1]]);
+      wv += ftSort(ftInside(st, 0).filter(it => { const r = ftRect(it.box); return r[1] > wr[0] && r[0] < wr[1] && r[3] > wr[2] && r[2] < wr[3]; }));
+      if (facing([0,1,0])) wv += shape([[XI1, WY0, WZ0], [TW, WY0, WZ0], [TW, WY0, WZ1], [XI1, WY0, WZ1]], toneI([0,1,0], METAL), .6);
+      if (facing([0,-1,0])) wv += shape([[XI1, WY1, WZ0], [TW, WY1, WZ0], [TW, WY1, WZ1], [XI1, WY1, WZ1]], toneI([0,-1,0], METAL), .6);
+      s += clipTo(winP, wv) + ink(pd(winP), 1.8);
+    }
+  }
+  return s + hullInk([...A, ...B], 2.8);
+}
+function ftBody(st, m, k){
+  const shell = ftShell(st, m, k);
+  if (k === 0) return shell;
+  const A = on(PY(BY0), OUTX), B = on(PY(BY1), OUTX);
+  return ftRoom(.55*k) + ftOp(1 - .8*k, shell) + ftOp(.6*k, hullInk([...A, ...B], 2.8)) + ftOp(k, ftSort(ftInside(st, k)));
+}
+
+/* ---------- hatch, struts, shelf, step ---------- */
+function ftHatchGeo(st){ const a = HOPEN*ease(st.hatch)*Math.PI/180; return { a, d: [Math.sin(a), 0, -Math.cos(a)], n: [Math.cos(a), 0, Math.sin(a)] }; }
+function ftHatch(st, m){
+  const g = ftHatchGeo(st), U = [0, HY1 - HY0, 0], V = g.d.map(v => v*HL), N = g.n.map(v => v*HT);
+  const at = (y, s, t) => [TW + g.d[0]*s + g.n[0]*t, y, HZ + g.d[2]*s + g.n[2]*t];
+  const quad = (s0, s1, y0, y1, t) => [at(y0, s0, t), at(y1, s0, t), at(y1, s1, t), at(y0, s1, t)];
+  const outer = shape(quad(8, HL - 8, HY0 + 8, HY1 - 8, HT + .1), mix(tone(g.n, m), '#ffffff', .14), 1.2)
+    + ftTxt(at((HY0 + HY1)/2, HL/2 + 8, HT + .2), [0,-1,0], g.d, 'TACOS', 24, STRIPE.l, 900);
+  const inner = shape(quad(HL - 14, HL - 10, HY0 + 12, HY1 - 12, -.1), '#fff6c8', .6);
+  const s = ftSlab([TW, HY0, HZ], U, V, N, m, 1.1, outer, inner) + ftRod([TW + 1, HY0, HZ + 1.2], [TW + 1, HY1, HZ + 1.2], 1.3, METAL, toneI, .6);
+  const pts = []; for (const sv of [0, HL]) for (const y of [HY0, HY1]) for (const t of [0, HT]) pts.push(at(y, sv, t));
+  pts.push([TW, HY0, HZ + 2.5]);
+  return ftIt(ftBoxOf(pts), act('hatch', s));
+}
+function ftStruts(st){
+  const g = ftHatchGeo(st), out = [];
+  for (const ys of [HY0 - 3, HY1 + 3]){
+    const A = [TW + 1.6, ys, HZ - 20], B = [TW + g.d[0]*60 + g.n[0]*1.6, ys, HZ + g.d[2]*60 + g.n[2]*1.6], u = norm(sub(A, B)), Bc = [0,1,2].map(i => B[i] + u[i]*34);
+    const body = ftRod(B, Bc, 1.9, BLK, toneI, .7), rd = ftRod(Bc, A, .8, METAL, toneI, .5);
+    const svg = box(TW, ys - 2, HZ - 23, TW + 2.2, ys + 2, HZ - 17, DARK, toneI, .6) + (depthOf(A) > depthOf(B) ? body + rd : rd + body) + ftDot(B, 1.4, METAL.m, .5);
+    out.push(ftIt(ftBoxOf([A, B, [TW, ys, HZ - 23]], 2), svg));
+  }
+  return out;
+}
+function ftShelf(){
+  const z0 = 164, z1 = 167;
+  let s = '';
+  for (const y of [280, 450]) s += box(TW, y - 2, 136, TW + 1.5, y + 2, 146, METAL, toneI, .5) + ftRod([TW + 1, y, 141], [TW + 22, y, z0], 1.1, METAL, toneI, .6);
+  s += box(TW, 260, z0, TW + 26, 470, z1, METAL, tone, 1);
+  const bottle = (y, col) => ftIt([[TW + 7, y - 3, z1], [TW + 13, y + 3, z1 + 22]], ftCyl(TW + 10, y, z1, z1 + 16, 3, matOf(col), toneI, .8) + ftRod([TW + 10, y, z1 + 16], [TW + 10, y, z1 + 22], 1.6, matOf(col), toneI, .5, .4));
+  s += ftSort([bottle(290, '#d9382c'), bottle(300, '#4f9a3a'),
+    ftBx(TW + 4, 438, z1, TW + 14, 458, z1 + 14, BLK, .8, facing([0,0,1]) ? shape(on(PZ(z1 + 14.05), rectUV(TW + 6, 441, TW + 12, 455)), '#fbfaf3', .5) : '')]);
+  return ftIt([[TW, 260, 136], [TW + 26, 470, z1 + 22]], s);
+}
+
+/* ---------- cab ---------- */
+function ftCab(m, k){
+  const fx1 = facing([1,0,0]), fx0 = facing([-1,0,0]), op = 1 - .5*k;
+  let lo = extrude(CABL, CX0, CX1, m);
+  for (const [x, ok] of [[CX1, fx1], [CX0, fx0]]) if (ok){ const sx = x === CX1 ? 1 : -1, xo = x + sx*.15;
+    lo += fill(pd(on(PX(x), CABL)), tone([sx,0,0], m)) + ink(pd(on(PX(x), CABL)), 2);
+    lo += shape(on(PX(xo), rectUV(535, 96, 734, 106)), STRIPE.l, .7);
+    lo += line([[xo, 548, 153], [xo, 548, 84], [xo, 640, 84], [xo, 640, 153]], 1.2) + shape([[xo, 622, 138], [xo, 634, 138], [xo, 634, 142], [xo, 622, 142]], METAL.m, .6); }
+  if (facing([0,1,0])){ const yf = 735.15;
+    lo += shape(on(PY(yf), rectUV(70, 88, 170, 128)), '#3d3935', 1);
+    let g = ''; for (let z = 94; z < 126; z += 6) g += pd([[73, yf + .05, z], [167, yf + .05, z]], false);
+    lo += `<path d="${g}" fill="none" stroke="${METAL.m}" stroke-width="1.2"/>`;
+    for (const x of [38, 202]) lo += shape(on(PY(yf), ellUV(x, 110, 11, 11, 16)), '#fff6d0', 1.1) + shape(on(PY(yf + .1), ellUV(x, 110, 5.5, 5.5, 12)), '#ffffff', .5)
+      + shape(on(PY(yf), rectUV(x - 8, 90, x + 8, 96)), '#f2a33a', .6); }
+  let up = extrude(CABU, CX0, CX1, m);
+  for (const [x, ok] of [[CX1, fx1], [CX0, fx0]]) if (ok){ const sx = x === CX1 ? 1 : -1, xo = x + sx*.15;
+    up += fill(pd(on(PX(x), CABU)), tone([sx,0,0], m)) + ink(pd(on(PX(x), CABU)), 2);
+    up += shape([[xo, 548, 162], [xo, 636, 162], [xo, 604, 236], [xo, 548, 239]], GLASS.m, 1.4)
+      + `<path d="${pd([[xo + sx*.05, 566, 168], [xo + sx*.05, 586, 232]], false)}" stroke="#fff" stroke-width="3" opacity=".38" stroke-linecap="round"/>`
+      + line([[xo, 548, 153], [xo, 548, 243], [xo, 606, 241]], 1.2); }
+  if (facing(NWS)){ const at = (x, t) => [x, 650 - 36*t + NWS[1]*.15, 153 + 85*t + NWS[2]*.15];
+    up += shape([at(20, .1), at(220, .1), at(220, .9), at(20, .9)], GLASS.m, 1.4)
+      + `<path d="${pd([at(60, .25), at(90, .8)], false)}M${pd([at(150, .25), at(175, .7)], false).slice(1)}" stroke="#fff" stroke-width="3.2" opacity=".38" stroke-linecap="round"/>`
+      + line([at(60, .13), at(105, .2)], 1.1) + line([at(150, .13), at(195, .2)], 1.1); }
+  const out = [
+    ftIt([[CX0, 535, BZ0], [CX1, 735, 153]], ftOp(op, lo + hullInk([...on(PX(CX0), CABL), ...on(PX(CX1), CABL)], 2.6))),
+    ftIt([[CX0, 535, 153], [CX1, 650, 248]], ftOp(op, up + hullInk([...on(PX(CX0), CABU), ...on(PX(CX1), CABU)], 2.6))),
+    ftIt([[4, 735, 62], [236, 748, 84]], ftOp(op, box(4, 735, 62, 236, 748, 84, METAL, tone, 1.2))) ];
+  for (const sx of [1, -1]){ const x0 = sx > 0 ? CX1 : CX0, xm = x0 + sx*14;
+    out.push(ftIt(ftBoxOf([[x0, 598, 176], [xm + sx*3, 612, 214]]), ftOp(op, ftRod([x0, 604, 200], [xm, 604, 200], 1, BLK, toneI, .6) + box(Math.min(xm - sx*1, xm + sx*3), 598, 176, Math.max(xm - sx*1, xm + sx*3), 612, 214, BLK, toneI, .9)))); }
+  return out;
+}
+
+/* ---------- chassis and the rear carrier: wheels, rails, axles, tanks, generator, gas line ---------- */
+function ftWheel(x0, x1, y, hub){
+  let s = '';
+  const hubSvg = () => { const xs = hub > 0 ? x1 : x0;
+    return shape(on(PX(xs + hub*.2), ellUV(y, TRAD, 22, 22, 22)), METAL.m, 1) + shape(on(PX(xs + hub*.4), ellUV(y, TRAD, 9, 9, 14)), METAL.l, .8)
+      + [0, 1, 2, 3, 4, 5].map(i => ftDot([xs + hub*.5, y + 15*Math.cos(i*Math.PI/3), TRAD + 15*Math.sin(i*Math.PI/3)], 1.1, METAL.d, .3)).join(''); };
+  s += cylX(x0, x1, y, TRAD, TRAD, TIRE, toneI, 1.5, 28);
+  if (hub && facing([hub, 0, 0])) s += hubSvg();
+  return ftIt([[x0, y - TRAD, 0], [x1, y + TRAD, 2*TRAD]], s);
+}
+function ftTank(x, y){
+  const A = on(PZ(122), ellUV(x, y, 8.5, 8.5, 18)), B = on(PZ(131), ellUV(x, y, 8.5, 8.5, 18));
+  let s = ftCyl(x, y, 52, 58, 12.5, TANKM, toneI, 1) + ftCyl(x, y, 58, 116, 15, TANKM, toneI, 1.2) + ftRod([x, y, 116], [x, y, 122], 15, TANKM, toneI, 1, 9);
+  const valve = ftCyl(x, y, 122, 129, 2.6, METAL, toneI, .6) + ftRod([x, y, 127], [x, y + 5, 127], 1.2, METAL, toneI, .5);
+  s += openShell(A, B, n => toneI(n, TANKM), valve) + ink(pd(B), .8) + ftRod([x, y, 129], [x, y, 133], 1, METAL, toneI, .5) + ftCyl(x, y, 133, 135, 4.5, matOf('#2f6fb0'), toneI, .7);
+  return ftIt([[x - 15, y - 15, 52], [x + 15, y + 15, 135]], s);
+}
+function ftChassis(st){
+  const it = [], put = x => it.push(x), bx = (...a) => put(ftBx(...a));
+  for (const [x0, x1, y, h] of [[12, 36, AXF, -1], [204, 228, AXF, 1], [6, 26, AXR, -1], [28, 48, AXR, 0], [192, 212, AXR, 0], [214, 234, AXR, 1]]) put(ftWheel(x0, x1, y, h));
+  for (const x of [62, 168]) bx(x, 74, 46, x + 10, 735, 72, DARK, 1, '', tone);
+  for (const [y, x0, x1] of [[AXR, 48, 192], [AXF, 36, 204]]){ put(ftRd([x0, y, TRAD], [x1, y, TRAD], 4, DARK, .8));
+    for (const x of [62, 168]) bx(x, y - 30, 41, x + 10, y + 30, 46, DARK, .7); }
+  bx(108, AXR - 12, 25, 132, AXR + 12, 49, DARK, 1);
+  put(ftRd([120, AXR + 12, 40], [120, 560, 48], 3.5, METAL, .7));
+  bx(100, 560, 40, 140, 620, 70, DARK, 1);
+  // grey water tank slung between the rails on hangers, its drain valve; the drains coming down through the floor
+  put(ftIt([[84, 112, 50], [156, 208, 76]], box(84, 112, 50, 156, 208, 72, matOf('#7c8287'), toneI, 1.1) + box(84, 114, 72, 88, 206, 76, DARK, toneI, .5) + box(152, 114, 72, 156, 206, 76, DARK, toneI, .5)));
+  put(ftIt([[116, 94, 54], [124, 112, 66]], ftRod([120, 112, 58], [120, 100, 58], 2, GREY ? matOf(GREY) : METAL, toneI, .6) + box(116, 96, 55, 124, 100, 63, matOf('#e8c23a'), toneI, .6) + ftRod([120, 98, 63], [120, 94, 66], .8, BLK, toneI, .4)));
+  it.push(...ftPipe([[60, 228, BZ0], [60, 228, 74], [90, 228, 74], [90, 200, 74], [90, 200, 72]], GREY, 1.6));
+  it.push(...ftPipe([[215, 509, BZ0], [215, 509, 74], [186, 509, 74], [186, 190, 74], [150, 190, 74], [150, 190, 72]], GREY, 1.5, 40));
+  // rear carrier: deck on two arms bolted to the rail ends; tank rack; two propane cylinders; regulator and hoses
+  for (const x of [62, 168]) bx(x, 6, 40, x + 10, 74, 46, DARK, .8);
+  bx(10, 6, 46, 230, 74, 52, METAL, 1, facing([0,0,1]) ? `<path d="${[20, 40, 60].map(y => pd([[12, y, 52.05], [228, y, 52.05]], false)).join('')}" fill="none" stroke="${METAL.d}" stroke-width=".6"/>` : '', tone);
+  for (const x of [8, 88]) for (const y of [23.5, 56.5]) put(ftRd([x, y, 52], [x, y, 106], 1.2, METAL, .5));
+  for (const y of [23.5, 56.5]) put(ftRd([8, y, 104], [88, y, 104], 1.2, METAL, .5));
+  put(ftTank(30, 40)); put(ftTank(64, 40));
+  it.push(...ftPipe([[30, 45, 127], [30, 64, 131], [40, 77, 128]], HOSE, 1, 12));
+  it.push(...ftPipe([[64, 45, 127], [64, 64, 131], [56, 77, 128]], HOSE, 1, 12));
+  bx(40, 74, 120, 56, 80, 134, matOf('#c9cfd1'), .9, facing([0,-1,0]) ? ftDot([48, 73.9, 130], 2.2, '#5b6064', .5) : '');
+  it.push(...ftPipe([[48, 77, 120], [48, 77, 72], [56, 84, 72], [56, 285, 72], [8, 285, 72], [8, 285, BZ0]], GAS, 1.2, 40));
+  // generator on the deck, its cord along the deck and up the rear wall to the shore-power inlet
+  let gp = '';
+  if (facing([1,0,0])) gp = shape(on(PX(172.1), rectUV(24, 62, 56, 104)), '#3d3935', .9) + [32, 46].map(y => shape(on(PX(172.2), rectUV(y - 4, 76, y + 4, 86)), '#f4f1e4', .5)).join('')
+    + ftDot([172.3, 30, 96], 1.6, st.hatchT ? '#43c25c' : '#7d7169', .4) + tx(172.3, 46, 95, 'GEN', 5, '#fff4d6', 800);
+  let gv = '';
+  if (facing([0,-1,0])){ let g = ''; for (let z = 64; z < 104; z += 6) g += pd([[110, 13.9, z], [162, 13.9, z]], false); gv = ink(g, .7); }
+  put(ftIt([[100, 14, 52], [172.3, 66, 122]], box(100, 14, 52, 172, 66, 112, GENM, tone, 1.4) + gp + gv + ftRod([108, 40, 112], [108, 40, 120], 1.4, BLK, toneI, .5) + ftRod([164, 40, 112], [164, 40, 120], 1.4, BLK, toneI, .5) + ftRod([108, 40, 120], [164, 40, 120], 1.4, BLK, toneI, .5)));
+  it.push(...ftPipe([[172.5, 32, 80], [180, 32, 53], [205, 32, 53], [205, 72, 53], [205, 77.5, 60], [205, 77.5, 98]], CORD, 1, 16));
+  bx(198, 75, 98, 214, 80, 114, matOf('#b9bfc1'), .9, facing([0,-1,0]) ? shape(on(PY(74.9), rectUV(201, 101, 211, 111)), '#e8c23a', .6) : '');
+  // water fill on the street side
+  put(ftIt([[-3.5, 146, 116], [0, 154, 124]], cylX(-3, 0, 150, 120, 4, METAL, toneI, .8, 14) + (facing([-1,0,0]) ? ftDot([-3.1, 150, 120], 1.6, COLD, .4) : '')));
+  // fold-down entry step under the side door, on two brackets from the floor edge
+  put(ftIt([[TW, 104, 54], [TW + 24, 164, 76]], box(TW, 108, 60, TW + 4, 112, 76, DARK, toneI, .5) + box(TW, 156, 60, TW + 4, 160, 76, DARK, toneI, .5) + box(TW, 104, 54, TW + 24, 164, 60, METAL, tone, 1)));
+  return it;
+}
+function ftRoof(){
+  let ac = box(92, 110, BZ1, 168, 200, BZ1 + 24, CERAMIC, tone, 1.1);
+  if (facing([0,0,1])){ let g = ''; for (let y = 120; y <= 190; y += 10) g += pd([[100, y, BZ1 + 24.05], [160, y, BZ1 + 24.05]], false); ac += ink(g, .7); }
+  const fan = box(25, 305, BZ1, 65, 345, BZ1 + 8, METAL, tone, .9) + ftCyl(45, 325, BZ1 + 8, BZ1 + 20, 16, METAL, tone, 1) + ftCyl(45, 325, BZ1 + 20, BZ1 + 24, 5, DARK, toneI, .6) + ftCyl(45, 325, BZ1 + 24, BZ1 + 30, 22, METAL, tone, 1.2);
+  return [ftIt([[92, 110, BZ1], [168, 200, BZ1 + 24]], ac), ftIt([[23, 303, BZ1], [67, 347, BZ1 + 30]], fan)];
+}
+
+/* ---------- labels ---------- */
+function ftLabels(st, k){
+  const ph = st.phase, burn = st.temp > 40, g = ftHatchGeo(st), hEnd = [TW + g.d[0]*HL, (HY0 + HY1)/2, HZ + g.d[2]*HL], gen = !!st.hatchT;
+  const c = ftCookPose(st), sm = [TW + 1.6 + g.d[0]*30, HY1 + 3, HZ - 10 + g.d[2]*30];
+  if (k > .6) return [
+    { at:[30, 40, 116], text:'PROPANE', on: burn }, { at:[48, 77, 134], text:'REGULATOR', on: burn }, { at:[8, 285, 72], text:'GAS LINE', on: burn },
+    { at:[136, 40, 120], text:'GENERATOR', on: gen }, { at:[206, 75, 114], text:'POWER IN', on: gen }, { at:[212, 90, 246], text:'BREAKERS', on: gen },
+    { at:[46, 330, 169], text:'GRIDDLE', on: ph === 'sear' }, { at:[24, 325, 152], text:'BURNERS', on: burn }, { at:[80, 380, 120], text:'CHEF BASE', on: false },
+    { at:[46, 405, 169], text:'STEAM PANS', on: false }, { at:[92, 410, 294], text:'VENT HOOD', on: ph === 'sear' }, { at:[22, 395, 290], text:'FILTERS', on: ph === 'sear' },
+    { at:[45, 325, BZ1 + 30], text:'ROOF FAN', on: ph === 'sear' }, { at:[14, 428, 262], text:'SUPPRESSOR', on: false }, { at:[81, 470, 230], text:'REACH-IN', on: false },
+    { at:[46, 516, 280], text:'COMPRESSOR', on: gen }, { at:[44, 92, 174], text:'3-BAY SINK', on: false }, { at:[39, 100, 124], text:'WATER TANK', on: false },
+    { at:[69, 142, 98], text:'WATER PUMP', on: false }, { at:[40, 196, 138], text:'HOT WATER', on: false }, { at:[120, 160, 50], text:'GREY WATER', on: false },
+    { at:[120, 96, 63], text:'DRAIN TAP', on: false }, { at:[215, 528, 174], text:'HAND SINK', on: false }, { at:[223, 470, 186], text:'PRINTER', on: ph === 'arrive' },
+    { at:[232, 262, 291], text:'TICKET BAR', on: false }, { at:[214, 280, 176.5], text:'CUT BOARD', on: ph === 'plate' },
+    { at:[c.x, c.y, FZ + 172], text:'COOK', on: !!ftDur[ph] }, { at:[122, 480, 300], text:'LED LIGHTS', on: gen },
+    { at:[TW + 26, 300, 167], text:'PASS SHELF', on: ph === 'take' },
+    { at:[178, 600, 72], text:'FRAME RAIL', on: false }, { at:[226, 196, 142], text:'FIRE EXT.', on: false }, { at:[-3, 150, 124], text:'WATER FILL', on: false } ];
+  const out = [{ at:[130, 155, BZ1 + 24], text:'ROOF A/C', on:false }, { at:[45, 325, BZ1 + 30], text:'ROOF FAN', on: ph === 'sear' }];
+  if (facing([1,0,0])){ out.push({ at:[TW, 206, 292], text:'MENU BOARD', on:false }, { at:[TW, 134, 250], text:'SIDE DOOR', on:false },
+      { at:hEnd, text:'HATCH', on: st.hatch !== st.hatchT }, { at:sm, text:'GAS STRUTS', on: st.hatch !== st.hatchT }, { at:[TW + 26, 300, 167], text:'PASS SHELF', on: ph === 'take' });
+    if (st.hatch > .5) out.push({ at:[TW, 300, WZ1], text:'WINDOW', on: !!ftDur[ph] }); }
+  if (facing([-1,0,0])) out.push({ at:[-3, 150, 124], text:'WATER FILL', on:false });
+  if (facing([0,-1,0])) out.push({ at:[30, 40, 116], text:'PROPANE', on: burn }, { at:[136, 40, 120], text:'GENERATOR', on: gen });
+  out.push({ at:[CX1, 590, 240], text:'CAB', on:false });
+  return out;
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0);
+  const sh = [...on(PY(BY0), OUTX), ...on(PY(BY1), OUTX), ...on(PX(CX0), CABU), ...on(PX(CX1), CABU), [4, 748, 62], [236, 748, 62], [10, 6, 46], [230, 6, 46]];
+  let s = castShadow(sh);
+  const cp = ftCustPose(st);
+  if (cp){ const ring = ellUV(cp.x, cp.y, 14, 14, 10).map(([x, y]) => [x, y, 0]).concat(ellUV(cp.x, cp.y, 9, 9, 8).map(([x, y]) => [x, y, 160]));
+    s += ftOp(cp.op, castShadow(ring)); }
+  const items = [...ftChassis(st), ...ftCab(m, k), ...ftRoof(),
+    ftIt([[0, BY0, BZ0], [TW, BY1, BZ1]], ftBody(st, m, k)),
+    ftShelf(), ...ftStruts(st).map(i => ({ ...i, svg: ftOp(1 - .75*k, i.svg) }))];
+  const h = ftHatch(st, m); items.push({ ...h, svg: ftOp(1 - .75*k, h.svg) });
+  const q = ftPlatePos(st);
+  if (q && q[0] >= 249) items.push(ftPlate(st, q, 3));
+  else if (q && k === 0 && q[0] > 226 && facing([1,0,0])){ const p = ftPlate(st, q, 3); p.box = [[TW, q[1] - 12, q[2]], [TW + 7, q[1] + 12, q[2] + 12]]; items.push(p); }
+  items.push(...ftCustomer(st));
+  // what hangs under the floor between the wheels is drawn first, as its own layer: the rails, axles and pipes cross like
+  // sticks and only the wheels, the body and the cab can hide them
+  const under = b => b && b[1][2] <= 78 && b[0][0] >= 30 && b[1][0] <= 210 && b[0][1] >= 74;
+  // with the walls shut, parts behind the body and wholly inside its outline are never seen: leave them out
+  let vis = items;
+  if (k === 0){ const H = ftHull2([...on(PY(BY0), OUTX), ...on(PY(BY1), OUTX)].map(p => P(...p))), body = { box: [[0, BY0, BZ0], [TW, BY1, BZ1]] };
+    vis = items.filter(it => !it.box || it.box === body.box || sepOrder(it, body) >= 0 || !ftCorners(it.box).every(p => ftInHull(H, p))); }
+  s += ftSort(vis.filter(i => under(i.box))) + ftSort(vis.filter(i => !under(i.box)));
+  // labels go to the column on their side of the truck; from some turns one side has more parts than its column holds,
+  // so each column keeps its first (most important) parts up to what fits under the buttons / beside the drawing
+  const LB = [0, TW, 15, 750, 0, 335], lab = ftLabels(st, k);
+  if (lab.length && (k > .6 || k === 0)){
+    const xs = []; for (const x of [LB[0], LB[1]]) for (const y of [LB[2], LB[3]]) for (const z of [LB[4], LB[5]]) xs.push(P(x, y, z)[0]);
+    // the same split xrCallouts makes: by side of the middle, unless a side has no room for the widest pill
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), cx = (x0 + x1)/2, vb = document.getElementById('fig').viewBox.baseVal;
+    const u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.6*INK_K, wMax = u ? fs*1.7*1.3 + 12*INK_K : Math.max(...lab.map(it => it.text.length))*fs*.62 + fs*1.5 + 12*INK_K;
+    const roomL = x0 - vb.x >= wMax, roomR = vb.x + vb.width - x1 >= wMax, n = { L:0, R:0 }, cap = { L:14, R:19 };
+    s += xrCallouts(lab.filter(it => { const sd = (P(...it.at)[0] < cx && roomL) || !roomR ? 'L' : 'R'; return ++n[sd] <= cap[sd]; }), LB); }
+  return s;
+}
+
+/* ---------- behaviour: one state object, one clock ---------- */
+let ui, ftLoop = false;
+const ftTempTarget = st => st.hatchT ? (st.phase === 'sear' ? 186 : 204) : 20;
+function ftStep(st, dt){
+  if (st.hatch !== st.hatchT) st.hatch = st.hatchT > st.hatch ? Math.min(1, st.hatch + dt/1.3) : Math.max(0, st.hatch - dt/1.3);
+  const tg = ftTempTarget(st); st.temp += (tg - st.temp)*Math.min(1, dt*(tg > st.temp ? .9 : .45)); if (Math.abs(tg - st.temp) < .4) st.temp = tg;
+  const d = ftDur[st.phase];
+  if (d){ st.t += dt/d; if (st.t >= 1){ if (st.phase === 'leave'){ st.served++; st.kind = null; } st.phase = ftNext[st.phase]; st.t = 0; } }
+  else st.t += dt;
+  return st.hatch !== st.hatchT || !!ftDur[st.phase] || st.temp !== tg;
+}
+// the clock is our own: when frames keep coming at one instant (headless shots do this with a heavy scene) the loop
+// steps aside for a short timer so time can move on, then carries on from where it was
+let ftLast = 0;
+function ftRun(resume){ if (ftLoop) return; ftLoop = true; if (!resume) ftLast = performance.now(); let still = 0;
+  ui.animate(() => { const now = performance.now(), dt = Math.min(.05, (now - ftLast)/1000); ftLast = now;
+    if (dt === 0 && ++still > 2){ ftLoop = false; setTimeout(() => ftRun(true), 16); return false; }
+    if (dt > 0) still = 0;
+    const go = ftStep(ui.st, dt); if (!go) ftLoop = false; return go; }); }
+function ftToggleHatch(st){
+  if (st.hatchT){ if (st.phase !== 'idle') return ui.flash('Hand out the order before closing up'); st.hatchT = 0; }
+  else st.hatchT = 1;
+  ftRun(); }
+function ftOrder(st, kind){
+  if (st.phase !== 'idle') return ui.flash('One order at a time');
+  st.hatchT = 1; st.kind = kind; st.phase = 'arrive'; st.t = 0; ftRun(); }
+function ftGrill(st){ const ph = st.phase;
+  if (ph === 'ordered'){ st.phase = 'toGrill'; st.t = 0; return ftRun(); }
+  ui.flash(ph === 'idle' ? (st.hatchT ? 'Take an order first' : 'Open the hatch and take an order first') : ph === 'arrive' ? 'The ticket is still printing'
+    : ph === 'cooked' ? 'The tacos are ready: hand them out' : ftServing.includes(ph) ? 'This order is being served' : 'Already on the grill'); }
+function ftHandOut(st){ const ph = st.phase;
+  if (ph === 'cooked'){ st.phase = 'toWindow'; st.t = 0; return ftRun(); }
+  ui.flash(ph === 'ordered' ? 'Grill the order first' : ph === 'idle' ? 'No order yet' : ph === 'arrive' ? 'The ticket is still printing'
+    : ftServing.includes(ph) ? 'Already handing it out' : 'Still cooking'); }
+
+ui = mountFigure({
+  fig:'', title:'Food truck', turn:'full',
+  size:[290, 750, 340], center:[125, 375], palette:'mustard',
+  // hatch 0..1 (hatchT = where it is going), phase + t (0..1 through the phase), kind of order, griddle temperature
+  state:{ hatch:0, hatchT:0, phase:'idle', t:0, kind:null, served:0, temp:20 },
+  scene,
+  buttons:[
+    { label:'Open the hatch', onClick:(st) => ftToggleHatch(st) },
+    { label:'Order', choices: st => Object.entries(ftKinds).map(([key, v]) => ({ label: v.label, disabled: st.phase !== 'idle', why:'One order at a time: hand this one out first',
+        onClick:(st) => ftOrder(st, key) })) },
+    { label:'Grill', onClick:(st) => ftGrill(st) },
+    { label:'Hand out', onClick:(st) => ftHandOut(st) },
+  ],
+  stats: st => [{ label:'Griddle', value: Math.round(st.temp) + '°C' }, { label:'Order', value: st.kind ? ftKinds[st.kind].label : '-', small:true }, { label:'Served', value: st.served }],
+  acts:{ hatch:(st) => ftToggleHatch(st) },
+  params:(st, q) => {
+    if (q.get('open') === '1'){ st.hatch = st.hatchT = 1; st.temp = 204; }
+    if (q.has('hatch')) st.hatch = +q.get('hatch');
+    if (q.has('order') && ftKinds[q.get('order')]) st.kind = q.get('order');
+    if (q.has('phase') && (ftDur[q.get('phase')] || ['ordered', 'cooked'].includes(q.get('phase')))){
+      st.phase = q.get('phase'); st.t = q.has('t') ? +q.get('t') : .5; st.hatch = st.hatchT = 1; st.temp = 200; if (!st.kind) st.kind = 'pastor'; }
+  },
+});
+{ const r0 = ui.render; ui.render = () => { r0(); const b = document.querySelector('#btns .act'); if (b) b.textContent = ui.st.hatchT ? 'Close the hatch' : 'Open the hatch';
+    document.documentElement.classList.toggle('ftxr', (ui.st.xr || 0) > .6); }; ui.render(); }
+// the see-through labels fill both columns; the right one runs where the readout sits, so the readout steps aside meanwhile
+document.head.insertAdjacentHTML('beforeend', '<style>@media (min-width:561px){html.ftxr:not(.nolabels) #stats{visibility:hidden}}</style>');
+xrMount(() => ui, () => '');
+</script>
+</body></html>
