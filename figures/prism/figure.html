@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Prism and lenses</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   White LED light passes through a collimator and slit, then through two prism faces to a white screen.
+   The table turns the whole triangular flint-glass prism. Snell's law is applied at each actual face.
+   Red bends less than violet. The six sample indices are OpenStax Table 1.2 values for flint glass.
+   In lens mode the lamp is parked, the candle carriage slides on the bench, and one lens is in the holder.
+   Rays bend at both spherical lens surfaces. A converging lens forms a real inverted image on a focused screen.
+   A diverging lens forms an upright virtual image on the object side. Dashed backward extensions are construction
+   lines, not light. The virtual image is an overlay and is never projected onto the screen.
+   Spherical aberration is retained. Image position is the intersection of two traced flame-tip rays, not a
+   claim that every marginal ray meets perfectly. Dimensions and object distances are bench centimetres.
+   References https://openstax.org/books/university-physics-volume-3/pages/1-5-dispersion
+   and https://openstax.org/books/university-physics-volume-3/pages/2-4-thin-lenses .
+   Parts and attachments.
+   BENCH board on four feet; two rails and a graduated strip screwed to the board; end stops on rails.
+   LAMP sliding foot, post, housing, rear cap, heat sink, LED chip, collimator, slit plate, switch, low-voltage
+   lead and connector. All optics are held in the housing. The cable follows the board to its connector.
+   PRISM carriage, spindle, platter, graduated rim and triangular prism resting on three cork pads.
+   LENSES two spherical glass elements; split annular retaining holders, stems, feet and clamp knobs on rails.
+   Spare holders and the prism rest on a storage shelf at the back of the bench.
+   SCREEN carriage on rails, post, crossbar, frame, white card and clips. It slides along the bench to focus.
+   CANDLE carriage, brass cup, wax, wick and flame. The cup sits on a post, all moving with the carriage.
+   Ray paths, surface normals, angle readouts and virtual-image outlines are teaching overlays, not hardware.
+*/
+const optX=70, optY=36, optZ=32, lensRadius=18, lensAperture=7;
+const prismColours=[['#e75943',660,1.662],['#f18c35',610,1.665],['#e7bd27',580,1.667],['#43a667',550,1.674],['#4b8bd2',470,1.684],['#8557bb',410,1.698]];
+const opticNames={prism:'Glass prism',converging:'Converging lens',diverging:'Diverging lens'};
+const optState={mode:'prism',angle:30,angleTarget:30,u:40,uTarget:40,screen:120,screenTarget:120,trace:false,pulse:1,moving:false};
+const optRad=a=>a*Math.PI/180;
+const optAdd=(a,b,k=1)=>a.map((v,i)=>v+k*b[i]);
+const optUnit=a=>{const d=Math.hypot(...a);return a.map(v=>v/d);};
+const optSub=(a,b)=>a.map((v,i)=>v-b[i]);
+const optDot=(a,b)=>a.reduce((s,v,i)=>s+v*b[i],0);
+const optCross=(a,b)=>a[0]*b[1]-a[1]*b[0];
+const optBounds=pts=>[[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i])))];
+function optRefract(d,normal,n1,n2){
+  let n=normal;
+  if(optDot(d,n)>0)n=n.map(v=>-v);
+  const c=-optDot(d,n),eta=n1/n2,k=1-eta*eta*(1-c*c);
+  if(k<0)return null;
+  const out=optUnit(d.map((v,i)=>eta*v+(eta*c-Math.sqrt(k))*n[i]));
+  return {d:out,n,i:Math.acos(Math.min(1,c))*180/Math.PI,r:Math.acos(Math.min(1,-optDot(out,n)))*180/Math.PI};
+}
+function optPrismVertices(angle,cx=optX,cy=optY+4){
+  const a=optRad(angle);
+  return [[-9,5.196],[0,-10.392],[9,5.196]].map(([x,y])=>[cx+x*Math.cos(a)-y*Math.sin(a),cy+x*Math.sin(a)+y*Math.cos(a)]);
+}
+function optPolyHit(o,d,vertices){
+  const hits=[];
+  vertices.forEach((a,j)=>{
+    const b=vertices[(j+1)%vertices.length],e=optSub(b,a),den=optCross(d,e);
+    if(Math.abs(den)<1e-9)return;
+    const delta=optSub(a,o),t=optCross(delta,e)/den,v=optCross(delta,d)/den;
+    if(t>1e-5&&v>=0&&v<=1)hits.push({p:optAdd(o,d,t),normal:optUnit([e[1],-e[0]]),t});
+  });
+  return hits.sort((a,b)=>a.t-b.t)[0];
+}
+function optPrismRay(st,index){
+  const vertices=optPrismVertices(st.angle),start=[26,optY],d=[1,0];
+  const a=optPolyHit(start,d,vertices);
+  if(!a)return null;
+  const entry=optRefract(d,a.normal,1,index);
+  const b=entry&&optPolyHit(a.p,entry.d,vertices);
+  const exit=b&&optRefract(entry.d,b.normal,index,1);
+  if(!exit)return null;
+  const end=optAdd(b.p,exit.d,(st.screen-b.p[0])/exit.d[0]);
+  return {points:[start,a.p,b.p,end].map(p=>[...p,optZ]),bends:[{p:[...a.p,optZ],...entry},{p:[...b.p,optZ],...exit}],out:exit.d};
+}
+function optLensSpec(mode){
+  return mode==='converging'?{centres:[16,-16],branches:[-1,1],n:1.5}:{centres:[-19,19],branches:[1,-1],n:1.5};
+}
+function optLensSurface(mode,j,h){
+  const s=optLensSpec(mode);
+  return optX+s.centres[j]+s.branches[j]*Math.sqrt(lensRadius*lensRadius-h*h);
+}
+function optCircleHit(o,d,c,branch){
+  const v=optSub(o,c),b=optDot(v,d),disc=b*b-optDot(v,v)+lensRadius*lensRadius;
+  if(disc<0)return null;
+  for(const t of [-b-Math.sqrt(disc),-b+Math.sqrt(disc)]){
+    const p=optAdd(o,d,t);
+    if(t>1e-5&&Math.sign(p[0]-c[0])===branch&&Math.abs(p[1])<=lensAperture+.01)return p;
+  }
+  return null;
+}
+function optLensRay(st,height){
+  const spec=optLensSpec(st.mode),start=[optX-st.u,6],target=[optLensSurface(st.mode,0,height),height];
+  let o=start,d=optUnit(optSub(target,start));
+  const points=[start],bends=[];
+  for(let j=0;j<2;j++){
+    const c=[optX+spec.centres[j],0],p=optCircleHit(o,d,c,spec.branches[j]);
+    if(!p)return null;
+    const bend=optRefract(d,optUnit(optSub(p,c)),j?spec.n:1,j?1:spec.n);
+    if(!bend)return null;
+    points.push(p);bends.push({...bend,p:[p[0],optY,p[1]+optZ]});o=p;d=bend.d;
+  }
+  points.push(optAdd(o,d,(st.screen-o[0])/d[0]));
+  return {points:points.map(([x,z])=>[x,optY,z+optZ]),bends,out:d,exit:o};
+}
+function optImage(st){
+  const a=optLensRay(st,0),b=optLensRay(st,4);
+  if(!a||!b)return null;
+  const den=optCross(a.out,b.out);
+  if(Math.abs(den)<1e-8)return null;
+  const t=optCross(optSub(b.exit,a.exit),b.out)/den,p=optAdd(a.exit,a.out,t);
+  return {x:p[0],z:p[1]+optZ,distance:p[0]-optX,m:p[1]/6};
+}
+function optRun(st,ui){
+  if(st.moving)return;
+  st.moving=true;
+  ui.animate(dt=>{
+    const approach=(key,target,speed)=>{const d=st[target]-st[key];st[key]+=Math.sign(d)*Math.min(Math.abs(d),dt*speed);};
+    approach('angle','angleTarget',12);approach('u','uTarget',22);approach('screen','screenTarget',38);
+    st.pulse=Math.min(1,st.pulse+dt/1.4);
+    st.moving=st.angle!==st.angleTarget||st.u!==st.uTarget||st.screen!==st.screenTarget||st.pulse<1;
+    return st.moving;
+  });
+}
+function optChoose(mode,st,ui){
+  st.mode=mode;st.screen=st.screenTarget=mode==='prism'?120:105;st.pulse=0;optRun(st,ui);
+}
+function optStroke(points,colour,width=1.8,dashed=false){
+  return `<path d="${pd(points,false)}" fill="none" stroke="${colour}" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round"${dashed?' stroke-dasharray="4 3"':''}/>`;
+}
+function optCandle(x,y,z=optZ,scale=1,ghost=false){
+  const at=(dx,dy,dz)=>[x+dx*scale,y+dy*Math.abs(scale),z+dz*scale];
+  const wax=matOf('#f2bd53');
+  const a=at(-1.7,-1.7,-6),b=at(1.7,1.7,3);
+  let s=box(...a.map((v,i)=>Math.min(v,b[i])),...a.map((v,i)=>Math.max(v,b[i])),wax,toneI,.7);
+  s+=optStroke([at(0,0,3),at(0,0,4)],INK,.8);
+  const flame=[at(-1.1,0,4.3),at(0,0,6),at(.85,0,4.7),at(0,0,3.8)];
+  s+=shape(flame,'#ed7045',.6)+shape([at(-.4,.02,4.2),at(0,.02,5.3),at(.35,.02,4.2)],'#ffe69b',.3);
+  return ghost?`<g opacity=".5">${s}</g>`:s;
+}
+function optCallouts(items){
+  const svg=document.getElementById('fig'),vb=svg.viewBox.baseVal,phone=innerWidth<=560;
+  const matrix=svg.getScreenCTM().inverse(),point=(x,y)=>new DOMPoint(x,y).matrixTransform(matrix);
+  const bottom=vb.height-8*INK_K,base=INK_K;
+  const ordered=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  const half=Math.ceil(ordered.length/2),columns=[ordered.slice(0,half),ordered.slice(half)];
+  let s='';
+  columns.forEach((col,side)=>{
+    const control=document.getElementById(side?'stats':'btns').getBoundingClientRect();
+    const top=phone?15*LBL_U():Math.max(8*base,point(control.left,control.bottom+14).y);
+    const k=phone?base:Math.min(base,(bottom-top)/(col.length*19));
+    const step=phone?Math.min(23*LBL_U(),(bottom-top)/col.length):19*k;
+    const start=top+step/2;
+    const width=phone?28*LBL_U():Math.max(...col.map(it=>it.text.length))*8.6*k*.62+8.6*k*1.5;
+    const x=side?vb.width-width/2-4*base:width/2+4*base;
+    col.sort((a,b)=>a.p[1]-b.p[1]);
+    INK_K=k;
+    col.forEach((it,j)=>{s+=tag(it.at,(x-it.p[0])/k,(start+j*step-it.p[1])/k,it.text);});
+    INK_K=base;
+  });
+  return s;
+}
+function optScreenImage(x,y,m){
+  const at=(dy,dz)=>[x,y+dy*Math.abs(m),optZ+dz*m];
+  return shape([at(-1.7,-6),at(1.7,-6),at(1.7,3),at(-1.7,3)],'#e5ac42',.5)
+    +optStroke([at(0,3),at(0,4)],INK,.6)
+    +shape([at(-1.1,4.3),at(0,6),at(.85,4.7),at(0,3.8)],'#ed7045',.4);
+}
+function optScene(st,palette){
+  const parts=[],labels=[],glass=matOf('#aedbe1'),blue=matOf('#6c93ba'),brass=matOf('#d3ac62');
+  const put=(pts,svg,text,at)=>{parts.push({box:optBounds(pts),svg});if(text)labels.push({at:at||avg(pts),text});};
+  const bx=(a,b,m,text)=>put([a,b],box(...a,...b,m,toneI,.8),text);
+  const vc=(x,y,a,b,r,m,text)=>put([[x-r,y-r,a],[x+r,y+r,b]],cyl(x,y,a,b,r,m,toneI,.8),text,[x,y,b]);
+  const segment=(a,b,r,m,text)=>put([a.map(v=>v-r),b.map(v=>v+r)],rod(a,b,r,m,toneI,.7),text,avg([a,b]));
+  const xr=ease(st.xr||0),lampY=st.mode==='prism'?optY:78;
+  let s=castShadow([[0,0,3],[150,0,3],[150,135,3],[0,135,3]]);
+  for(const [x,y] of [[8,8],[142,8],[8,127],[142,127]])s+=cyl(x,y,-2,0,3,DARK,toneI,.8);
+  s+=board(0,0,150,135,3,5);
+  bx([7,25,3],[144,28,6],METAL,'LEFT RAIL');bx([7,44,3],[144,47,6],METAL,'RIGHT RAIL');
+  bx([8,50,3],[144,54,3.5],CERAMIC,'METRIC SCALE');
+  for(let x=10;x<=140;x+=2)s+=line([[x,50,3.6],[x,50+(x%10?1.5:3),3.6]],.5);
+  for(const x of [8,142])bx([x-1,25,6],[x+1,47,8],DARK,x===142?'END STOP':null);
+  bx([7,lampY-7,3],[25,lampY+7,7],palette,'LAMP FOOT');segment([15,lampY,7],[15,lampY,26],1.5,METAL,'LAMP POST');
+  const housing=box(6,lampY-6,26,25,lampY+6,38,palette,tone,1.3);
+  put([[6,lampY-6,26],[25,lampY+6,38]],`<g opacity="${1-.83*xr}">${housing}</g>`,'LAMP HOUSING');
+  if(xr>.01){
+    bx([8,lampY-4,29],[10,lampY+4,35],METAL,'HEAT SINK');
+    bx([10,lampY-1.5,30.5],[10.5,lampY+1.5,33.5],matOf('#fff1ba'),'WHITE LED');
+    put([[20,lampY-4,28],[21,lampY+4,36]],cylX(20,21,lampY,32,4,glass,toneI,.7),'COLLIMATOR');
+  }
+  for(let x=8;x<18;x+=2)bx([x,lampY-6.1,34],[x+.6,lampY-6,37],DARK,x===8?'VENT SLOTS':null);
+  bx([25,lampY-5,27],[26,lampY-1,37],DARK,'SLIT PLATE');bx([25,lampY+1,27],[26,lampY+5,37],DARK);
+  bx([10,lampY+6,28],[14,lampY+7,31],DARK,'POWER SWITCH');
+  const wire=[[6,lampY,28],[3,lampY,25],[3,lampY,4],[3,110,4],[10,110,4]];
+  for(let j=0;j<wire.length-1;j++)put([wire[j],wire[j+1]],optStroke([wire[j],wire[j+1]],DARK.m,1.5),j===3?'POWER LEAD':null);
+  bx([10,107,3],[15,113,5],DARK,'DC CONNECTOR');
+  bx([20,115,3],[88,131,8],WOOD,'OPTICS SHELF');
+  const prismY=st.mode==='prism'?optY+4:122,prismZ=st.mode==='prism'?18:12;
+  bx([60,prismY-9,st.mode==='prism'?6:8],[80,prismY+9,prismZ-4],blue,'PRISM CARRIAGE');
+  vc(optX,prismY,prismZ-4,prismZ,2.2,METAL,'TURNTABLE SPINDLE');
+  vc(optX,prismY,prismZ,prismZ+2,12,palette,'TURNTABLE');
+  let scale='';
+  for(let a=0;a<360;a+=15){const t=optRad(a);scale+=line([[optX+10*Math.cos(t),prismY+10*Math.sin(t),prismZ+2.1],[optX+11.6*Math.cos(t),prismY+11.6*Math.sin(t),prismZ+2.1]],.5);}
+  put([[58,prismY-12,prismZ+2],[82,prismY+12,prismZ+2.2]],scale,'DEGREE SCALE',[optX+11,prismY,prismZ+2]);
+  const tri=optPrismVertices(st.angle,optX,prismY),bottom=tri.map(p=>[...p,prismZ+2.8]),top=tri.map(p=>[...p,prismZ+23]);
+  tri.forEach(([x,y],j)=>vc(optX+(x-optX)*.65,prismY+(y-prismY)*.65,prismZ+2,prismZ+2.8,1.2,matOf('#ae8151'),j===0?'CORK PAD':null));
+  const prismGlass=loft(bottom,top,n=>toneI(n,glass))+shape(top,'#cbe8eb',.8)+hullInk([...bottom,...top],1.7);
+  put([...bottom,...top],`<g opacity="${.65-.37*xr}">${prismGlass}</g>`,'FLINT GLASS PRISM');
+  labels.push({at:avg([top[0],top[1],bottom[0],bottom[1]]),text:'PRISM ENTRY FACE'},{at:avg([top[1],top[2],bottom[1],bottom[2]]),text:'PRISM EXIT FACE'});
+  for(const mode of ['converging','diverging']){
+    const active=st.mode===mode,cx=active?optX:mode==='converging'?30:49,cy=active?optY:122,cz=active?optZ:24;
+    bx([cx-5,cy-8,active?6:8],[cx+5,cy+8,11],blue,active?'LENS CARRIAGE':null);
+    segment([cx,cy,11],[cx,cy,cz-8],1.1,METAL,active?'HOLDER STEM':null);
+    for(let j=0;j<24;j++){
+      const a=j*2*Math.PI/24,b=(j+1)*2*Math.PI/24;
+      const q=(x,r,t)=>[x,cy+r*Math.cos(t),cz+r*Math.sin(t)];
+      const A=[q(cx-1.6,7.3,a),q(cx-1.6,9,a),q(cx-1.6,9,b),q(cx-1.6,7.3,b)],B=A.map(p=>[cx+1.6,p[1],p[2]]);
+      put([...A,...B],loft(A,B,n=>toneI(n,DARK))+shape(vis([1,0,0])?B:A,DARK.m,.45));
+    }
+    for(let j=0;j<2;j++)for(let k=0;k<6;k++){
+      const r0=k*lensAperture/6,r1=(k+1)*lensAperture/6;
+      const ring=r=>Array.from({length:24},(_,i)=>{const t=i*Math.PI/12;return [cx+optLensSurface(mode,j,r)-optX,cy+r*Math.cos(t),cz+r*Math.sin(t)];});
+      const A=ring(r0),B=ring(r1);
+      for(let i=0;i<24;i++){
+        const q=[A[i],B[i],B[(i+1)%24],A[(i+1)%24]];
+        put(q,fill(pd(q),j?'#b2dce4':'#e3f5f5',`opacity="${.45-.2*xr}"`));
+      }
+      if(k===5)put(B,ink(pd(B),.8));
+    }
+    bx([cx,cy+8,cz-1],[cx+3,cy+11,cz+1],brass,active?'CLAMP KNOB':null);
+    labels.push({at:[cx,cy,cz],text:mode==='converging'?'CONVERGING LENS':'DIVERGING LENS'});
+    if(active)labels.push({at:[optLensSurface(mode,0,4),cy,cz+4],text:'FRONT CURVED SURFACE'},{at:[optLensSurface(mode,1,-4),cy,cz-4],text:'REAR CURVED SURFACE'},{at:[cx,cy+8.5,cz],text:'RETAINING RING'});
+  }
+  const candleX=st.mode==='prism'?34:optX-st.u,candleY=st.mode==='prism'?94:optY;
+  bx([candleX-5,candleY-7,st.mode==='prism'?3:6],[candleX+5,candleY+7,10],palette,'CANDLE CARRIAGE');
+  segment([candleX,candleY,10],[candleX,candleY,25],1.2,METAL,'CANDLE POST');
+  vc(candleX,candleY,25,26,3,brass,'BRASS CANDLE CUP');
+  put([[candleX-2,candleY-2,26],[candleX+2,candleY+2,38]],optCandle(candleX,candleY),'WAX CANDLE',[candleX,candleY,30]);
+  labels.push({at:[candleX,candleY,35.5],text:'WICK'},{at:[candleX,candleY,37],text:'FLAME'});
+  const screenY=st.mode==='prism'?99:optY,sy0=screenY-(st.mode==='prism'?31:16),sy1=screenY+(st.mode==='prism'?31:16),sx=st.screen;
+  bx([sx-5,screenY-9,3],[sx+5,screenY+9,8],blue,'SCREEN FOOT');
+  segment([sx,screenY,8],[sx,screenY,12],1.5,METAL,'SCREEN POST');
+  const frame=box(sx,sy0-1,12,sx+1.5,sy1+1,53,blue,toneI,1);
+  put([[sx,sy0-1,12],[sx+1.5,sy1+1,53]],`<g opacity="${1-.7*xr}">${frame}</g>`,'SCREEN FRAME');
+  const screenFace=vis([-1,0,0])?sx-.05:sx+1.55;
+  put([[screenFace,sy0,13],[screenFace,sy1,52]],shape(on(PX(screenFace),rectUV(sy0,13,sy1,52)),'#fffaf0',.6),'WHITE SCREEN');
+  const screenPart=parts[parts.length-1];
+  for(const y of [sy0+4,sy1-4])bx([sx-.3,y-1,51],[sx+1.8,y+1,54],METAL,y===sy0+4?'CARD CLIP':null);
+  const rays=st.mode==='prism'?prismColours.map(([colour,nm,n])=>({...optPrismRay(st,n),colour,nm})):[-4,0,4].map((h,j)=>({...optLensRay(st,h),colour:['#3a9aab','#e2943b','#c96875'][j]}));
+  const image=st.mode==='prism'?null:optImage(st);
+  if(st.mode==='prism'){
+    const edge=rays.map(r=>r.points[3]);
+    for(let j=0;j<rays.length-1;j++){
+      const a=edge[j],b=edge[j+1];
+      const q=[[screenFace,a[1],29],[screenFace,b[1],29],[screenFace,b[1],35],[screenFace,a[1],35]];
+      screenPart.svg+=fill(pd(q),rays[j].colour);
+    }
+  }else if(st.mode==='converging'&&image){
+    const blur=Math.min(6,Math.abs(sx-image.x)*.2),m=image.m;
+    const picture=optScreenImage(screenFace,screenY,m);
+    screenPart.svg+=`<defs><filter id="focusBlur"><feGaussianBlur stdDeviation="${blur}"/></filter></defs><g filter="url(#focusBlur)" opacity=".85">${picture}</g>`;
+  }
+  s+=byDepth(parts);
+  const show=st.trace||xr>.01;
+  if(st.mode==='prism'||show){
+    rays.forEach(r=>{
+      if(!r.points)return;
+      const pts=st.mode==='prism'&&!show?[r.points[0],r.points[1]]:r.points;
+      s+=optStroke(pts,st.mode==='prism'&&!show?'#fff4bf':r.colour,show?1.5:3);
+      if(st.mode==='prism'&&!show)s+=optStroke(r.points.slice(2),r.colour,1.4);
+      if(st.pulse<1){const j=Math.min(2,Math.floor(st.pulse*3)),p=optAdd(r.points[j],optSub(r.points[j+1],r.points[j]),st.pulse*3-j),q=P(...p);s+=`<circle cx="${q[0]}" cy="${q[1]}" r="2" fill="${r.colour}"/>`;}
+    });
+  }
+  if(show&&st.mode==='diverging'&&image){
+    rays.forEach(r=>{if(r.points)s+=optStroke([[image.x,optY,image.z],r.points[2]],r.colour,1.2,true);});
+    s+=optCandle(image.x,optY,optZ,image.m,true)+tag([image.x,optY,image.z],-20,-25,'VIRTUAL IMAGE',true);
+  }
+  if(xr>.6){
+    const r=rays[st.mode==='prism'?3:1];
+    if(r.bends)r.bends.forEach((b,j)=>{
+      const n=st.mode==='prism'?[b.n[0],b.n[1],0]:[b.n[0],0,b.n[1]];
+      s+=optStroke([optAdd(b.p,n,-7),optAdd(b.p,n,7)],'#716d68',.9,true);
+      const q=P(...b.p);
+      s+=`<text x="${q[0]+8}" y="${q[1]+(j?-17:15)}" font-size="${5*INK_K}" fill="${INK}" font-family="monospace">i ${b.i.toFixed(1)} deg / r ${b.r.toFixed(1)} deg</text>`;
+    });
+    s+=optCallouts(labels);
+  }
+  return s;
+}
+const optUI=mountFigure({fig:'34',turn:'full',title:'Prism and lenses',size:[150,135,64],palette:'mint',state:optState,scene:optScene,
+  stats:st=>{
+    if(st.mode==='prism'){
+      const r=optPrismRay(st,1.674);
+      return [{label:'Prism turn',value:st.angle.toFixed(0)+' deg',small:true},{label:'Green deviation',value:r?(Math.atan2(r.out[1],r.out[0])*180/Math.PI).toFixed(1)+' deg':'TIR',small:true}];
+    }
+    const im=optImage(st);
+    return [{label:'Object distance',value:st.u.toFixed(1)+' cm',small:true},{label:st.mode==='converging'?'Real image':'Virtual image',value:im?im.distance.toFixed(1)+' cm':'No image',small:true},{label:'Screen distance',value:(st.screen-optX).toFixed(1)+' cm',small:true}];
+  },
+  buttons:[
+    {label:'Choose optic',choices:st=>Object.entries(opticNames).map(([mode,label])=>({label,current:st.mode===mode,onClick:(st,ui)=>optChoose(mode,st,ui)}))},
+    {label:'Rotate prism',onClick:(st,ui)=>{if(st.mode!=='prism')return ui.flash('Choose the glass prism first');st.angleTarget=st.angleTarget===36?24:st.angleTarget+6;st.pulse=0;optRun(st,ui);}},
+    {label:'Slide candle',choices:st=>[54,40,32].map(u=>({label:u+' cm',current:st.uTarget===u,disabled:st.mode==='prism',why:'Choose a lens to image the candle',onClick:(st,ui)=>{st.uTarget=u;st.pulse=0;optRun(st,ui);}}))},
+    {label:'Focus screen',onClick:(st,ui)=>{if(st.mode==='prism')return ui.flash('The spectrum is already on the screen');if(st.mode==='diverging')return ui.flash('A virtual image cannot be caught on a screen');const im=optImage(st);if(im){st.screenTarget=im.x;optRun(st,ui);}}},
+    {label:'Trace rays',onClick:(st,ui)=>{st.trace=!st.trace;st.pulse=0;optRun(st,ui);}}
+  ],
+  params:(st,q)=>{
+    if(Object.hasOwn(opticNames,q.get('mode')))st.mode=q.get('mode');
+    for(const [key,min,max] of [['angle',24,36],['u',32,54],['screen',96,124]])if(q.has(key)&&Number.isFinite(Number(q.get(key))))st[key]=Math.max(min,Math.min(max,Number(q.get(key))));
+    if(!q.has('screen'))st.screen=st.mode==='prism'?120:105;
+    st.angleTarget=st.angle;st.uTarget=st.u;st.screenTarget=st.screen;st.trace=q.get('trace')==='1';
+    if(q.get('focus')==='1'&&st.mode==='converging')st.screen=st.screenTarget=optImage(st).x;
+  }
+});
+xrMount(()=>optUI,()=>'');
+</script></body></html>
