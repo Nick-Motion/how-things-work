@@ -1,0 +1,620 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Microwave</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Countertop microwave oven (turntable type, 800 W, ~50 x 38 x 29 cm). 1 unit = 0.5 cm.
+   x = depth (back 6, front frame 78, door + fascia face 82), y = width (right side 10, left side 110), z = up.
+   It stands on a kitchen counter board (top at z = 3); the bowl of soup waits on the counter in front of it.
+
+   How it really works (and where everything is after each step):
+   1. DOOR OPEN: the button on the fascia pushes a lever back to the latch bracket; its release bar lifts the two latch
+      hooks on the door's free edge out of their catches, and the door swings open on its two hinges. The hooks leave
+      the interlock switches: PRIMARY and SECONDARY open (the high-voltage circuit can't be made), MONITOR closes. The
+      oven lamp comes on.
+   2. Bowl in: the bowl goes from the counter, up and over, in through the opening and down onto the glass turntable,
+      which rests on the roller ring and the coupler.
+   3. Close the door: the hooks ride over the catches, drop in, and press the interlock switches closed again.
+   4. Set the time on the keypad: the control board shows it on the display.
+   5. Start: the board's relay closes. Mains (cord -> line fuse -> noise filter -> primary switch -> relay) reaches the
+      high-voltage transformer's primary coil. The secondary (~2 kV) with the HV capacitor and HV diode doubles to ~4 kV
+      and drives the magnetron; a third little winding heats its filament. The magnetron's antenna radiates 2.45 GHz
+      microwaves into the waveguide, which carries them through the mica waveguide cover into the cavity; the steel
+      walls and the door mesh keep them in. Water in the soup heats and steams. The fan pulls air in through the rear
+      vents, across the magnetron's cooling fins and on into the cavity through the air inlet holes; the turntable
+      motor turns the coupler, so the tray turns (and the roller ring rolls at half speed). The timer counts down;
+      at zero the relay opens and the buzzer beeps. Opening the door at any time opens the interlocks and stops it.
+
+   Parts (each is held by another; see the numbers below):
+   CASE     wrapper (top + sides) . back panel with rear vents and rating label . front frame with the cavity opening
+            and two latch slots . four feet . power cord with strain relief . side vents
+   DOOR     door frame . window with perforated mesh screen . choke seal round the inner panel . two latch hooks . two hinges
+   FASCIA   control panel . display . keypad . START / STOP keys . DOOR OPEN button
+   CAVITY   oven cavity . waveguide cover (mica) . air inlet holes . lamp holes . glass turntable . roller ring with
+            three wheels . coupler . turntable motor under the floor
+   MICROWAVES  waveguide (on the cavity's right wall) . magnetron: mounting flange, two ring magnets, cooling fins, yoke,
+            filter box, filament terminals, thermal cutout . antenna into the waveguide
+   HIGH VOLTAGE  HV transformer: core, primary coil, secondary coil, base plate . HV capacitor with clamp band and terminals .
+            HV diode to a chassis screw
+   COOLING  fan motor . fan blades . shroud . bracket . foot
+   CONTROLS control board . relay . microcontroller . buzzer . display module . keypad membrane . release lever . release bar .
+            latch bracket . primary, secondary and monitor interlock switches with plungers
+   POWER    fuse board: line fuse, noise filter, terminal block . wiring harness (live, HV, motors, lamp) */
+
+/* ---------- geometry ---------- */
+const BH = 3, BX1 = 124, BY1 = 118;                         // counter board (top at z = 3)
+const BTOP = boardTop(0, 0, BX1, BY1, BH, 6);
+const XB = 6, XF = 78, XD = 82, DT = XD - XF;               // case back, front frame, door + fascia face, door thickness
+const YR = 10, YL = 110, YP = 36;                           // right side, left side, fascia / door split
+const ZB = 5, ZT = 63;
+// a rounded rectangle in (u, v) with only one side's corners rounded (lo: the u0 side, hi: the u1 side)
+const rrSide = (u0, v0, u1, v1, r, lo, hi) => [...(hi ? arcUV(u1 - r, v0 + r, r, -90, 0) : [[u1, v0]]), ...(hi ? arcUV(u1 - r, v1 - r, r, 0, 90) : [[u1, v1]]),
+  ...(lo ? arcUV(u0 + r, v1 - r, r, 90, 180) : [[u0, v1]]), ...(lo ? arcUV(u0 + r, v0 + r, r, 180, 270) : [[u0, v0]])];
+const OUT = rrUV(YR, ZB, YL, ZT, 4);                        // case profile in (y, z), swept along x
+const PANEL = rrSide(YR, ZB, YP - .3, ZT, 4, true, false);
+const DW = YL - YP, DOOR = rrSide(0, ZB, DW, ZT, 4, true, false);   // door profile in (u = distance from the hinge, z)
+const WIN = rrUV(9, 15, 55, 51, 2);                         // door window in (u, z)
+const CX0 = 10, CX1 = 77, CY0 = 40, CY1 = 106, CZ0 = 12, CZ1 = 52;   // oven cavity
+const OPENING = on(PX(XF), rectUV(CY0, CZ0, CY1, CZ1));
+const TC = [43.5, 73], TR = 26, TZ = 14, TZ1 = 15.5;         // turntable centre, radius, underside, top
+const BOFF = 6, BPH = 2.3;                                   // the bowl sits a little off centre on the tray
+const BOWL_OUT = [104, 30, BH];
+const DMAX = 95 * Math.PI / 180;
+const SPEED = 15;                                            // timer seconds per real second
+const TIMES = [30, 60, 120];
+
+const CREAM = { l:'#fff4d6', m:'#e6dcbd', d:'#bfb390' };
+const CAV = { l:'#f6f3ea', m:'#e1ddd0', d:'#bdb8a8' };
+const COP = { l:'#f0b07a', m:'#d08a52', d:'#9a5a2c' }, COP2 = matOf('#c76a3e'), LAM = matOf('#80878d'), PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' };
+const MICA = matOf('#e6d5a6'), MAG = matOf('#666c74'), RELM = matOf('#3f7fc0'), SWM = matOf('#45494f'), FANM = matOf('#a9bccb'), WHP = matOf('#ece8dc'), CHIP = matOf('#34302d');
+const BAND = matOf('#5a82c6'), SOUP = '#e0703c';
+
+/* ---------- helpers ---------- */
+const bxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const ringZ = (x, y, z, r, n = 24, a0 = 0) => Array.from({length:n}, (_, i) => { const a = a0 + i/n*2*Math.PI; return [x + r*Math.cos(a), y + r*Math.sin(a), z]; });
+const fmt = s => { s = Math.max(0, Math.ceil(s - 1e-6)); return Math.floor(s/60) + ':' + String(s % 60).padStart(2, '0'); };
+// an oriented box o + a*A + b*B + c*Cv (a, b, c in 0..1): its faces that face the viewer, and its bounds
+function obox(o, A, B, Cv, mat, w = .6){
+  const q = (a, b, c) => [0,1,2].map(i => o[i] + a*A[i] + b*B[i] + c*Cv[i]), ctr = q(.5, .5, .5);
+  const F = [[[0,0,0],[1,0,0],[1,1,0],[0,1,0]], [[0,0,1],[1,0,1],[1,1,1],[0,1,1]], [[0,0,0],[1,0,0],[1,0,1],[0,0,1]],
+             [[0,1,0],[1,1,0],[1,1,1],[0,1,1]], [[0,0,0],[0,1,0],[0,1,1],[0,0,1]], [[1,0,0],[1,1,0],[1,1,1],[1,0,1]]];
+  let s = '';
+  for (const fc of F){ const pts = fc.map(c => q(...c)); let n = norm(cross(sub(pts[1], pts[0]), sub(pts[3], pts[0])));
+    if (dot(n, sub(avg(pts), ctr)) < 0) n = n.map(v => -v); if (vis(n)) s += shape(pts, toneI(n, mat), w); }
+  const all = []; for (const a of [0,1]) for (const b of [0,1]) for (const c of [0,1]) all.push(q(a, b, c));
+  return { box: bxOf(all), svg: s };
+}
+// text on the back face (x = const), read from behind
+const mwTxB = (x,y,z,str,size,col=INK,weight=700) => `<text transform="${txM(P(x,y,z), Dv(0,1,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+// cables: corners rounded, cut into short pieces with their own boxes so they sort among the solids
+const mwBend = (pts, r = 1.2) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k]) * d/la), q = c.map((v, k) => b[k] + (v - b[k]) * d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+const mwWire = (pts, col, w = .35, Lseg = 4) => { const q = mwBend(pts), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < Lseg){ len += Math.hypot(...q[j].map((v, k) => v - q[j - 1][k])); j++; }
+    if (len < Lseg) while (j < q.length - 1) j++;
+    const seg = q.slice(i, j + 1), d = pd(seg, false);
+    let svg = `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w + .8)}" stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    for (const e of [i === 0 ? q[0] : null, j === q.length - 1 ? q[j] : null]) if (e){ const [X, Y] = P(...e); svg += `<circle cx="${f(X)}" cy="${f(Y)}" r=".7" fill="${INK}"/>`; }
+    out.push({ box: bxOf(seg), svg }); i = j; }
+  return out; };
+const mwSmooth = (pts, it = 3) => { for (let k = 0; k < it; k++){ const o = [pts[0]];
+    for (let i = 0; i < pts.length - 1; i++){ const a = pts[i], b = pts[i+1]; o.push(a.map((v,j) => v*.75 + b[j]*.25), a.map((v,j) => v*.25 + b[j]*.75)); }
+    o.push(pts[pts.length - 1]); pts = o; } return pts; };
+const mwCord = (pts, r = 1) => { const d = pd(mwSmooth(pts), false), c = 'fill="none" stroke-linecap="round" stroke-linejoin="round"';
+  return `<path d="${d}" ${c} stroke="${INK}" stroke-width="${f(2*r + 1)}"/><path d="${d}" ${c} stroke="${DARK.l}" stroke-width="${f(2*r)}"/>`; };
+const CORD_ON = [[XB - 3, 32, 9], [XB - 4.4, 32.4, 6.5], [XB - 5, 33, BH + 1], [2.5, 35, BH + 1], [.4, 36, BH + 1]];
+const CORD_OFF = [[.4, 36, BH + 1], [-1.2, 36.3, BH - .5], [-1.6, 36.5, -8]];
+
+/* ---------- the door: hinged at the front-left corner (XD, YL), swinging out to the viewer's left ---------- */
+const doorF = th => { const c = Math.cos(th), s = Math.sin(th), es = [s, -c, 0], et = [-c, -s, 0];
+  return { es, et, nF: [c, s, 0], p: (u, t, z) => [XD + u*es[0] + t*et[0], YL + u*es[1] + t*et[1], z] }; };
+const doorTh = st => DMAX * ease(st.dk);
+function hookParts(st, D){
+  const lift = 1.6 * st.hook, out = [];
+  for (const h of [45.5, 18]){ const z = h + lift, A = D.es.map(v => v*1.6);
+    out.push(obox(D.p(70.8, DT, z), A, D.et.map(v => v*6), [0, 0, 2], METAL));                   // shank, back into the slot
+    out.push(obox(D.p(70.8, DT + 4.6, z + 2), A, D.et.map(v => v*1.4), [0, 0, 1.4], METAL)); }   // barb that catches behind the frame
+  return out;
+}
+const txD = (D, u, z, str, size, col) => `<text transform="${txM(P(...D.p(u, -.06, z)), Dv(...D.es), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".12em">${str}</text>`;
+function doorPart(st, m){
+  const th = doorTh(st), D = doorF(th), lit = isLit(st);
+  const Fr = DOOR.map(([u, z]) => D.p(u, 0, z)), Bk = DOOR.map(([u, z]) => D.p(u, DT, z));
+  const fr = facing(D.nF), bk = facing(D.et), hooks = byDepth(hookParts(st, D));
+  let s = fr ? hooks : '';
+  s += loft(Fr, Bk, n => tone(n, m));
+  if (fr){
+    const win = WIN.map(([u, z]) => D.p(u, 0, z)), fc = tone(D.nF, m);
+    s += `<path d="${pd(Fr)}${pd(win)}" fill="${fc}" fill-rule="evenodd"/>`;
+    // through the window: the real cavity behind it (it lines up only while the door is shut)
+    s += th < .02 ? clipTo(win, clipTo(OPENING, cavityView(st))) : fill(pd(win), '#2a3134');
+    s += fill(pd(win), 'url(#mwMesh)') + fill(pd(win), '#10161a', `opacity="${th < .02 ? (lit ? .12 : .38) : .2}"`);
+    s += fill(pd([D.p(13, -.05, 48), D.p(17.5, -.05, 48), D.p(29, -.05, 18), D.p(24.5, -.05, 18)]), '#ffffff', 'opacity=".3"');
+    s += fill(pd([D.p(20, -.05, 48), D.p(21.6, -.05, 48), D.p(33, -.05, 18), D.p(31.4, -.05, 18)]), '#ffffff', 'opacity=".3"');
+    s += ink(pd(win), 1.6) + ink(pd(rrUV(6, 12, 58, 54, 3).map(([u, z]) => D.p(u, -.04, z))), .8);
+    s += txD(D, 32, 8.2, 'COLORWAVE', 3, mix(fc, '#000000', .45));
+    s += ink(pd(Fr), 2.2);
+  }
+  if (bk){
+    s += fill(pd(Bk), tone(D.et, METAL));
+    // choke seal: the channel round the inner panel's edge that stops microwaves leaking at the gap
+    const o = rrUV(2.5, ZB + 2.5, DW - 2.5, ZT - 2.5, 3).map(([u, z]) => D.p(u, DT + .05, z)), i = rrUV(6, ZB + 6, DW - 6, ZT - 6, 2).map(([u, z]) => D.p(u, DT + .05, z));
+    s += `<path d="${pd(o)}${pd(i)}" fill="${mix(METAL.d, '#000000', .1)}" fill-rule="evenodd"/>` + ink(pd(o), .8) + ink(pd(i), .8);
+    const wb = WIN.map(([u, z]) => D.p(u, DT + .06, z));
+    s += fill(pd(wb), '#3a4246') + fill(pd(wb), 'url(#mwMesh)') + ink(pd(wb), 1.1);
+    s += ink(pd(Bk), 2) + hooks;
+  }
+  if (!fr && !bk) s += hooks;
+  s += hullInk([...Fr, ...Bk], 2.6);
+  return { box: bxOf([...Fr, ...Bk]), svg: act('door', s) };
+}
+
+/* ---------- the cavity and what's in it ---------- */
+const isLit = st => st.run || st.dk > .02;
+function cavWalls(st, alpha, xr){
+  const lit = isLit(st);
+  const Wl = [
+    { n:[1,0,0],  pts:[[CX0,CY0,CZ0],[CX0,CY1,CZ0],[CX0,CY1,CZ1],[CX0,CY0,CZ1]] },
+    { n:[0,-1,0], pts:[[CX0,CY1,CZ0],[CX1,CY1,CZ0],[CX1,CY1,CZ1],[CX0,CY1,CZ1]] },
+    { n:[0,1,0],  pts:[[CX0,CY0,CZ0],[CX1,CY0,CZ0],[CX1,CY0,CZ1],[CX0,CY0,CZ1]], right:true },
+    { n:[0,0,1],  pts:[[CX0,CY0,CZ0],[CX1,CY0,CZ0],[CX1,CY1,CZ0],[CX0,CY1,CZ0]] },
+    { n:[0,0,-1], pts:[[CX0,CY0,CZ1],[CX1,CY0,CZ1],[CX1,CY1,CZ1],[CX0,CY1,CZ1]] } ];
+  let s = '';
+  for (const w of Wl){
+    if (!vis(w.n)){ if (xr) s += ink(pd(w.pts), .5); continue; }
+    let c = toneI(w.n, CAV); if (lit) c = mix(c, '#ffe9a0', .4);
+    s += fill(pd(w.pts), c, `opacity="${alpha}"`) + ink(pd(w.pts), .7);
+    if (w.right){ const Q = PY(CY0 + .1);
+      s += shape(on(Q, rrUV(38, 40, 54, 49, 1)), mix(MICA.l, c, .2), .8);                      // waveguide cover (mica)
+      let d1 = '', d2 = '';
+      for (let x = 61.5; x <= 68.6; x += 1.4) for (let z = 43.5; z <= 50.6; z += 1.4) d1 += pd(on(Q, ellUV(x, z, .35, .35, 6)));
+      for (let x = 18.5; x <= 32; x += 1.5) for (let z = 30.5; z <= 42; z += 1.5) d2 += pd(on(Q, ellUV(x, z, .35, .35, 6)));
+      s += fill(d1, lit ? '#fff3a0' : '#8e897d') + fill(d2, '#77736a');
+    }
+  }
+  return s;
+}
+function trayParts(st){
+  const rr = st.rot / 2, z0 = CZ0;
+  let s = '';
+  // roller ring: hub, three spokes, the ring, three wheels rolling on the cavity floor under the tray
+  const ringBand = (r0, r1, za, zb) => { const A = ringZ(TC[0], TC[1], za, r1, 36), B = ringZ(TC[0], TC[1], zb, r1, 36), Bi = ringZ(TC[0], TC[1], zb, r0, 36);
+    return loft(A, B, n => toneI(n, WHP)) + `<path d="${pd(B)}${pd(Bi)}" fill="${WHP.l}" fill-rule="evenodd"/>` + ink(pd(B), .6) + ink(pd(Bi), .5) + hullInk([...A, ...B], .9); };
+  s += ringBand(3.6, 4.6, z0 + .4, z0 + 1.2);
+  for (let k = 0; k < 3; k++){ const a = rr + k*2*Math.PI/3, c = Math.cos(a), sn = Math.sin(a);
+    s += rod([TC[0] + 4.4*c, TC[1] + 4.4*sn, z0 + .8], [TC[0] + 15.9*c, TC[1] + 15.9*sn, z0 + .8], .45, WHP, toneI, .5); }
+  s += ringBand(15.8, 17, z0 + .4, z0 + 1.2);
+  const wheels = [];
+  for (let k = 0; k < 3; k++){ const a = rr + k*2*Math.PI/3 + Math.PI/3, c = Math.cos(a), sn = Math.sin(a);
+    const A = [TC[0] + 15.9*c, TC[1] + 15.9*sn, z0 + 1], B = [TC[0] + 18.1*c, TC[1] + 18.1*sn, z0 + 1];
+    wheels.push({ box: bxOf([A, B], 1), svg: rod(A, B, 1, DARK, toneI, .6, 1, 14) }); }
+  s += byDepth(wheels);
+  // coupler on the motor shaft: its three lobes fit the sockets under the tray
+  { const A = ringZ(TC[0], TC[1], z0, 3, 6, st.rot), B = ringZ(TC[0], TC[1], z0 + 2, 3, 6, st.rot);
+    s += loft(A, B, n => toneI(n, WHP)) + fill(pd(B), WHP.l) + ink(pd(B), .5) + hullInk([...A, ...B], .8); }
+  // the glass tray
+  { const A = ringZ(TC[0], TC[1], TZ, TR, 48), B = ringZ(TC[0], TC[1], TZ1, TR, 48);
+    s += `<g opacity=".82">${loft(A, B, n => toneI(n, CLEAR))}</g>` + fill(pd(B), CLEAR.l, 'opacity=".55"');
+    s += ink(pd(ringZ(TC[0], TC[1], TZ1 + .02, TR - 2.5, 48)), .5);
+    for (let k = 0; k < 3; k++){ const a = st.rot + k*2*Math.PI/3 + .5;
+      s += shape(ringZ(TC[0] + 21*Math.cos(a), TC[1] + 21*Math.sin(a), TZ1 + .03, 1, 8), CLEAR.d, .4); }
+    s += fill(pd([[TC[0] + 6, TC[1] + 14, TZ1 + .04], [TC[0] + 9, TC[1] + 13, TZ1 + .04], [TC[0] - 6, TC[1] - 16, TZ1 + .04], [TC[0] - 9, TC[1] - 14, TZ1 + .04]]), '#ffffff', 'opacity=".35"');
+    s += ink(pd(B), .9) + hullInk([...A, ...B], 1.2); }
+  return s;
+}
+function cavContents(st){
+  let s = trayParts(st);
+  const b = bowlPos(st);
+  if (b[0] < XF) s += act('bowl', bowlSvg(b, st)) + steamSvg(b, st);
+  return s;
+}
+const cavityView = st => cavWalls(st, 1, false) + cavContents(st);
+
+/* ---------- the bowl of soup ---------- */
+const BOWL = [[0, 6.2], [1.4, 6.2], [1.4, 7.2], [3, 10.4], [5.5, 13], [8.5, 14.6], [11, 15.2]];   // (height, radius) foot to rim
+function bowlPos(st){
+  const inP = [TC[0] + BOFF*Math.cos(st.rot + BPH), TC[1] + BOFF*Math.sin(st.rot + BPH), TZ1];
+  if (st.bowlT <= 0) return BOWL_OUT.slice(); if (st.bowlT >= 1) return inP;
+  const K = [BOWL_OUT, [BOWL_OUT[0], BOWL_OUT[1], 26], [100, inP[1], 26], [inP[0], inP[1], 26], inP];
+  const Ls = K.slice(1).map((p, i) => Math.hypot(...sub(p, K[i]))), T = Ls.reduce((a, b) => a + b);
+  let d = ease(st.bowlT) * T;
+  for (let i = 0; i < Ls.length; i++){ if (d <= Ls[i] || i === Ls.length - 1){ const u = Math.min(1, d / Ls[i]); return K[i].map((v, j) => v + (K[i+1][j] - v)*u); } d -= Ls[i]; }
+}
+function bowlSvg(c, st){
+  const rg = BOWL.map(([dz, r]) => ringZ(c[0], c[1], c[2] + dz, r, 28));
+  let s = '';
+  for (let i = 2; i < rg.length - 1; i++) s += loft(rg[i], rg[i+1], n => toneI(n, CERAMIC), true);   // far inside wall
+  s += fill(pd(ringZ(c[0], c[1], c[2] + 1.45, 7.2, 20)), CERAMIC.m);
+  // soup: a little higher and bubbling once it boils
+  const sz = c[2] + 8, sr = 14.2, hot = Math.min(1, st.heat);
+  s += fill(pd(ringZ(c[0], c[1], sz, sr, 28)), mix(SOUP, '#c4502a', hot*.4)) + fill(pd(ringZ(c[0] + 2, c[1] - 2.5, sz + .01, 7, 20)), '#f08a55', 'opacity=".5"');
+  if (st.heat > .95) for (let i = 0; i < 6; i++){ const a = i*1.1 + st.t*.7, r = 3 + (i*2.3) % 9, ph = (st.t*2.2 + i*.37) % 1;
+    s += shape(ringZ(c[0] + r*Math.cos(a), c[1] + r*Math.sin(a), sz + .02, .5 + ph, 8), '#f29a6a', .35); }
+  s += ink(pd(ringZ(c[0], c[1], sz + .01, sr, 28)), .5);
+  for (let i = 0; i < rg.length - 1; i++) s += loft(rg[i], rg[i+1], n => toneI(n, i >= 5 ? BAND : CERAMIC));   // near outside wall
+  const rim = rg[rg.length - 1], rimI = ringZ(c[0], c[1], c[2] + 11, 14.4, 28);
+  s += `<path d="${pd(rim)}${pd(rimI)}" fill="${CERAMIC.l}" fill-rule="evenodd"/>` + ink(pd(rim), .9) + ink(pd(rimI), .6);
+  s += ink(pd(rg[5], true), .5) + hullInk([...rg[0], ...rim], 1.5);
+  return s;
+}
+function steamSvg(c, st){
+  if (st.heat < .45) return '';
+  const a = Math.min(1, (st.heat - .45) / .35);
+  let s = '';
+  for (let i = 0; i < 3; i++){ const ang = i*2.1 + .4, x0 = c[0] + 5*Math.cos(ang), y0 = c[1] + 5*Math.sin(ang), pts = [];
+    const ph = (st.t*.55 + i*.33) % 1;
+    for (let j = 0; j <= 12; j++){ const h = j*1.6 + ph*6; pts.push([x0 + 1.8*Math.sin(h*.45 - st.t*2.4 + i), y0 + 1.2*Math.cos(h*.4 - st.t*2 + i), c[2] + 9 + h]); }
+    const d = pd(pts, false);
+    s += `<g opacity="${f(a*.8*(1 - ph*.4))}"><path d="${d}" fill="none" stroke="#b8c6cc" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></g>`; }
+  return s;
+}
+const bowlPart = st => { const b = bowlPos(st); if (b[0] < XF) return null;
+  return { box: [[b[0] - 15.3, b[1] - 15.3, b[2]], [b[0] + 15.3, b[1] + 15.3, b[2] + 11]], svg: act('bowl', bowlSvg(b, st)) + steamSvg(b, st) }; };
+
+/* ---------- the case, the fascia, the feet ---------- */
+function caseSvg(st, m){
+  const FRONT = facing([1,0,0]), BACK = facing([-1,0,0]), LEFT = facing([0,1,0]), RIGHT = facing([0,-1,0]);
+  let s = '';
+  if (BACK){ const bk = tone([-1,0,0], m), Q = PX(XB - .2);
+    s += fill(pd(on(PX(XB), OUT)), bk);
+    for (let z = 26.5; z <= 44; z += 3) s += shape(on(Q, rrUV(16, z, 36, z + 1.4, .7)), mix(bk, '#000000', .45), .5);      // rear vents, behind the fan
+    s += shape(on(Q, rrUV(62, 16, 94, 34, 1.5)), '#f3f0e6', .8);
+    s += mwTxB(XB - .3, 78, 28.5, '230V~ 50Hz', 2.6, INK, 800) + mwTxB(XB - .3, 78, 24, 'OUTPUT 800W', 2.6, INK, 800) + mwTxB(XB - .3, 78, 19.5, 'MOD. CW-20', 2.2, INK, 700);
+    s += ink(pd(on(PX(XB), OUT)), 2.2); }
+  if (FRONT){ const fc = tone([1,0,0], m);
+    s += `<path d="${pd(on(PX(XF), OUT))}${pd(OPENING)}" fill="${fc}" fill-rule="evenodd"/>`;
+    if (st.dk > 0) s += clipTo(OPENING, cavityView(st));
+    for (const z of [45, 17.5]) s += shape(on(PX(XF + .05), rectUV(37.3, z, 39.5, z + 5)), '#26231f', .6);                 // latch slots
+    s += ink(pd(OPENING), 1.4) + ink(pd(on(PX(XF), OUT)), 2); }
+  s += extrude(OUT, XB, XF, m);
+  if (LEFT){ const sm = tone([0,1,0], m); let v = '';
+    for (let i = 0; i < 7; i++) v += pd(on(PY(YL + .2), rrUV(12 + i*3, 46, 13.4 + i*3, 57, .6)));
+    s += fill(v, mix(sm, '#000000', .45)) + ink(v, .5); }
+  if (RIGHT){ const sm = tone([0,-1,0], m); let v = '';
+    for (let i = 0; i < 7; i++) v += pd(on(PY(YR - .2), rrUV(46 + i*3, 28, 47.4 + i*3, 42, .6)));
+    s += fill(v, mix(sm, '#000000', .45)) + ink(v, .5); }
+  s += hullInk([...on(PX(XB), OUT), ...on(PX(XF), OUT)], 2.8);
+  return s;
+}
+const KEYS = [['1','2','3'], ['4','5','6'], ['7','8','9'], ['+30','0','CLR']];
+function panelSvg(st, m){
+  const A = on(PX(XF), PANEL), B = on(PX(XD), PANEL);
+  let s = loft(A, B, n => tone(n, CREAM));
+  if (facing([1,0,0])){ const F = PX(XD + .3);
+    s += fill(pd(B), tone([1,0,0], CREAM));
+    s += shape(on(F, rrUV(13, 51.5, 33, 59, 1.5)), '#1d2a26', 1.1);
+    s += tx(XD + .4, 23, 53.6, dispText(st), 4.6, '#8af0ae', 800);
+    KEYS.forEach((row, r) => row.forEach((k, c) => { const y = [29.3, 23, 16.7][c], z = [46, 41.5, 37, 32.5][r];
+      s += shape(on(F, rrUV(y - 2.6, z - 1.6, y + 2.6, z + 1.6, .8)), '#fbf7ea', .6) + tx(XD + .4, y, z - .75, k, k.length > 1 ? 1.7 : 2.2, INK, 800); }));
+    // START / STOP keys and the long DOOR OPEN button: real raised keys that sink when pressed
+    const key = (y0, z0, y1, z1, h, col, txt, size, name) => { const b = box(XD, y0, z0, XD + h, y1, z1, matOf(col), toneI, .9);
+      return act(name, b + tx(XD + h + .05, (y0 + y1)/2, (z0 + z1)/2 - size*.36, txt, size, INK, 800)); };
+    s += key(24.4, 23, 33, 28.5, .4, '#e8826a', 'STOP', 2.2, 'stop');
+    s += key(13, 23, 21.6, 28.5, st.sbtn > 0 ? .25 : 1, '#79c98c', 'START', 2.2, 'start');
+    s += key(13, 9, 33, 17, st.btn > 0 ? .3 : 1.3, '#d9cfb3', 'DOOR OPEN', 2.6, 'open');
+    s += ink(pd(B), 1.8); }
+  s += hullInk([...A, ...B], 2.4);
+  return s;
+}
+const dispText = st => st.done ? 'End' : fmt(st.time);
+const FEET = [[11, 15], [11, 105], [75, 15], [75, 105]];
+const feetParts = () => FEET.map(([x, y]) => ({ box: [[x - 2.5, y - 2.5, BH], [x + 2.5, y + 2.5, ZB]], svg: cyl(x, y, BH, ZB, 2.5, DARK, toneI, .9, 16) }));
+
+/* ---------- see-through: the working parts ---------- */
+function mwMech(st, k){
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg });
+  const bx = (x0, y0, z0, x1, y1, z1, M, w = .6, extra = '') => put([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, M, toneI, w) + extra);
+  const pb = (arr, x0, y0, z0, x1, y1, z1, M, w = .6) => arr.push({ box: [[x0, y0, z0], [x1, y1, z1]], svg: box(x0, y0, z0, x1, y1, z1, M, toneI, w) });
+  const run = st.run, closed = st.dk < .02, hot = '#ff6a2a';
+  // ---- cavity: faint steel walls, the turntable, the bowl, the microwaves spreading from the waveguide cover
+  put([[CX0, CY0, CZ0], [CX1, CY1, CZ1]], cavWalls(st, .25, true) + cavContents(st) + (run ? cavWaves(st) : ''));
+  // ---- turntable motor under the cavity floor; its shaft comes up through the floor into the coupler
+  { const x = TC[0], y = TC[1];
+    put([[x - 7, y - 5, 6.5], [x + 7, y + 5, CZ0]], box(x - 5, y - 5, 6.5, x + 5, y + 5, 11, WHP, toneI, .7) + box(x - 7, y - 1.5, 11, x + 7, y + 1.5, CZ0, METAL, toneI, .5)
+      + cyl(x, y, 11, CZ0, .8, METAL, toneI, .5, 10)); }
+  // ---- waveguide: a steel duct on the cavity's right wall; antenna inside it, the wave running up to the cover
+  { const x0 = 36, x1 = 56, y0 = 34, y1 = 40, z0 = 22, z1 = 50;
+    const F = [[[1,0,0], [[x1,y0,z0],[x1,y1,z0],[x1,y1,z1],[x1,y0,z1]]], [[-1,0,0], [[x0,y0,z0],[x0,y1,z0],[x0,y1,z1],[x0,y0,z1]]],
+               [[0,-1,0], [[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1]]], [[0,0,1], [[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]]], [[0,0,-1], [[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0]]]];
+    let g = '';
+    for (const [n, q] of F) if (!vis(n)) g += fill(pd(q), toneI(n.map(v => -v), METAL), 'opacity=".55"');
+    g += rod([46, 34, 31], [46, 36.6, 31], 1.8, METAL, toneI, .6) + cyl(46, 36.6, 30.2, 31.8, 1.1, run ? matOf('#ffb347') : METAL, toneI, .5, 10).replace(/cyl/, '');
+    if (run){ const w = []; for (let i = 0; i <= 40; i++){ const z = 32 + i*.4; w.push([46 + 3*Math.sin(z*.9 - st.t*14), 37.2, z]); }
+      g += `<path d="${pd(w, false)}" fill="none" stroke="${hot}" stroke-width="1" opacity=".85"/>`; }
+    for (const [n, q] of F) if (vis(n)) g += fill(pd(q), toneI(n, METAL), 'opacity=".42"') + ink(pd(q), .6);
+    put([[x0, y0, z0], [x1, y1, z1]], g); }
+  // ---- magnetron, bolted by its flange to the waveguide
+  { const cx = 46, cz = 33, pcs = [], STY = matOf('#9aa3a8');
+    pb(pcs, 38, 33, 24, 54, 34, 42, METAL);                                                   // mounting flange
+    for (const [ya, yb] of [[30.5, 33], [20, 22.5]]) pcs.push({ box: [[cx - 7, ya, cz - 7], [cx + 7, yb, cz + 7]], svg: rod([cx, ya, cz], [cx, yb, cz], 7, MAG, toneI, .7, 7, 22) });   // ring magnets
+    for (let i = 0; i < 6; i++){ const y = 23 + i*1.25; pb(pcs, 37, y, 24.5, 55, y + .45, 41.5, matOf('#d3d8da'), .45); }   // cooling fins
+    pb(pcs, 38, 19.5, 42, 54, 33, 43.5, STY); pb(pcs, 38, 19.5, 22.5, 54, 33, 24, STY); pb(pcs, 38, 18.5, 24, 54, 19.5, 42, STY);   // yoke
+    pb(pcs, 41, 13, 28, 51, 18.5, 38, METAL);                                                 // filter box
+    for (const x of [44, 48]) pcs.push({ box: [[x - .8, 10.8, cz - .8], [x + .8, 13, cz + .8]], svg: rod([x, 13, cz], [x, 10.8, cz], .7, matOf('#d8b25a'), toneI, .5) });
+    pcs.push({ box: [[48.2, 25.2, 43.5], [51.8, 28.8, 45.2]], svg: cyl(50, 27, 43.5, 45.2, 1.8, DARK, toneI, .6, 14) });   // thermal cutout
+    put([[37, 10.8, 22.5], [55, 34, 45.2]], byDepth(pcs)); }
+  // ---- fan: motor behind, blades in a square shroud, bracket from the shroud's top bar to the motor; a foot to the floor
+  { const fy = 26, fz = 34, R = 8.2, pcs = [];
+    pcs.push({ box: [[18, 22, 30], [24, 30, 38]], svg: cylX(18, 24, fy, fz, 4, DARK, toneI, .8, 18) + (facing([0,0,1]) ? '' : '') });
+    pcs.push({ box: [[24, fy - .8, fz - .8], [25.4, fy + .8, fz + .8]], svg: cylX(24, 25.4, fy, fz, .7, METAL, toneI, .5, 10) });
+    { let b = ''; const n = 5;
+      for (let i = 0; i < n; i++){ const a0 = st.fan + i*2*Math.PI/n, pts = [];
+        for (let j = 0; j <= 4; j++){ const a = a0 + j*.13; pts.push([26, fy + 2*Math.cos(a), fz + 2*Math.sin(a)]); }
+        for (let j = 4; j >= 0; j--){ const a = a0 + j*.17 + .25; pts.push([26, fy + R*Math.cos(a), fz + R*Math.sin(a)]); }
+        b += shape(pts, toneI([1,0,0], FANM), .6); }
+      b += cylX(25.4, 26.6, fy, fz, 2.1, FANM, toneI, .6, 14);
+      pcs.push({ box: [[25.4, fy - R, fz - R], [26.6, fy + R, fz + R]], svg: b }); }
+    pb(pcs, 27, 16.5, 43, 28.5, 35.5, 44.5, LAM); pb(pcs, 27, 16.5, 23.5, 28.5, 35.5, 25, LAM);
+    pb(pcs, 27, 16.5, 25, 28.5, 17.5, 43, LAM); pb(pcs, 27, 34.5, 25, 28.5, 35.5, 43, LAM);
+    pb(pcs, 21, 25, 43, 27, 27, 44.5, LAM); pb(pcs, 20, 25, 38, 22, 27, 43, LAM);
+    put([[18, 16.5, 23.5], [28.5, 35.5, 44.5]], byDepth(pcs));
+    bx(26.5, 24, ZB, 28.5, 30, 23.5, LAM, .6); }
+  // ---- high-voltage transformer on the floor: base plate, laminated core, primary (lower) and secondary (upper) coils
+  { const pcs = [];
+    pb(pcs, 38, 15, ZB, 62, 31, 6.5, METAL);
+    pcs.push({ box: [[40, 16, 6.5], [60, 30, 20]], svg: box(40, 16, 6.5, 60, 30, 20, LAM, toneI, .7)
+      + (facing([0,0,1]) ? `<path d="${[...Array(9)].map((_, i) => pd([[40.4, 17 + i*1.5, 20.02], [59.6, 17 + i*1.5, 20.02]], false)).join('')}" fill="none" stroke="${INK}" stroke-width=".3" opacity=".6"/>` : '') });
+    for (const [y0, y1] of [[12.5, 16], [30, 33.5]]){ pb(pcs, 44, y0, 8, 56, y1, 12.5, COP); pb(pcs, 44, y0, 13.5, 56, y1, 18.5, COP2); }
+    put([[38, 12.5, ZB], [62, 33.5, 20]], byDepth(pcs)); }
+  // ---- HV capacitor in its clamp band, terminals toward the diode
+  { const y = 16, z = 10.5, r = 4.4, pcs = [];
+    pcs.push({ box: [[8.5, y - r, z - r], [13, y + r, z + r]], svg: rod([8.5, y, z], [13, y, z], r, METAL, toneI, .7, r, 20) });
+    pb(pcs, 13, y - r - .4, ZB, 15, y + r + .4, z + r + .4, LAM);
+    pcs.push({ box: [[15, y - r, z - r], [22, y + r, z + r]], svg: rod([15, y, z], [22, y, z], r, METAL, toneI, .7, r, 20) });
+    pb(pcs, 22, 14, 11, 23, 15, 13, matOf('#d8b25a'), .4); pb(pcs, 22, 17, 11, 23, 18, 13, matOf('#d8b25a'), .4);
+    put([[8.5, y - r - .4, ZB], [23, y + r + .4, z + r + .4]], byDepth(pcs)); }
+  // ---- HV diode from the capacitor terminal to a chassis screw on the floor
+  put([[23, 11.4, ZB], [31.9, 15, 12.6]], line([[23, 14.5, 12], [25.5, 13.6, 10]], .5) + rod([25.5, 13.6, 10], [29, 12.5, 7.5], .9, CHIP, toneI, .5)
+    + line([[29, 12.5, 7.5], [31, 12, 5.8]], .5) + cyl(31, 12, ZB, 5.8, .9, METAL, toneI, .5, 8));
+  // ---- fuse board on standoffs: terminal block (the cord's end), line fuse, noise filter choke
+  { const pcs = [];
+    pb(pcs, 8, 26, 6, 18, 38, 6.6, PCBM, .5);
+    pb(pcs, 8.2, 30, 6.6, 10.4, 34, 8.6, RELM, .5);
+    pcs.push({ box: [[9.5, 26.6, 6.6], [15.5, 28.4, 8.5]], svg: rod([9.5, 27.5, 7.6], [15.5, 27.5, 7.6], .9, CLEAR, toneI, .5) + rod([9.5, 27.5, 7.6], [10.5, 27.5, 7.6], .95, METAL, toneI, .4) + rod([14.5, 27.5, 7.6], [15.5, 27.5, 7.6], .95, METAL, toneI, .4) });
+    pcs.push({ box: [[11, 34.6, 6.6], [16, 37.6, 10]], svg: box(11, 34.6, 6.6, 16, 37.6, 10, DARK, toneI, .5) + rod([12, 36.1, 8.3], [15, 36.1, 8.3], 1.3, COP, toneI, .4) });
+    put([[8, 26, ZB], [18, 38, 10]], cyl(9, 27, ZB, 6, .5, METAL, toneI, .3, 6) + cyl(17, 37, ZB, 6, .5, METAL, toneI, .3, 6) + byDepth(pcs)); }
+  // ---- control board behind the fascia and what's on it
+  bx(74, 12, 20, 75, 33, 61, PCBM, .6);
+  bx(70.5, 14, 24, 74, 20, 30, run ? matOf('#5fa0e0') : RELM, .6);
+  bx(73, 21, 40, 74, 29, 47, CHIP, .5);
+  put([[71.5, 26.6, 27.6], [74, 31.4, 32.4]], cylX(71.5, 74, 29, 30, 2.4, DARK, toneI, .6, 16));
+  bx(75, 13, 51, 77.5, 33, 59, CHIP, .6, facing([1,0,0]) ? tx(77.6, 23, 53.6, dispText(st), 4.2, '#8af0ae', 800) : '');
+  bx(77.4, 12, 20, 78, 34, 48, matOf('#d9d2c0'), .5);
+  // ---- latch bracket on the cavity's front flange, the three interlock switches, the release bar
+  bx(68, 39.3, 14, 78, 40, 52, METAL, .6);
+  for (const [z0, z1] of [[44, 50], [16, 22], [23, 29]]){ const zc = (z0 + z1)/2;
+    bx(70, 34, z0, 75.5, 37, z1, SWM, .6);
+    bx(74, 37, zc - .6, 75.2, closed ? 37.5 : 38.6, zc + .6, matOf('#e2483d'), .4); }
+  { const up = 1.6 * st.hook;
+    bx(76, 36, 14 + up, 77.5, 37, 50 + up, METAL, .5);
+    for (const z of [44 + up, 16.5 + up]) bx(76, 37, z, 77.5, 37.5, z + 1, METAL, .4); }
+  // ---- release lever: the DOOR OPEN button's stem, back and across to the bottom of the release bar
+  { const push = st.btn > 0 ? 1 : 0;
+    put([[74.5, 22, 11.5], [78, 37, 14]], rod([78, 23, 12.5], [75.5 - push, 23, 12.5], .7, METAL, toneI, .5) + rod([75.5 - push, 23, 12.5], [76.7, 36.5, 13.5], .6, METAL, toneI, .5)); }
+  // ---- oven lamp in its socket, shining through the holes in the cavity wall
+  put([[62, 34.5, 44], [68, 40, 50]], box(62, 34.5, 44, 68, 38, 50, WHP, toneI, .6) + box(62, 38, 49, 68, 40, 50, METAL, toneI, .4)
+    + `<circle cx="${f(P(65, 39, 46.6)[0])}" cy="${f(P(65, 39, 46.6)[1])}" r="${f(1.9)}" fill="${isLit(st) ? '#fff2a0' : '#f4f1e6'}" stroke="${INK}" stroke-width=".6"/>`);
+  // ---- hinges at the door's left edge
+  for (const z of [8, 54]) put([[78.5, 107, z], [81.5, 110, z + 4]], box(78.5, 107, z, 81.5, 110, z + 4, DARK, toneI, .6) + cyl(81.5, 109.5, z - .6, z + 4.6, .6, METAL, toneI, .4, 8));
+  // ---- the door's latch hooks (they move with the door)
+  for (const h of hookParts(st, doorF(doorTh(st)))) parts.push(h);
+  // ---- wiring harness
+  const cLive = run ? hot : '#8a3a24', cN = run ? hot : '#3a3632', cHV = run ? '#ff3b2a' : '#5a1f18';
+  const W = (pts, col, w) => parts.push(...mwWire(pts, col, w));
+  W([[15.5, 27.5, 7.6], [17, 27.5, 6.2], [17, 37.8, 5.6], [69.4, 37.8, 5.6], [69.4, 35.4, 44], [70, 35.4, 47]], cLive, .35);
+  W([[70, 34.4, 46.5], [69.6, 30, 45.5], [69.6, 18, 32], [71.5, 17, 30.1]], cLive, .3);
+  W([[71, 15, 24], [68, 13, 20], [66, 13, 11], [56.1, 13.5, 10]], cLive, .35);
+  W([[44, 12.5, 16], [36, 12, 15], [23.1, 14.5, 12.5]], cHV, .45);
+  W([[23.1, 17.5, 12.5], [26, 11.4, 14], [26, 11.2, 32], [40, 11, 33], [43.4, 10.9, 33]], cHV, .45);
+  W([[52, 12.5, 18.4], [50, 11, 26], [48, 10.9, 32.2]], cHV, .4);
+  W([[73.6, 31, 20.2], [72, 32, 7], [33, 37, 6.5], [22, 32, 7], [21, 30, 31]], cN, .3);
+  W([[73.6, 32.4, 20.2], [70, 38.6, 7], [50, 38.6, 7], [44, 67.8, 8.5]], cN, .3);
+  W([[73.8, 32.8, 52], [66, 34.6, 51.5], [65, 35, 50]], cN, .3);
+  // the case parts sort among themselves; the camera always looks down, so floor parts come first
+  return byDepth(parts);
+}
+// microwaves from the waveguide cover into the cavity: three travelling wave lines toward the food
+function cavWaves(st){
+  const src = [46, CY0 + .4, 44.5], b = bowlPos(st), tg = [[b[0], b[1], b[2] + 9], [b[0] + 14, b[1] + 6, b[2] + 6], [b[0] - 14, b[1] + 8, b[2] + 6]];
+  let s = '';
+  for (const t of tg){ const d = sub(t, src), pts = [];
+    for (let i = 0; i <= 36; i++){ const u = i/36, a = 2.2*Math.sin(u*22 - st.t*16);
+      pts.push([src[0] + d[0]*u, src[1] + d[1]*u, src[2] + d[2]*u + a]); }
+    s += `<path d="${pd(pts, false)}" fill="none" stroke="#ff6a2a" stroke-width="1" stroke-linecap="round" opacity=".7"/>`; }
+  return s;
+}
+
+/* ---------- labels: two columns, the left one gets the leftmost anchors (so leaders don't cross) ---------- */
+function mwCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0]));
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.6*k, hgt = u ? 17*u : fs*1.8, gap = hgt + (u ? 3*u : 2.4*k);
+  const Lc = [], Rc = [];
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, btn = document.getElementById('btns');
+  const wMax = u ? hgt*1.3 + 12*k : Math.max(...items.map(it => it.text.length))*fs*.62 + fs*1.5 + 12*k;
+  const roomL = xmin - vb.x >= wMax, roomR = vb.x + vb.width - xmax >= wMax;
+  const its = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  const nL = !roomL ? 0 : !roomR ? its.length : Math.round(its.length * .42);
+  its.forEach((it, i) => (i < nL ? Lc : Rc).push(it));
+  let s = '';
+  const top = { [-1]: fs, [1]: fs + 30*k };
+  if (btn && svgEl.getScreenCTM()){ const r = btn.getBoundingClientRect(), q = new DOMPoint(r.right, r.bottom + 30).matrixTransform(svgEl.getScreenCTM().inverse());
+    if (q.y > 0) top[-1] = q.y + hgt; }
+  for (const [col, side] of [[Lc, -1], [Rc, 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    const shift = col.length ? Math.max(0, col.reduce((a, c) => a + c.py - c.Y, 0) / col.length) : 0;
+    const room = col.length ? col[0].py - top[side] : 0; for (const c of col) c.py -= Math.min(shift, room);
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+const LB = [0, BX1, 0, BY1, 0, ZT];
+function insideLabels(st){
+  const run = st.run, closed = st.dk < .02, D = doorF(doorTh(st)), b = bowlPos(st), rr = st.rot/2 + Math.PI/3;
+  return [
+    { at:[CX0, CY1 - 8, CZ1 - 5], text:'OVEN CAVITY', on: run },
+    { at:[TC[0] + TR*Math.cos(2.6), TC[1] + TR*Math.sin(2.6), TZ1], text:'GLASS TURNTABLE', on: run },
+    { at:[TC[0] + 18.1*Math.cos(rr), TC[1] + 18.1*Math.sin(rr), CZ0 + 1], text:'ROLLER RING', on: run },
+    { at:[TC[0] + 3, TC[1], CZ0 + 1.5], text:'COUPLER', on: run },
+    { at:[TC[0] + 5, TC[1] + 3, 8.5], text:'TURNTABLE MOTOR', on: run },
+    { at:[46, CY0, 44.5], text:'WAVEGUIDE COVER', on: run },
+    { at:[25, CY0, 36], text:'AIR INLET', on: run },
+    { at:[65, 39, 46.6], text:'OVEN LAMP', on: isLit(st) },
+    { at:[56, 37, 47], text:'WAVEGUIDE', on: run },
+    { at:[46, 36.6, 31], text:'ANTENNA', on: run },
+    { at:[55, 26, 30], text:'COOLING FINS', on: run },
+    { at:[46, 21, 40], text:'MAGNETS', on: false },
+    { at:[51, 18, 35], text:'MAGNETRON', on: run },
+    { at:[44, 10.8, 33], text:'FILAMENT TERMINALS', on: run },
+    { at:[50, 27, 45.2], text:'THERMAL CUTOUT', on: false },
+    { at:[26, 26 + 6*Math.cos(st.fan + .4), 34 + 6*Math.sin(st.fan + .4)], text:'FAN', on: run },
+    { at:[18, 26, 34], text:'FAN MOTOR', on: run },
+    { at:[XB, 26, 41], text:'REAR VENTS', on: run },
+    { at:[60, 23, 18], text:'HV TRANSFORMER', on: run },
+    { at:[50, 12.5, 10], text:'PRIMARY COIL', on: run },
+    { at:[50, 33.5, 16], text:'SECONDARY COIL', on: run },
+    { at:[8.5, 16, 12], text:'HV CAPACITOR', on: run },
+    { at:[27.3, 13, 8.8], text:'HV DIODE', on: run },
+    { at:[74, 30, 58], text:'CONTROL BOARD', on: run },
+    { at:[72, 17, 30], text:'RELAY', on: run },
+    { at:[71.5, 29, 30], text:'BUZZER', on: st.beep > 0 },
+    { at:[73.5, 25, 47], text:'MICROCONTROLLER', on: false },
+    { at:[70, 35.5, 48.5], text:'PRIMARY SWITCH', on: closed },
+    { at:[70, 35.5, 17.5], text:'SECONDARY SWITCH', on: closed },
+    { at:[70, 35.5, 27.5], text:'MONITOR SWITCH', on: !closed },
+    { at: D.p(71.6, DT + 6, 47.5 + 1.6*st.hook), text:'LATCH HOOKS', on: st.hook > .05 },
+    { at:[76.3, 30, 13.2], text:'RELEASE LEVER', on: st.btn > 0 },
+    { at: D.p(32, 0, 30), text:'DOOR MESH', on: false },
+    { at:[81.5, 109.5, 58], text:'HINGE', on: st.dk !== st.dT },
+    { at:[12.5, 27.5, 8.5], text:'LINE FUSE', on: run },
+    { at:[13.5, 36, 10], text:'NOISE FILTER', on: false },
+    { at:[XB - 3, 32, 9], text:'POWER CORD', on: run } ];
+}
+function surfaceLabels(st){
+  if (!facing([1,0,0])) return [];
+  const D = doorF(doorTh(st));
+  return [ { at: D.p(46, 0, 58), text:'DOOR', on: st.dk !== st.dT }, { at: D.p(14, 0, 30), text:'WINDOW', on: false },
+    { at:[XD, 23, 59], text:'DISPLAY', on: st.run }, { at:[XD, 23, 41.5], text:'KEYPAD', on: false },
+    { at:[XD + 1, 17, 28.5], text:'START', on: st.sbtn > 0 }, { at:[XD + 1.3, 30, 13], text:'DOOR OPEN', on: st.btn > 0 } ];
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0), behind = facing([-1,0,0]);
+  let s = `<defs><pattern id="mwMesh" width="1.3" height="1.3" patternUnits="userSpaceOnUse"><circle cx=".65" cy=".65" r=".34" fill="#15191b"/></pattern></defs>`;
+  s += (behind ? '' : mwCord(CORD_OFF)) + board(0, 0, BX1, BY1, BH, 6, WOOD) + (behind ? mwCord(CORD_OFF) : '');
+  // cast shadows on the counter: the case, the open door, the bowl
+  { const D = doorF(doorTh(st)), b = bowlPos(st);
+    let sh = castShadow([...on(PX(XB), OUT), ...on(PX(XD), OUT)], BH);
+    if (st.dk > .01) sh += castShadow([...DOOR.map(([u, z]) => D.p(u, 0, z)), ...DOOR.map(([u, z]) => D.p(u, DT, z))], BH);
+    if (b[0] >= XF) sh += castShadow([...ringZ(b[0], b[1], b[2], 14, 16), ...ringZ(b[0], b[1], b[2] + 11, 15.2, 16)], BH);
+    s += clipTo(BTOP, sh); }
+  const items = [
+    { box: [[XB, YR, ZB], [XF, YL, ZT]], svg: caseSvg(st, m) },
+    { box: [[XF, YR, ZB], [XD, YP, ZT]], svg: panelSvg(st, m) },
+    doorPart(st, m),
+    { box: [[XB - 5.5, 31, BH], [XB, 37, 10.5]], svg: cylX(XB - 3, XB, 32, 9, 1.6, DARK, toneI, .8, 12) + mwCord(CORD_ON) },
+    ...feetParts() ];
+  const bp = bowlPart(st);
+  if (k <= 0) s += byDepth([...items, bp]);
+  else { const front = CAM_V[0] >= 0;
+    s += (bp && !front ? bp.svg : '') + xrGhost(byDepth(items), '', k, OUT, XB, XF, m) + `<g opacity="${f(k)}">${mwMech(st, k)}</g>` + (bp && front ? bp.svg : ''); }
+  const lab = k > .6 ? insideLabels(st) : k <= 0 ? surfaceLabels(st) : [];
+  if (lab.length) s += mwCallouts(lab, LB);
+  return s;
+}
+
+/* ---------- behaviour (one state object, one loop) ---------- */
+let ui, loopOn = false;
+const bowlIn = st => st.bowlT >= 1 && !st.bowlMove;
+const hookGoal = st => (st.btn > 0 || (st.dT === 1 && st.dk < .2) || (st.dT === 0 && st.dk > 0 && st.dk < .08)) ? 1 : 0;
+function tick(st, dt){
+  st.t += dt;
+  st.btn = Math.max(0, st.btn - dt); st.sbtn = Math.max(0, st.sbtn - dt); st.beep = Math.max(0, st.beep - dt);
+  // door: the hooks lift first, then it swings; closing, it shuts and the hooks drop into their catches
+  if (st.dk !== st.dT && !(st.dT === 1 && st.btn > .15)){
+    st.dk = st.dT ? Math.min(1, st.dk + dt/.9) : Math.max(0, st.dk - dt/.55);
+    if (st.dk === 1 && st.pend === 'bowl'){ st.pend = null; moveBowl(st); }
+    if (st.dk === 0 && st.pend === 'start'){ st.pend = null; begin(st); } }
+  const hg = hookGoal(st); st.hook = hg > st.hook ? Math.min(1, st.hook + dt/.12) : Math.max(0, st.hook - dt/.12);
+  if (st.bowlMove){ st.bowlT = Math.min(1, Math.max(0, st.bowlT + st.bowlDir*dt/1.7)); if (st.bowlT === 0 || st.bowlT === 1) st.bowlMove = false; }
+  if (st.run){
+    st.time -= dt*SPEED; st.heat = Math.min(1.08, st.heat + dt*SPEED/60); st.rot += dt*1.1; st.fan += dt*24;
+    if (st.time <= 0){ st.time = 0; st.run = false; st.done = true; st.beep = 1.4; ui.flash('Beep beep beep: the soup is ready', 2400); } }
+  else st.heat = Math.max(0, st.heat - dt*.012);
+}
+const active = st => st.dk !== st.dT || st.btn > 0 || st.sbtn > 0 || st.beep > 0 || st.hook !== hookGoal(st) || st.bowlMove || st.run || st.heat > .45;
+function kick(){ if (loopOn) return; loopOn = true;
+  ui.animate(dt => { const st = ui.st; tick(st, dt); const a = active(st); if (!a) loopOn = false; return a; }); }
+function begin(st){ st.run = true; st.done = false; kick(); }
+function openDoor(st){
+  st.btn = .3; st.dT = 1;
+  if (st.run){ st.run = false; ui.flash('Door opened: the interlocks cut the power', 2200); }
+  kick();
+}
+function closeDoor(st){ if (st.bowlMove) return ui.flash('Mind the bowl'); st.dT = 0; kick(); }
+function doorBtn(st){ if (st.dT) closeDoor(st); else openDoor(st); }
+function moveBowl(st){ st.bowlDir = st.bowlT >= 1 ? -1 : 1; st.bowlMove = true; kick(); }
+function bowlBtn(st){
+  if (st.bowlMove) return;
+  if (!st.dT || st.dk < 1){ if (!st.dT) openDoor(st); st.pend = 'bowl'; return kick(); }   // open the door first, then the bowl
+  moveBowl(st);
+}
+function setTime(st, s){ st.time = s; st.done = false; }
+function start(st){
+  st.sbtn = .2;
+  if (st.bowlMove) return ui.flash('One moment');
+  if (!bowlIn(st)) return ui.flash('Put in a bowl first: never run it empty');
+  if (st.run){ st.time += 30; return ui.flash('+30 seconds'); }
+  if (st.time <= 0) st.time = 30;                     // quick start: thirty seconds
+  st.done = false;
+  if (st.dT || st.dk > 0){ st.dT = 0; st.pend = 'start'; kick(); }   // shut the door first, then start
+  else begin(st);
+}
+
+ui = mountFigure({
+  fig:'22', title:'Microwave', size:[BX1, BY1, ZT], palette:'tomato', turn:'full',
+  // dk: door 0 shut .. 1 open (dT its target); bowlT: bowl 0 on the counter .. 1 on the turntable; time: timer seconds;
+  // heat: soup 0 (20 C) .. 1 (95 C); rot: turntable angle; fan: fan angle; hook: latch hooks lifted 0..1
+  state:{ dk:0, dT:0, btn:0, sbtn:0, hook:0, bowlT:0, bowlDir:1, bowlMove:false, pend:null, time:0, run:false, done:false, heat:0, rot:0, fan:0, beep:0, t:0 },
+  scene,
+  stats: st => [{ label:'Soup', value: Math.round(20 + 75*Math.min(1, st.heat)) + '°C' }],
+  buttons:[
+    { label:'Open / close door', onClick: st => doorBtn(st) },
+    { label:'Bowl in / out', onClick: st => bowlBtn(st) },
+    { label:'Set time', choices: st => TIMES.map(t => ({ label: fmt(t), current: !st.run && Math.abs(st.time - t) < .5,
+        disabled: st.run, why:'It is cooking: open the door to stop it first', onClick: st => setTime(st, t) })) },
+    { label:'Start', onClick: st => start(st) },
+  ],
+  acts:{ door: st => doorBtn(st), open: st => openDoor(st), start: st => start(st), stop: st => { if (st.run){ st.run = false; } else { st.time = 0; st.done = false; } },
+         bowl: st => bowlBtn(st) },
+  params:(st, q) => {
+    if (q.get('open') === '1'){ st.dk = st.dT = 1; }
+    if (q.get('bowl') === 'in') st.bowlT = 1;
+    if (q.has('bowlT')) st.bowlT = +q.get('bowlT');
+    if (q.has('time')) st.time = +q.get('time');
+    if (q.has('heat')) st.heat = +q.get('heat');
+    if (q.has('rot')) st.rot = +q.get('rot');
+    if (q.get('run') === '1'){ st.bowlT = 1; st.dk = st.dT = 0; st.run = true; if (st.time <= 0) st.time = 60; }
+  },
+});
+xrMount(() => ui, () => '');
+if (active(ui.st)) kick();
+</script></body></html>

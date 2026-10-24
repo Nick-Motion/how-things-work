@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Traffic light</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Traffic light: a puffin-style pedestrian crossing (1 unit = 1 cm).
+   How it really works (and where the signal / current is after each step):
+   1. Rest: cars green, red man. Mains from the street (buried cable) -> cutout -> RCD -> isolator -> power supply card
+      in the controller's card rack. The lamp supply relay is closed; the CPU card drives each lamp through the lamp
+      switch cards and an output relay; the multicore cable runs out through the gland plate, the underground duct, up
+      inside the pole to the terminal block in the vehicle signal head, then to each LED driver and LED module.
+   2. A pedestrian presses the button on the push-button unit (PBU, 1.1 m up the pole, facing the waiting person).
+      The button's plunger closes a microswitch; the low-voltage push-button pair runs down the pole, through the duct
+      to the terminal rail and the push-button input card. The controller latches the demand and lights WAIT
+      (its own output, back up the multicore).
+   3. After the minimum green the controller switches green off, amber on (about 3 s), then red, then a short all-red.
+   4. Green man on the PBU's nearside display, the sounder bleeps, the tactile cone under the PBU spins (for blind
+      people); WAIT goes out.
+   5. Red man again; the on-crossing detector on top of the pole watches the crossing and holds the all-red while
+      people are still on it. The kerbside detector watches the waiting area.
+   6. Red + amber, then green: back to rest. A photocell on the head lets the controller dim the LEDs at night.
+   Layout: road y 0..42 (traffic arrives from +x), kerb at y = 42, pavement y 42..167. Crossing studs at x 20 and 95,
+   stop line at x 130; the pole stands just past the stop line, its vehicle head facing the oncoming cars (+x).
+   Parts (each held by another):
+   GROUND     road, stop line, crossing studs, kerb stones, paving slabs, cable duct (cabinet -> pole), mains cable
+   CABINET    concrete plinth, case, roof, door (hinges, handle, lock, louvres, label, wiring-diagram pocket),
+              mains cutout, RCD, isolator (rotary handle), manual panel (signals on/off switch), card rack (side plates,
+              rails, backplane), power supply card, CPU card, two lamp switch cards, push-button input card, spare card,
+              DIN rails, 8 output relays (lamp supply, R, A, G, red man, green man, WAIT, audible), terminal rail with
+              terminal blocks, heater, gland plate with glands, looms
+   POLE       pole, cap, ground collar, clamp bands, head brackets, signal multicore, push-button pair
+   HEAD       backboard (white border), housing, three visors, red / amber / green LED modules, LED drivers, terminal
+              block, photocell; on-crossing detector on the pole top; kerbside detector on its band
+   PBU        case, hood, nearside red man / green man display (LED modules), WAIT lamp, button + bezel, plunger,
+              microswitch, PBU board, sounder (grille on the side), cone motor, tactile cone */
+
+/* ---------- geometry ---------- */
+const PW = 170, KY = 42, PD = 167, PH = 12;              // pavement x 0..PW, y KY..PD, top at PH; road y 0..KY
+const POX = 110, POY = 70, POR = 5.5, POT = 302;         // pole
+const VXB = 117, VXH = 118.5, VXF = 140, VVIS = 12;      // vehicle head: backboard back, housing back, front, visor length
+const VY0 = POY - 14, VY1 = POY + 14, VZ0 = 206, VZ1 = 290;
+const BBY0 = POY - 22, BBY1 = POY + 22, BBZ0 = 197, BBZ1 = 299;
+const LENS_R = 9.5;
+const ASP = [ { k:'R', z:276, on:'#ff4a3a', off:'#4f2622', name:'RED' },
+              { k:'A', z:248, on:'#ffb21e', off:'#54431f', name:'AMBER' },
+              { k:'G', z:220, on:'#35e39a', off:'#1f4237', name:'GREEN' } ];
+const BX0 = 101, BX1 = 119, BY0 = POY + POR, BY1 = 87, BZ0 = 96, BZ1 = 166;   // push-button unit
+const BTNZ = 111;
+const CX0 = 15, CX1 = 55, CY0 = 92, CY1 = 162, CZ0 = 17, CZ1 = 127;           // controller cabinet
+const DY0 = 94, DY1 = 160, DZ0 = 21, DZ1 = 123, DOOR_MAX = 75;                  // door (hinge at y = DY0)
+const IX0 = 17, IX1 = 53, IY0 = 94, IY1 = 160, IZ0 = 19, IZ1 = 125;             // cabinet inside
+
+const PAVE = { l:'#e6e2d8', m:'#cdc8ba', d:'#a39d8e' }, KERBM = { l:'#d9d6cf', m:'#bdb9b0', d:'#8f8b82' };
+const ASPH = { l:'#6e6a64', m:'#58544f', d:'#3d3a36' }, CONC = { l:'#dcd7ca', m:'#c2bcad', d:'#968f80' };
+const HEADM = { l:'#4c4946', m:'#363331', d:'#211f1d' }, BBM = { l:'#3a3735', m:'#2a2826', d:'#1a1817' };
+const PBUM = { l:'#eeece6', m:'#d2cfc6', d:'#a09c91' }, BTNM = matOf('#f2d14a');
+const PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, PANELM = matOf('#b9bfc2'), RACKM = matOf('#9aa2a6');
+const BAKE = matOf('#3f3a36'), WHITEM = matOf('#ecebe4'), RELM = matOf('#5b8fd6'), TERMM = matOf('#9aa0a4'), TERMY = matOf('#e0c040');
+const DUCTM = matOf('#4a4642'), REDM = matOf('#d8402f'), CABIN = matOf('#cfd3cf');
+const CARDS = [ { k:'PSU', y0:112, y1:120 }, { k:'CPU', y0:121, y1:127 }, { k:'LS1', y0:128, y1:134 },
+                { k:'LS2', y0:135, y1:141 }, { k:'PBI', y0:142, y1:148 }, { k:'SPR', y0:149, y1:156 } ];
+const RELAYS = ['SUP', 'R', 'A', 'G', 'RM', 'GM', 'WAIT', 'AUD'];
+
+const tlB = (x0,y0,z0,x1,y1,z1) => [[x0,y0,z0],[x1,y1,z1]];
+const tlCorners = (x0,y0,z0,x1,y1,z1) => { const o = []; for (const x of [x0,x1]) for (const y of [y0,y1]) for (const z of [z0,z1]) o.push([x,y,z]); return o; };
+const tlBoxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const mw = w => `style="stroke-width:${w.toFixed(2)}"`;                    // a stroke in model units (not rescaled)
+const tlDots = (plane, pts, r, col) => fill(pts.map(([u, v]) => pd(on(plane, ellUV(u, v, r, r, 8)))).join(''), col);
+
+/* ---------- signal state ---------- */
+const PHASES = {
+  green:    { lamps:['G','RM'] },
+  amber:    { lamps:['A','RM'], d:2.4, next:'red' },
+  red:      { lamps:['R','RM'], d:1.0, next:'walk' },
+  walk:     { lamps:['R','GM'], d:4.8, next:'clear' },
+  clear:    { lamps:['R','RM'], d:1.6, next:'redamber' },
+  redamber: { lamps:['R','A','RM'], d:1.2, next:'green' },
+  start:    { lamps:['R','RM'], d:1.5, next:'redamber' },
+};
+const lampsOn = st => st.sig ? new Set([...PHASES[st.ph].lamps, ...(st.wait ? ['WAIT'] : []), ...(st.ph === 'walk' ? ['AUD'] : []), 'SUP']) : new Set();
+const beepOn = st => st.sig && st.ph === 'walk' && (st.t % .24) < .12;
+
+/* ---------- ground ---------- */
+function road(){
+  let s = box(0, 0, 0, PW, KY, 2, ASPH, tone, 1);
+  s += fill(pd(on(PZ(2.05), rectUV(128, 3, 132, KY - 3))), '#f1eee4');                            // stop line
+  for (const x of [20, 95]) for (let y = 5; y < KY - 2; y += 8)                                   // crossing studs
+    s += shape(on(PZ(2.1), rectUV(x - 1.6, y - 1.6, x + 1.6, y + 1.6)), '#dfe2e2', .5);
+  return s;
+}
+function pavement(){
+  let s = box(0, KY, 0, PW, PD, PH, PAVE, tone, 1);
+  s += shape(on(PZ(PH + .03), rectUV(0, KY, PW, KY + 15)), KERBM.l, .9);                          // kerb stones
+  let j = ''; for (let x = 50; x < PW; x += 50) j += pd([[x, KY, PH + .05], [x, KY + 15, PH + .05]], false);
+  for (let x = 45; x < PW; x += 45) j += pd([[x, KY + 15, PH + .05], [x, PD, PH + .05]], false);
+  for (const y of [KY + 60, KY + 105, KY + 150]) j += pd([[0, y, PH + .05], [PW, y, PH + .05]], false);
+  if (facing([0,-1,0])) for (let x = 50; x < PW; x += 50) j += pd([[x, KY - .05, 2], [x, KY - .05, PH]], false);
+  s += `<path d="${j}" fill="none" stroke="${INK}" stroke-width=".6" opacity=".55"/>`;
+  return s;
+}
+function shadows(st){
+  const ring = (z, r) => on(PZ(z), ellUV(POX, POY, r, r, 12));
+  let s = castShadow(tlCorners(CX0 - 2, CY0 - 2, PH, CX1 + 2, CY1 + 2, CZ1 + 4), PH)
+    + castShadow([...ring(PH, POR), ...ring(POT, POR)], PH)
+    + castShadow(tlCorners(VXB, BBY0, BBZ0, VXF + VVIS, BBY1, BBZ1), PH)
+    + castShadow(tlCorners(BX0, BY0, BZ0, BX1, BY1, BZ1), PH);
+  if (st.door > .005){ const d = doorGeo(st); s += castShadow([...d.A, ...d.B], PH); }
+  return clipTo(on(PZ(PH), rectUV(0, KY, PW, PD)), s);
+}
+
+/* ---------- pole ---------- */
+function pole(m){
+  let s = cyl(POX, POY, PH, PH + 2, POR + 2, CONC, tone, 1, 24);                                     // ground collar
+  s += cyl(POX, POY, PH + 2, POT, POR, m, tone, 1.8, 24);
+  s += cyl(POX, POY, POT, POT + 2.5, POR + .8, m, tone, 1.1, 24);                                    // cap
+  for (const z of [102, 160, 218, 240, 278]) s += cyl(POX, POY, z - 1.6, z + 1.6, POR + .5, METAL, toneI, .8, 24);   // clamp bands
+  return s;
+}
+const brackets = () => [218, 278].map(z => box(POX + POR, POY - 3, z - 2.2, VXB, POY + 3, z + 2.2, METAL, toneI, .8)).join('');
+function kerbDetector(){
+  let s = box(105, BY0, 236, 115, 83, 244, HEADM, tone, .9);
+  if (facing([0,1,0])) s += shape(on(PY(83.05), ellUV(110, 239.6, 2.4, 2.4, 14)), '#2b3a46', .6) + fill(pd(on(PY(83.1), ellUV(109.3, 240.4, .7, .7, 8))), '#ffffff', 'opacity=".5"');
+  return s;
+}
+function topDetector(){
+  let s = rod([POX, POY, POT + 2.5], [POX, POY, POT + 6], 1.2, METAL, toneI, .8);
+  s += box(POX - 12, POY - 5, POT + 6, POX + 2, POY + 5, POT + 13, HEADM, tone, 1);
+  if (facing([-1,0,0])) s += shape(on(PX(POX - 12.05), ellUV(POY, POT + 9.5, 2.6, 2.6, 14)), '#2b3a46', .6);
+  return s;
+}
+
+/* ---------- vehicle signal head ---------- */
+const LEDS = (() => { const o = [[0,0]]; for (const [r, n, a] of [[3.3, 6, 0], [6.5, 12, .26]]) for (let i = 0; i < n; i++){ const t = i/n*2*Math.PI + a; o.push([r*Math.cos(t), r*Math.sin(t)]); } return o; })();
+function backboard(){
+  const P2 = rrUV(BBY0, BBZ0, BBY1, BBZ1, 4);
+  let s = extrude(P2, VXB, VXH, BBM);
+  if (facing([1,0,0])) s += fill(pd(on(PX(VXH), P2)), '#f1eee4') + fill(pd(on(PX(VXH + .02), rrUV(BBY0 + 2.6, BBZ0 + 2.6, BBY1 - 2.6, BBZ1 - 2.6, 2.5))), BBM.m) + ink(pd(on(PX(VXH), P2)), 1.1);
+  if (facing([-1,0,0])) s += fill(pd(on(PX(VXB), P2)), tone([-1,0,0], BBM)) + ink(pd(on(PX(VXB), P2)), 1.1);
+  return s + hullInk([...on(PX(VXB), P2), ...on(PX(VXH), P2)], 2.2);
+}
+function housing(st){
+  const P2 = rrUV(VY0, VZ0, VY1, VZ1, 3), lit = lampsOn(st);
+  let s = extrude(P2, VXH, VXF, HEADM);
+  if (facing([1,0,0])){
+    s += fill(pd(on(PX(VXF), P2)), tone([1,0,0], HEADM)) + ink(pd(on(PX(VXF), P2)), 1.2);
+    for (const a of ASP){ const on1 = lit.has(a.k), pl = PX(VXF + .1);
+      s += shape(on(PX(VXF + .05), ellUV(POY, a.z, LENS_R + 1.3, LENS_R + 1.3, 28)), '#191715', .8);
+      s += fill(pd(on(pl, ellUV(POY, a.z, LENS_R, LENS_R, 28))), on1 ? a.on : a.off);
+      s += tlDots(PX(VXF + .14), LEDS.map(([u, v]) => [POY + u, a.z + v]), .95, on1 ? mix(a.on, '#ffffff', .55) : mix(a.off, '#ffffff', .08));
+      if (on1) s += fill(pd(on(PX(VXF + .16), ellUV(POY, a.z, LENS_R*1.55, LENS_R*1.55, 28))), a.on, 'opacity=".28"');
+      s += fill(pd(on(PX(VXF + .18), arcUV(POY, a.z, LENS_R*.72, 100, 160, 6).concat(arcUV(POY, a.z, LENS_R*.55, 160, 100, 6)))), '#ffffff', 'opacity=".32"');
+    }
+  }
+  s += hullInk([...on(PX(VXH), P2), ...on(PX(VXF), P2)], 2.2);
+  s += cyl(131, POY, VZ1, VZ1 + 3, 2.2, CERAMIC, toneI, .9, 16);                                      // photocell
+  return s;
+}
+function visor(a, lit){
+  const R = LENS_R + 1.6, n = 12, a0 = -12, a1 = 192, th = i => (a0 + (a1 - a0)*i/n)*Math.PI/180;
+  const pt = (x, t) => [x, POY + R*Math.cos(t), a.z + R*Math.sin(t)];
+  let inner = '', outer = '', edges = ''; const vs = [];
+  for (let i = 0; i < n; i++){ const t0 = th(i), t1 = th(i + 1), tm = (t0 + t1)/2, nr = [0, Math.cos(tm), Math.sin(tm)];
+    const q = [pt(VXF, t0), pt(VXF + VVIS, t0), pt(VXF + VVIS, t1), pt(VXF, t1)], ov = vis(nr); vs.push(ov);
+    if (ov) outer += face(pd(q), tone(nr, HEADM)); else inner += face(pd(q), lit ? mix(HEADM.d, a.on, .3) : HEADM.d); }
+  for (let i = 0; i <= n; i++) if (i === 0 || i === n || vs[i - 1] !== vs[i]) edges += pd([pt(VXF, th(i)), pt(VXF + VVIS, th(i))], false);
+  return inner + outer + ink(edges, .9) + ink(pd(Array.from({length: n + 1}, (_, i) => pt(VXF + VVIS, th(i))), false), 1.1);
+}
+
+/* ---------- push-button unit (with the nearside red man / green man display) ---------- */
+function man(plane, u0, v0, w, h, walking, col){
+  const cu = u0 + w/2, U = (du, dv) => plane([cu + du*h, v0 + dv*h]);
+  const torso = walking ? [[.03, .68], [-.03, .43]] : [[0, .68], [0, .43]];
+  const limbs = walking
+    ? [[[-.03, .44], [-.18, .25], [-.24, .06]], [[-.03, .44], [.1, .25], [.18, .07]], [[.02, .66], [.18, .5]], [[.02, .66], [-.15, .5]]]
+    : [[[-.05, .44], [-.06, .06]], [[.05, .44], [.06, .06]], [[-.08, .66], [-.11, .42]], [[.08, .66], [.11, .42]]];
+  const hc = walking ? [.05, .84] : [0, .84];
+  const head = Array.from({length: 12}, (_, i) => { const t = i/12*2*Math.PI; return U(hc[0] + .085*Math.cos(t), hc[1] + .085*Math.sin(t)); });
+  const sk = (pts, wd) => `<path d="${pts.map(seg => pd(seg.map(([a, b]) => U(a, b)), false)).join('')}" fill="none" stroke="${col}" ${mw(wd)} stroke-linecap="round" stroke-linejoin="round"/>`;
+  return sk([torso], h*.2) + sk(limbs, h*.11) + fill(pd(head), col);
+}
+const RM_ON = '#ff4a3a', RM_OFF = '#4a2a26', GM_ON = '#4df08a', GM_OFF = '#21392c';
+function pbuFront(st, plane, dy){
+  const lit = lampsOn(st);
+  let s = shape(on(plane(dy), rrUV(102.5, 131, 117.5, 163.5, 1.5)), '#1d1a18', .9);
+  s += fill(pd(on(plane(dy + .02), rectUV(104, 148.5, 116, 162))), lit.has('RM') ? '#3a1612' : '#221d1b');
+  s += fill(pd(on(plane(dy + .02), rectUV(104, 132.5, 116, 146))), lit.has('GM') ? '#123a20' : '#1d211e');
+  s += man(plane(dy + .05), 104, 149, 12, 12.5, false, lit.has('RM') ? RM_ON : RM_OFF);
+  s += man(plane(dy + .05), 104, 133, 12, 12.5, true, lit.has('GM') ? GM_ON : GM_OFF);
+  s += shape(on(plane(dy), rectUV(103.5, 119, 116.5, 128)), '#1d1a18', .8);
+  if (lit.has('WAIT')) s += fill(pd(on(plane(dy + .02), rectUV(103.5, 119, 116.5, 128))), '#ffb21e', 'opacity=".25"');
+  s += txY(110, dy + .1, 121.6, 'WAIT', 4.3, lit.has('WAIT') ? '#ffc23a' : '#4a4034', 800);
+  s += txY(110, dy + .1, 103.4, 'PUSH BUTTON', 2.1, INK, 800);
+  s += shape(on(plane(dy + .03), ellUV(110, BTNZ, 4.6, 4.6, 20)), '#2a2724', .8);
+  return s;
+}
+function pbuButton(st){ const ext = st.btnT > 0 ? 1 : 2.4;
+  return act('pbtn', rod([110, BY1, BTNZ], [110, BY1 + ext, BTNZ], 3.2, BTNM, toneI, 1, 3.2, 20)); }
+function cone(st){
+  let s = rod([110, 82, BZ0], [110, 82, BZ0 - 5.5], 2.4, METAL, toneI, .8, .5, 16);
+  for (const k of [0, 1, 2]){ const c = st.cone + k*2.094, d = [Math.cos(c), Math.sin(c), .4];
+    if (vis(d)) s += ink(pd([[110 + 2.3*Math.cos(c), 82 + 2.3*Math.sin(c), BZ0 - .3], [110 + .5*Math.cos(c), 82 + .5*Math.sin(c), BZ0 - 5.2]], false), .7); }
+  return s;
+}
+function pbu(st){
+  const FY = facing([0,1,0]), FXp = facing([1,0,0]);
+  let body = box(BX0, BY0, BZ0, BX1, BY1, BZ1, PBUM, tone, 1) + hullInk(tlCorners(BX0, BY0, BZ0, BX1, BY1, BZ1), 2);
+  if (FXp){ let g = ''; for (const y of [79, 80.5, 82, 83.5, 85]) g += pd([[BX1 + .05, y, 106], [BX1 + .05, y, 115]], false); body += ink(g, 1); }
+  const hood = box(102, BY1, 163.5, 118, BY1 + 4, 165, PBUM, tone, .7), btn = pbuButton(st), cn = cone(st);
+  return FY ? cn + body + pbuFront(st, PY, BY1 + .05) + btn + hood : btn + hood + cn + body;
+}
+
+/* ---------- controller cabinet ---------- */
+function doorGeo(st){
+  const a = ease(st.door)*DOOR_MAX*Math.PI/180, sa = Math.sin(a), ca = Math.cos(a), DW = DY1 - DY0;
+  const Pt = (s, z, off = 0) => [CX1 + s*sa + off*ca, DY0 + s*ca - off*sa, z];
+  const ring = z => [Pt(0, z, 0), Pt(DW, z, 0), Pt(DW, z, -2), Pt(0, z, -2)];
+  return { a, sa, ca, DW, Pt, A: ring(DZ0), B: ring(DZ1), no: [ca, -sa, 0] };
+}
+function doorFace(g){
+  const { Pt, DW, sa, ca } = g, o = .06;
+  let s = ink(pd([Pt(0, DZ0, o), Pt(DW, DZ0, o), Pt(DW, DZ1, o), Pt(0, DZ1, o)]), 1.5);
+  let lv = ''; for (let z = 30; z <= 44; z += 3.5) lv += pd([Pt(18, z, o), Pt(48, z, o)], false);
+  s += ink(lv, 1);
+  s += shape([Pt(15, 103, o), Pt(51, 103, o), Pt(51, 114, o), Pt(15, 114, o)], '#f1eee4', .8);
+  const tq = P(...Pt(33, 107.4, o + .05));
+  s += `<text transform="${txM(tq, Dv(-sa, -ca, 0), Dv(0, 0, -1))}" font-size="3" fill="${INK}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em">TRAFFIC SIGNALS</text>`;
+  s += rod(Pt(DW - 6, 88, 0), Pt(DW - 6, 88, .9), 1.3, METAL, toneI, .7, 1.3, 12);                    // lock
+  for (const z of [34, 102]) s += rod(Pt(-.2, z, 1), Pt(-.2, z + 9, 1), 1.1, METAL, toneI, .7, 1.1, 10);   // hinges
+  return s;
+}
+const doorHandle = g => rod(g.Pt(g.DW - 6, 76, 0), g.Pt(g.DW - 6, 76, 2.4), 1.2, DARK, toneI, .8, 1.2, 12) + rod(g.Pt(g.DW - 6, 76, 2.4), g.Pt(g.DW - 6, 67, 2.4), .9, DARK, toneI, .8, .9, 10);
+function doorInner(g){
+  const { Pt } = g, o = -2.06;
+  let s = shape([Pt(10, 56, o), Pt(56, 56, o), Pt(56, 114, o), Pt(10, 114, o)], '#c9ccc4', .8);        // document pocket
+  s += shape([Pt(13, 64, o - .05), Pt(53, 64, o - .05), Pt(53, 112, o - .05), Pt(13, 112, o - .05)], '#f4f1e6', .6);   // wiring diagram
+  let l = ''; for (let z = 70; z <= 106; z += 6) l += pd([Pt(16, z, o - .1), Pt(50, z, o - .1)], false) + pd([Pt(20 + (z % 12), z, o - .1), Pt(20 + (z % 12), z - 4, o - .1)], false);
+  s += `<path d="${l}" fill="none" stroke="#5a7aa8" stroke-width=".6"/>`;
+  return s + ink(pd([Pt(2, DZ0 + 2, o), Pt(64, DZ0 + 2, o), Pt(64, DZ1 - 2, o), Pt(2, DZ1 - 2, o)]), .6);
+}
+function doorItem(st, m){
+  const g = doorGeo(st), outV = vis(g.no), inV = vis(g.no.map(v => -v));
+  let s = (outV ? '' : doorHandle(g)) + loft(g.A, g.B, n => tone(n, m)) + fill(pd(g.B), tone([0,0,1], m)) + ink(pd(g.B), .9);
+  if (outV) s += doorFace(g) + doorHandle(g);
+  if (inV) s += doorInner(g);
+  s += hullInk([...g.A, ...g.B], 2.2);
+  const b = tlBoxOf([...g.A, ...g.B]); b[0][0] = Math.max(b[0][0], CX1 + 2);
+  return { box: b, svg: act('door', s) };
+}
+function cabWalls(){
+  const c = n => mix(toneI(n, CABIN), '#f2efe7', .2), F = [
+    [[1,0,0],  [[IX0,IY0,IZ0],[IX0,IY1,IZ0],[IX0,IY1,IZ1],[IX0,IY0,IZ1]]],
+    [[0,1,0],  [[IX0,IY0,IZ0],[IX1,IY0,IZ0],[IX1,IY0,IZ1],[IX0,IY0,IZ1]]],
+    [[0,-1,0], [[IX0,IY1,IZ0],[IX1,IY1,IZ0],[IX1,IY1,IZ1],[IX0,IY1,IZ1]]],
+    [[0,0,1],  [[IX0,IY0,IZ0],[IX1,IY0,IZ0],[IX1,IY1,IZ0],[IX0,IY1,IZ0]]],
+    [[0,0,-1], [[IX0,IY0,IZ1],[IX1,IY0,IZ1],[IX1,IY1,IZ1],[IX0,IY1,IZ1]]] ];
+  return F.filter(([n]) => vis(n)).map(([n, q]) => shape(q, c(n), .6)).join('');
+}
+function cabinet(st, m){
+  const open = st.door > .005, FX = facing([1,0,0]), g = doorGeo(st);
+  let s = (!FX && !open ? doorHandle(g) : '') + box(CX0 - 2, CY0 - 2, PH, CX1 + 2, CY1 + 2, CZ0, CONC, tone, .9);
+  const [X0, X1, Y0, Y1, Z0, Z1] = [CX0, CX1, CY0, CY1, CZ0, CZ1];
+  const F = [ [[0,1,0],  [[X0,Y1,Z0],[X1,Y1,Z0],[X1,Y1,Z1],[X0,Y1,Z1]]],
+              [[0,-1,0], [[X0,Y0,Z0],[X1,Y0,Z0],[X1,Y0,Z1],[X0,Y0,Z1]]],
+              [[-1,0,0], [[X0,Y0,Z0],[X0,Y1,Z0],[X0,Y1,Z1],[X0,Y0,Z1]]] ];
+  for (const [n, q] of F) if (vis(n)) s += shape(q, tone(n, m), 1.2);
+  if (facing([0,1,0])){ let v = ''; for (let z = 106; z <= 118; z += 3) v += pd([[X0 + 8, Y1 + .05, z], [X1 - 8, Y1 + .05, z]], false); s += ink(v, 1); }
+  if (facing([-1,0,0])) s += shape([[X0 - .05, Y0 + 15, 40], [X0 - .05, Y1 - 15, 40], [X0 - .05, Y1 - 15, 70], [X0 - .05, Y0 + 15, 70]], mix(tone([-1,0,0], m), '#ffffff', .15), .8);
+  if (FX){
+    const q = [[X1,Y0,Z0],[X1,Y1,Z0],[X1,Y1,Z1],[X1,Y0,Z1]];
+    if (open){
+      const hole = [[X1 + .02, DY0, DZ0], [X1 + .02, DY1, DZ0], [X1 + .02, DY1, DZ1], [X1 + .02, DY0, DZ1]];
+      s += clipTo(hole, cabWalls() + byDepth(cabParts(st)));
+      s += fill(pd(q) + pd(hole), tone([1,0,0], m), 'fill-rule="evenodd"') + ink(pd(q), 1.2) + ink(pd(hole), 1.6);
+    } else s += shape(q, tone([1,0,0], m), 1.2) + act('door', doorFace(g) + doorHandle(g));
+  }
+  s += box(CX0 - 2, CY0 - 2, CZ1, CX1 + 2, CY1 + 2, CZ1 + 4, m, tone, 1.1);                         // roof
+  s += hullInk(tlCorners(CX0 - 2, CY0 - 2, PH, CX1 + 2, CY1 + 2, CZ1 + 4), 2.6);
+  return s;
+}
+
+/* ---------- inside parts ---------- */
+const tlBend = (pts, r = 1.2) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k])*d/la), q = c.map((v, k) => b[k] + (v - b[k])*d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+// a cable cut into short pieces, each with its own box, so byDepth puts it behind or in front of the solids it passes
+const tlWire = (pts, col, w = .35, Ls = 4) => { const q = tlBend(pts), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = Math.hypot(...q[j].map((v, k) => v - q[i][k]));
+    while (j < q.length - 1 && len < Ls){ j++; len += Math.hypot(...q[j].map((v, k) => v - q[j - 1][k])); }
+    const seg = q.slice(i, j + 1), d = pd(seg, false);
+    out.push({ box: tlBoxOf(seg), svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w + .9)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linecap="round" stroke-linejoin="round"/>` });
+    i = j; }
+  return out; };
+// the push-button pair, switch to input card (the middle part runs inside the duct)
+const PB_PATH = [[110, 81.5, BTNZ], [110, 78, BTNZ], [108.4, 72, BTNZ - 3], [108.4, 71.6, 12], [108.4, 71.6, 5.5], [108.4, 130.4, 5.5],
+  [32, 130.4, 5.5], [32, 130.4, 21.5], [32, 130.4, 30], [25, 145, 36], [21, 145, 40], [19.2, 145, 70]];
+const SIG_COL = '#2f2c29', PB_COL = '#3c6fb4', MAINS_COL = '#7a4a2a', HOT = '#ffb347';
+function along(pts, t){ const L2 = []; let tot = 0; for (let i = 1; i < pts.length; i++){ const l = Math.hypot(...pts[i].map((v, k) => v - pts[i-1][k])); L2.push(l); tot += l; }
+  let d = t*tot; for (let i = 1; i < pts.length; i++){ if (d <= L2[i-1]){ const u = d / L2[i-1]; return pts[i-1].map((v, k) => v + (pts[i][k] - v)*u); } d -= L2[i-1]; } return pts[pts.length - 1]; }
+
+function cabParts(st){
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg }), lit = lampsOn(st), FX = facing([1,0,0]);
+  const bx = (x0, y0, z0, x1, y1, z1, M, w = .7, extra = '') => put(tlB(x0, y0, z0, x1, y1, z1), box(x0, y0, z0, x1, y1, z1, M, toneI, w) + extra);
+  const sq = (x, y, z, c, r = .8) => FX ? fill(pd(on(PX(x), rectUV(y - r, z - r, y + r, z + r))), c) + ink(pd(on(PX(x), rectUV(y - r, z - r, y + r, z + r))), .3) : '';
+  const wires = (...a) => parts.push(...tlWire(...a));
+  // mains column: cutout, RCD, isolator, manual panel
+  bx(18, 96, 26, 28, 106, 44, BAKE, .8, FX ? shape(on(PX(28.05), rectUV(99, 37, 103, 41)), '#d8402f', .4) : '');
+  bx(18, 96, 62, 25, 106, 74, WHITEM, .7, sq(25.05, 99, 70, '#3a3632', .9) + sq(25.05, 103, 70, '#3a3632', .9) + sq(25.05, 101, 65, '#e8c45a', .7));
+  bx(18, 96, 82, 26, 106, 96, matOf('#e6e2d6'), .7);
+  put(tlB(26, 98.4, 86.4, 29, 103.6, 91.6), rod([26, 101, 89], [28.6, 101, 89], 2.6, matOf('#d8d2c2'), toneI, .7, 2.6, 16) + rod([28.6, 101, 89], [28.6 + .01, 101, 89], 0, REDM)
+    + (FX ? shape(on(PX(28.7), rectUV(100.2, 86.6, 101.8, 91.4)), '#d8402f', .5) : ''));
+  bx(18, 96, 104, 30, 106, 120, matOf('#7c8389'), .8, sq(30.05, 98.5, 116.5, st.sig ? '#43c25c' : '#e2483d', .8));
+  put(tlB(30, 100, 109, 33, 102, 115), act('panel', rod([30, 101, 112], [32.6, 101, 112 + (st.sig ? 2.6 : -2.6)], .8, METAL, toneI, .7, .6, 10)));
+  // card rack: side plates, shelves, backplane, cards
+  bx(17, 110, 68, 44.5, 111.5, 112, RACKM, .6); bx(17, 156.5, 68, 44.5, 158, 112, RACKM, .6);
+  bx(17, 111.5, 66.5, 44.5, 156.5, 68, RACKM, .6); bx(17, 111.5, 112, 44.5, 156.5, 113.5, RACKM, .6);
+  bx(17, 111.5, 68, 19, 156.5, 112, PCBM, .6);
+  const blink = Math.floor((st.clock || 0)*2) % 2 === 0;
+  for (const c of CARDS){ const yc = (c.y0 + c.y1)/2;
+    bx(19, yc - .5, 70, 42.5, yc + .5, 110, PCBM, .5);
+    let leds = '';
+    if (c.k === 'PSU') leds = sq(44.55, yc, 106, '#43c25c');
+    if (c.k === 'CPU') leds = sq(44.55, yc, 106, blink ? '#43c25c' : '#2b4a33');
+    if (c.k === 'LS1') leds = ['R','A','G','RM'].map((k, i) => sq(44.55, yc, 104 - 4*i, lit.has(k) ? '#ffb347' : '#5a4a3a', .7)).join('');
+    if (c.k === 'LS2') leds = ['GM','WAIT','AUD'].map((k, i) => sq(44.55, yc, 104 - 4*i, lit.has(k) ? '#ffb347' : '#5a4a3a', .7)).join('');
+    if (c.k === 'PBI') leds = sq(44.55, yc, 104, st.wait || st.pulse >= .85 ? '#ffb347' : '#5a4a3a');
+    bx(42.5, c.y0, 69, 44.5, c.y1, 111, c.k === 'SPR' ? matOf('#8f969a') : PANELM, .6, leds);
+  }
+  // relays on their DIN rail, terminal rail, heater, gland plate
+  bx(17, 109, 51, 19, 143, 55, METAL, .5);
+  RELAYS.forEach((k, i) => { const y0 = 110 + 4*i;
+    bx(19, y0 + .3, 46, 30, y0 + 3.7, 60, RELM, .6, sq(30.05, y0 + 2, 57, lit.has(k) ? '#ff5a3a' : '#5a3a36', .7)); });
+  bx(17, 109, 35, 19, 157, 38, METAL, .5);
+  for (let y = 110, i = 0; y < 156; y += 2.4, i++) bx(19, y, 33, 25, y + 2.2, 40, i % 6 === 5 ? TERMY : TERMM, .45);
+  bx(18, 146, 21, 24, 158, 29, matOf('#b0b6b8'), .7, FX ? ink([148, 150, 152, 154, 156].map(y => pd([[24.05, y, 22.5], [24.05, y, 27.5]], false)).join(''), .6) : '');
+  bx(22, 112, 19, 48, 150, 20, METAL, .6);
+  for (const [x, y] of [[30, 132], [32, 130.4]]) put(tlB(x - 1.5, y - 1.5, 20, x + 1.5, y + 1.5, 22), cyl(x, y, 20, 21.5, 1.4, DARK, toneI, .6, 12));
+  put(tlB(21.5, 99.5, 17, 24.5, 102.5, 19.6), cyl(23, 101, 17, 19.6, 1.5, DARK, toneI, .6, 12));
+  // looms: mains, signal multicore, relays to terminals, rack to relays, push-button pair
+  const hot = lit.size > 0;
+  wires([[23, 101, 19.6], [23, 101, 26]], MAINS_COL, .55);
+  wires([[23, 104, 44], [23, 104, 62]], MAINS_COL, .4); wires([[23, 104, 74], [23, 104, 82]], MAINS_COL, .4);
+  wires([[24, 104, 96], [24, 104, 100], [24, 108, 100], [19.6, 114, 100]], MAINS_COL, .4);
+  wires([[30, 132, 21.5], [30, 132, 29], [25, 132, 33.5]], SIG_COL, .7);
+  RELAYS.forEach((k, i) => wires([[24, 112 + 4*i, 46], [24, 112 + 4*i, 40]], lit.has(k) ? HOT : '#c9a24a', .25, 8));
+  wires([[18.4, 120, 68], [18.4, 120, 60], [18.6, 124, 60]], '#3a3632', .3, 8);
+  wires(PB_PATH.slice(7), st.pulse >= .8 ? HOT : PB_COL, .3);
+  return parts;
+}
+
+function mech(st){
+  const parts = cabParts(st), put = (b, svg) => parts.push({ box: b, svg }), lit = lampsOn(st);
+  const wires = (...a) => parts.push(...tlWire(...a));
+  const bx = (x0, y0, z0, x1, y1, z1, M, w = .7, extra = '') => put(tlB(x0, y0, z0, x1, y1, z1), box(x0, y0, z0, x1, y1, z1, M, toneI, w) + extra);
+  // duct under the pavement: cabinet -> along -> pole root
+  const duct = (a, b) => put(tlBoxOf([a, b].flatMap(p => [[p[0] - 3, p[1] - 3, p[2] - 3], [p[0] + 3, p[1] + 3, p[2] + 3]])), rod(a, b, 3, DUCTM, toneI, .8, 3, 14));
+  duct([30, 132, 17], [30, 132, 5.5]); duct([30, 132, 5.5], [70, 132, 5.5]); duct([70, 132, 5.5], [110, 132, 5.5]);
+  duct([110, 132, 5.5], [110, 101, 5.5]); duct([110, 101, 5.5], [110, 70, 5.5]); duct([110, 70, 5.5], [110, 70, 12]);
+  wires([[0, 101, 5.5], [23, 101, 5.5], [23, 101, 17]], MAINS_COL, .6, 8);                          // mains from the street
+  // signal multicore up the pole, branches to the head, the PBU, the detectors
+  const sc = st.sig ? '#4a4038' : SIG_COL;
+  wires([[110, 70, 12], [110, 70, 218], [117.5, 70, 218], [121.5, 70, 214], [121.5, 70, 212.5]], sc, .7, 10);
+  wires([[110, 70, 218], [110, 70, POT + 6]], sc, .5, 10);
+  wires([[110, 70, 128], [110, 76.5, 128]], sc, .5); wires([[110, 70, 240], [110, 76, 240]], sc, .4);
+  wires(PB_PATH.slice(0, 5), st.pulse >= 0 && st.pulse < .35 ? HOT : PB_COL, .3, 6);
+  // vehicle head inside: terminal block, LED drivers, LED modules
+  bx(119.5, POY - 10, 208, 125, POY + 10, 212.5, TERMM, .6);
+  ASP.forEach((a, i) => { const on1 = lit.has(a.k);
+    bx(127, POY - 8, a.z - 7, 134, POY + 8, a.z + 7, PCBM, .6);
+    let mod = rod([136, POY, a.z], [138.5, POY, a.z], 9, PCBM, toneI, .7, 9, 24);
+    if (facing([1,0,0])) mod += tlDots(PX(138.55), LEDS.map(([u, v]) => [POY + u, a.z + v]), 1, on1 ? a.on : mix(a.off, '#ffffff', .15))
+      + (on1 ? fill(pd(on(PX(138.6), ellUV(POY, a.z, 8, 8, 24))), a.on, 'opacity=".3"') : '');
+    put(tlB(136, POY - 9, a.z - 9, 138.6, POY + 9, a.z + 9), mod);
+    wires([[123, POY + 9 - 4*i, 212.5], [123, POY + 9.5 - 4*i, a.z - 2], [127, POY + 7.5 - 2*i, a.z]], on1 ? HOT : '#3a3632', .25, 8);
+    wires([[134, POY, a.z], [136, POY, a.z]], on1 ? HOT : '#3a3632', .3);
+  });
+  // PBU inside: board, switch + plunger, LED modules, sounder, cone motor; the button and cone redrawn over the ghost
+  bx(103, 76.5, 100, 117, 78, 160, PCBM, .6);
+  bx(107, 81.5, 108, 113, 85, 114, DARK, .7, facing([0,1,0]) ? shape(on(PY(85.05), rectUV(109, 109.5, 111, 112.5)), '#e8e4da', .4) : '');
+  put(tlB(109, 85, 110, 111, 87, 112), rod([110, 85, BTNZ], [110, 87, BTNZ], .9, METAL, toneI, .6, .9, 10));
+  const mod = (z0, z1, inner) => bx(104, 84.5, z0, 116, 86.5, z1, PCBM, .6, facing([0,1,0]) ? inner : '');
+  mod(148.5, 162, man(PY(86.55), 104, 149, 12, 12.5, false, lit.has('RM') ? RM_ON : RM_OFF));
+  mod(132.5, 146, man(PY(86.55), 104, 133, 12, 12.5, true, lit.has('GM') ? GM_ON : GM_OFF));
+  mod(119, 128, tlDots(PY(86.55), [105.5, 108.5, 111.5, 114.5].flatMap(x => [[x, 121.5], [x, 125.5]]), .8, lit.has('WAIT') ? '#ffc23a' : '#5a4a30'));
+  put(tlB(114.5, 79.4, 107.4, 119, 84.6, 112.6), rod([115, 82, 110], [118.8, 82, 110], 2.6, METAL, toneI, .7, 2.6, 16));
+  put(tlB(107.5, 79.5, 97, 112.5, 84.5, 103), cyl(110, 82, 97, 103, 2.4, DARK, toneI, .7, 16));
+  wires([[110, 78, 104], [110, 81, 104], [110, 82, 103]], '#3a3632', .2); wires([[115, 78, 110], [115, 80, 110]], '#3a3632', .2);
+  put(tlB(107, 80, BZ0 - 6, 113, 85, BZ0), cone(st));
+  put(tlB(106, BY1, 107, 114, BY1 + 2.6, 115), pbuButton(st));
+  // pulse on the push-button pair: the press travelling to the controller
+  let pulse = '';
+  if (st.pulse >= 0){ const [X, Y] = P(...along(PB_PATH, Math.min(1, st.pulse)));
+    pulse = `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(5*INK_K)}" fill="#ffd84a" opacity=".45"/><circle cx="${f(X)}" cy="${f(Y)}" r="${f(2.3*INK_K)}" fill="#ffd84a" stroke="${INK}" stroke-width="1"/>`; }
+  return `<g opacity=".55">${cabWalls()}</g>` + byDepth(parts) + pulse;
+}
+
+/* ---------- scene ---------- */
+function soundArcs(st){
+  if (!beepOn(st)) return '';
+  let s = ''; for (const r of [3.5, 6.5, 9.5]) s += pd(Array.from({length: 9}, (_, i) => { const t = (-45 + 90*i/8)*Math.PI/180; return [BX1 + 1 + r*Math.cos(t), 82, 110 + r*Math.sin(t)]; }), false);
+  return `<path d="${s}" fill="none" stroke="${INK}" stroke-width="1.2" stroke-linecap="round"/>`;
+}
+function objects(st, m){
+  const it = [];
+  it.push({ box: tlB(CX0 - 2, CY0 - 2, PH, CX1 + 2, CY1 + 2, CZ1 + 4), svg: cabinet(st, m) });
+  if (st.door > .005) it.push(doorItem(st, m));
+  it.push({ box: tlB(POX - POR, POY - POR, PH, POX + POR, POY + POR, POT + 2.5), svg: pole(m) });
+  it.push({ box: tlB(POX + POR, POY - 3, 215.8, VXB, POY + 3, 280.2), svg: brackets() });
+  it.push({ box: tlB(105, BY0, 236, 115, 83, 244), svg: kerbDetector() });
+  it.push({ box: tlB(POX - 12, POY - 5, POT + 2.5, POX + 2, POY + 5, POT + 13), svg: topDetector() });
+  it.push({ box: tlB(VXB, BBY0, BBZ0, VXH, BBY1, BBZ1), svg: backboard() });
+  it.push({ box: tlB(VXH, VY0, VZ0, VXF, VY1, VZ1 + 3), svg: housing(st) });
+  const lit = lampsOn(st);
+  for (const a of ASP) it.push({ box: tlB(VXF, POY - LENS_R - 2, a.z - 2.5, VXF + VVIS, POY + LENS_R + 2, a.z + LENS_R + 2), svg: visor(a, lit.has(a.k)) });
+  it.push({ box: tlB(BX0, BY0, BZ0 - 6, BX1, BY1 + 4, BZ1), svg: pbu(st) });
+  return it;
+}
+const XR_B = [10, 150, 60, 165, 0, 316];
+function insideLabels(st){
+  const lit = lampsOn(st), walk = st.sig && st.ph === 'walk';
+  return [
+    { at:[28, 101, 36], text:'MAINS CUTOUT', on:false }, { at:[25, 101, 70], text:'RCD', on:false },
+    { at:[28.6, 101, 91], text:'ISOLATOR', on:st.sig }, { at:[30, 103, 117], text:'MANUAL PANEL', on:!st.sig },
+    { at:[44.5, 116, 100], text:'POWER SUPPLY CARD', on:st.sig }, { at:[44.5, 124, 96], text:'CPU CARD', on:st.sig },
+    { at:[44.5, 135, 92], text:'LAMP SWITCH CARDS', on:lit.size > 1 }, { at:[44.5, 145, 100], text:'PUSH BUTTON INPUT CARD', on:st.pulse >= .8 || st.wait },
+    { at:[30, 126, 52], text:'OUTPUT RELAYS', on:lit.size > 1 }, { at:[30, 112, 50], text:'LAMP SUPPLY RELAY', on:st.sig },
+    { at:[25, 150, 37], text:'TERMINAL RAIL', on:false }, { at:[44, 140, 20], text:'GLAND PLATE', on:false },
+    { at:[24, 154, 25], text:'HEATER', on:false },
+    { at:[4, 101, 5.5], text:'MAINS CABLE', on:st.sig }, { at:[80, 132, 8.5], text:'CABLE DUCT', on:st.pulse >= .35 && st.pulse < .8 },
+    { at:[110, 70, 170], text:'SIGNAL CABLE', on:st.sig }, { at:[108.4, 71.6, 60], text:'PUSH BUTTON WIRES', on:st.pulse >= 0 },
+    { at:[POX + POR, POY + 3, 278], text:'HEAD BRACKETS', on:false },
+    { at:[138.5, POY - 6, 276], text:'RED LED MODULE', on:lit.has('R') }, { at:[138.5, POY - 6, 248], text:'AMBER LED MODULE', on:lit.has('A') },
+    { at:[138.5, POY - 6, 220], text:'GREEN LED MODULE', on:lit.has('G') }, { at:[134, POY + 8, 255], text:'LED DRIVERS', on:lit.size > 1 },
+    { at:[125, POY + 6, 210], text:'HEAD TERMINAL BLOCK', on:st.sig }, { at:[131, POY, VZ1 + 3], text:'PHOTOCELL', on:false },
+    { at:[POX - 12, POY, POT + 9.5], text:'ON-CROSSING DETECTOR', on:st.sig && st.ph === 'clear' }, { at:[110, 83, 240], text:'KERBSIDE DETECTOR', on:st.wait },
+    { at:[113, 85, 112], text:'PUSH SWITCH', on:st.btnT > 0 }, { at:[110, BY1 + 2.4, BTNZ], text:'BUTTON', on:st.btnT > 0 },
+    { at:[116, 86.5, 124], text:'WAIT LAMP', on:lit.has('WAIT') }, { at:[116, 86.5, 156], text:'RED MAN LEDS', on:lit.has('RM') },
+    { at:[116, 86.5, 140], text:'GREEN MAN LEDS', on:lit.has('GM') }, { at:[118.8, 82, 110], text:'SOUNDER', on:beepOn(st) || walk },
+    { at:[110, 82, 92], text:'TACTILE CONE', on:walk }, { at:[112.4, 82, 100], text:'CONE MOTOR', on:walk },
+    { at:[117, 77, 150], text:'PBU BOARD', on:st.sig } ];
+}
+function surfaceLabels(st){
+  const lit = lampsOn(st);
+  return [ { at:[VXF + VVIS, POY + 8, 276], text:'VEHICLE SIGNAL', on:lit.has('A') || lit.has('R') },
+    { at:[110, BY1, 124], text:'WAIT LAMP', on:lit.has('WAIT') }, { at:[110, BY1 + 2.4, BTNZ], text:'PUSH BUTTON', on:st.btnT > 0 || st.pulse >= 0 },
+    { at:[110, BY1, 140], text:'GREEN MAN', on:lit.has('GM') }, { at:[110, 82, 91], text:'TACTILE CONE', on:st.sig && st.ph === 'walk' },
+    { at:[CX1, 140, 100], text:'CONTROLLER CABINET', on:st.door > .5 }, { at:[POX - 12, POY, POT + 9.5], text:'ON-CROSSING DETECTOR', on:false },
+    { at:[110, 83, 240], text:'KERBSIDE DETECTOR', on:false }, { at:[VXH, BBY1, 250], text:'BACKBOARD', on:false },
+    { at:[POX, POY + POR, 190], text:'POLE', on:false }, { at:[130, 20, 2], text:'STOP LINE', on:false },
+    { at:[20, 21, 2], text:'CROSSING STUDS', on:false }, { at:[80, KY, PH], text:'KERB', on:false } ];
+}
+function scene(st, m){
+  const k = ease(st.xr || 0);
+  let s = byDepth([{ box: tlB(0, 0, 0, PW, KY, 2), svg: road() }, { box: tlB(0, KY, 0, PW, PD, PH), svg: pavement() }]);
+  s += shadows(st);
+  const body = byDepth(objects(st, m));
+  s += k > 0 ? `<g opacity="${f(1 - .8*k)}">${body}</g><g opacity="${f(k)}">${mech(st)}</g>` : body;
+  s += soundArcs(st);
+  s += xrCallouts(k > .6 ? insideLabels(st) : surfaceLabels(st), XR_B);
+  return s;
+}
+
+/* ---------- behaviour (one state object, one clock) ---------- */
+let tlUI = null, tlLoop = false, tlAudio = null;
+function tlAudioInit(){ try { if (!tlAudio && window.AudioContext) tlAudio = new AudioContext(); if (tlAudio && tlAudio.state === 'suspended') tlAudio.resume(); } catch (e) { tlAudio = null; } }
+function tlBeep(){ try { if (!tlAudio) return; const t = tlAudio.currentTime, o = tlAudio.createOscillator(), g = tlAudio.createGain();
+  o.type = 'square'; o.frequency.value = 2300; g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.04, t + .008); g.gain.exponentialRampToValueAtTime(.0001, t + .1);
+  o.connect(g); g.connect(tlAudio.destination); o.start(t); o.stop(t + .11); } catch (e) {} }
+function tlSet(st, ph){ st.ph = ph; st.t = 0; st.beat = -1;
+  if (ph === 'walk') st.wait = false;
+  if (ph === 'green' && st.wait) st.hold = 1.5; }                                    // a demand made late: served after the next minimum green
+function tlStep(st, dt){
+  st.clock += dt; st.btnT = Math.max(0, st.btnT - dt);
+  if (st.door !== st.doorT) st.door = Math.min(1, Math.max(0, st.door + Math.sign(st.doorT - st.door)*dt/1.1));
+  if (st.pulse >= 0){ st.pulse += dt/.9; if (st.pulse >= 1){ st.pulse = -1; st.wait = true; if (st.ph === 'green') st.hold = .6; } }
+  if (st.hold > 0){ st.hold -= dt; if (st.hold <= 0){ st.hold = 0; if (st.ph === 'green' && st.sig) tlSet(st, 'amber'); } }
+  const ph = PHASES[st.ph];
+  if (st.sig && ph.d){ st.t += dt; if (st.t >= ph.d) tlSet(st, ph.next); }
+  if (st.sig && st.ph === 'walk'){ st.cone += dt*5; const b = Math.floor(st.t / .24); if (b !== st.beat){ st.beat = b; tlBeep(); } }
+}
+function tlRun(){
+  if (tlLoop || tlUI.st.freeze) return; tlLoop = true;
+  tlUI.animate(dt => { const st = tlUI.st; tlStep(st, dt);
+    const busy = (st.sig && st.ph !== 'green') || st.pulse >= 0 || st.hold > 0 || st.btnT > 0 || st.door !== st.doorT || (st.door > 0 && st.sig) || st.xr > 0;
+    if (!busy) tlLoop = false; return busy; });
+}
+function tlPress(st, ui){
+  st.btnT = .25; tlAudioInit();
+  if (!st.sig) ui.flash('The signals are switched off at the cabinet');
+  else if (st.ph === 'walk') ui.flash('The green man is on: cross now');
+  else if (st.wait || st.pulse >= 0 || st.ph === 'amber' || st.ph === 'red') ui.flash('Already pressed: wait for the green man');
+  else st.pulse = 0;
+  tlRun();
+}
+function tlDoor(st){ st.doorT = st.doorT ? 0 : 1; tlRun(); }
+function tlSig(st, ui){
+  st.sig = !st.sig;
+  if (!st.sig){ st.ph = 'green'; st.t = 0; st.wait = false; st.pulse = -1; st.hold = 0; ui.flash('Signals off: the lamp supply relay opens'); }
+  else { tlSet(st, 'start'); ui.flash('Signals on: start-up all-red, then green'); }
+  tlRun();
+}
+
+tlUI = mountFigure({
+  fig:'21', title:'Traffic light',
+  size:[PW, PD, POT + 14], palette:'mint',
+  state:{ ph:'green', t:0, beat:-1, wait:false, pulse:-1, hold:0, btnT:0, door:0, doorT:0, sig:true, cone:0, clock:0 },
+  scene,
+  buttons:[
+    { label:'Press the button', onClick:(st, ui) => tlPress(st, ui) },
+    { label:'Open / close the cabinet', onClick:(st) => tlDoor(st) },
+    { label:'Signals off / on', onClick:(st, ui) => tlSig(st, ui) },
+  ],
+  acts:{ pbtn:(st, el, ui) => tlPress(st, ui), door:(st) => tlDoor(st), panel:(st, el, ui) => tlSig(st, ui) },
+  params:(st, q) => {
+    if (PHASES[q.get('ph')]) st.ph = q.get('ph');
+    if (q.has('t')) st.t = +q.get('t');
+    if (q.get('door') === '1') st.door = st.doorT = 1;
+    if (q.get('sig') === '0') st.sig = false;
+    if (q.get('wait') === '1') st.wait = true;
+    if (q.has('pulse')) st.pulse = +q.get('pulse');
+    if (q.has('cone')) st.cone = +q.get('cone');
+    if (q.get('freeze') === '1') st.freeze = true;
+  },
+});
+xrMount(() => tlUI, () => '');
+if (tlUI.st.ph !== 'green' || tlUI.st.pulse >= 0) tlRun();
+</script></body></html>
