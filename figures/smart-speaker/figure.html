@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Smart speaker</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Smart speaker — a fabric-covered cylinder speaker (about 99 mm across, 148 mm tall) on a wooden wall shelf beside
+   the home Wi-Fi router. 1 unit = 1 mm. x = depth (front of the shelf at x = SX), y = width, z = up.
+
+   How it really works (where the sound and the data are after each step):
+   WAKE     a person in front of the shelf says the wake word. The sound reaches the six MEMS microphones under the
+            holes in the top. The processor on the logic board listens all the time, but only on the device: a small
+            wake-word model runs locally and nothing leaves the speaker. When it matches, the LED ring lights blue
+            with a cyan arc pointing toward the voice (the mics' timing differences give the direction).
+   ASK      the person asks a question. Now the processor streams the recorded audio, in small packets, to the
+            Wi-Fi radio -> antenna cable -> flex antenna on the speaker chamber -> through the air to the router ->
+            down the router's cable to the internet and a speech server. The ring spins while it waits.
+   REPLY    the server turns the speech into text, works out the answer and sends back synthesised speech: packets
+            come back up the cable -> router -> air -> antenna -> radio -> processor -> audio amplifier -> speaker
+            wires -> tweeter (speech, front-firing) and woofer (down-firing onto the deflector, which spreads the
+            bass all round through the fabric). The ring pulses cyan while it speaks.
+   MUSIC    "play music": the same trip, then a steady stream of music packets comes down; the woofer cone pumps on
+            the beat and the bass port breathes.
+   MUTE     the mute button presses its tact switch; the mic cut-off transistor removes power from the microphone
+            ring itself (a hardware switch, not software), and the ring turns red. Spoken words are not heard.
+   POWER    mains adapter -> cord over the back of the shelf -> DC jack on the power board in the base -> power wires
+            up the chamber wall to the logic board.
+
+   Parts (each held by another):
+   CASE     rubber foot . base plate . fabric cover . light ring band . top cap with six mic holes . four buttons
+            (mute, volume up, action, volume down) . DC jack and AUX holes at the back
+   TOP      logic board on three standoffs on the chamber lid . processor . memory . flash storage . power chip .
+            Wi-Fi radio (shield can) . antenna connector . crystal . audio amplifier . capacitor . speaker and power
+            connectors . copper traces . four tact switches under the button stems . six MEMS microphones on the mic
+            power ring trace . mic cut-off transistor . twelve RGB LEDs . light guide ring over them
+   RADIO    antenna cable from the radio's connector over the board edge, down the chamber wall to the flex antenna
+            stuck on the chamber
+   SOUND    speaker chamber (sealed box) standing on four support posts on the base plate . woofer bolted under the
+            chamber's floor: flange, surround, cone, voice coil, magnet with steel plates, four basket arms, terminal
+            . tweeter through the chamber's front wall . bass port through the back wall . speaker wires from the
+            logic board, through a grommet in the chamber wall, to the tweeter and the woofer terminal . deflector
+            cone on the base plate under the woofer
+   POWER    power board on two standoffs on the base plate . DC jack . AUX jack . filter capacitor . connector .
+            power wires up the chamber wall to the logic board
+   SHELF    wooden shelf . Wi-Fi router with two hinged antennas, status lights and a network cable and power cable
+            over the back edge . the speaker's power cord over the back edge */
+
+/* ---------- geometry ---------- */
+const SX = 170, SY = 232, BH = 14, SHR = 8;
+const BTOP = boardTop(0, 0, SX, SY, BH, SHR);
+const CX = 92, CY = 170, R = 49.5;                                   // speaker axis and radius
+const Z_FOOT = 18, Z_BASE = 24, Z_FAB = 147, Z_RING = 154, Z_TOP = 162, TOP_R = 44.5, BT_H = 1.6;
+const BTN = [{ id:'mute', a:45 }, { id:'volUp', a:135 }, { id:'action', a:225 }, { id:'volDown', a:315 }], BTN_RR = 30, BTN_CAP = 6;
+const MIC_A = [0, 60, 120, 180, 240, 300], MIC_R = 36;
+const LED_A = Array.from({ length:12 }, (_, i) => 15 + 30*i), LED_R = 42.5;
+const CH0 = 38.5, CH1 = 140, CHR = 45;                               // speaker chamber
+const TZ = 100, PORT_Z = 70, PORT_R = 5;                              // tweeter height, bass port
+const BRD_Z = 146, BRD_T = 147.6, BRD_R = 45;                         // logic board
+const G_Z0 = BRD_T + 2.8, G_Z1 = Z_RING, G_R0 = 42;                        // light guide
+const RX0 = 40, RX1 = 122, RY0 = 16, RY1 = 96, RZ1 = BH + 30, ANT_TOP = 132;   // router
+const RANT = [[RX0 + 6, RY0 + 12], [RX0 + 6, RY1 - 12]];
+const VSRC = [CX + 180, CY - 15, 150];                                // where the person's voice comes from
+const DOA = Math.atan2(VSRC[1] - CY, VSRC[0] - CX) * 180/Math.PI;    // direction of the voice, as the mics find it
+const V_SPEED = 150, V_STEP = .16, V_DIST = Math.hypot(VSRC[0] - CX, VSRC[1] - CY) - R - 2;
+const WAKE_T = .55 + V_DIST / V_SPEED, LISTEN_T = 6, ASK_SPEAK = 1.3, PK_T = .6, SERVER_T = .35;
+const ANS_T = { question: 2.4, music: 1.1, stop: .8 };
+
+const TOPM = { l:'#eeede8', m:'#d5d3cb', d:'#aaa79e' }, BTNM = { l:'#e4e2db', m:'#cbc8c0', d:'#a19e95' };
+const FROST = { l:'#eef2f0', m:'#d3dad7', d:'#a9b2af' }, ROUTM = { l:'#61656c', m:'#484b51', d:'#2e3035' };
+const PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, CHIPM = matOf('#3a3633'), SOCM = matOf('#2c2d33'), CONN = matOf('#efe9da');
+const COPPER = matOf('#d08a52'), FLEXM = matOf('#e2a94a'), CONEM = matOf('#8d96a3'), FERR = matOf('#4a4c52'), CHM = matOf('#c6cacf');
+const BLUEM = matOf('#3f6fb4'), STEEL = METAL;
+const RING_BLUE = '#2b62e3', RING_CYAN = '#5fe3ff', RING_RED = '#e2483d', RING_WHITE = '#f4f7ff';
+const PK_COL = { up:'#ff9a3a', down:RING_CYAN, music:'#8af0ae' };
+
+const rad = a => a * Math.PI/180;
+const at3 = (r, a, z) => [CX + r*Math.cos(rad(a)), CY + r*Math.sin(rad(a)), z];
+const uv3 = (u, v, z) => [CX + u, CY + v, z];
+const ringZ = (z, r, n = 48) => on(PZ(z), ellUV(CX, CY, r, r, n));
+const arcZ = (z, r, a0, a1, n = 16, c = [CX, CY]) => Array.from({ length:n + 1 }, (_, i) => { const a = rad(a0 + (a1 - a0)*i/n); return [c[0] + r*Math.cos(a), c[1] + r*Math.sin(a), z]; });
+const aabb = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const annulus = (z, r0, r1, n = 40) => pd(ringZ(z, r1, n)) + pd(ringZ(z, r0, n).reverse());
+const sw = w => `style="stroke-width:${f(w)}"`;                     // a stroke in screen units that inkScale leaves alone
+const MK = Math.sqrt(1.5);                                            // model unit -> drawing units
+
+/* ---------- light ring colour ---------- */
+const listening = st => st.phase === 'listen' || st.phase === 'ask';
+function ringCol(st, a){
+  const T = st.T, ph = st.phase;
+  if (st.volT > 0){ const d = ((a - DOA) % 360 + 360) % 360; return d <= st.vol/10*360 ? RING_WHITE : '#1d3d8f'; }
+  if (ph === 'think') return Math.floor((((a + T*320) % 360) + 360) % 360 / 30) % 2 ? RING_CYAN : RING_BLUE;
+  if (ph === 'answer') return mix(RING_BLUE, RING_CYAN, .5 + .5*Math.sin(T*9));
+  if (listening(st)) return Math.abs(((a - DOA + 540) % 360) - 180) < 40 ? RING_CYAN : RING_BLUE;
+  if (st.mute) return RING_RED;
+  return null;
+}
+const ringLit = st => !!ringCol(st, 0) || !!ringCol(st, 180);
+
+/* ---------- cords and wires: cut into short pieces so each sorts with the solids it passes ---------- */
+const bend = (pts, r = 2) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k]) * d/la), q = c.map((v, k) => b[k] + (v - b[k]) * d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+function strands(pts, col, r, seg = 6, br = 2){
+  const q = bend(pts, br), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < seg){ len += Math.hypot(...q[j].map((v, k) => v - q[j - 1][k])); j++; }
+    if (len < seg) while (j < q.length - 1) j++;
+    const piece = q.slice(i, j + 1), d = pd(piece, false), cap = 'fill="none" stroke-linecap="round" stroke-linejoin="round"';
+    out.push({ box: aabb(piece, r), svg: `<path d="${d}" ${cap} stroke="${INK}" ${sw(2*r*MK + 1.3*INK_K)}/><path d="${d}" ${cap} stroke="${col}" ${sw(2*r*MK)}/>` });
+    i = j; }
+  return out;
+}
+
+/* ---------- the network path: radio -> antenna -> air -> router -> its cable -> off the shelf (the internet) ---------- */
+const NET = (() => {
+  const tip = [RANT[0][0], RANT[0][1], ANT_TOP], out0 = at3(R + .4, 270, 127), ctl = [72, 70, 168];
+  const segs = [
+    ['in', [uv3(0, -15, 149.4), uv3(0, -21.5, 149), uv3(0, -44.6, 148.4), uv3(0, -45.6, 148.2), uv3(0, -46.4, 147), uv3(0, -46.4, 137.5), at3(46.2, 270, 127)]],
+    ['air', Array.from({ length:17 }, (_, i) => { const t = i/16; return [0,1,2].map(j => (1-t)*(1-t)*out0[j] + 2*(1-t)*t*ctl[j] + t*t*tip[j]); })],
+    ['ant', [tip, [tip[0], tip[1], RZ1 + 6]]],
+    ['hid', [[tip[0], tip[1], RZ1 + 6], [RX0 + .5, 52, 24]]],
+    ['wire', [[RX0 - 7, 52, 24], [RX0 - 11, 52, 18], [RX0 - 14, 52, BH + 1.6], [1.5, 50, BH + 1.6], [-1.2, 50, BH - 1], [-2, 50, -40]]],
+  ];
+  const pts = [], tags = [];
+  for (const [tag, p] of segs) for (const q of p){ pts.push(q); tags.push(tag); }
+  // time along the path: the hop through the air counts 4x, so a packet spends most of its trip where it can be seen
+  const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(...pts[i].map((v, k) => v - pts[i - 1][k])) * (tags[i] === 'air' && tags[i - 1] === 'air' ? 4 : 1));
+  return { pts, tags, cum, len: cum[cum.length - 1] };
+})();
+function netAt(s){
+  const d = Math.max(0, Math.min(1, s)) * NET.len; let i = 1; while (i < NET.cum.length - 1 && NET.cum[i] < d) i++;
+  const a = NET.pts[i - 1], b = NET.pts[i], t = (d - NET.cum[i - 1]) / ((NET.cum[i] - NET.cum[i - 1]) || 1);
+  return { p: a.map((v, k) => v + (b[k] - v)*t), tag: NET.tags[i] === 'hid' || NET.tags[i - 1] === 'hid' ? (NET.tags[i - 1] === 'ant' && t < .02 ? 'ant' : 'hid') : NET.tags[i - 1] === 'in' && NET.tags[i] !== 'in' ? 'in' : NET.tags[i] };
+}
+const packets = st => st.pk.map(p => { const s = (st.T - p.t0) / PK_T; if (s < 0 || s > 1) return null;
+  const q = netAt(p.kind === 'up' ? s : 1 - s); return { ...q, col: PK_COL[p.kind] }; }).filter(Boolean);
+const pkSvg = (p, col) => { const [X, Y] = P(...p), r = 3.4*INK_K;
+  return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r*2.1)}" fill="${col}" opacity=".35"/><circle cx="${f(X)}" cy="${f(Y)}" r="${f(r)}" fill="${col}" stroke="${INK}" stroke-width=".8"/>`; };
+const pkItem = q => ({ box: aabb([q.p], .3), svg: pkSvg(q.p, q.col) });
+
+/* ---------- sound ---------- */
+function coneDz(st){
+  let a = 0;
+  if (st.phase === 'answer') a += .75*Math.sin(st.T*2*Math.PI*6.5)*(.6 + .4*Math.sin(st.T*9));
+  if (st.music){ const duck = st.phase === 'idle' ? 1 : .35, beat = (st.T*2) % 1;
+    a += duck*(.5 + .7*st.vol/10)*Math.exp(-beat*5)*Math.cos(beat*28); }
+  return Math.max(-1.3, Math.min(1.2, a));
+}
+// the person's words: wavefronts from the voice, travelling to the speaker
+function voiceArcs(st){
+  const out = [], th = DOA + 180;
+  for (let e = st.vStart; e <= st.vEnd + 1e-6; e += V_STEP){ const r = (st.T - e) * V_SPEED;
+    if (r < 6 || r > V_DIST) continue;
+    const pts = arcZ(VSRC[2], r, 180 + DOA - 24, 180 + DOA + 24, 14, VSRC), o = Math.min(1, (r - 6)/20, (V_DIST - r)/18);
+    out.push({ box: aabb(pts), svg: `<path d="${pd(pts, false)}" fill="none" stroke="${PK_COL.up}" stroke-width="2.2" stroke-linecap="round" opacity="${f(.9*o)}"/>` }); }
+  void th; return out;
+}
+// speech and music out of the tweeter: wavefronts toward the room
+function tweeterArcs(st){
+  const out = [], sp = st.phase === 'answer', mu = st.music && st.phase === 'idle';
+  if (!sp && !mu) return out;
+  const c = [CX + R + .6, CY, TZ], step = sp ? .16 : .5, t0 = sp ? st.ansAt : st.musicAt;
+  for (let j = 0; j < 5; j++){ const e = Math.floor(st.T/step - j)*step; if (e < t0) continue;
+    const age = st.T - e, r = 5 + age*95; if (age > .7) continue;
+    const pts = arcZ(TZ, r, -34, 34, 12, c), o = Math.min(1, (.7 - age)/.3);
+    out.push({ box: aabb(pts), svg: `<path d="${pd(pts, false)}" fill="none" stroke="${INK}" stroke-width="1.3" stroke-linecap="round" opacity="${f(.7*o)}"/>` }); }
+  return out;
+}
+// bass from the down-firing woofer spreads out round the base, along the shelf
+function bassRings(st){
+  if (!st.music && st.phase !== 'answer') return '';
+  let s = ''; const duck = st.phase === 'idle' ? 1 : .5;
+  for (let j = 0; j < 3; j++){ const tb = Math.floor(st.T*2 - j)/2; if (tb < (st.music ? st.musicAt : st.ansAt)) continue;
+    const age = st.T - tb, r = R + 3 + age*60; if (age > 1.4) continue;
+    s += `<path d="${pd(ringZ(BH + .3, r, 48))}" fill="none" stroke="${INK}" stroke-width="1.1" opacity="${f(.55*duck*(1 - age/1.4))}"/>`; }
+  return clipTo(BTOP, s);
+}
+
+/* ---------- the closed speaker ---------- */
+function portOn(a, z, w, h){
+  const n = [Math.cos(rad(a)), Math.sin(rad(a)), 0]; if (!vis(n)) return '';
+  const c = at3(R + .25, a, z), t = [-n[1], n[0], 0];
+  const pts = rrUV(-w/2, -h/2, w/2, h/2, Math.min(w, h)/2 - .01, 4).map(([u, v]) => [c[0] + t[0]*u, c[1] + t[1]*u, c[2] + v]);
+  return shape(pts, '#1d1a16', .8);
+}
+function btnSvg(st, b, z0, z1){
+  const c = at3(BTN_RR, b.a, 0), x = c[0], y = c[1], zt = z1 + .05;
+  const col = b.id === 'mute' && st.mute ? RING_RED : '#5b5850';
+  const L2 = pts => `<path d="${pd(pts.map(([u, v]) => [x + u, y + v, zt]), false)}" fill="none" stroke="${col}" stroke-width="1.2" stroke-linecap="round"/>`;
+  let s = cyl(x, y, z0, z1, BTN_CAP, BTNM, tone, 1, 22);
+  if (b.id === 'action') s += fill(pd(on(PZ(zt), ellUV(x, y, 1.5, 1.5, 12))), col);
+  if (b.id === 'volUp') s += L2([[-2.8, 0], [2.8, 0]]) + L2([[0, -2.8], [0, 2.8]]);
+  if (b.id === 'volDown') s += L2([[-2.8, 0], [2.8, 0]]);
+  if (b.id === 'mute') s += `<path d="${pd(on(PZ(zt), ellUV(x, y, 2.7, 2.7, 16)))}" fill="none" stroke="${col}" stroke-width="1.1"/>` + L2([[-2.6, 2.6], [2.6, -2.6]]);
+  return act(b.id, s);
+}
+const pressOf = (st, id) => st.press[id] > 0 ? 1 : 0;
+function spkBody(st, m){
+  let s = '';
+  const foot0 = ringZ(BH, 44), foot1 = ringZ(Z_FOOT, 44);
+  s += loft(foot0, foot1, n => tone(n, DARK));
+  const b0 = ringZ(Z_FOOT, 47.6), b1 = ringZ(Z_FOOT + 2.2, 49.3), b2 = ringZ(Z_BASE, R);
+  s += loft(b0, b1, n => tone(n, TOPM)) + loft(b1, b2, n => tone(n, TOPM));
+  s += loft(ringZ(Z_BASE, R), ringZ(Z_FAB, R), n => tone(n, m));
+  const [h0, h1] = nearHalf();
+  let knit = ''; for (let z = Z_BASE + 6; z < Z_FAB - 3; z += 6) knit += pd(arcZ(z, R + .05, h0, h1, 28), false);
+  s += `<path d="${knit}" fill="none" stroke="${m.d}" stroke-width=".55" opacity=".32"/>`;
+  // the light ring band, then the top cap
+  const N = 48; let band = '', glow = '';
+  for (let i = 0; i < N; i++){ const a0 = i*360/N, a1 = (i + 1)*360/N, am = (a0 + a1)/2, n = [Math.cos(rad(am)), Math.sin(rad(am)), 0];
+    if (!vis(n)) continue;
+    const q = [at3(R + .1, a0, Z_FAB), at3(R + .1, a1, Z_FAB), at3(R + .1, a1, Z_RING), at3(R + .1, a0, Z_RING)], c = ringCol(st, am);
+    band += face(pd(q), c || tone(n, FROST));
+    if (c) glow += `<path d="${pd(q)}" fill="${c}" stroke="${c}" stroke-width="4"/>`; }
+  s += band;
+  const t0 = ringZ(Z_RING, R), t1 = ringZ(158, 49), t2 = ringZ(160.7, 47.3), t3 = ringZ(Z_TOP, TOP_R);
+  s += loft(t0, t1, n => tone(n, TOPM)) + loft(t1, t2, n => tone(n, TOPM)) + loft(t2, t3, n => tone(n, TOPM));
+  s += fill(pd(t3), tone([0, 0, 1], TOPM));
+  if (glow) s += `<g filter="url(#spGlow)" opacity=".7">${glow}</g>`;
+  for (const z of [Z_BASE, Z_FAB, Z_RING]) s += line(arcZ(z, R + .05, h0, h1, 28), .9);
+  s += ink(pd(t3), 1);
+  s += portOn(174.2, 30.3, 7, 7) + portOn(190.4, 30.1, 5, 5);
+  for (const a of MIC_A){ const c = at3(MIC_R, a, 0); s += fill(pd(on(PZ(Z_TOP + .05), ellUV(c[0], c[1], 1.05, 1.05, 10))), '#2b2724'); }
+  s += byDepth(BTN.map(b => { const c = at3(BTN_RR, b.a, 0), p = pressOf(st, b.id);
+    return { box: [[c[0] - BTN_CAP, c[1] - BTN_CAP, Z_TOP], [c[0] + BTN_CAP, c[1] + BTN_CAP, Z_TOP + BT_H]], svg: btnSvg(st, b, Z_TOP, Z_TOP + BT_H - p) }; }));
+  s += hullInk([...foot0, ...b0, ...ringZ(Z_BASE, R), ...t0, ...t1, ...t3], 2.8);
+  return s;
+}
+
+/* ---------- see-through: the inside ---------- */
+function spkMech(st, inPk){
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg });
+  const bx = (x0, y0, z0, x1, y1, z1, M, w = .6, extra = '') => put([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, M, toneI, w) + extra);
+  const bu = (u, v, du, dv, z0, h, M, w = .6, extra = '') => bx(CX + u - du/2, CY + v - dv/2, z0, CX + u + du/2, CY + v + dv/2, z0 + h, M, w, extra);
+  const vc = (x, y, z0, z1, r, M, w = .6, n = 18) => put([[x - r, y - r, z0], [x + r, y + r, z1]], cyl(x, y, z0, z1, r, M, toneI, w, n));
+  const top = facing([0, 0, 1]), back = facing([-1, 0, 0]);
+  let boardSvg = '';
+  const hearing = !st.mute && voiceArcs(st).length > 0, micPow = !st.mute, sound = st.phase === 'answer' || st.music;
+  const dz = coneDz(st);
+  const topZ = (u, v, z, r, col) => fill(pd(on(PZ(z), ellUV(CX + u, CY + v, r, r, 10))), col);
+  // ---- base: deflector cone, support posts, power board with its jacks
+  { const A = ringZ(Z_BASE, 22, 32), B = ringZ(33, 2.4, 32);
+    put([[CX - 22, CY - 22, Z_BASE], [CX + 22, CY + 22, 33]], loft(A, B, n => toneI(n, CHM)) + fill(pd(B), CHM.l) + hullInk([...A, ...B], .9)); }
+  for (const a of [45, 135, 225, 315]){ const c = at3(43, a, 0); vc(c[0], c[1], Z_BASE, CH0, 1.8, CHM, .6, 12); }
+  for (const v of [-8, 8]) vc(CX - 37, CY + v, Z_BASE, 26, 1, STEEL, .4, 10);
+  bx(CX - 46, CY - 12, 26, CX - 28, CY + 12, 27.6, PCBM, .6);
+  const hole = (y, z, r) => back ? fill(pd(on(PX(CX - 48.7), ellUV(y, z, r, r, 12))), '#141210') : '';
+  bx(CX - 48.6, CY + 1.5, 27.6, CX - 40, CY + 8.5, 33.4, DARK, .6, hole(CY + 5, 30.5, 2));
+  bx(CX - 48.6, CY - 12, 27.6, CX - 41, CY - 6, 32.6, DARK, .6, hole(CY - 9, 30.1, 1.5));
+  vc(CX - 33, CY - 4, 27.6, 33.5, 2.6, BLUEM, .6, 14);
+  bx(CX - 35, CY + 6, 27.6, CX - 31, CY + 10, 29.8, CONN, .5);
+  // power wires: from the power board's connector, up the chamber wall, over the board edge to its connector
+  parts.push(...strands([[CX - 33, CY + 8, 29.8], [CX - 33, CY + 8, 35.5], at3(46.4, 172, 36.5), at3(46.4, 172, 146.4), at3(45.4, 172, 148.1)], '#3a3632', .55));
+  parts.push(...strands([at3(44.6, 172, 148.3), at3(24.3, 172, 148.6)], '#3a3632', .55, 30));
+  // ---- the speaker chamber with the woofer under its floor, the tweeter in its front wall and the bass port in its back
+  { const rA = ringZ(CH0, CHR, 40), rB = ringZ(CH1, CHR, 40);
+    let w0 = fill(pd(ringZ(36.6, 34, 40)), '#2b2724') + ink(pd(ringZ(36.6, 34, 40)), .6);                       // surround
+    w0 += loft(ringZ(37, 40.5, 40), ringZ(CH0, 40.5, 40), n => toneI(n, STEEL)) + fill(annulus(CH0, 34, 40.5), STEEL.l, 'fill-rule="evenodd"') + ink(annulus(CH0, 34, 40.5), .6);
+    if (top) for (const a of [0, 90, 180, 270]){ const c = at3(37.5, a, 0); w0 += topZ(c[0] - CX, c[1] - CY, CH0 + .05, .8, '#7c8389'); }
+    const cA = ringZ(37 + dz, 30, 40), cB = ringZ(47 + dz, 9, 40);
+    w0 += loft(cA, cB, n => toneI(n, sound ? matOf('#a3acb9') : CONEM)) + ink(pd(cA), .6) + ink(pd(cB), .6) + ink(pd(ringZ(42 + dz, 19.5, 40)), .35);
+    const cp = [], cput = (b, svg) => cp.push({ box: b, svg });
+    cput([[CX - 8.6, CY - 8.6, 47 + dz], [CX + 8.6, CY + 8.6, 50 + dz]], cyl(CX, CY, 47 + dz, 50 + dz, 8.6, sound ? matOf('#ff9a3a') : COPPER, toneI, .6, 22));
+    cput([[CX - 17, CY - 17, 51.5], [CX + 17, CY + 17, 53]], cyl(CX, CY, 51.5, 53, 17, STEEL, toneI, .6, 28));
+    cput([[CX - 17, CY - 17, 53], [CX + 17, CY + 17, 60]], cyl(CX, CY, 53, 60, 17, FERR, toneI, .7, 28));
+    cput([[CX - 13, CY - 13, 60], [CX + 13, CY + 13, 61.5]], cyl(CX, CY, 60, 61.5, 13, STEEL, toneI, .6, 24));
+    for (const a of [30, 120, 210, 300]){ const p0 = at3(38, a, CH0), p1 = at3(16.8, a, 51.5); cput(aabb([p0, p1], 1), rod(p0, p1, .9, STEEL, toneI, .5)); }
+    { const c = at3(28, 120, 44.5); cput([[c[0] - 1.4, c[1] - 1.4, 44.5], [c[0] + 1.4, c[1] + 1.4, 46.2]], box(c[0] - 1.4, c[1] - 1.4, 44.5, c[0] + 1.4, c[1] + 1.4, 46.2, CONN, toneI, .5)); }
+    // tweeter: housing, faceplate, dome (drawn from the end that faces away)
+    { const y = CY, z = TZ, hs = cylX(CX + 30, CX + 43, y, z, 9, FERR, toneI, .7, 20), fp = cylX(CX + 43, CX + 45.2, y, z, 11, DARK, toneI, .7, 24);
+      const rings = [[45.2, 7.2], [46.5, 6.2], [47.4, 4.6], [47.9, 2.6], [48.1, .4]].map(([dx, r]) => on(PX(CX + dx), ellUV(y, z, r, r, 20)));
+      let dome = ''; for (let i = 0; i < rings.length - 1; i++) dome += loft(rings[i], rings[i + 1], n => toneI(n, sound ? matOf('#fff2c4') : STEEL));
+      dome += hullInk(rings.flat(), .7);
+      cput([[CX + 30, y - 11, z - 11], [CX + 48.2, y + 11, z + 11]], facing([1, 0, 0]) ? hs + fp + dome : dome + fp + hs); }
+    // bass port: a tube through the back wall, open at both ends
+    { const a = [CX - 22, CY, PORT_Z], b = [CX - 47.6, CY, PORT_Z];
+      const end = back ? b : a, bore = on(PX(end[0] + (back ? -.05 : .05)), ellUV(CY, PORT_Z, PORT_R - 1, PORT_R - 1, 16));
+      cput([[b[0], CY - PORT_R, PORT_Z - PORT_R], [a[0], CY + PORT_R, PORT_Z + PORT_R]], rod(a, b, PORT_R, CHM, toneI, .7) + fill(pd(bore), '#1d1a16')); }
+    // speaker wires inside: from the grommet in the wall to the tweeter and to the woofer terminal
+    const swc = sound ? '#ff9a3a' : '#b4532a';
+    cp.push(...strands([at3(43.5, 90, 127.6), at3(43.5, 90, 104), [CX + 30, CY + 3, TZ + 1]], swc, .45));
+    cp.push(...strands([at3(43, 92, 127.6), at3(43, 92, 60), at3(32, 112, 49), at3(28.5, 120, 46.2)], swc, .45));
+    cput(aabb([at3(44, 90, 126.5), at3(46.4, 90, 129.5)]), rod(at3(43.6, 90, 128), at3(46.4, 90, 128), 1.5, DARK, toneI, .5));
+    const far = `<g opacity=".5">` + loft(rA, rB, n => toneI(n.map(v => -v), CHM), true) + fill(annulus(CH0 + .05, 40.5, CHR), CHM.d, 'fill-rule="evenodd"') + `</g>`;
+    const near = `<g opacity=".28">` + loft(rA, rB, n => toneI(n, CHM)) + `</g>` + fill(pd(rB), CHM.l, 'opacity=".2"');
+    const [h0, h1] = nearHalf();
+    put([[CX - 47.6, CY - CHR, 35], [CX + 48.2, CY + CHR, CH1]], far + w0 + byDepth(cp) + near + ink(pd(rB), .8) + line(arcZ(CH0, CHR, h0, h1, 24), .7) + hullInk([...rA, ...rB], 1.2)); }
+  // ---- Wi-Fi flex antenna stuck on the chamber wall, and its cable from the radio
+  { const lo = arcZ(118, 45.6, 262, 278, 10), hi = arcZ(136, 45.6, 262, 278, 10).reverse(), on1 = st.pk.length > 0;
+    let mz = []; for (let i = 0; i <= 8; i++){ const a = 264 + 12*(i % 2), z = 120 + i*1.9; mz.push(at3(45.65, a, z)); }
+    put(aabb([...lo, ...hi]), shape([...lo, ...hi], on1 ? matOf('#ffc26a').l : FLEXM.m, .6) + `<path d="${pd(mz, false)}" fill="none" stroke="${on1 ? '#ff7a1a' : '#a8641f'}" stroke-width=".9" stroke-linejoin="round"/>`); }
+  parts.push(...strands([uv3(0, -21.5, 148.9), uv3(0, -44.8, 148.4)], '#2b2724', .45, 30));
+  parts.push(...strands([uv3(0, -45.3, 148.3), uv3(0, -46.4, 147.2), uv3(0, -46.4, 137.5), at3(46, 270, 135.4)], '#2b2724', .45, 6, 1));
+  // ---- logic board on three standoffs on the chamber lid
+  for (const a of [100, 220, 340]){ const c = at3(38, a, 0); vc(c[0], c[1], CH1, BRD_Z, 1.6, STEEL, .5, 12); }
+  { let tr = '';
+    if (top){ const zt = BRD_T + .03, T2 = (pts, col, w = .7) => `<path d="${pd(pts.map(([u, v]) => uv3(u, v, zt)), false)}" fill="none" stroke="${col}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+      tr += `<path d="${pd(ringZ(zt, MIC_R, 48))}" fill="none" stroke="${micPow ? '#ffb347' : '#9b8f6a'}" stroke-width="${micPow ? 1 : .7}"/>`;
+      tr += T2([[7.5, 20.7], [12.3, 33.8]], micPow ? '#ffb347' : '#9b8f6a', micPow ? 1 : .7) + T2([[15.5, 17.5], [8.6, 19.8]], '#d8b25a');
+      for (const t of [[[7, 3], [10, 3]], [[7, -6], [8.5, -8]], [[0, -7], [0, -11]], [[-7, 4], [-10, 4]], [[-7, -5], [-10, -6]], [[-13, 8], [-13, 16], [-2, 23]], [[-16, -7], [-22.8, -.5], [-22.8, 1]], [[4.5, -18], [5.2, -20]]]) tr += T2(t, '#d8b25a', .6);
+      for (const a of LED_A){ const p = at3(LED_R, a, 0); tr += T2([[p[0] - CX, p[1] - CY], [(p[0] - CX)*.93, (p[1] - CY)*.93]], '#d8b25a', .5); } }
+    boardSvg = cyl(CX, CY, BRD_Z, BRD_T, BRD_R, PCBM, toneI, .8, 48) + tr; }
+  const proc = st.phase === 'think' || st.phase === 'ask' || (st.phase === 'wake') || st.phase === 'answer';
+  bu(0, 0, 14, 14, BRD_T, 1.4, proc ? matOf('#4a4f6a') : SOCM, .7, top ? topZ(-5, -5, BRD_T + 1.45, .8, '#8a8a90') : '');
+  bu(13, 3, 6, 11, BRD_T, 1, CHIPM, .6);
+  bu(12, -10.5, 7, 8, BRD_T, 1.2, CHIPM, .6);
+  bu(0, -15, 9, 8, BRD_T, 1.4, st.pk.length ? matOf('#fff0c8') : STEEL, .6);
+  bu(0, -21.5, 2.6, 2.6, BRD_T, 1, STEEL, .5);
+  bu(5.2, -21, 3.2, 2, BRD_T, .9, STEEL, .5);
+  bu(-13, 5, 6, 6, BRD_T, 1, sound ? matOf('#5a4a3a') : CHIPM, .6);
+  bu(-13, -7, 6, 6, BRD_T, 1, CHIPM, .6);
+  vc(CX - 5.5, CY + 13.5, BRD_T, BRD_T + 4, 2, BLUEM, .5, 14);
+  bu(0, 25, 4.5, 3, BRD_T, 2.2, CONN, .5);
+  bu(-22.8, 3.2, 3, 4.5, BRD_T, 2.2, CONN, .5);
+  bu(7.5, 20.7, 3, 3, BRD_T, .9, st.mute ? matOf('#e2483d') : CHIPM, .5);
+  // speaker wires outside the chamber: from the board's connector over the edge, down the wall to the grommet
+  const swc = sound ? '#ff9a3a' : '#b4532a';
+  parts.push(...strands([uv3(0, 26.5, 149.4), uv3(0, 44.8, 148.4)], swc, .45, 30));
+  // microphones on the mic power ring, LEDs round the edge, tact switches under the buttons
+  for (const a of MIC_A){ const c = at3(MIC_R, a, 0);
+    bx(c[0] - 1.7, c[1] - 1.7, BRD_T, c[0] + 1.7, c[1] + 1.7, BRD_T + 1.1, hearing ? matOf('#ffd27a') : micPow ? STEEL : matOf('#a3a3a0'), .5, top ? topZ(c[0] - CX, c[1] - CY, BRD_T + 1.13, .55, '#1d1a16') : ''); }
+  for (const a of LED_A){ const c = at3(LED_R, a, 0), col = ringCol(st, a);
+    bx(c[0] - 1.3, c[1] - 1.3, BRD_T, c[0] + 1.3, c[1] + 1.3, BRD_T + 1.2, col ? matOf(col) : matOf('#f3f1ea'), .45); }
+  for (const b of BTN){ const c = at3(BTN_RR, b.a, 0), p = pressOf(st, b.id);
+    put([[c[0] - 3, c[1] - 3, BRD_T], [c[0] + 3, c[1] + 3, BRD_T + 2.8]], box(c[0] - 3, c[1] - 3, BRD_T, c[0] + 3, c[1] + 3, BRD_T + 2, DARK, toneI, .5) + cyl(c[0], c[1], BRD_T + 2, BRD_T + 2.8 - .6*p, 1.4, p ? matOf('#ff9a3a') : BTNM, toneI, .4, 12)); }
+  parts.push(...strands([uv3(0, 45.3, 148.3), uv3(0, 46.4, 147.2), at3(46.4, 90, 129.4), at3(46.4, 90, 128)], swc, .45, 6, 1));
+  for (const b of BTN){ const c = at3(BTN_RR, b.a, 0), p = pressOf(st, b.id);
+    const zc = Z_TOP + BT_H - 3.4 - p;
+    put([[c[0] - 1.6, c[1] - 1.6, BRD_T + 2.8], [c[0] + 1.6, c[1] + 1.6, zc]], cyl(c[0], c[1], BRD_T + 2.8 - .6*p, zc, 1.6, BTNM, toneI, .5, 12));
+    put([[c[0] - BTN_CAP, c[1] - BTN_CAP, zc], [c[0] + BTN_CAP, c[1] + BTN_CAP, zc + 3.4]], btnSvg(st, b, zc, zc + 3.4)); }
+  // light guide: a clear ring over the LEDs, in pieces so it sorts round the parts inside it
+  for (let i = 0; i < 24; i++){ const a0 = i*15, a1 = a0 + 15, am = a0 + 7.5, n = [Math.cos(rad(am)), Math.sin(rad(am)), 0], col = ringCol(st, am), base = col || '#e3edef';
+    const o = (r, a, z) => at3(r, a, z), outer = [o(R, a0, G_Z0), o(R, a1, G_Z0), o(R, a1, G_Z1), o(R, a0, G_Z1)], inner = [o(G_R0, a0, G_Z0), o(G_R0, a1, G_Z0), o(G_R0, a1, G_Z1), o(G_R0, a0, G_Z1)];
+    const topq = [o(G_R0, a0, G_Z1), o(R, a0, G_Z1), o(R, a1, G_Z1), o(G_R0, a1, G_Z1)];
+    const sv = `<g opacity="${col ? .85 : .55}">` + (vis(n) ? face(pd(outer), col ? base : toneI(n, FROST)) : face(pd(inner), col ? mix(base, '#000000', .12) : FROST.d)) + face(pd(topq), col ? mix(base, '#ffffff', .25) : FROST.l) + `</g>` + line([o(R, a0, G_Z1), o(R, a1, G_Z1)], .4) + line([o(G_R0, a0, G_Z1), o(G_R0, a1, G_Z1)], .3);
+    put(aabb([...outer, ...inner]), sv); }
+  // data packets on their way between the radio and the antenna
+  for (const q of inPk) parts.push(pkItem(q));
+  // the inside is a stack, drawn in layers from the bottom: base, chamber and its walls, the board with what lies on it, above the board
+  const layer = p => p.box[1][2] <= CH0 + .01 ? 0 : p.box[0][2] >= G_Z0 - .01 ? 3 : p.box[0][2] >= BRD_Z - .01 ? 2 : 1;
+  return [0, 1, 2, 3].map(L => (L === 2 ? boardSvg : '') + byDepth(parts.filter(p => layer(p) === L))).join('');
+}
+
+/* ---------- the router and the cords ---------- */
+function routerItems(st){
+  const items = [];
+  let s = box(RX0, RY0, BH, RX1, RY1, RZ1, ROUTM, tone, 1.1);
+  if (facing([0, 0, 1])){ let v = ''; for (let x = RX0 + 22; x <= RX1 - 12; x += 7) v += pd([[x, RY0 + 16, RZ1 + .05], [x, RY1 - 16, RZ1 + .05]], false);
+    s += `<path d="${v}" fill="none" stroke="${INK}" stroke-width="1" opacity=".55"/>`; }
+  if (facing([1, 0, 0])){ const blink = st.pk.length && Math.floor(st.T*14) % 2;
+    [['#43c25c', 1], ['#43c25c', 1], [blink ? '#43c25c' : '#2a5a36', 1], [blink ? '#43c25c' : '#2a5a36', 1]].forEach(([c], i) => {
+      s += shape(on(PX(RX1 + .15), ellUV(RY1 - 22 - i*13, BH + 17, 1.7, 1.7, 10)), c, .5); });
+    s += tx(RX1 + .2, RY0 + 16, BH + 10, 'WI-FI', 4.6, '#c9ccd2', 800); }
+  if (facing([-1, 0, 0])) for (const y of [52, 68]) s += shape(on(PX(RX0 - .15), rrUV(y - 3.5, 21, y + 3.5, 27, .8)), '#141210', .6);
+  const cn = []; for (const x of [RX0, RX1]) for (const y of [RY0, RY1]) for (const z of [BH, RZ1]) cn.push([x, y, z]);
+  s += hullInk(cn, 2.4);
+  items.push({ box: [[RX0, RY0, BH], [RX1, RY1, RZ1]], svg: s });
+  for (const [ax, ay] of RANT) items.push({ box: [[ax - 4, ay - 4, RZ1], [ax + 4, ay + 4, ANT_TOP]],
+    svg: box(ax - 4, ay - 4, RZ1, ax + 4, ay + 4, RZ1 + 6, ROUTM, tone, .9) + rod([ax, ay, RZ1 + 6], [ax, ay, ANT_TOP], 3.2, ROUTM, tone, 1.2, 2.6, 16) });
+  return items;
+}
+// cords run along the shelf to its back edge and hang down behind it; the hanging part draws with the shelf
+const CORD_SPK = [[CX - 61, CY + 5, 30.3], [CX - 66, CY + 5.5, 24], [CX - 70, CY + 6.5, BH + 1.8], [12, CY + 12, BH + 1.8], [1.5, CY + 14, BH + 1.8]];
+const CORD_W = [[RX0 - 7, 52, 24], [RX0 - 11, 52, 18], [RX0 - 14, 52, BH + 1.6], [1.5, 50, BH + 1.6]];
+const CORD_P = [[RX0 - 7, 68, 24], [RX0 - 11, 68, 18], [RX0 - 14, 69, BH + 1.6], [1.5, 74, BH + 1.6]];
+const hangOf = p => [p, [-1.2, p[1] + .3, BH - 1], [-2, p[1] + .5, -42]];
+function cordItems(){
+  const out = [];
+  out.push({ box: [[CX - 61, CY + 1.4, 26.7], [CX - 49.6, CY + 8.6, 33.9]], svg: rod([CX - 49.6, CY + 5, 30.3], [CX - 61, CY + 5, 30.3], 3.6, DARK, toneI, 1, 3.6) });
+  for (const y of [52, 68]) out.push({ box: [[RX0 - 7, y - 3, 21], [RX0 - .2, y + 3, 27]], svg: rod([RX0 - .2, y, 24], [RX0 - 7, y, 24], 2.8, y === 52 ? BLUEM : DARK, toneI, .9) });
+  out.push(...strands(CORD_SPK, DARK.l, 1.7, 12, 4), ...strands(CORD_W, BLUEM.l, 1.4, 12, 4), ...strands(CORD_P, DARK.l, 1.5, 12, 4));
+  return out;
+}
+const hangSvg = () => [[CORD_SPK, DARK.l, 1.7], [CORD_W, BLUEM.l, 1.4], [CORD_P, DARK.l, 1.5]].map(([c, col, r]) => strands(hangOf(c[c.length - 1]), col, r, 80, 2)[0].svg).join('');
+function shadows(){
+  const sp = castShadow([...ringZ(BH, R, 24), ...ringZ(Z_TOP, TOP_R, 24)], BH);
+  const cn = []; for (const x of [RX0, RX1]) for (const y of [RY0, RY1]) for (const z of [BH, RZ1]) cn.push([x, y, z]);
+  const an = RANT.map(([x, y]) => castShadow([...on(PZ(RZ1), ellUV(x, y, 3.2, 3.2, 8)), ...on(PZ(ANT_TOP), ellUV(x, y, 2.6, 2.6, 8))], BH)).join('');
+  return clipTo(BTOP, sp + castShadow(cn, BH) + an);
+}
+
+/* ---------- scene ---------- */
+const SPK_BOX = [[CX - R, CY - R, BH], [CX + R, CY + R, Z_TOP + BT_H]];
+const XB = [CX - R, CX + R, CY - R, CY + R, BH, Z_TOP + 4];
+function scene(st, m){
+  const k = ease(st.xr || 0), behind = facing([-1, 0, 0]);
+  let s = `<defs><filter id="spGlow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="${f(2.4*INK_K)}"/></filter></defs>`;
+  const hang = hangSvg();
+  s += (behind ? '' : hang) + board(0, 0, SX, SY, BH, SHR, WOOD) + (behind ? hang : '');
+  s += shadows() + bassRings(st);
+  const pks = packets(st), inPk = pks.filter(q => q.tag === 'in'), outPk = pks.filter(q => q.tag !== 'in' && q.tag !== 'hid' && q.p[0] > 1.5);
+  let spk = spkBody(st, m);
+  if (k > 0) spk = xrGhostRings(spk, '', k, ringZ(BH, R), ringZ(Z_TOP, TOP_R), m) + `<g opacity="${f(k)}">${spkMech(st, k > .3 ? inPk : [])}</g>`;
+  const items = [{ box: SPK_BOX, svg: spk }, ...routerItems(st), ...cordItems(), ...outPk.map(pkItem), ...voiceArcs(st), ...tweeterArcs(st)];
+  // the radio link: a faint dotted line through the air while data flows
+  if (st.pk.length){ const air = NET.pts.filter((_, i) => NET.tags[i] === 'air');
+    items.push({ box: aabb(air), svg: `<path d="${pd(air, false)}" fill="none" stroke="${INK}" stroke-width=".9" stroke-dasharray="2 4" opacity=".45"/>` }); }
+  s += byDepth(items);
+  s += labels(st, k);
+  return s;
+}
+function labels(st, k){
+  const anyPress = BTN.some(b => st.press[b.id] > 0), lit = ringLit(st), sound = st.phase === 'answer' || st.music, net = st.pk.length > 0;
+  if (k > .6){ const dz = coneDz(st);
+    return xrCallouts([
+      { at: at3(BTN_RR, 45, Z_TOP + BT_H), text:'MUTE BUTTON', on: st.mute },
+      { at: at3(BTN_RR, 135, Z_TOP + BT_H), text:'VOLUME BUTTONS', on: st.volT > 0 },
+      { at: at3(BTN_RR, 225, Z_TOP + BT_H), text:'ACTION BUTTON', on: st.press.action > 0 },
+      { at: at3(BTN_RR + 3, 315, BRD_T + 2), text:'TACT SWITCHES', on: anyPress },
+      { at: at3(MIC_R, 120, BRD_T + 1.1), text:'MICROPHONES', on: !st.mute && voiceArcs(st).length > 0 },
+      { at: at3(LED_R, 165, BRD_T + 1.2), text:'LED RING', on: lit },
+      { at: at3(R, 200, G_Z1), text:'LIGHT GUIDE', on: lit },
+      { at: uv3(7.5, 20.7, BRD_T + .9), text:'MIC CUT-OFF', on: st.mute },
+      { at: at3(BRD_R, 205, BRD_T), text:'LOGIC BOARD', on: false },
+      { at: uv3(0, 0, BRD_T + 1.4), text:'PROCESSOR', on: ['wake', 'ask', 'think', 'answer'].includes(st.phase) },
+      { at: uv3(13, 3, BRD_T + 1), text:'MEMORY', on: false },
+      { at: uv3(12, -10.5, BRD_T + 1.2), text:'FLASH STORAGE', on: false },
+      { at: uv3(0, -15, BRD_T + 1.4), text:'WI-FI RADIO', on: net },
+      { at: at3(45.6, 270, 127), text:'WI-FI ANTENNA', on: net },
+      { at: uv3(0, -46.4, 142), text:'ANTENNA CABLE', on: net },
+      { at: uv3(-13, 5, BRD_T + 1), text:'AUDIO AMP', on: sound },
+      { at: uv3(-13, -7, BRD_T + 1), text:'POWER CHIP', on: false },
+      { at: at3(CHR, 40, 90), text:'SPEAKER CHAMBER', on: false },
+      { at: [CX + 48.1, CY, TZ], text:'TWEETER', on: sound },
+      { at: at3(22, 60, 41 + dz), text:'WOOFER CONE', on: sound },
+      { at: at3(32, 330, 36.6), text:'SURROUND', on: false },
+      { at: at3(8.6, 60, 48.5 + dz), text:'VOICE COIL', on: sound },
+      { at: at3(17, 60, 56.5), text:'MAGNET', on: false },
+      { at: [CX - 47.6, CY, PORT_Z + PORT_R], text:'BASS PORT', on: !!st.music },
+      { at: at3(43.5, 90, 112), text:'SPEAKER WIRES', on: sound },
+      { at: at3(15, 330, 29), text:'DEFLECTOR', on: sound },
+      { at: [CX - 37, CY - 12, 27.6], text:'POWER BOARD', on: false },
+      { at: [CX - 48.6, CY + 5, 32.5], text:'DC JACK', on: false },
+      { at: at3(46.4, 172, 95), text:'POWER WIRES', on: false },
+      { at: at3(R, 300, 70), text:'FABRIC COVER', on: false },
+      { at: [RX1, (RY0 + RY1)/2, RZ1], text:'WI-FI ROUTER', on: net },
+    ], XB); }
+  const items = [
+    { at: at3(R, YAW - 25, Z_RING - 2), text:'LIGHT RING', on: lit },
+    { at: at3(BTN_RR, 45, Z_TOP + BT_H), text:'MUTE BUTTON', on: st.mute },
+    { at: at3(BTN_RR, 225, Z_TOP + BT_H), text:'ACTION BUTTON', on: st.press.action > 0 },
+    { at: at3(BTN_RR, 135, Z_TOP + BT_H), text:'VOLUME BUTTONS', on: st.volT > 0 },
+    { at: at3(MIC_R, 0, Z_TOP), text:'MIC HOLES', on: !st.mute && voiceArcs(st).length > 0 },
+    { at: at3(R, YAW + 30, 80), text:'FABRIC GRILLE', on: sound },
+    { at: [RX1, (RY0 + RY1)/2, RZ1], text:'WI-FI ROUTER', on: net },
+    { at: [RANT[0][0], RANT[0][1], ANT_TOP - 10], text:'ROUTER ANTENNA', on: net },
+  ];
+  if (facing([-1, 0, 0])) items.push({ at: [CX - 56, CY + 5, 33.5], text:'POWER CORD', on: false });
+  return xrCallouts(items, XB);
+}
+
+/* ---------- behaviour (one state object, one clock) ---------- */
+let ui, loopOn = false;
+const st = { phase:'idle', pt:0, T:0, kind:null, queue:null, mute:false, music:false, musicAt:0, nextMusic:0, nextUp:0,
+  pk:[], rt:null, qEnd:0, replyAt:0, sent:false, ansAt:-99, press:{}, vol:6, volT:0, vStart:-99, vEnd:-99 };
+const speakFor = (st, len) => { st.vStart = st.T; st.vEnd = st.T + len; };
+function stepSim(st, dt){
+  st.T += dt; st.pt += dt;
+  for (const k of Object.keys(st.press)) st.press[k] = Math.max(0, st.press[k] - dt);
+  st.volT = Math.max(0, st.volT - dt);
+  st.pk = st.pk.filter(p => st.T - p.t0 < PK_T);
+  const ph = st.phase;
+  if (ph === 'wake' && st.pt >= WAKE_T){ st.phase = 'listen'; st.pt = 0; }
+  else if (ph === 'listen'){ if (st.queue && st.pt > .25){ const q = st.queue; st.queue = null; startAsk(st, q); } else if (st.pt > LISTEN_T) st.phase = 'idle'; }
+  else if (ph === 'ask'){ const arrive = V_DIST / V_SPEED;
+    if (st.pt >= arrive && st.pt <= ASK_SPEAK + arrive && st.T >= st.nextUp){ st.pk.push({ t0: st.T, kind:'up' }); st.nextUp = st.T + .14; }
+    if (st.pt > ASK_SPEAK + arrive){ st.phase = 'think'; st.pt = 0; st.qEnd = st.T; st.replyAt = st.T + PK_T + SERVER_T; st.sent = false; } }
+  else if (ph === 'think'){
+    if (!st.sent && st.T >= st.replyAt){ st.sent = true; const n = st.kind === 'question' ? 5 : 3;
+      for (let i = 0; i < n; i++) st.pk.push({ t0: st.T + i*.09, kind:'down' }); st.ansAt = st.T + PK_T; }
+    if (st.sent && st.T >= st.ansAt){ st.phase = 'answer'; st.pt = 0; st.rt = st.ansAt - st.qEnd; if (st.kind === 'stop') st.music = false; } }
+  else if (ph === 'answer' && st.pt > ANS_T[st.kind]){
+    st.phase = 'idle'; st.pt = 0;
+    if (st.kind === 'music' && !st.music){ st.music = true; st.musicAt = st.T; st.nextMusic = st.T; } }
+  if (st.music && st.T >= st.nextMusic){ st.pk.push({ t0: st.T, kind:'music' }); st.nextMusic = st.T + .3; }
+}
+const busy = st => st.phase !== 'idle' || st.pk.length || st.music || st.volT > 0 || Object.values(st.press).some(v => v > 0) || st.T < st.vEnd + 1.2;
+function kick(){
+  if (loopOn) return; loopOn = true;
+  ui.animate(dt => { stepSim(ui.st, dt); const b = busy(ui.st); if (!b) loopOn = false; return b; });
+}
+function startWake(st, then){ st.phase = 'wake'; st.pt = 0; st.queue = then; speakFor(st, .55); }
+function startAsk(st, kind){ st.phase = 'ask'; st.pt = 0; st.kind = kind; st.nextUp = 0; speakFor(st, ASK_SPEAK); }
+function talk(st, kind){
+  if (st.mute) return ui.flash('The mics are off. Press mute to turn them on');
+  if (['ask', 'think', 'answer'].includes(st.phase)) return ui.flash('Wait for the answer');
+  if (kind === 'wake'){ if (st.phase === 'listen' || st.phase === 'wake') return ui.flash('It is already listening'); startWake(st, null); }
+  else if (st.phase === 'listen') startAsk(st, kind);
+  else if (st.phase === 'wake') st.queue = kind;
+  else startWake(st, kind);
+  kick();
+}
+function pressMute(st){
+  st.press.mute = .18; st.mute = !st.mute;
+  if (st.mute && ['wake', 'listen', 'ask'].includes(st.phase)){ st.phase = 'idle'; st.queue = null; }
+  kick();
+}
+function pressVol(st, d, id){ st.press[id] = .18; st.vol = Math.max(0, Math.min(10, st.vol + d)); st.volT = 1.4; kick(); }
+function pressAction(st){ st.press.action = .18;
+  if (st.mute) { kick(); return ui.flash('The mics are off. Press mute to turn them on'); }
+  if (st.phase === 'idle'){ st.phase = 'listen'; st.pt = 0; } kick(); }
+
+ui = mountFigure({
+  fig:'31', title:'Smart speaker', turn:'full', size:[SX, SY, 180], center:[CX, CY - 25], palette:'cobalt', state: st,
+  scene,
+  readout: st => st.mute ? 'mics off' : ({ wake:'wake word heard', listen:'listening', ask:'sending your question',
+    think:'waiting for the server ' + (st.T - st.qEnd).toFixed(1) + ' s', answer:'answer back in ' + (st.rt || 0).toFixed(1) + ' s' })[st.phase] || (st.music ? 'playing music' : ''),
+  buttons:[
+    { label:'Say the wake word', onClick: st => talk(st, 'wake') },
+    { label:'Ask a question', onClick: st => talk(st, 'question') },
+    { label:'Play / stop music', onClick: st => talk(st, st.music ? 'stop' : 'music') },
+    { label:'Press mute', onClick: st => pressMute(st) },
+  ],
+  acts:{ mute: st => pressMute(st), volUp: st => pressVol(st, 1, 'volUp'), volDown: st => pressVol(st, -1, 'volDown'), action: st => pressAction(st) },
+  params:(st, q) => {
+    if (q.get('mute') === '1') st.mute = true;
+    if (q.has('vol')) st.vol = Math.max(0, Math.min(10, +q.get('vol') | 0));
+    if (q.has('t')) st.T = +q.get('t');
+    const s = q.get('state');
+    if (s === 'listen'){ st.phase = 'listen'; }
+    if (s === 'ask'){ st.phase = 'ask'; st.kind = 'question'; st.pt = 1.2; st.vStart = st.T - 1.2; st.vEnd = st.T + .1;
+      for (const d of [.1, .25, .4]) st.pk.push({ t0: st.T - d, kind:'up' }); }
+    if (s === 'think'){ st.phase = 'think'; st.kind = 'question'; st.qEnd = st.T - .9; st.sent = true; st.ansAt = st.T + .3;
+      for (const d of [.1, .22, .34]) st.pk.push({ t0: st.T - d, kind:'down' }); }
+    if (s === 'answer'){ st.phase = 'answer'; st.kind = 'question'; st.ansAt = st.T - .3; st.rt = 1.6; }
+    if (s === 'music'){ st.music = true; st.musicAt = st.T - 2; for (const d of [.05, .35]) st.pk.push({ t0: st.T - d, kind:'music' }); }
+  },
+});
+addEventListener('keydown', e => {
+  if (/input|textarea|button/i.test(e.target.tagName)) return;
+  const k = e.key.toLowerCase();
+  if (k === 'w') talk(st, 'wake'); else if (k === 'q') talk(st, 'question'); else if (k === 'p') talk(st, st.music ? 'stop' : 'music'); else if (k === 'm') pressMute(st); else return;
+  e.preventDefault(); ui.render();
+});
+xrMount(() => ui, () => '');
+</script></body></html>
