@@ -1,0 +1,689 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The neuron</title></head><body>
+<script src="core.js"></script>
+<script>
+/* The neuron: a teaching model of two nerve cells on a bench board, wired to a stimulator and a two-channel oscilloscope.
+   How it really works (and where every ion, wave and molecule is after each step):
+   1. At rest the membrane sits at -70 mV: inside negative, Na+ crowded outside, K+ inside (the Na/K pump keeps it so).
+   2. Poke: the micromanipulator advances the stimulating electrode onto a dendrite and the stimulator injects a pulse.
+      The dendrite depolarises where it is touched and the change spreads passively toward the cell body, shrinking as it
+      goes (graded potential; here 60% of it is left at the cell body).
+   3. The axon hillock / initial segment decides. If the cell body passes the -55 mV threshold, voltage-gated Na+ channels
+      open, Na+ rushes in and the membrane swings to +40 mV. Then Na+ channels close and K+ channels open, K+ flows out,
+      the membrane falls to -80 mV (undershoot) and recovers to -70 mV. A weak poke (-64 mV at the cell body) just fades.
+   4. Myelin (one Schwann cell per sleeve) insulates the axon, so the action potential is only regenerated at the nodes of
+      Ranvier between sleeves: it jumps node to node (saltatory conduction, ~60 m/s here instead of ~1 m/s bare).
+   5. At the axon terminal the spike opens voltage-gated Ca2+ channels, Ca2+ enters, synaptic vesicles fuse with the
+      membrane and release glutamate into the synaptic cleft (20-40 nm wide; drawn much wider).
+   6. Glutamate crosses the cleft and opens AMPA receptors on neuron 2's dendritic spine: Na+ enters and neuron 2 depolarises
+      (an EPSP of about +12 mV, recorded on channel 2). Reuptake pumps clear glutamate from the cleft.
+   7. Blocker: a drop of CNQX (an AMPA receptor antagonist) from the dropper bottle sits on the receptors; the spike still
+      arrives and glutamate is still released, but neuron 2 stays at -70 mV. A drop of saline washes it out.
+   Time is slowed: one second on screen is about two milliseconds in the real cell.
+
+   Parts (each held by another):
+   BOARD    bench board . six clear acrylic support posts with feet and saddles under soma, sleeves, terminal, neuron 2
+   NEURON 1 dendrites (stim branch + six more) with dendritic spines . cell body: nucleus, nucleolus, Nissl bodies (rough ER),
+            Golgi apparatus, mitochondria . axon hillock . initial segment . axon with microtubules and mitochondria .
+            five myelin sleeves (Schwann cells) with their nuclei . four nodes of Ranvier with Na+ channels, K+ channels and
+            Na/K pumps . axon terminal bouton: vesicles, mitochondrion, Ca2+ channels, reuptake pumps
+   SYNAPSE  synaptic cleft . glutamate . AMPA receptors on the spine head . postsynaptic density
+   NEURON 2 dendritic spine and its dendrite . three more dendrites . cell body with nucleus, nucleolus, mitochondrion .
+            hillock and axon with one myelin sleeve, a node and its onward axon
+   RIG      stimulator (battery box, strength dial, red fire button, LED, output socket) . stimulating electrode on a
+            micromanipulator stand (foot, post, clamp, arm, slide block, holder, glass pipette) . two recording electrodes on
+            stands into the two cell bodies . two-channel oscilloscope (screen, knobs, power switch, CH1/CH2 sockets, mains
+            cord out of the back) . cables socket to socket along posts and board . CNQX dropper bottle . saline dropper bottle */
+
+/* ---------- geometry (x = depth toward the viewer, y = width toward viewer-left, z = up) ---------- */
+const BW = 92, BD = 242, BH = 3, BR = 6;
+const BTOP = boardTop(0, 0, BW, BD, BH, BR);
+const AX = 50, AZ = 18, AR = 1.9;                                  // neuron 1's axon runs along y at x = AX, z = AZ
+const S1 = [50, 180, 18], S1R = [10, 11, 8];                       // cell body 1
+const S2 = [50, 22, 16], S2R = [8, 8, 6.5];                        // cell body 2
+const SLEEVES = [[140, 156], [120, 136], [100, 116], [80, 96], [60, 76]];
+const AX_SITES = [158, 138, 118, 98, 78, 56];                      // initial segment, four nodes, terminal: where the spike is made
+const BOUT = [50, 48.6, 18], BOUTR = [4.4, 4, 4.4];                // terminal bouton, y 44.6..52.6
+const SPN = [50, 39.8, 18], SPNR = [3.2, 1.8, 3.2];                // neuron 2's spine head, y 38..41.6
+const CLEFT = [41.6, 44.6], SYN = [50, 43.1, 18];
+const STIM = [68, 204, 21];                                        // where the stimulating electrode touches
+const SC = { x0: 4, x1: 30, y0: 84, y1: 154, z1: 48 };             // oscilloscope
+const SCP = rrUV(SC.y0, BH, SC.y1, SC.z1, 3);
+const STB = { x0: 70, x1: 88, y0: 224, y1: 240, z1: 14 };          // stimulator
+const STP = rrUV(STB.y0, BH, STB.y1, STB.z1, 1.6);
+const BOTTLES = [ { x: 80, y: 72, name: 'CNQX', act: 'cnqx' }, { x: 80, y: 86, name: 'SALINE', act: 'saline' } ];
+const BOT_R = 4, NECK_Z = 17.5, PIP_L = 10.5, DROP_Z = 30;
+const SUPPORTS = [[50, 180, 10], [50, 128, 13.1], [50, 88, 13.1], [50, 56.5, 16.1], [50, 22, 9.5], [70, 5, 11.6]];
+
+const addv = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]], scl = (a, k) => a.map(v => v*k);
+const lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const dist3 = (a, b) => Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
+const sm01 = t => { t = clamp01(t); return t*t*(3 - 2*t); };
+const boxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const hullPath = pts3 => sp(hull(pts3.map(p => P(...p))));
+const circ = (p, r, fillC, w = .6, extra = '') => { const [X, Y] = P(...p); return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r*CAM_K)}" fill="${fillC}"${w ? ` stroke="${INK}" stroke-width="${w}"` : ''} ${extra}/>`; };
+
+/* ---------- colours ---------- */
+const NEU2 = matOf('#b9a6ea');
+const MYEL = { l: '#fff6df', m: '#efe0b8', d: '#c9b688' };
+const SCOPEM = { l: '#b4c0c8', m: '#919ea8', d: '#5f6c76' };
+const STIMM = PALS.mustard;
+const KNOBM = { l: '#fff4d6', m: '#e6dcbd', d: '#bfb390' };
+const REDM = matOf('#e2483d'), RUBM = matOf('#3a3632'), WHITEM = matOf('#f3efe4');
+const AMBER = { l: '#d68f3e', m: '#ad6a2b', d: '#6e3f18' }, GLASSM = { l: '#e7f3f5', m: '#c9e1e6', d: '#9dbcc3' };
+const NUCM = matOf('#9b80d6'), NUCLM = matOf('#5c3f96'), ERM = matOf('#6aa8de'), GOLM = matOf('#f0a646'), MITM = matOf('#ea7650');
+const NACH = matOf('#ff9f1c'), KCH = matOf('#8a5cf0'), PUMPM = matOf('#43a86a'), CACH = matOf('#5fcf6a'), RECM = matOf('#d0573f'), TRANSM = matOf('#3f7fc0');
+const NAC = '#ff9f1c', KC = '#8a5cf0', CAC = '#5fcf6a', GLUC = '#e2483d', DRUGC = '#22a99e';
+const HOT = '#ffe14d', COLD = '#7d8cf0';
+// membrane colour follows its voltage: yellow when depolarised, a little blue in the undershoot
+function tint(M, v, span = 60){
+  if (v >= -70){ const k = Math.pow(clamp01((v + 70)/span), .8); return k < .01 ? M : { l: mix(M.l, HOT, k), m: mix(M.m, HOT, k*.9), d: mix(M.d, '#b8901c', k*.8) }; }
+  const k = clamp01((-70 - v)/14)*.6; return { l: mix(M.l, COLD, k), m: mix(M.m, COLD, k), d: mix(M.d, '#2c3470', k) };
+}
+
+/* ---------- shapes ---------- */
+function ringAt(c, d, r, n = 12){
+  const u = norm(cross(d, Math.abs(d[2]) < .9 ? [0,0,1] : [1,0,0])), v = cross(d, u), o = [];
+  for (let i = 0; i < n; i++){ const t = i/n*2*Math.PI, a = Math.cos(t)*r, b = Math.sin(t)*r;
+    o.push([c[0] + u[0]*a + v[0]*b, c[1] + u[1]*a + v[1]*b, c[2] + u[2]*a + v[2]*b]); }
+  return o;
+}
+// a living tube (dendrite, hillock, organelle): one outline round the whole branch and no ink on its joints.
+// rootIn: the first piece starts inside a body (cell body, bouton, parent branch), so it gets no outline and grows out smoothly.
+function tubeSvg(pts, rs, cols, rootIn = true, wInk = 2.6, n = 12, shade = tone){
+  let ik = '', disc = '', fl = '', d = [0, 1, 0];
+  for (let i = 0; i < pts.length - 1; i++){
+    const a = pts[i], b = pts[i+1]; d = norm(sub(b, a));
+    const A = ringAt(a, d, rs[i], n), B = ringAt(b, d, rs[i+1], n), M = cols[i];
+    if (i > 0){ disc += circ(a, rs[i], M.m, 0);
+      if (!(rootIn && i === 1)) ik += circ(a, rs[i], INK, 0, `stroke="${INK}" stroke-width="${wInk}"`); }
+    fl += loft(A, B, nr => shade(nr, M));
+    if (!(rootIn && i === 0)) ik += `<path d="${hullPath([...A, ...B])}" fill="${INK}" stroke="${INK}" stroke-width="${wInk}" stroke-linejoin="round"/>`;
+  }
+  const e = pts[pts.length - 1], rl = rs[rs.length - 1];
+  if (rl > .05 && vis(d)) fl += face(pd(ringAt(e, d, rl, n)), shade(d, cols[cols.length - 1]));
+  return ik + disc + fl;
+}
+const tubeBox = (pts, rs) => boxOf(pts.flatMap((p, i) => [addv(p, [rs[i], rs[i], rs[i]]), addv(p, [-rs[i], -rs[i], -rs[i]])]));
+// a rounded body (cell body, nucleus, bouton): latitude bands
+function blob(c, R, M, w = 2.4, shade = tone, nl = 7, n = 20){
+  const rings = [];
+  for (let j = 0; j <= nl; j++){ const ph = (-80 + 160*j/nl)*Math.PI/180;
+    rings.push(on(PZ(c[2] + R[2]*Math.sin(ph)), ellUV(c[0], c[1], R[0]*Math.cos(ph), R[1]*Math.cos(ph), n))); }
+  let s = '';
+  for (let j = 0; j < nl; j++) s += loft(rings[j], rings[j+1], nr => shade(nr, M));
+  if (vis([0,0,1])) s += face(pd(rings[nl]), shade([0,0,1], M));
+  if (vis([0,0,-1])) s += face(pd(rings[0]), shade([0,0,-1], M));
+  return s + (w ? hullInk(rings.flat(), w) : '');
+}
+const blobBox = (c, R) => [[c[0]-R[0], c[1]-R[1], c[2]-R[2]], [c[0]+R[0], c[1]+R[1], c[2]+R[2]]];
+// a point on a body's surface in direction d
+const onBlob = (c, R, d) => { const t = 1/Math.hypot(d[0]/R[0], d[1]/R[1], d[2]/R[2]); return addv(c, scl(d, t)); };
+// a myelin sleeve (one Schwann cell wrapped round the axon), along y or x, with rounded ends
+function sleeveSvg(axis, a0, a1, c, rMax, M){
+  const ts = [a0, a0+.6, a0+1.6, a0+3, a1-3, a1-1.6, a1-.6, a1], rs = [2.2, .73, .92, 1, 1, .92, .73, 2.2].map((k, i) => i === 0 || i === 7 ? k : k*rMax);
+  const ring = (t, r) => axis === 'y' ? on(PY(t), ellUV(c[0], c[1], r, r, 18)) : on(PX(t), ellUV(c[0], c[1], r, r, 18));
+  const R = ts.map((t, i) => ring(t, rs[i]));
+  let s = ''; for (let i = 0; i < 7; i++) s += loft(R[i], R[i+1], nr => tone(nr, M));
+  const n0 = axis === 'y' ? [0,-1,0] : [-1,0,0], n1 = n0.map(v => -v);
+  if (vis(n0)) s += face(pd(R[0]), M.d); if (vis(n1)) s += face(pd(R[7]), M.d);
+  return s + hullInk(R.flat(), 2.2);
+}
+// a bare stretch of axon along y
+const bareY = (y0, y1, M, r = AR) => { const A = on(PY(y0), ellUV(AX, AZ, r, r, 16)), B = on(PY(y1), ellUV(AX, AZ, r, r, 16));
+  return loft(A, B, nr => tone(nr, M)) + hullInk([...A, ...B], 1.4); };
+const stud = (c, d, r0, r1, rr, M) => rod(addv(c, scl(d, r0)), addv(c, scl(d, r1)), rr, M, toneI, .5, rr, 8);
+const mito = (a, b, r) => { const d = sub(b, a), pts = [a, addv(a, scl(d, .22)), addv(a, scl(d, .78)), b];
+  let s = tubeSvg(pts, [r*.4, r, r, r*.4], [MITM, MITM, MITM], false, 1.3, 10, toneI);
+  const u = norm(cross(norm(d), [0,0,1])), cr = []; for (let i = 0; i <= 8; i++) cr.push(addv(addv(addv(a, scl(d, .18 + .64*i/8)), [0, 0, r*.75]), scl(u, (i % 2 ? .5 : -.5)*r)));
+  return s + line(cr, .45); };
+const mitoBox = (a, b, r) => boxOf([a, b], r + .05);
+const mtub = (y0, y1) => [[.8, 0], [-.6, .55], [-.25, -.75]].map(([dx, dz]) => `<path d="${pd([[AX+dx, y0, AZ+dz], [AX+dx, y1, AZ+dz]], false)}" fill="none" stroke="#2f7d6a" stroke-width=".55"/>`).join('');
+// glass ghost of a membrane in see-through, and the insides drawn over it
+const gh = (svg, k) => k > 0 ? `<g opacity="${f(1 - .74*k)}">${svg}</g>` : svg;
+const inn = (svg, k) => k > 0 && svg ? `<g opacity="${(k).toFixed(2)}">${svg}</g>` : '';
+
+/* ---------- the neurons' branches ---------- */
+// grow(): a branch leaving a body, starting inside it (no outline there) and leaving through its surface
+const grow = (c, R, pts, rs) => { const q = sub(pts[0], c), t1 = 1/Math.hypot(q[0]/R[0], q[1]/R[1], q[2]/R[2]);
+  return { pts: [addv(c, scl(q, t1*.5)), addv(c, scl(q, t1*1.03)), ...pts], rs: [rs[0]*1.7, rs[0]*1.25, ...rs], fromBody: true }; };
+const BR1 = [
+  { ...grow(S1, S1R, [[62,194,20],[68,204,21],[72,214,20.5],[75,221.5,20]], [2.2,1.8,1.3,.8]), stim: true },
+  { pts: [[68,204,21],[66.6,207,21.2],[64,213,21.5],[63,220.5,21.5]], rs: [1.4,1.35,1.1,.6], stim: true },
+  { ...grow(S1, S1R, [[51,198,20.5],[50.5,210,21],[46,222,20.5],[43,231,20]], [2.4,1.9,1.3,.7]), spines: true },
+  { pts: [[50.5,210,21],[52,213,21],[56,222,21],[58,230,20.5]], rs: [1.4,1.3,.9,.5], spines: true },
+  { ...grow(S1, S1R, [[39,193,19],[35,203,18.5],[32,214,18]], [2.2,1.6,.8]), spines: true },
+  { pts: [[35,203,18.5],[37.4,205.6,18.6],[40,210,19],[40.5,217,19]], rs: [1.3,1.2,.9,.5] },
+  { ...grow(S1, S1R, [[61,173,15],[67,169,14],[72,164,13.5]], [1.9,1.4,.7]) },
+  { ...grow(S1, S1R, [[39,173,15.5],[34,168,15],[31.5,162,14.5]], [1.9,1.4,.7]) },
+];
+const HILL1 = grow(S1, S1R, [[50,166,18],[50,161,18],[50,156,18]], [3.2,2.1,1.9]);
+const TERM1 = grow(BOUT, BOUTR, [[50,56,18],[50,60,18]], [1.9,1.9]);
+const BR2 = [
+  { ...grow(S2, S2R, [[50,32,17],[50,35.5,17.6],[50,38.6,18]], [2.2,1.5,.9]), recv: true },
+  { ...grow(S2, S2R, [[58,28,15.5],[65,33,15],[72,38,14.5],[79,36,14]], [2,1.6,1.1,.6]), spines: true },
+  { ...grow(S2, S2R, [[42,28,16.5],[37,34,16],[33,41,15.5]], [2,1.4,.7]) },
+  { ...grow(S2, S2R, [[42,16,15.5],[36,13,15],[30,8,14.5]], [1.8,1.3,.6]) },
+];
+const AX2 = grow(S2, S2R, [[56,14,15.5],[58.5,10,15],[61,6.5,15],[63,5,15]], [2.4,1.7,1.5,1.4]);
+const SLV2 = [63, 77], N2Y = 5, N2Z = 15;
+// how far each dendrite piece is from the stimulating electrode, along the cell (for the graded potential)
+const SIM = { tS: .35, TR: .25, VD: 80, ATT: .6, STEP: .2, TR2: .35, EPSP: 12, DS: 22 };
+SIM.LAM = SIM.DS / Math.log(1/SIM.ATT);
+for (const b of BR1) b.segS = b.pts.slice(0, -1).map((p, i) => { const mid = lerp3(p, b.pts[i+1], .5);
+  return b.stim ? dist3(mid, STIM) : SIM.DS + Math.max(0, dist3(mid, S1) - 10); });
+// dendritic spines: little knobs on the top of the outer pieces
+for (const b of [...BR1, ...BR2]) b.sp = !b.spines ? [] : b.pts.slice(2, -1).map((p, i) => { const q = lerp3(p, b.pts[i+3], .5), r = (b.rs[i+2] + b.rs[i+3])/2; return { base: addv(q, [0, 0, r*.5]), top: addv(q, [0, 0, r + 1]), seg: i + 2 }; });
+
+/* ---------- the physiology (one clock, in slowed seconds) ---------- */
+const alpha = (u, a, tr) => u <= 0 ? 0 : a*(u/tr)*Math.exp(1 - u/tr);
+// a patch of membrane u seconds after it fires: up to +40 mV (Na+ in), down to -80 mV (K+ out), back to -70 mV
+function apWave(u){
+  if (u < -.06 || u > 1.1) return null;
+  if (u < 0) return -70 + 15*(u + .06)/.06;
+  if (u < .12) return -55 + 95*sm01(u/.12);
+  if (u < .36) return 40 - 120*sm01((u - .12)/.24);
+  return -80 + 10*(1 - Math.exp(-(u - .36)/.2))/(1 - Math.exp(-.74/.2));
+}
+function evMake(t0, kind){
+  const a0 = kind === 'strong' ? 35 : 10, aS = a0*SIM.ATT, fires = aS >= 15;
+  let x = 0;
+  if (fires){ const want = 15/aS; let lo = 0, hi = 1; for (let i = 0; i < 30; i++){ const mm = (lo + hi)/2; if (mm*Math.exp(1 - mm) < want) lo = mm; else hi = mm; } x = (lo + hi)/2; }
+  const tF = t0 + SIM.tS + SIM.DS/SIM.VD + x*SIM.TR;
+  const sites = AX_SITES.map((_, i) => tF + .05 + SIM.STEP*i);
+  return { t0, kind, a0, aS, fires, tF, sites, tT: sites[sites.length - 1], blk: null, said: 0 };
+}
+function vSoma(st, T){
+  let v = -70;
+  for (const e of st.ev){ if (T < e.t0) continue;
+    if (e.fires && T >= e.tF){ const a = apWave(T - e.tF); if (a != null) return a; continue; }
+    v += alpha(T - e.t0 - SIM.tS - SIM.DS/SIM.VD, e.aS, SIM.TR); }
+  return v;
+}
+function vDend(st, s, T){ let v = -70;
+  for (const e of st.ev) if (T >= e.t0) v += alpha(T - e.t0 - SIM.tS - s/SIM.VD, e.a0*Math.exp(-s/SIM.LAM), SIM.TR);
+  return v; }
+function vSite(st, i, T){ for (const e of st.ev){ if (!e.fires) continue; const a = apWave(T - e.sites[i]); if (a != null) return a; } return -70; }
+const blkOf = (st, e) => e.blk != null ? e.blk : st.block > .5 ? 1 : 0;
+function vN2(st, T, lead = 0){ let v = -70;
+  for (const e of st.ev) if (e.fires) v += alpha(T - e.tT - .45 + lead, SIM.EPSP*(1 - blkOf(st, e)), SIM.TR2);
+  return v; }
+const lastFired = st => { for (let i = st.ev.length - 1; i >= 0; i--) if (st.ev[i].fires) return st.ev[i]; return null; };
+
+/* ---------- ions at a patch of axon (Na+ in, then K+ out), split behind / in front of the membrane ---------- */
+function ionsAt(st, i, yc, rr = AR){
+  const e = lastFired(st), out = { far: '', near: '', na: false, k: false }; if (!e) return out;
+  const u = st.T - e.sites[i];
+  for (let j = 0; j < 6; j++){ const a = (j*60 + 15)*Math.PI/180, d = [Math.cos(a), 0, Math.sin(a)], y = yc + (j % 2 ? .9 : -.9);
+    const pNa = (u + .05)/.2, pK = (u - .1)/.36;
+    if (pNa > 0 && pNa < 1){ out.na = true; const r = rr + .4 + 5*(1 - sm01(pNa)), c = addv([AX, y, AZ], scl(d, r)), g = circ(c, .8, NAC, .6);
+      if (vis(d)) out.near += g; else out.far += g; }
+    if (pK > 0 && pK < 1){ out.k = true; const r = rr + .4 + 5*sm01(pK), c = addv([AX, y + (j % 2 ? -.5 : .5), AZ], scl(d, r)), g = circ(c, .8, KC, .6, `opacity="${f(1 - Math.max(0, pK - .7)/.3)}"`);
+      if (vis(d)) out.near += g; else out.far += g; }
+  }
+  return out;
+}
+// channels in the membrane of a node (see-through): Na+ channels crowd the nodes, with K+ channels and Na/K pumps
+const NODE_CH = [0,1,2,3,4,5,6,7].map(j => ({ a: j*45 + 22, dy: j % 2 ? .8 : -.8, M: j === 3 || j === 7 ? PUMPM : j === 1 || j === 5 ? KCH : NACH }));
+const nodeChannels = (yc, rr = AR) => NODE_CH.map(c => { const a = c.a*Math.PI/180, d = [Math.cos(a), 0, Math.sin(a)];
+  return { d, svg: stud([AX, yc + c.dy, AZ], d, rr - .3, rr + .9, .42, c.M) }; });
+
+/* ---------- see-through insides ---------- */
+const NISSL = [[43.5,178,17], [56.5,182.5,17.5], [47.5,173.6,17.4], [53,188.4,18], [45,186.6,19.4]];
+const GOLGI = [5, 5.8, 6.6].map(r => Array.from({ length: 7 }, (_, i) => { const a = (-90 - 26 + 52*i/6)*Math.PI/180; return [50 + r*Math.cos(a)*.9, 179 + r*Math.sin(a), 18.6]; }));
+const MITO1 = [[[44,182,21.5],[46.5,185,21.8]], [[55,176,20.6],[57,179.2,20.8]], [[53,186,15.4],[56.4,185,15.8]]];
+function somaInside(){
+  const it = [], put = (b, svg) => it.push({ box: b, svg });
+  const NC = [50, 181, 18.6], NR = [4.3, 4.3, 3.8];
+  put(blobBox(NC, NR), blob(NC, NR, NUCM, 1.4, toneI, 6, 18) + blob([51, 182, 19.6], [1.4, 1.4, 1.3], NUCLM, .8, toneI, 4, 12));
+  for (const p of NISSL) put(blobBox(p, [2.3, 1.2, 1.4]), blob(p, [2.2, 1.1, .5], ERM, .8, toneI, 4, 14) + blob(addv(p, [0, 0, 1.1]), [2, 1, .45], ERM, .8, toneI, 4, 14)
+    + [-1.2, 0, 1.2].map(dx => circ(addv(p, [dx, .8, .5]), .22, '#2d4f8a', 0)).join(''));
+  for (const g of GOLGI) put(boxOf(g, .6), tubeSvg(g, g.map((_, i) => i === 0 || i === 6 ? .25 : .5), g.map(() => GOLM), false, 1.1, 8, toneI));
+  for (const [a, b] of MITO1) put(mitoBox(a, b, .9), mito(a, b, .9));
+  return byDepth(it);
+}
+const VES = [[48.4,46,16.6],[51.6,46,19.2],[50,46.2,18],[48.6,46.4,19.6],[51.4,46.4,16.6],[49,48.2,17.4],[51.2,48.4,18.6],[48.2,48.6,19.2],[50.6,49.6,16.4],[50,50,20]];
+const CA_D = [[.55,-1,.35],[-.55,-1,.35],[.5,-1,-.45],[-.5,-1,-.45]].map(norm);
+const TR_D = [[1,-.45,.25],[-1,-.45,.25]].map(norm);
+const REC_D = [[.5,1,.42],[-.5,1,.42],[.5,1,-.42],[-.5,1,-.42],[0,1,0]].map(norm);
+const REC_TIP = REC_D.map(d => addv(onBlob(SPN, SPNR, d), scl(d, .75)));
+
+/* ---------- apparatus ---------- */
+const STANDS = [
+  { id: 'stim', base: [84, 198], tip: [68, 204, 23], band: REDM },
+  { id: 'rec1', base: [20, 192], tip: [50, 180, 26.1], band: matOf('#f4d35e') },
+  { id: 'rec2', base: [20, 10], tip: [50, 22, 22.6], band: matOf('#6fe3ff') },
+];
+function standGeo(sd, adv){
+  const t0 = sd.tip, A0 = [t0[0] + (sd.base[0] - t0[0])*.38, t0[1] + (sd.base[1] - t0[1])*.38, t0[2] + 14];
+  const d = norm(sub(t0, A0)), back = 2.6*(1 - adv);
+  return { d, A0, tip: addv(t0, scl(d, -back)), H0: addv(A0, scl(d, -1.4 - back)), H1: addv(A0, scl(d, 3.2 - back)), Mb: addv(A0, scl(d, -2.6)) };
+}
+// round each corner of a cable's route, then cut it into short pieces that sort with the solids
+const bend3 = (pts, r = 1.2) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i-1], pts[i], pts[i+1]];
+    const la = dist3(a, b), lc = dist3(c, b), dd = Math.min(r, la/2.2, lc/2.2);
+    if (dd < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k])*dd/la), q = c.map((v, k) => b[k] + (v - b[k])*dd/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+const wireBits = (pts, col, w = .45, L = 4) => { const q = bend3(pts), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < L){ len += dist3(q[j], q[j-1]); j++; }
+    const seg = q.slice(i, j + 1), d = pd(seg, false);
+    out.push({ box: boxOf(seg, w), svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w + 1)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linecap="round" stroke-linejoin="round"/>` });
+    i = j; }
+  return out; };
+const FLOOR = BH + .45;
+const CABLE_FLOOR = {
+  stim: [[89.8, 228, 6.5], [90.8, 228, 5], [90.6, 226.5, FLOOR], [87, 206, FLOOR], [85.1, 199.4, FLOOR]],
+  rec1: [[34, 140, FLOOR], [34, 157, FLOOR], [27, 174, FLOOR], [21.2, 190.8, FLOOR]].reverse(),
+  rec2: [[34, 128, FLOOR], [33, 60, FLOOR], [26, 26, FLOOR], [21.2, 11.4, FLOOR]].reverse(),
+};
+const PORTS = { rec1: [SC.x1 + 2.4, 140, 8], rec2: [SC.x1 + 2.4, 128, 8] };
+function standParts(st, sd, adv, put, k){
+  const g = standGeo(sd, adv), [bx, by] = sd.base, zA = g.Mb[2];
+  put([[bx-3.2, by-3.2, BH], [bx+3.2, by+3.2, BH+1.2]], cyl(bx, by, BH, BH + 1.2, 3.2, DARK, toneI, 1.1, 20));
+  put([[bx-1.2, by-1.2, BH+1.2], [bx+1.2, by+1.2, zA+1.6]], cyl(bx, by, BH + 1.2, zA + 1.6, .75, METAL, toneI, .9, 12) + box(bx-1.2, by-1.2, zA-1.1, bx+1.2, by+1.2, zA+1.3, DARK, toneI, .8));
+  // the arm, from the clamp to the slide block (the block itself sorts with the holder that slides through it)
+  const dir = norm([g.Mb[0] - bx, g.Mb[1] - by, 0]), a0 = [bx + dir[0]*1.2, by + dir[1]*1.2, zA], a1 = addv(g.Mb, scl(dir, -1.3));
+  put(boxOf([a0, a1], .6), rod(a0, a1, .55, METAL, toneI, .8, .55, 10));
+  // slide block, the holder in two pieces either side of it, glass pipette
+  const hb = [], hput = (b, svg) => hb.push({ box: b, svg });
+  hput(boxOf([g.Mb], 1.3), box(g.Mb[0]-1.3, g.Mb[1]-1.3, g.Mb[2]-1.3, g.Mb[0]+1.3, g.Mb[1]+1.3, g.Mb[2]+1.3, DARK, toneI, .8));
+  const cut0 = addv(g.Mb, scl(g.d, -1.6)), cut1 = addv(g.Mb, scl(g.d, 1.6));
+  if (dot(sub(cut0, g.H0), g.d) > 0) hput(boxOf([g.H0, cut0], 1), rod(g.H0, cut0, .9, METAL, toneI, .8, .9, 12));
+  const hf = dot(sub(g.H1, cut1), g.d) > 0 ? cut1 : g.H1;
+  const band = addv(g.H1, scl(g.d, -1.2));
+  hput(boxOf([hf, g.tip], 1), rod(hf, band, .9, METAL, toneI, .8, .9, 12) + rod(band, g.H1, .95, sd.band, toneI, .8, .95, 12)
+    + rod(g.H1, g.tip, .5, GLASSM, toneI, .7, .12, 10) + line([addv(g.H1, scl(g.d, .2)), addv(g.tip, scl(g.d, -.4))], .35));
+  put(boxOf([g.H0, g.tip, g.Mb], 1.3), byDepth(hb));
+  // its cable: out of the holder's back, along the arm, down the post, along the board to its socket
+  const side = sd.id === 'stim' ? [1, 0] : [.0, -1], off = [bx + side[0]*1.05, by + side[1]*1.05];
+  const route = [g.H0, addv(g.Mb, [0, 0, 1.9]), [bx + dir[0]*1.2, by + dir[1]*1.2, zA + 1.9], [off[0], off[1], zA + .4], [off[0], off[1], BH + 2]];
+  const tail = sd.id === 'stim' ? CABLE_FLOOR.stim.slice().reverse() : CABLE_FLOOR[sd.id];
+  const end = sd.id === 'stim' ? [] : [[PORTS[sd.id][0] + 1.6, PORTS[sd.id][1], 6.4], PORTS[sd.id]];
+  const col = sd.id === 'stim' ? '#c43d33' : sd.id === 'rec1' ? '#d9b23a' : '#3aa8c8';
+  wireBits([...route, ...tail.map(p => p.slice()), ...end], col).forEach(w => put(w.box, w.svg));
+  return g;
+}
+
+function scopeItem(st){
+  const FR = facing([1,0,0]), BK = facing([-1,0,0]), x1 = SC.x1;
+  let body = extrude(SCP, SC.x0, x1, SCOPEM), mounted = '';
+  if (FR){
+    body += fill(pd(on(PX(x1), SCP)), tone([1,0,0], SCOPEM));
+    body += shape(on(PX(x1 + .15), rrUV(98, 15.5, 152, 45.5, 1.6)), '#3a3632', 1);
+    const xs = x1 + .3, ys0 = 150, ys1 = 100, zV = v => 18 + (Math.max(-92, Math.min(52, v)) + 90)/140*25.4;
+    body += shape(on(PX(xs - .05), rectUV(ys1, 17, ys0, 44)), '#1d2a26', .6);
+    let g = '';
+    for (let i = 1; i < 8; i++){ const y = ys0 - 50*i/8; g += pd([[xs, y, 17.2], [xs, y, 43.8]], false); }
+    for (const v of [-80, -40, 0, 40]) g += pd([[xs, ys0 - .2, zV(v)], [xs, ys1 + .2, zV(v)]], false);
+    body += `<path d="${g}" fill="none" stroke="#3f6a5c" stroke-width=".45"/>`;
+    body += `<path d="${pd([[xs, ys0 - .2, zV(-55)], [xs, ys1 + .2, zV(-55)]], false)}" fill="none" stroke="#e2483d" stroke-width=".7" stroke-dasharray="1.6 1.2"/>`;
+    const trace = (fn, col) => { const N = 240, pts = []; for (let i = 0; i <= N; i++){ const tau = st.T - 6 + 6*i/N; pts.push([xs + .02, ys0 - 50*i/N, zV(fn(tau))]); }
+      const [X, Y] = P(...pts[N]); return `<path d="${pd(pts, false)}" fill="none" stroke="${col}" stroke-width="1.1" stroke-linejoin="round"/><circle cx="${f(X)}" cy="${f(Y)}" r="1.4" fill="${col}"/>`; };
+    body += trace(t => vN2(st, t), '#6fe3ff') + trace(t => vSoma(st, t), '#f4d35e');
+    body += tx(xs, 138, 41.3, 'CH1 CELL BODY', 1.9, '#f4d35e', 800) + tx(xs, 113, 41.3, 'CH2 NEURON 2', 1.9, '#6fe3ff', 800);
+    body += tx(xs, 146.6, zV(-55) + .7, '-55', 1.5, '#ff8a7a', 800) + tx(xs, 146.6, zV(40) + .7, '+40', 1.5, '#8af0ae', 700) + tx(xs, 146.6, zV(-70) - 2.1, '-70', 1.5, '#8af0ae', 700);
+    body += tx(xs, 106, 18.2, '2 MS/DIV', 1.5, '#8af0ae', 700);
+    body += tx(x1 + .2, 125, 46.2, 'SCOPE 2CH', 1.6, '#3a3632', 800);
+    body += tx(x1 + .2, 140, 11.2, 'CH1', 1.8, INK, 800) + tx(x1 + .2, 128, 11.2, 'CH2', 1.8, INK, 800);
+    body += shape(on(PX(x1 + .15), rectUV(89.5, 7.2, 93.5, 10.2)), '#3a3632', .7) + fill(pd(on(PX(x1 + .2), ellUV(91.5, 12.6, .7, .7, 10))), '#43c25c') + ink(pd(on(PX(x1 + .2), ellUV(91.5, 12.6, .7, .7, 10))), .4);
+  }
+  if (BK){ body += fill(pd(on(PX(SC.x0), SCP)), tone([-1,0,0], SCOPEM));
+    let v = ''; for (let z = 20; z <= 40; z += 3) v += pd([[SC.x0 - .1, 132, z], [SC.x0 - .1, 104, z]], false);
+    body += `<path d="${v}" fill="none" stroke="${INK}" stroke-width="1" opacity=".7"/>`;
+    body += shape(on(PX(SC.x0 - .15), rrUV(136, 6, 146, 12, 1)), '#3a3632', .8); }
+  if (FR) body += ink(pd(on(PX(x1), SCP)), 2); if (BK) body += ink(pd(on(PX(SC.x0), SCP)), 2);
+  body += hullInk([...on(PX(SC.x0), SCP), ...on(PX(x1), SCP)], 2.8);
+  // knobs and sockets stick out of the front
+  mounted += [[91.5, 39], [91.5, 31], [91.5, 23]].map(([y, z]) => cylX(x1, x1 + 2.2, y, z, 2.2, KNOBM, toneI, 1, 18) + (FR ? line([[x1 + 2.25, y, z], [x1 + 2.25, y - 1.3, z + 1.3]], .9) : '')).join('');
+  mounted += [140, 128].map(y => cylX(x1, x1 + 2.4, y, 8, 1.3, METAL, toneI, .9, 14)).join('');
+  return FR ? body + mounted : mounted + body;
+}
+function stimItem(st){
+  const FR = facing([1,0,0]), BK = facing([-1,0,0]);
+  let body = extrude(STP, STB.x0, STB.x1, STIMM);
+  if (FR){ body += fill(pd(on(PX(STB.x1), STP)), tone([1,0,0], STIMM)) + tx(STB.x1 + .2, 233, 10, 'STIMULATOR', 1.9, INK, 800) + tx(STB.x1 + .2, 233, 6.4, 'OUT', 1.6, INK, 700) + ink(pd(on(PX(STB.x1), STP)), 1.8); }
+  if (BK){ body += fill(pd(on(PX(STB.x0), STP)), tone([-1,0,0], STIMM)) + shape(on(PX(STB.x0 - .15), rrUV(227, 5, 237, 11, 1)), '#f3efe4', .7) + ink(pd(on(PX(STB.x0), STP)), 1.8); }
+  body += hullInk([...on(PX(STB.x0), STP), ...on(PX(STB.x1), STP)], 2.4);
+  const port = cylX(STB.x1, STB.x1 + 1.8, 228, 6.5, 1.1, METAL, toneI, .9, 14);
+  // on the top: strength dial, red fire button, LED
+  const z = STB.z1, pz = st.press > 0 ? .5 : 1.4, aa = (st.kind === 'weak' ? -50 : 50)*Math.PI/180;
+  const top = byDepth([
+    { box: [[72.6, 233.6, z], [77.4, 238.4, z + 1.8]], svg: cyl(75, 236, z, z + 1.8, 2.4, KNOBM, toneI, 1, 18) + line([[75, 236, z + 1.85], [75 + 2*Math.sin(aa), 236 + 2*Math.cos(aa), z + 1.85]], .9) },
+    { box: [[79.2, 227.7, z], [83.8, 232.3, z + pz]], svg: act('poke', cyl(81.5, 230, z, z + pz, 2.3, REDM, toneI, 1, 18)) },
+    { box: [[84.7, 235.7, z], [86.3, 237.3, z + .6]], svg: cyl(85.5, 236.5, z, z + .6, .8, matOf(st.press > 0 || (st.ev.length && st.T - st.ev[st.ev.length-1].t0 < .6) ? '#ff5a3d' : '#8d877a'), toneI, .7, 10) } ]);
+  return (FR ? body + port : port + body) + top;
+}
+function bottleSvg(b, i, holding, squeeze){
+  const M = i === 0 ? AMBER : GLASSM, x = b.x, y = b.y;
+  let s = cyl(x, y, BH, 14, BOT_R, M, tone, 1.6, 22);
+  // wrap label, its name toward the viewer
+  s += loft(on(PZ(6), ellUV(x, y, BOT_R + .05, BOT_R + .05, 22)), on(PZ(11.4), ellUV(x, y, BOT_R + .05, BOT_R + .05, 22)), n => toneI(n, WHITEM));
+  const az = YAW*Math.PI/180, nn = [Math.cos(az), Math.sin(az), 0], o = P(x + nn[0]*(BOT_R + .1), y + nn[1]*(BOT_R + .1), 7.6);
+  s += `<text transform="${txM(o, Dv(nn[1], -nn[0], 0), Dv(0,0,-1))}" font-size="${i === 0 ? 2.3 : 1.7}" fill="${i === 0 ? '#22756e' : '#3f7fc0'}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800">${b.name}</text>`;
+  s += loft(on(PZ(14), ellUV(x, y, BOT_R, BOT_R, 22)), on(PZ(16), ellUV(x, y, 1.9, 1.9, 22)), n => tone(n, M)) + cyl(x, y, 16, NECK_Z, 1.9, M, tone, 1, 18);
+  if (holding) s += dropperTop([x, y, NECK_Z], i, squeeze);
+  else s += fill(pd(on(PZ(NECK_Z + .02), ellUV(x, y, 1.2, 1.2, 14))), '#2b2523');
+  return act(b.act, s);
+}
+// the dropper's collar and rubber bulb, standing on point c (its pipette hangs below)
+const dropperTop = (c, i, squeeze = 0) => cyl(c[0], c[1], c[2], c[2] + 1.5, 1.6, RUBM, toneI, .9, 16)
+  + blob([c[0], c[1], c[2] + 3.4 - .5*squeeze], [1.5 + .2*squeeze, 1.5 + .2*squeeze, 2.1*(1 - .3*squeeze)], i === 0 ? matOf(DRUGC) : WHITEM, 1.1, toneI, 5, 14);
+function dropperPos(d){
+  const b = BOTTLES[d.src], home = [b.x, b.y, NECK_Z - PIP_L], up = [b.x, b.y, DROP_Z], over = [SYN[0] + 4, SYN[1], 26], t = d.t;
+  if (t < .5) return lerp3(home, up, ease(t/.5));
+  if (t < 1.1) return lerp3(up, over, ease((t - .5)/.6));
+  if (t < 1.6) return over;
+  if (t < 2.2) return lerp3(over, up, ease((t - 1.6)/.6));
+  return lerp3(up, home, ease(Math.min(1, (t - 2.2)/.4)));
+}
+
+function cordOff(){ const pts = [[.3, 147, BH + .6], [-1.2, 147.4, BH - .8], [-1.6, 147.6, -9]], d = pd(bend3(pts), false);
+  return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="2.6" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${DARK.l}" stroke-width="1.4" stroke-linecap="round"/>`; }
+
+/* ---------- shadows ---------- */
+function shadowsSvg(st){
+  const sh = [], tubeSh = (pts, rs) => { for (let i = 0; i < pts.length - 1; i++) sh.push(castShadow([...ringAt(pts[i], norm(sub(pts[i+1], pts[i])), rs[i], 6), ...ringAt(pts[i+1], norm(sub(pts[i+1], pts[i])), rs[i+1], 6)], BH)); };
+  const blobSh = (c, R) => sh.push(castShadow([...on(PZ(c[2]), ellUV(c[0], c[1], R[0], R[1], 14)), [c[0], c[1], c[2] + R[2]], [c[0], c[1], c[2] - R[2]]], BH));
+  blobSh(S1, S1R); blobSh(S2, S2R); blobSh(BOUT, BOUTR); blobSh(SPN, SPNR);
+  for (const b of [...BR1, ...BR2, HILL1, AX2]) tubeSh(b.pts, b.rs);
+  tubeSh([[AX, 160, AZ], [AX, 52, AZ]], [4.9, 4.9]); tubeSh([[63, N2Y, N2Z], [86, N2Y, N2Z]], [3.4, 3.4]);
+  for (const [x, y, z] of SUPPORTS) sh.push(castShadow([...on(PZ(BH), ellUV(x, y, 1, 1, 8)), ...on(PZ(z), ellUV(x, y, 1, 1, 8))], BH));
+  sh.push(castShadow([...on(PX(SC.x0), SCP), ...on(PX(SC.x1), SCP)], BH));
+  sh.push(castShadow([...on(PX(STB.x0), STP), ...on(PX(STB.x1), STP)], BH));
+  BOTTLES.forEach(b => sh.push(castShadow([...on(PZ(BH), ellUV(b.x, b.y, BOT_R, BOT_R, 12)), ...on(PZ(14), ellUV(b.x, b.y, BOT_R, BOT_R, 12)), [b.x, b.y, 23]], BH)));
+  for (const sd of STANDS){ const g = standGeo(sd, 1), [bx, by] = sd.base;
+    sh.push(castShadow([...on(PZ(BH), ellUV(bx, by, 3.2, 3.2, 12)), [bx, by, g.Mb[2] + 1.6]], BH), castShadow([[bx, by, g.Mb[2]], g.Mb, g.H1, g.tip], BH)); }
+  if (st.drop){ const p = dropperPos(st.drop); if (p[2] > NECK_Z - PIP_L + .5) sh.push(castShadow([p, addv(p, [0, 0, PIP_L + 5])], BH)); }
+  return clipTo(BTOP, `<g opacity=".9">${sh.join('')}</g>`);
+}
+
+/* ---------- labels: xrCallouts' pills, but split by screen x into two columns sized to the room on each side, each starting under the controls on its side ---------- */
+function callouts(items, B){
+  items = items.filter(Boolean);
+  const svgEl = document.getElementById('fig'), M = svgEl.getScreenCTM();
+  if ((window.LBL_U && LBL_U()) || !M) return xrCallouts(items, B);
+  const k = INK_K, fs = 8.6*k, hgt = fs*1.8, vb = svgEl.viewBox.baseVal, cs = [];
+  let gap = hgt + 1.6*k;
+  for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) cs.push(P(x, y, z)[0]);
+  const xmin = Math.min(...cs), xmax = Math.max(...cs);
+  const under = el => { if (!el || !el.offsetHeight) return fs; const r = el.getBoundingClientRect(); const y = new DOMPoint(r.left, r.bottom + 14).matrixTransform(M.inverse()).y + hgt/2;
+    return y < vb.y + vb.height*.45 ? Math.max(fs, y) : fs; };   // controls laid out below the figure (phone) don't count
+  const its = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X);
+  const zc = document.querySelector('.zchip'), zr = zc && zc.offsetHeight && zc.getBoundingClientRect();
+  const bot = vb.y + vb.height - hgt/2, botR = zr ? Math.min(bot, new DOMPoint(zr.left, zr.top - 4).matrixTransform(M.inverse()).y - hgt/2) : bot;   // keep the right column clear of build.py's zoom chip
+  const topL = under(document.getElementById('btns')), topR = Math.max(under(document.querySelector('.vset')), under(document.getElementById('stats')));
+  const sL = Math.max(0, bot - topL), sR = Math.max(0, botR - topR), nL = Math.max(1, Math.min(its.length - 1, Math.round(its.length*sL/(sL + sR || 1))));   // split by column height
+  gap = Math.max(hgt*.95, Math.min(gap, sL/Math.max(1, nL - 1), sR/Math.max(1, its.length - nL - 1)));   // tighten the spacing until both columns fit
+  let s = '';
+  for (const [col, side, top, bt] of [[its.slice(0, nL), -1, topL, bot], [its.slice(nL), 1, topR, botR]]){
+    col.sort((a, b) => a.Y - b.Y);
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top); y = c.py; }
+    if (!col.length) continue;
+    const shift = Math.max(0, col.reduce((a, c) => a + c.py - c.Y, 0)/col.length, y - bt), up = Math.min(shift, col[0].py - top);
+    let yb = bt + gap; for (let i = col.length - 1; i >= 0; i--){ col[i].py = Math.max(top, Math.min(col[i].py - up, yb - gap)); yb = col[i].py; }   // squeeze any gaps upward so the column ends by bt
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1));
+      const w = c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex - side*4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+
+/* ---------- scene ---------- */
+let ui;
+function scene(st, m){
+  const k = ease(st.xr || 0), T = st.T, eF = lastFired(st);
+  const vS = vSoma(st, T), vI = AX_SITES.map((_, i) => vSite(st, i, T)), v2 = vN2(st, T), mS = tint(m, vS);
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg });
+  const back = facing([-1,0,0]);
+  let s = (back ? '' : cordOff()) + board(0, 0, BW, BD, BH, BR) + (back ? cordOff() : '') + shadowsSvg(st);
+
+  // clear acrylic support posts: foot, post, saddle
+  for (const [x, y, z] of SUPPORTS) put([[x-2.6, y-2.6, BH], [x+2.6, y+2.6, z - .02]], `<g opacity=".82">` + cyl(x, y, BH, BH + .6, 2.6, CLEAR, toneI, .9, 18) + cyl(x, y, BH + .6, z - .7, .9, CLEAR, toneI, .8, 12)
+    + box(x - 1.7, y - .7, z - .8, x + 1.7, y + .7, z - .02, CLEAR, toneI, .7) + `</g>`);
+
+  // ---- neuron 1: cell body, dendrites, hillock + initial segment
+  put(blobBox(S1, S1R), gh(blob(S1, S1R, mS, 2.6), k) + inn(somaInside(), k));
+  for (const b of BR1){
+    const cols = b.segS.map((sd, i) => b.fromBody && i < 2 ? mS : tint(m, vDend(st, sd, T)));
+    let sv = tubeSvg(b.pts, b.rs, cols, true, 2.6);
+    for (const q of b.sp) sv += rod(q.base, q.top, .32, cols[q.seg], tone, .6, .32, 8) + circ(q.top, .62, cols[q.seg].l, .7);
+    put(tubeBox(b.pts, b.rs.map(r => r + (b.spines ? 1.7 : 0))), gh(sv, k) + (k > 0 && b === BR1[2] ? inn(mtub(0, 0), 0) : ''));
+  }
+  { const io = ionsAt(st, 0, 158.6), cols = [mS, mS, mS, tint(m, vI[0])];
+    let inner = mtub(170, 156.2) + nodeChannels(158.6).map(c => c.svg).join('');
+    put(tubeBox(HILL1.pts, HILL1.rs), io.far + gh(tubeSvg(HILL1.pts, HILL1.rs, cols, true, 2.4), k) + inn(inner, k) + io.near); }
+
+  // ---- myelin sleeves (Schwann cells), the axon inside them, nodes of Ranvier between them
+  SLEEVES.forEach(([y0, y1], j) => {
+    const mc = tint(m, Math.max(vI[j], vI[j+1])), mid = (y0 + y1)/2, sn = [AX + (j % 2 ? 1.4 : -1.4), mid + 2, AZ + 4.55];
+    let core = bareY(y0, y1, mc) + mtub(y0, y1);
+    if (j === 1) core += mito([AX, 131, AZ + .3], [AX, 126, AZ + .3], .75);
+    if (j === 3) core += mito([AX, 91, AZ - .3], [AX, 86, AZ - .3], .75);
+    put([[AX - 4.9, y0, AZ - 4.9], [AX + 4.9, y1, AZ + 5.6]], gh(sleeveSvg('y', y0, y1, [AX, AZ], 4.9, MYEL), k) + inn(core, k)
+      + gh(blob(sn, [1.5, 3, .9], matOf('#d9c37e'), 1, tone, 4, 14), k));
+  });
+  for (let j = 0; j < 4; j++){
+    const yc = AX_SITES[j + 1], io = ionsAt(st, j + 1, yc), ch = nodeChannels(yc);
+    put([[AX - 3, yc - 2, AZ - 3], [AX + 3, yc + 2, AZ + 3]], io.far + (k > 0 ? inn(ch.filter(c => !vis(c.d)).map(c => c.svg).join(''), k) : '')
+      + gh(bareY(yc - 2, yc + 2, tint(m, vI[j + 1])), k) + (k > 0 ? inn(ch.filter(c => vis(c.d)).map(c => c.svg).join(''), k) : '') + io.near);
+  }
+  // the spike jumping from node to node (drawn above the sleeves)
+  if (eF) for (let i = 0; i < AX_SITES.length - 1; i++){
+    const t0 = eF.sites[i], t1 = eF.sites[i+1]; if (T < t0 || T > t1 + .05) continue;
+    const p = clamp01((T - t0)/(t1 - t0)), ya = AX_SITES[i], yb = AX_SITES[i+1], pts = [];
+    for (let q = 0; q <= 16; q++){ const t = p*q/16; pts.push([AX, ya + (yb - ya)*t, AZ + 5.8 + 4.2*Math.sin(Math.PI*t)]); }
+    const dd = pd(pts, false);
+    put([[AX - 1, yb, AZ + 5.7], [AX + 1, ya, AZ + 10.2]], `<path d="${dd}" fill="none" stroke="${HOT}" stroke-width="5" stroke-linecap="round" opacity=".35"/><path d="${dd}" fill="none" stroke="${INK}" stroke-width="2.6" stroke-linecap="round"/><path d="${dd}" fill="none" stroke="${HOT}" stroke-width="1.4" stroke-linecap="round"/>` + circ(pts[16], 1.1, HOT, .8));
+  }
+
+  // ---- axon terminal (bouton): Ca2+ in, vesicles fuse
+  const uT = eF ? T - eF.tT : -9;
+  { const mt = tint(m, vI[5]), cols = [mt, mt, mt];
+    const memb = blob(BOUT, BOUTR, mt, 2.2), tub = tubeSvg(TERM1.pts, TERM1.rs, cols, true, 2.2);
+    const membS = facing([0,1,0]) ? memb + tub : tub + memb;
+    let far = '', near = '', inner = '';
+    if (uT > -.06 && uT < .55){ CA_D.forEach((d, i) => { const pp = clamp01((uT + .05 - i*.03)/.35), r = 1.9 - 1.25*sm01(pp);
+      const c = addv(BOUT, [d[0]*BOUTR[0]*r, d[1]*BOUTR[1]*r, d[2]*BOUTR[2]*r]), g = circ(c, .75, CAC, .6, `opacity="${f(1 - clamp01((uT - .35)/.2))}"`);
+      if (r < 1 && k === 0) return; if (vis(d)) near += g; else far += g; }); }
+    if (k > 0){
+      const it = [];
+      VES.forEach((p, i) => { let q = p, op = 1;
+        if (i < 5 && uT > 0){ const pp = sm01((uT - .08 - i*.04)/.25); q = lerp3(p, [p[0], 45.1, p[2]], pp); op = 1 - clamp01((uT - .32 - i*.04)/.18); if (uT > 2.2) { q = p; op = clamp01((uT - 2.2)/.4); } }
+        if (op > .02) it.push({ at: q, svg: `<g opacity="${f(op)}">` + circ(q, 1, '#fff3c4', .55) + [[-.35, 0, .3], [.35, 0, .2], [0, 0, -.35]].map(o => circ(addv(q, o), .22, GLUC, 0)).join('') + `</g>` }); });
+      it.push({ box: mitoBox([51.5, 50.2, 19.6], [48.6, 51.2, 17.6], .7), svg: mito([51.5, 50.2, 19.6], [48.6, 51.2, 17.6], .7) });
+      inner = byDepth(it) + CA_D.map(d => stud(onBlob(BOUT, BOUTR, d), d, -.3, .7, .5, CACH)).join('') + TR_D.map(d => stud(onBlob(BOUT, BOUTR, d), d, -.3, .7, .5, TRANSM)).join('')
+        + mtub(60, 52);
+    }
+    put(blobBox(BOUT, [BOUTR[0], BOUTR[1], BOUTR[2]]).map((p, i) => i ? [p[0], 60, p[2]] : p), far + gh(membS, k) + inn(inner, k) + near);
+  }
+  // ---- synaptic cleft: glutamate crossing, CNQX on the receptors
+  { let cs = '';
+    if (uT > .2 && uT < 2.4) for (let i = 0; i < 16; i++){
+      const a = i*2.4, rr = .6 + (i % 6)*.75, u = uT - .25 - i*.018, pp = sm01(u/.3), bound = !blkOf(st, eF) && rr < 3;
+      if (u < 0) continue;
+      const spread = bound ? 1 : 1 + .55*clamp01((u - .3)/1.2), op = 1 - clamp01((u - 1.35)/.5);
+      const y = 44.4 - (bound ? 2.5 : 2.2)*pp + (u > 1.35 ? 1.6*clamp01((u - 1.35)/.5) : 0);
+      const c = [SYN[0] + Math.cos(a)*rr*spread, y, SYN[2] + Math.sin(a)*rr*spread];
+      if (op > .02) cs += circ(c, .5, GLUC, .45, `opacity="${f(op)}"`);
+    }
+    if (st.block > .01){ const ob = `opacity="${f(st.block)}"`;
+      REC_TIP.forEach(p => cs += circ(addv(p, [0, .35, 0]), .55, DRUGC, .45, ob));
+      for (let i = 0; i < 7; i++){ const a = i*1.9 + T*.6, rr = 3.6 + (i % 3)*.9; cs += circ([SYN[0] + Math.cos(a)*rr, 43.1 + Math.sin(i*1.3 + T)*.9, SYN[2] + Math.sin(a)*rr], .55, DRUGC, .45, ob); } }
+    if (cs) put([[SYN[0] - 6, CLEFT[0] + .01, SYN[2] - 6], [SYN[0] + 6, CLEFT[1] - .01, SYN[2] + 6]], cs);
+  }
+
+  // ---- neuron 2: spine head with receptors, dendrites, cell body, axon
+  // neuron 2's EPSP is small (+12 mV), so its colour scale is tighter
+  const m2 = tint(NEU2, v2, 20), m2r = tint(NEU2, vN2(st, T, .08), 20);
+  { let inner = '';
+    if (k > 0) inner = REC_D.map((d, i) => stud(onBlob(SPN, SPNR, d), d, -.3, .75, .5, RECM)).join('') + (vis([0,1,0]) ? shape(on(PY(41.3), ellUV(SPN[0], SPN[2], 2.2, 2.2, 16)), '#6d5873', .5) : '');
+    put(blobBox(SPN, SPNR), gh(blob(SPN, SPNR, m2r, 2), k) + inn(inner, k)); }
+  { let inner = '';
+    if (k > 0){ const it = [];
+      it.push({ box: blobBox([50, 22.5, 16.6], [3.4, 3.4, 3]), svg: blob([50, 22.5, 16.6], [3.4, 3.4, 3], NUCM, 1.2, toneI, 5, 16) + blob([50.8, 23.2, 17.6], [1.1, 1.1, 1], NUCLM, .7, toneI, 4, 10) });
+      it.push({ box: mitoBox([54.5, 18, 17.6], [56, 21, 17.8], .7), svg: mito([54.5, 18, 17.6], [56, 21, 17.8], .7) });
+      it.push({ box: blobBox([45, 19, 15.5], [2, 1, 1]), svg: blob([45, 19, 15.5], [1.9, 1, .45], ERM, .7, toneI, 4, 12) });
+      inner = byDepth(it); }
+    put(blobBox(S2, S2R), gh(blob(S2, S2R, m2, 2.4), k) + inn(inner, k)); }
+  for (const b of BR2){ const mm = b.recv ? m2r : m2, cols = b.pts.slice(0, -1).map(() => mm);
+    let sv = tubeSvg(b.pts, b.rs, cols, true, 2.4);
+    for (const q of b.sp) sv += rod(q.base, q.top, .3, mm, tone, .6, .3, 8) + circ(q.top, .58, mm.l, .7);
+    put(tubeBox(b.pts, b.rs.map(r => r + (b.spines ? 1.6 : 0))), gh(sv, k)); }
+  put(tubeBox(AX2.pts, AX2.rs), gh(tubeSvg(AX2.pts, AX2.rs, AX2.pts.slice(0, -1).map(() => m2), true, 2.2), k));
+  put([[SLV2[0], N2Y - 3.4, N2Z - 3.4], [SLV2[1], N2Y + 3.4, N2Z + 4.2]], gh(sleeveSvg('x', SLV2[0], SLV2[1], [N2Y, N2Z], 3.4, MYEL) + blob([70, N2Y + 1, N2Z + 3.1], [2.6, 1.2, .8], matOf('#d9c37e'), 1, tone, 4, 12), k));
+  { const A = on(PX(77), ellUV(N2Y, N2Z, 1.4, 1.4, 14)), B = on(PX(84.6), ellUV(N2Y, N2Z, 1.2, 1.2, 14));
+    put([[77, N2Y - 1.7, N2Z - 1.7], [87.9, N2Y + 1.7, N2Z + 1.7]], gh(loft(A, B, nr => tone(nr, NEU2)) + hullInk([...A, ...B], 1.4) + blob([86.2, N2Y, N2Z], [1.7, 1.7, 1.7], NEU2, 1.4, tone, 5, 14), k)); }
+
+  // ---- the rig: stands and electrodes, stimulator, oscilloscope, bottles, dropper
+  const eL = st.ev[st.ev.length - 1], uP = eL ? T - eL.t0 : 9;
+  const adv = uP < .35 ? ease(uP/.35) : uP < .7 ? 1 : uP < 1 ? 1 - ease((uP - .7)/.3) : 0;
+  const gS = standParts(st, STANDS[0], adv, put, k);
+  standParts(st, STANDS[1], 1, put, k); standParts(st, STANDS[2], 1, put, k);
+  if (uP > SIM.tS && uP < SIM.tS + .2){ const [X, Y] = P(...gS.tip), r = 3.2*INK_K*(1 - (uP - SIM.tS)/.2*.4); let sv = '';
+    for (let i = 0; i < 8; i++){ const a = i*Math.PI/4, rr = i % 2 ? r*.55 : r; sv += `${i ? 'L' : 'M'}${f(X + Math.cos(a)*rr)} ${f(Y + Math.sin(a)*rr)}`; }
+    put(boxOf([gS.tip], .6).map((p, i) => i ? addv(p, [0, 0, 2]) : [p[0], p[1], gS.tip[2]]), `<path d="${sv}Z" fill="#fff36a" stroke="${INK}" stroke-width=".8"/>`); }
+  put([[SC.x0, SC.y0, BH], [SC.x1 + 2.4, SC.y1, SC.z1]], scopeItem(st));
+  put([[STB.x0, STB.y0, BH], [STB.x1 + 1.8, STB.y1, STB.z1 + 1.9]], stimItem(st));
+  wireBits([[SC.x0, 141, 9], [SC.x0 - 1.6, 143, 6], [1.6, 146, FLOOR], [.3, 147, FLOOR]], DARK.l, .7).forEach(w => put(w.box, w.svg));
+  const d = st.drop, holdI = d ? d.src : -1;
+  BOTTLES.forEach((b, i) => put([[b.x - BOT_R, b.y - BOT_R, BH], [b.x + BOT_R, b.y + BOT_R, holdI === i ? NECK_Z : 24]], bottleSvg(b, i, holdI !== i, 0)));
+  if (d){ const p = dropperPos(d), sq = d.t > 1.1 && d.t < 1.45 ? Math.sin(Math.PI*(d.t - 1.1)/.35) : 0, z0 = Math.max(p[2], NECK_Z);
+    const top = addv(p, [0, 0, PIP_L]);
+    put([[p[0] - 1.8, p[1] - 1.8, z0], [p[0] + 1.8, p[1] + 1.8, top[2] + 5.6]], (top[2] - z0 > .2 ? rod([p[0], p[1], z0], top, .4, GLASSM, toneI, .8, .75, 10) : '') + dropperTop(top, d.src, sq));
+    if (d.t > 1.22 && d.t < 1.55){ const q = clamp01((d.t - 1.22)/.28), dz = p[2] - .6 - (p[2] - .6 - (AZ + 2.2))*q*q, dp = [p[0], p[1], dz];
+      put([[dp[0] - .8, dp[1] - .8, dz - .8], [dp[0] + .8, dp[1] + .8, dz + .8]], circ(dp, .75, d.src === 0 ? '#9fe0dc' : '#d8eef4', .8)); }
+  }
+  s += byDepth(parts);
+
+  // ---- labels
+  const B = [0, BW, 0, BD, 0, 46];
+  const io0 = ionsAt(st, 0, 158), firing = eF ? AX_SITES.findIndex((_, i) => T >= eF.sites[i] - .05 && T < eF.sites[i] + .5) : -1;
+  const ionL = firing >= 0 ? (() => { const io = ionsAt(st, firing, AX_SITES[firing]); return [
+      io.na ? { at: [AX + 3.2, AX_SITES[firing], AZ + 3.2], text: 'NA+ IN', on: true } : null,
+      io.k ? { at: [AX - 3.2, AX_SITES[firing], AZ + 3.2], text: 'K+ OUT', on: true } : null ].filter(Boolean); })() : [];
+  const glu = uT > .2 && uT < 2.2, live = eF && T < eF.tT + 2.5;
+  if (k > .6) s += callouts([
+    { at: [50.5, 212, 22.5], text: 'DENDRITE', on: !!eL && uP < 1.2 },
+    { at: BR1[2].sp[1].top, text: 'DENDRITIC SPINE', on: false },
+    { at: [57, 189, 19], text: 'CELL BODY', on: vS > -60 },
+    { at: [50, 181, 22.4], text: 'NUCLEUS', on: false },
+    { at: NISSL[1], text: 'NISSL BODIES', on: false },
+    { at: GOLGI[0][3], text: 'GOLGI APPARATUS', on: false },
+    { at: MITO1[0][1], text: 'MITOCHONDRION', on: false },
+    { at: [AX + 2.6, 166, AZ + 1.5], text: 'AXON HILLOCK', on: !!eF && Math.abs(T - eF.tF - .2) < .3 },
+    { at: [AX + 2, 158, AZ + 1], text: 'INITIAL SEGMENT', on: vI[0] > -55 },
+    { at: [AX + .8, 147, AZ], text: 'MICROTUBULES', on: false },
+    { at: [AX, 108, AZ + 4.9], text: 'MYELIN SHEATH', on: false },
+    { at: [AX - 1.4, 110, AZ + 5.4], text: 'SCHWANN CELL', on: false },
+    { at: [AX + 1.9, 98, AZ], text: 'NODE OF RANVIER', on: vI[3] > -55 },
+    { at: addv([AX, 117.2, AZ], scl(nodeChannels(118)[0].d, 2.8)), text: 'NA+ CHANNELS', on: vI[2] > -60 && T - (eF ? eF.sites[2] : 0) < .14 },
+    { at: addv([AX, 118.8, AZ], scl(nodeChannels(118)[1].d, 2.8)), text: 'K+ CHANNELS', on: vI[2] > -75 && eF && T - eF.sites[2] > .1 && T - eF.sites[2] < .5 },
+    { at: addv([AX, 78.8, AZ], scl(nodeChannels(78)[3].d, 2.8)), text: 'NA/K PUMP', on: false },
+    { at: [AX, 68, AZ + 1.9], text: 'AXON', on: !!eF && T > eF.sites[0] && T < eF.tT + .3 },
+    { at: [52, 51, 21.5], text: 'AXON TERMINAL', on: uT > -.05 && uT < .6 },
+    { at: VES[6], text: 'VESICLES', on: uT > .05 && uT < .6 },
+    { at: onBlob(BOUT, BOUTR, CA_D[0]), text: 'CA2+ CHANNELS', on: uT > -.05 && uT < .35 },
+    { at: onBlob(BOUT, BOUTR, TR_D[0]), text: 'REUPTAKE PUMP', on: uT > 1.3 && uT < 2.2 },
+    { at: [SYN[0] + 3, 43.1, SYN[2] + 2.5], text: 'SYNAPTIC CLEFT', on: glu },
+    glu ? { at: [SYN[0] - 1.2, 42.4, SYN[2] + 1.6], text: 'GLUTAMATE', on: true } : null,
+    { at: REC_TIP[0], text: 'AMPA RECEPTORS', on: glu && !blkOf(st, eF) },
+    { at: [52.6, 41, 16], text: 'POSTSYN DENSITY', on: false },
+    { at: [57, 26, 18], text: 'NEURON 2', on: v2 > -66 },
+    { at: [70, N2Y - 3.4, N2Z], text: 'N2 AXON', on: false },
+    { at: lerp3(gS.tip, gS.A0, .5), text: 'STIM ELECTRODE', on: adv > .5 },
+    { at: [79, 232, STB.z1], text: 'STIMULATOR', on: uP < .6 },
+    { at: lerp3(standGeo(STANDS[1], 1).tip, standGeo(STANDS[1], 1).A0, .45), text: 'REC ELECTRODE 1', on: !!live },
+    { at: lerp3(standGeo(STANDS[2], 1).tip, standGeo(STANDS[2], 1).A0, .45), text: 'REC ELECTRODE 2', on: !!live },
+    { at: [SC.x1, 125, SC.z1 - 2], text: 'OSCILLOSCOPE', on: false },
+    { at: [BOTTLES[0].x, BOTTLES[0].y, 14], text: 'CNQX BLOCKER', on: st.block > .5 },
+    ...ionL ].filter(Boolean), B);
+  else s += callouts([
+    { at: [50.5, 212, 22.5], text: 'DENDRITES', on: !!eL && uP < 1.2 },
+    { at: [57, 189, 19], text: 'CELL BODY', on: vS > -60 },
+    { at: [AX + 2.6, 166, AZ + 1.5], text: 'AXON HILLOCK', on: !!eF && Math.abs(T - eF.tF - .2) < .3 },
+    { at: [AX, 108, AZ + 4.9], text: 'MYELIN SHEATH', on: false },
+    { at: [AX + 1.9, 98, AZ], text: 'NODE OF RANVIER', on: vI[3] > -55 },
+    { at: [52, 51, 21.5], text: 'AXON TERMINAL', on: uT > -.05 && uT < .6 },
+    { at: [SYN[0] + 3, 43.1, SYN[2] + 2.5], text: 'SYNAPSE', on: glu },
+    { at: [57, 26, 18], text: 'NEURON 2', on: v2 > -66 },
+    { at: lerp3(gS.tip, gS.A0, .5), text: 'STIM ELECTRODE', on: adv > .5 },
+    { at: [79, 232, STB.z1], text: 'STIMULATOR', on: uP < .6 },
+    { at: lerp3(standGeo(STANDS[1], 1).tip, standGeo(STANDS[1], 1).A0, .45), text: 'REC ELECTRODE 1', on: !!live },
+    { at: lerp3(standGeo(STANDS[2], 1).tip, standGeo(STANDS[2], 1).A0, .45), text: 'REC ELECTRODE 2', on: !!live },
+    { at: [SC.x1, 125, SC.z1 - 2], text: 'OSCILLOSCOPE', on: false },
+    { at: [BOTTLES[0].x, BOTTLES[0].y, 14], text: 'CNQX BLOCKER', on: st.block > .5 },
+    { at: [BOTTLES[1].x, BOTTLES[1].y, 14], text: 'SALINE', on: !!d && d.src === 1 },
+    ...ionL ], B);
+  return s;
+}
+
+/* ---------- behaviour (one state object, one clock) ---------- */
+let loopOn = false;
+const evBusy = (st, e) => st.T - e.t0 < (e.fires ? 5.2 : 2.4);
+function busy(st){ const e = st.ev[st.ev.length - 1]; return (e && evBusy(st, e)) || !!st.drop || st.block !== st.blockT || st.press > 0; }
+function run(){
+  if (loopOn) return; loopOn = true;
+  ui.animate(dt => { const st = ui.st; st.T += dt; st.press = Math.max(0, st.press - dt);
+    if (st.drop){ const d = st.drop; d.t += dt;
+      if (d.t >= 1.5 && !d.landed){ d.landed = true; st.blockT = d.src === 0 ? 1 : 0; ui.flash(d.src === 0 ? 'CNQX lands on the synapse: the AMPA receptors are blocked' : 'Saline washes the CNQX off the receptors', 2400); }
+      if (d.t >= 2.6) st.drop = null; }
+    if (st.block < st.blockT) st.block = Math.min(1, st.block + dt/.6); else if (st.block > st.blockT) st.block = Math.max(0, st.block - dt/1.2);
+    const e = st.ev[st.ev.length - 1];
+    if (e){
+      if (e.said < 1 && e.fires && st.T >= e.tF){ e.said = 1; ui.flash('Threshold reached: an action potential fires', 2000); }
+      if (e.said < 1 && !e.fires && st.T >= e.t0 + SIM.tS + SIM.DS/SIM.VD + SIM.TR){ e.said = 1; ui.flash('Too weak: it fades out below the -55 mV threshold', 2400); }
+      if (e.fires && e.said < 2 && st.T >= e.tT){ e.said = 2; e.blk = st.block > .5 ? 1 : 0; }
+      if (e.fires && e.said < 3 && st.T >= e.tT + .9){ e.said = 3; ui.flash(e.blk ? 'Blocked: glutamate is released but CNQX holds the receptors shut' : 'Glutamate opens the receptors: neuron 2 depolarises', 2400); }
+    }
+    const b = busy(st); if (!b) loopOn = false; return b; });
+}
+function poke(st, kind){
+  const e = st.ev[st.ev.length - 1];
+  if (e && st.T - e.t0 < (e.fires ? 3 : 1.1)) return ui.flash('Refractory: let the trace settle first');
+  st.ev = st.ev.filter(x => st.T - x.t0 < 9); st.ev.push(evMake(st.T, kind)); st.kind = kind; st.press = .25; run();
+}
+function addDrop(st, src){
+  if (st.drop) return ui.flash('One drop at a time');
+  if (src === 0 && st.blockT === 1) return ui.flash('The blocker is already on the synapse');
+  if (src === 1 && st.blockT === 0 && st.block === 0) return ui.flash('No blocker to wash out yet');
+  st.drop = { src, t: 0, landed: false }; run();
+}
+const fmtV = v => (v > .5 ? '+' : '') + Math.round(v) + ' mV';
+
+ui = mountFigure({
+  fig: 'B1', title: 'The neuron', size: [BW + 90, BD, 130], center: [BW/2, BD/2], palette: 'blush', turn: 'full',
+  state: { T: 0, ev: [], kind: 'strong', press: 0, block: 0, blockT: 0, drop: null },
+  scene,
+  stats: st => [ { label: 'Cell body CH1', value: fmtV(vSoma(st, st.T)) },
+    { label: 'Neuron 2 CH2', value: fmtV(vN2(st, st.T)), small: true },
+    { label: 'Threshold', value: '-55 mV', small: true } ],
+  buttons: [
+    { label: 'Poke strong', onClick: st => poke(st, 'strong') },
+    { label: 'Poke weak', onClick: st => poke(st, 'weak') },
+    { label: 'Add blocker', onClick: st => addDrop(st, 0) },
+    { label: 'Wash out', onClick: st => addDrop(st, 1) },
+  ],
+  acts: { poke: st => poke(st, 'strong'), cnqx: st => addDrop(st, 0), saline: st => addDrop(st, 1) },
+  params: (st, q) => {
+    if (q.get('block') === '1') st.block = st.blockT = 1;
+    if (q.has('poke')){ const kind = q.get('poke') === 'weak' ? 'weak' : 'strong', e = evMake(0, kind);
+      st.T = +(q.get('pt') || 1.5); e.said = 9; if (st.T >= e.tT) e.blk = st.block > .5 ? 1 : 0; st.ev = [e]; st.kind = kind; }
+    if (q.has('drop')){ const t = +q.get('drop'); st.drop = { src: q.get('src') === '1' ? 1 : 0, t, landed: t >= 1.5 }; }
+  },
+});
+xrMount(() => ui, () => '');
+addEventListener('load', () => setTimeout(() => ui.render(), 400));
+</script></body></html>
