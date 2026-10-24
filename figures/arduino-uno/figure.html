@@ -1,0 +1,657 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Arduino Uno</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Arduino Uno R3 on a desk, a mini breadboard with a red LED beside it. 1 unit = 1 mm.
+   x = depth (front at high x), y = width (+y viewer-left at the default view), z = up.
+   The board lies with its USB end toward -y and its digital header toward the front (+x). Board-local (u, v) is the
+   usual top view of an Uno: u along the long edge from the USB end (0..68.6), v across from the power/analog edge
+   (0..53.3). World x = BX0 + v, y = BY0 + u, which keeps the board unmirrored in this engine's projection.
+
+   How it really works (where power, data and the pin-13 signal are after each step):
+   1. Plug in USB: the computer's 5 V reaches the USB-B jack's VBUS contact -> 500 mA polyfuse -> FDN340P P-MOSFET
+      (on while no barrel-jack supply is present; the LMV358 comparator decides) -> the 5 V net -> VCC of the
+      ATmega328P and ATmega16U2, the 5V header pin, the LP2985 3.3 V regulator. The green ON LED lights. The 16U2 (the
+      USB chip, clocked by the 16 MHz HC-49 crystal) enumerates as a serial port. The 328P (clocked by its 16 MHz ceramic
+      resonator) runs whatever sketch is in its flash: out of this box, an empty one (444 bytes).
+   2. Upload Blink: the IDE opens the port and drops DTR. The 16U2 pulls its DTR pin low, and the 100 nF auto-reset
+      capacitor passes that edge to the 328P's RESET pin (held high by a 10 k pull-up): the chip resets into the
+      Optiboot bootloader, which flashes the L LED three times. The sketch (924 bytes) arrives over USB D+/D- (through
+      two 22 ohm resistors) into the 16U2, which forwards it as serial data through 1 k resistors to the 328P's RXD
+      (pin 2); replies go back from TXD (pin 3). The RX and TX LEDs flicker. The bootloader writes it into flash page by
+      page, then jumps to the new sketch.
+   3. Blink runs: PB5 (DIP pin 19 = digital pin 13) goes HIGH for one second, LOW for one second. The pin-13 trace runs
+      to the D13 header socket and to the LMV358 buffer that drives the yellow L LED.
+   4. Wire an LED to pin 13: two jumpers already sit in the breadboard; their free ends go into D13 and the GND socket
+      beside it. D13 -> jumper -> column 9 -> 220 ohm resistor -> column 5 -> LED anode; LED cathode -> column 4 ->
+      jumper -> GND. (5 V - 2 V) / 220 ohm = 14 mA: the red LED blinks with L.
+   5. Press reset: the button grounds RESET; the chip stops (pin 13 LOW). On release Optiboot flashes L, waits for an
+      upload, then restarts the sketch from the top.
+   The barrel jack and the 5 V regulator are drawn but unpowered: this board runs from USB.
+
+   Parts (each held by another):
+   DESK       wooden desk top
+   BOARD      PCB (FR4, solder mask, silkscreen) . 4 mounting holes . copper traces (top) . bottom-layer traces + vias
+   USB        USB-B jack: shell, tongue, 4 contacts . USB-B plug: overmold, metal shell, strain relief . cable over the
+              desk edge
+   POWER      barrel jack: housing, centre pin, sleeve contact, 3 terminals . M7 reverse-polarity diode . two 47 uF
+              electrolytic caps (can, base, foil winding) . NCP1117 5 V regulator (SOT-223 body, tab, leads, die) .
+              LP2985 3.3 V regulator . MF-MSMF050 polyfuse . FDN340P MOSFET . LMV358 op-amp
+   USB CHIP   ATmega16U2 (QFN, die, bond wires) . 16 MHz HC-49 crystal (can, quartz blank, clips) . 2 load caps .
+              2 x 22 ohm USB resistors . 100 nF auto-reset cap . 16U2 ICSP header . 2 x 1 k serial resistors
+   MCU        ATmega328P-PU (DIP-28 body, 28 legs, lead frame, die paddle, die with flash / SRAM / CPU, bond wires) .
+              DIP socket (2 rails, 2 end bars) . 16 MHz ceramic resonator . 10 k reset pull-up . 100 nF decoupling cap .
+              ICSP header (2 x 3)
+   CONTROLS   reset tact switch (base, plate, plunger, snap dome, legs) . L, TX, RX, ON LEDs + their resistors
+   HEADERS    digital 10 + 8, power 8, analog 6 (black bodies, gold contacts)
+   CIRCUIT    mini breadboard (body, 170 holes, centre channel, 34 spring-clip strips) . 220 ohm resistor (body, 4 bands,
+              legs) . red 5 mm LED (epoxy, flange, anvil, post, die, bond wire, legs) . 2 Dupont jumpers (housings, wire) */
+
+/* ---------- layout ---------- */
+const BH = 6, DW = 116, DD = 138, DRAD = 6;                 // desk top
+const BX0 = 108, BY0 = 80;                                   // board v = 0 edge at x = BX0, u = 0 edge at y = BY0
+const PB = BH + 2, PT = BH + 3.6, ZH = PT + 8.5;              // PCB bottom (on its solder joints), top; header top
+const UW = (u, v, z) => [BX0 - v, BY0 - u, z];
+const uon = (z, uv) => uv.map(([u, v]) => UW(u, v, z));
+const ubx = (u0, v0, z0, u1, v1, z1) => [[BX0 - Math.max(v0, v1), BY0 - Math.max(u0, u1), z0], [BX0 - Math.min(v0, v1), BY0 - Math.min(u0, u1), z1]];
+const uBox = (u0, v0, z0, u1, v1, z1, m, w = .5, sh = toneI) => { const [a, b] = ubx(u0, v0, z0, u1, v1, z1); return box(...a, ...b, m, sh, w); };
+const uIt = (u0, v0, z0, u1, v1, z1, svg) => ({ box: ubx(u0, v0, z0, u1, v1, z1), svg });
+const uCyl = (u, v, z0, z1, r, m, w = .6, n = 20) => cyl(BX0 - v, BY0 - u, z0, z1, r, m, toneI, w, n);
+const mw = w => `style="stroke-width:${(+w).toFixed(2)}"`;   // a stroke in model units (not rescaled by inkScale)
+const ghost = (body, inner, k) => k > 0 ? `<g opacity="${f(1 - .8*k)}">${body}</g><g opacity="${f(k)}">${inner()}</g>` : body;
+const ucirc = (u, v, z, r, n = 14) => uon(z, ellUV(u, v, r, r, n));
+const urect = (u0, v0, u1, v1, z) => uon(z, rectUV(u0, v0, u1, v1));
+// text lying on the board top: reading along +u (txU) or along +v (txV)
+const txU = (u, v, z, str, size, col = '#f4f6f2', wt = 700, anc = 'middle') => `<text transform="${txM(P(...UW(u, v, z)), Dv(0,-1,0), Dv(1,0,0))}" font-size="${size}" fill="${col}" text-anchor="${anc}" font-family="ui-monospace,Menlo,monospace" font-weight="${wt}" letter-spacing=".04em">${str}</text>`;
+const txV = (u, v, z, str, size, col = '#f4f6f2', wt = 700, anc = 'middle') => `<text transform="${txM(P(...UW(u, v, z)), Dv(-1,0,0), Dv(0,-1,0))}" font-size="${size}" fill="${col}" text-anchor="${anc}" font-family="ui-monospace,Menlo,monospace" font-weight="${wt}" letter-spacing=".04em">${str}</text>`;
+// text on the breadboard (world): reading along -y, up = -x
+const txW = (x, y, z, str, size, col = INK, wt = 700) => `<text transform="${txM(P(x, y, z), Dv(0,-1,0), Dv(1,0,0))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${wt}" letter-spacing=".04em">${str}</text>`;
+
+/* ---------- colours ---------- */
+const CHIP = { l:'#4d4a47', m:'#363331', d:'#232120' }, HDR = { l:'#4a4642', m:'#34312e', d:'#211f1d' };
+const GOLD = matOf('#e8c45a'), TIN = METAL, COP = '#d8935a', SILK = '#f4f6f2', HOLE = '#2b2523';
+const ALU = { l:'#eef0f0', m:'#c9cfd2', d:'#949da1' }, PLUGM = { l:'#5a5651', m:'#3d3935', d:'#262321' };
+const BBM = { l:'#fbfaf3', m:'#e6e2d6', d:'#c2bcae' }, WHITE = matOf('#f3efe4'), TAN = matOf('#c9a46a');
+const FUSE = matOf('#d7b73e'), RESB = matOf('#d9c49a'), CAPT = matOf('#c8946a'), SMDK = matOf('#2f2c2a');
+const LEDR = { l:'#ff8a75', m:'#e2483d', d:'#a8302a' }, LEDRL = { l:'#fff0d8', m:'#ffb08a', d:'#ff6a4a' };
+const WYEL = '#f2c230', WBLK = '#2b2724', QUARTZ = matOf('#e6f3f4');
+
+/* ---------- the board's parts, in board mm ---------- */
+const OUTL = [[0,0],[66.04,0],[68.58,2.54],[68.58,50.8],[66.04,53.34],[0,53.34]];
+const HOLES = [[13.97,2.54],[15.24,50.8],[66.04,7.62],[66.04,35.56]];
+const DIG = [['SCL',21.34],['SDA',23.88],['AREF',26.42],['GND',28.96],['13',31.5],['12',34.04],['~11',36.58],['~10',39.12],['~9',41.66],['8',44.2],
+  ['7',48.26],['~6',50.8],['~5',53.34],['4',55.88],['~3',58.42],['2',60.96],['TX1',63.5],['RX0',66.04]];
+const PWR = ['', 'IOREF', 'RESET', '3V3', '5V', 'GND', 'GND', 'VIN'], ANA = ['A0','A1','A2','A3','A4','A5'];
+const DIPU = 47.5, DIPV = 14.3, DIPZ0 = PT + 3.8, DIPZ1 = PT + 7.1;
+const dipPinU = k => k <= 14 ? 64.01 - (k - 1)*2.54 : 30.99 + (k - 15)*2.54;   // pin 1 top right, by the notch
+const dipPinV = k => k <= 14 ? DIPV + 3.81 : DIPV - 3.81;
+const LEDS = { L:[30.5, 44, '#ffcf3a'], TX:[30.5, 40.5, '#ffcf3a'], RX:[30.5, 38.3, '#ffcf3a'], ON:[59, 44.2, '#5fe07a'] };
+const XTAL = [21, 23.5], U2 = [21, 33], RESO = [42.5, 21.5], RST = [6.5, 49.5];
+// copper: top-layer runs (solid) and bottom-layer runs (dashed, through vias)
+const TRK = {
+  dm:   [[7.9,37.3],[10.6,37.3],[11.6,35.5],[13.8,35.5],[15.9,33.4],[18.5,33.4]],
+  dp:   [[7.9,38.7],[11.3,38.7],[12.2,37.5],[13.8,37.5],[17.1,34.2],[18.5,34.2]],
+  vbus: [[9.6,36.6],[10.4,35.8],[10.4,27]],
+  v5a:  [[14.6,27],[14.6,21.6],[15.6,20.6],[27.4,20.6],[29.05,22.25],[29.05,23.45]],
+  v5b:  [[30,25.75],[31.4,25.75],[33,24.15],[47.6,24.15],[49.4,22.35],[49.4,19.4],[48.77,18.6],[48.77,DIPV + 3.81]],
+  v5c:  [[34,24.15],[34.8,23.35],[34.8,5.8],[34.54,4.8],[34.54,2.54]],
+  v5d:  [[20.8,4.3],[21.6,5.0],[33.6,5.0],[34.54,4.8]],
+  v33:  [[25.55,5.6],[25.55,5.0]],
+  vin:  [[6,12.6],[6.3,13.0],[6.3,16]],
+  vin2: [[2.6,16],[1.4,17.2],[1.4,19.4],[11.6,19.4],[13,18],[13,5.2],[16.2,5.2],[16.2,4.3]],
+  txl:  [[23.5,34.0],[24.8,34.0],[25.4,35.4],[27,35.4],[28.4,36.8],[57.2,36.8],[60.2,33.8],[60.2,20.8],[61.47,19.5],[61.47,DIPV + 3.81]],
+  rxl:  [[23.5,33.2],[24.8,33.2],[25.4,34.2],[27,34.2],[28.7,35.9],[56.8,35.9],[59.3,33.4],[59.3,20.8],[58.93,19.6],[58.93,DIPV + 3.81]],
+  dtr:  [[21.6,35.5],[21.6,37.3],[25,40.7],[25.7,41.5]],
+  rst:  [[27.3,41.5],[28.2,42.4],[57,42.4],[61.6,37.8],[61.6,24],[63.2,22.4],[64.01,19.6],[64.01,DIPV + 3.81]],
+  x1:   [[18.56,23.5],[18.56,28.6],[19.4,29.9],[19.4,30.5]],
+  x2:   [[23.44,23.5],[23.44,28.6],[22.6,29.9],[22.6,30.5]],
+  xc1:  [[18.56,26.6],[17.3,26.6],[16.4,27.4]],
+  xc2:  [[23.44,26.6],[24.7,26.6],[25.6,27.4]],
+  r1:   [[41.2,21.0],[41.15,19.6],[41.15,DIPV + 3.81]],
+  r2:   [[43.8,21.0],[43.69,19.6],[43.69,DIPV + 3.81]],
+  opin: [[36.6,26.6],[33.6,26.6],[32.9,27.3]],
+  ledL: [[29.5,43.0],[29.5,44]],
+  opout:[[30.37,33.6],[30.37,34.6]],
+};
+const BOT = {
+  p13:  [[41.15,DIPV - 3.81],[39.88,DIPV - 2.54],[39.88,43.6],[33.2,50.3],[31.5,50.8]],
+  p13b: [[39.88,23.3],[36.6,26.6]],
+  ledb: [[30.37,34.6],[29.5,35.5],[29.5,43.0]],
+};
+const VIAS = [[36.6,26.6],[30.37,34.6],[29.5,43.0]];
+
+/* ---------- the circuit on the breadboard (world coordinates) ---------- */
+const BBX0 = 6, BBY0 = BY0 - 49.42, BBT = BH + 8.5, BBW = 35, BBL = 46;
+const ROWX = {}; 'abcde'.split('').forEach((r, i) => ROWX[r] = BBX0 + 3.53 + i*2.54); 'fghij'.split('').forEach((r, i) => ROWX[r] = BBX0 + 3.53 + 4*2.54 + 7.62 + i*2.54);
+const colY = c => BBY0 + 2.68 + (c - 1)*2.54;
+const LEDC = [ROWX.g, (colY(8) + colY(9))/2], LEDZ0 = BBT + 3.2;
+const JUMP = [ { hu: 31.5, col: 4, col2: WYEL, name: 'D13', lx: 46.5 }, { hu: 28.96, col: 8, col2: WBLK, name: 'GND', lx: 50.5 } ];
+const PLUGX = BX0 - 38, FACE = BY0 + 6.2, ZJACK = PT + 5.45, ZREST = BH + 5.5;
+
+/* ---------- small helpers ---------- */
+const add3 = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]], scl3 = (a, k) => a.map(v => v*k), lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const boxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const bez = (p0, p1, p2, p3, n) => Array.from({length: n + 1}, (_, i) => { const t = i/n, a = (1-t)**3, b = 3*(1-t)**2*t, c = 3*(1-t)*t*t, d = t**3;
+  return [0,1,2].map(k => a*p0[k] + b*p1[k] + c*p2[k] + d*p3[k]); });
+// round each interior corner of a route (a cable bends, it doesn't kink)
+const bend = (pts, r = 3) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k]) * d/la), q = c.map((v, k) => b[k] + (v - b[k]) * d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+// a cable cut into short pieces, each with its own box, so byDepth puts it behind or in front of the solids it passes
+const cable = (pts, col, r, Lp = 3, ends = false) => { const out = [];
+  for (let i = 0; i < pts.length - 1; ){
+    let j = i + 1, len = 0; while (j < pts.length - 1 && len < Lp){ len += Math.hypot(...pts[j].map((v, k) => v - pts[j - 1][k])); j++; }
+    if (len < Lp) while (j < pts.length - 1) j++;
+    const seg = pts.slice(i, j + 1), d = pd(seg, false);
+    out.push({ box: boxOf(seg, r*.7), svg: `<path d="${d}" fill="none" stroke="${INK}" ${mw(2*r + .55)} stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" ${mw(2*r)} stroke-linecap="round" stroke-linejoin="round"/>` });
+    i = j; }
+  return out; };
+const polyAt = (pts, t) => { const seg = []; let tot = 0;
+  for (let i = 0; i < pts.length - 1; i++){ const l = Math.hypot(pts[i+1][0] - pts[i][0], pts[i+1][1] - pts[i][1]); seg.push(l); tot += l; }
+  let d = ((t % 1) + 1) % 1 * tot;
+  for (let i = 0; i < seg.length; i++){ if (d <= seg[i]) { const k = seg[i] ? d/seg[i] : 0; return [pts[i][0] + (pts[i+1][0] - pts[i][0])*k, pts[i][1] + (pts[i+1][1] - pts[i][1])*k]; } d -= seg[i]; }
+  return pts[pts.length - 1]; };
+
+/* ---------- what the board is doing right now (derived from the one state object) ---------- */
+function sig(st, now){
+  const o = { pow: st.plugged && st.plugK >= 1, pin: false, tx: false, rx: false, usb: false, ser: false, dtr: false, wr: false };
+  if (!o.pow) return o;
+  const el = st.frz != null ? st.frz : (now - st.ph0) / 1000;
+  const flashes = e => e < .45 && ((e*1000/75) | 0) % 2 === 0;
+  if (st.phase === 'run') o.pin = st.sketch === 'blink' && ((st.frzRun != null ? st.frzRun : (now - st.runT0)) % 2000) < 1000;
+  else if (st.phase === 'boot') { o.pin = st.bootLen > .5 && flashes(el); o.usb = el < .8 && st.bootLen < .5; }
+  else if (st.phase === 'upload'){
+    o.usb = true; o.dtr = el < .3;
+    if (el >= .25 && el < .7) o.pin = flashes(el - .25);
+    if (el >= .7 && el < 2.9){ o.ser = true; o.wr = true; o.rx = ((el*1000/55) | 0) % 2 === 0; o.tx = ((el*1000/90) | 0) % 3 === 0; }
+  }
+  return o;
+}
+const upProg = (st, now) => st.phase !== 'upload' ? 0 : Math.max(0, Math.min(1, ((st.frz != null ? st.frz : (now - st.ph0)/1000) - .7) / 2.2));
+
+/* ---------- the PCB: substrate, mask, silkscreen, copper ---------- */
+function pcbItem(st, m, k, sg, now){
+  const A = uon(PB, OUTL), B = uon(PT, OUTL), zc = PT + .02;
+  const top = k > 0 ? mix(m.l, '#f2efe7', .3*k) : m.l;
+  let s = loft(A, B, n => toneI(n, { l: m.m, m: m.d, d: mix(m.d, '#000000', .3) })) + fill(pd(B), top);
+  const tp = pts => pd(pts.map(([u, v]) => UW(u, v, zc)), false);
+  const all = Object.values(TRK).map(tp).join(''), bot = Object.values(BOT).map(tp).join('');
+  // the traces show faintly through the solder mask; in see-through the mask clears and the copper shows
+  s += `<path d="${all}" fill="none" stroke="${mix(m.l, '#ffffff', .28)}" ${mw(.55)} stroke-linecap="round" stroke-linejoin="round" opacity="${f(1 - k)}"/>`;
+  if (k > 0){
+    s += `<g opacity="${f(k)}"><path d="${bot}" fill="none" stroke="${mix(COP, '#f2efe7', .35)}" ${mw(.5)} stroke-dasharray="1.1 .7" stroke-linecap="round"/>`
+      + `<path d="${all}" fill="none" stroke="${COP}" ${mw(.55)} stroke-linecap="round" stroke-linejoin="round"/>`
+      + VIAS.map(([u, v]) => shape(ucirc(u, v, zc, .45, 10), COP, .25) + fill(pd(ucirc(u, v, zc + .01, .2, 8)), HOLE)).join('');
+    // live nets
+    const hot = (keys, col, w = .7, src = TRK) => `<path d="${keys.map(q => tp(src[q])).join('')}" fill="none" stroke="${col}" ${mw(w)} stroke-linecap="round" stroke-linejoin="round"/>`;
+    if (sg.pow) s += hot(['vbus', 'v5a', 'v5b', 'v5c', 'v5d', 'v33'], '#ff8a3a', .6);
+    if (sg.pin) s += hot(['opin', 'opout', 'ledL'], '#e2483d') + hot(['p13', 'p13b', 'ledb'], '#e2483d', .6, BOT);
+    if (sg.dtr) s += hot(['dtr', 'rst'], '#43c25c');
+    const dots = (key, n, speed, col, rev = false, src = TRK) => { let d = ''; for (let i = 0; i < n; i++){ const t = (now/1000*speed + i/n) % 1, [u, v] = polyAt(src[key], rev ? 1 - t : t);
+      d += fill(pd(ucirc(u, v, zc + .03, .42, 8)), col); } return d; };
+    if (sg.usb) s += hot(['dm', 'dp'], '#3e86d9', .55) + dots('dm', 3, 1.4, '#ffffff') + dots('dp', 3, 1.4, '#ffffff');
+    if (sg.ser) s += hot(['txl'], '#f2c230', .55) + dots('txl', 9, .45, '#fff4d6') + hot(['rxl'], '#f2c230', .55) + dots('rxl', 3, .45, '#fff4d6', true);
+    s += `</g>`;
+  }
+  // silkscreen
+  const sk = (pts, w = .25) => `<path d="${pd(pts.map(([u, v]) => UW(u, v, zc + .01)), true)}" fill="none" stroke="${SILK}" ${mw(w)}/>`;
+  s += txU(50, 33.6, zc, 'ARDUINO', 3.1, SILK, 800) + txU(50, 26.6, zc, 'UNO', 6.2, SILK, 800);
+  s += sk(ellUV(47.1, 39.3, 3.1, 2.3, 18), .55) + sk(ellUV(52.9, 39.3, 3.1, 2.3, 18), .55);
+  s += `<path d="${pd([UW(46, 39.3, zc), UW(48.2, 39.3, zc)], false)}${pd([UW(51.8, 39.3, zc), UW(54, 39.3, zc)], false)}${pd([UW(52.9, 38.2, zc), UW(52.9, 40.4, zc)], false)}" fill="none" stroke="${SILK}" ${mw(.5)}/>`;
+  s += txU(44, 46.3, zc, 'DIGITAL (PWM~)', 1.7, SILK, 700);
+  for (const [t, u] of DIG) s += txV(u + .45, 48.6, zc, t, 1.05, SILK, 700, 'end');
+  PWR.forEach((t, i) => { if (t) s += txV(24.38 + i*2.54 + .45, 4.3, zc, t, 1.05, SILK, 700, 'start'); });
+  ANA.forEach((t, i) => s += txV(50.8 + i*2.54 + .45, 4.3, zc, t, 1.05, SILK, 700, 'start'));
+  s += txU(44, 7.4, zc, 'POWER', 1.4, SILK) + txU(57.2, 7.4, zc, 'ANALOG IN', 1.4, SILK);
+  s += txU(RST[0], 45.2, zc, 'RESET', 1.3, SILK) + txU(64.5, 21.9, zc, 'ICSP', 1.3, SILK) + txU(16, 45.4, zc, 'ICSP', 1.1, SILK);
+  for (const n of ['L', 'TX', 'RX']) s += txU(28.2, LEDS[n][1] - .45, zc, n, 1.3, SILK, 800, 'end');
+  s += txU(56.8, LEDS.ON[1] - .45, zc, 'ON', 1.3, SILK, 800, 'end');
+  s += sk(rectUV(28.6, 7.9, 66.4, 20.7)) + sk(rectUV(12.0, 39.3, 20.0, 44.7)) + sk(rectUV(61.8, 23.0, 67.2, 31.0));
+  // mounting holes: a tinned ring and the desk seen through the hole
+  for (const [u, v] of HOLES) s += shape(ucirc(u, v, zc, 1.9, 18), '#dfe2e2', .35) + fill(pd(ucirc(u, v, zc + .01, 1.5, 18)), '#5a4632') + ink(pd(ucirc(u, v, zc + .01, 1.5, 18)), .3);
+  s += ink(pd(B), 1.1) + hullInk([...A, ...B], 2.2);
+  return { box: ubx(0, 0, PB, 68.58, 53.34, PT), svg: s };
+}
+
+/* ---------- female headers (black, gold contacts inside) ---------- */
+function header(IT, u0, n, v, k){
+  const ua = u0 - 1.27, ub = u0 + (n - 1)*2.54 + 1.27, va = v - 1.27, vb = v + 1.27;
+  let body = uBox(ua, va, PT, ub, vb, ZH, HDR, .7), holes = '';
+  for (let i = 0; i < n; i++){ const u = u0 + i*2.54; holes += pd(urect(u - .5, v - .5, u + .5, v + .5, ZH + .02)); }
+  body += fill(holes, '#141110') + `<path d="${holes}" fill="none" stroke="${GOLD.m}" ${mw(.12)} opacity=".7"/>`;
+  const inner = () => { let c = ''; for (let i = 0; i < n; i++){ const u = u0 + i*2.54; c += uBox(u - .3, v - .45, PT - 1.4, u + .3, v + .45, ZH - .5, GOLD, .25); } return c; };
+  IT.push(uIt(ua, va, PT, ub, vb, ZH, ghost(body, inner, k)));
+}
+// 2 x 3 male ICSP header: black base, gold pins
+function icsp(IT, us, vs){
+  const ua = Math.min(...us) - 1.27, ub = Math.max(...us) + 1.27, va = Math.min(...vs) - 1.27, vb = Math.max(...vs) + 1.27;
+  IT.push(uIt(ua, va, PT, ub, vb, PT + 2.5, uBox(ua, va, PT, ub, vb, PT + 2.5, HDR, .6)));
+  for (const u of us) for (const v of vs) IT.push(uIt(u - .32, v - .32, PT + 2.5, u + .32, v + .32, PT + 8.5, uBox(u - .32, v - .32, PT + 2.5, u + .32, v + .32, PT + 8.5, GOLD, .3)));
+}
+// a two-terminal SMD chip (resistor / capacitor / fuse): body + two metal ends, along u or v
+function smd(IT, u, v, lu, lv, h, m, alongU = true, endM = TIN, e = .3){
+  const parts = [];
+  if (alongU){ parts.push(uIt(u - lu/2, v - lv/2, PT, u - lu/2 + e, v + lv/2, PT + h, uBox(u - lu/2, v - lv/2, PT, u - lu/2 + e, v + lv/2, PT + h, endM, .25)));
+    parts.push(uIt(u - lu/2 + e, v - lv/2, PT, u + lu/2 - e, v + lv/2, PT + h, uBox(u - lu/2 + e, v - lv/2, PT, u + lu/2 - e, v + lv/2, PT + h, m, .25)));
+    parts.push(uIt(u + lu/2 - e, v - lv/2, PT, u + lu/2, v + lv/2, PT + h, uBox(u + lu/2 - e, v - lv/2, PT, u + lu/2, v + lv/2, PT + h, endM, .25))); }
+  else { parts.push(uIt(u - lu/2, v - lv/2, PT, u + lu/2, v - lv/2 + e, PT + h, uBox(u - lu/2, v - lv/2, PT, u + lu/2, v - lv/2 + e, PT + h, endM, .25)));
+    parts.push(uIt(u - lu/2, v - lv/2 + e, PT, u + lu/2, v + lv/2 - e, PT + h, uBox(u - lu/2, v - lv/2 + e, PT, u + lu/2, v + lv/2 - e, PT + h, m, .25)));
+    parts.push(uIt(u - lu/2, v + lv/2 - e, PT, u + lu/2, v + lv/2, PT + h, uBox(u - lu/2, v + lv/2 - e, PT, u + lu/2, v + lv/2, PT + h, endM, .25))); }
+  IT.push(...parts);
+}
+// gull-wing leads of an SMD package: list of [u, v, side] where side is the outward direction ('u+','u-','v+','v-')
+function leads(IT, list, zt, len = .8, wd = .4){
+  for (const [u, v, sd] of list){
+    const du = sd === 'u+' ? 1 : sd === 'u-' ? -1 : 0, dv = sd === 'v+' ? 1 : sd === 'v-' ? -1 : 0;
+    const a = [u, v], b = [u + du*len, v + dv*len], hw = wd/2;
+    const u0 = Math.min(a[0], b[0]) - (dv ? hw : 0), u1 = Math.max(a[0], b[0]) + (dv ? hw : 0), v0 = Math.min(a[1], b[1]) - (du ? hw : 0), v1 = Math.max(a[1], b[1]) + (du ? hw : 0);
+    IT.push(uIt(u0, v0, PT, u1, v1, Math.min(zt, PT + .25), uBox(u0, v0, PT, u1, v1, PT + .22, TIN, .2)));
+  }
+}
+// a black chip body with optional marking text and an inside drawn in see-through
+function chipBody(IT, u0, v0, u1, v1, z0, z1, k, extra, inner){
+  IT.push(uIt(u0, v0, z0, u1, v1, z1, ghost(uBox(u0, v0, z0, u1, v1, z1, CHIP, .55) + extra, inner || (() => ''), k)));
+}
+// bond wires + a die on a plane, for see-through
+function dieArt(cu, cv, z, half, pads, col = '#4f5577'){
+  let s = shape(uon(z, rectUV(cu - half - .3, cv - half - .3, cu + half + .3, cv + half + .3)), TIN.m, .25);
+  s += shape(uon(z + .02, rectUV(cu - half, cv - half, cu + half, cv + half)), col, .3);
+  let g = ''; for (let i = 1; i < 4; i++){ const a = -half + i*half/2; g += pd([UW(cu + a, cv - half, z + .03), UW(cu + a, cv + half, z + .03)], false) + pd([UW(cu - half, cv + a, z + .03), UW(cu + half, cv + a, z + .03)], false); }
+  s += `<path d="${g}" fill="none" stroke="#8a93c0" ${mw(.08)}/>`;
+  let w = ''; for (const [pu, pv, qu, qv] of pads){ const a = UW(pu, pv, z + .03), b = UW(qu, qv, z + .02), mid = add3(lerp3(a, b, .5), [0, 0, .5]);
+    w += pd(bez(a, mid, mid, b, 5), false); }
+  return s + `<path d="${w}" fill="none" stroke="#f3cf5a" ${mw(.1)}/>`;
+}
+
+/* ---------- the board's components ---------- */
+function uno(IT, st, m, k, sg, now){
+  IT.push(pcbItem(st, m, k, sg, now));
+  // headers
+  header(IT, 21.34, 10, 50.8, k); header(IT, 48.26, 8, 50.8, k); header(IT, 24.38, 8, 2.54, k); header(IT, 50.8, 6, 2.54, k);
+  icsp(IT, [13.46, 16, 18.54], [40.73, 43.27]); icsp(IT, [63.23, 65.77], [24.46, 27, 29.54]);
+
+  // USB-B jack: steel shell over the board edge, the opening toward -u; inside a tongue with four contacts
+  { const z0 = PT, z1 = PT + 10.9, faceN = [0, 1, 0];
+    let body = uBox(-6.2, 32, z0, 9.8, 44, z1, ALU, .9);
+    if (vis([0,0,1])) body += `<path d="${pd([UW(-3, 34, z1 + .02), UW(6, 34, z1 + .02)], false)}${pd([UW(-3, 42, z1 + .02), UW(6, 42, z1 + .02)], false)}" fill="none" stroke="${INK}" ${mw(.18)} opacity=".6"/>`
+      + shape(ucirc(2, 38, z1 + .02, .9, 10), ALU.m, .2);
+    if (vis(faceN)){ const op = [[33.8, z0 + 1.6], [42.2, z0 + 1.6], [42.2, z0 + 7.6], [40.6, z0 + 9.3], [35.4, z0 + 9.3], [33.8, z0 + 7.6]].map(([v, z]) => UW(-6.25, v, z));
+      body += shape(op, '#1d1a16', .5) + shape([[35.6, z0 + 3.9], [40.4, z0 + 3.9], [40.4, z0 + 7.0], [35.6, z0 + 7.0]].map(([v, z]) => UW(-6.3, v, z)), WHITE.m, .3); }
+    const inner = () => uBox(-5.6, 35.6, z0 + 3.9, 7, 40.4, z0 + 7, WHITE, .3)
+      + [36.6, 39.4].map(v => uBox(-4.5, v - .45, z0 + 7, 7, v + .45, z0 + 7.15, GOLD, .2)).join('')
+      + rod(UW(7, 36.6, z0 + 7.1), UW(9.6, 36.6, z0 + .1), .22, GOLD, toneI, .2) + rod(UW(7, 39.4, z0 + 7.1), UW(9.6, 39.4, z0 + .1), .22, GOLD, toneI, .2)
+      + rod(UW(7, 37.3, z0 + 3.9), UW(7.9, 37.3, z0 + .1), .22, GOLD, toneI, .2) + rod(UW(7, 38.7, z0 + 3.9), UW(7.9, 38.7, z0 + .1), .22, GOLD, toneI, .2);
+    IT.push(uIt(-6.2, 32, z0, 9.8, 44, z1, act('plug', ghost(body, inner, k)))); }
+
+  // barrel jack: black housing, round socket toward -u, centre pin and sleeve contact inside
+  { const z0 = PT, z1 = PT + 11, zc = PT + 6.5, vc = 7.8;
+    let body = uBox(-1.8, 3.3, z0, 12.4, 12.3, z1, CHIP, .9);
+    if (vis([0, 1, 0])) body += shape(on(PY(BY0 + 1.85), ellUV(BX0 - vc, zc, 3.15, 3.15, 20)), '#141110', .5) + shape(on(PY(BY0 + 1.9), ellUV(BX0 - vc, zc, 1.0, 1.0, 12)), TIN.l, .3);
+    if (vis([0,0,1])) body += `<path d="${pd([UW(1, 3.8, z1 + .02), UW(1, 11.8, z1 + .02)], false)}" fill="none" stroke="${INK}" ${mw(.2)} opacity=".5"/>`;
+    const inner = () => rod(UW(-1, vc, zc), UW(11, vc, zc), 1.0, TIN, toneI, .3) + uBox(1, vc - 1.6, z0 + 2.6, 9, vc + 1.6, z0 + 3.1, GOLD, .25)
+      + [3.5, 7.8, 12].map((v, i) => uBox(11.4, v - .5, z0 - .2, 12.2, v + .5, z0 + (i === 1 ? 6.5 : 3.1), TIN, .25)).join('');
+    IT.push(uIt(-1.8, 3.3, z0, 12.4, 12.3, z1, ghost(body, inner, k))); }
+
+  // reset button: 6 x 6 tact switch, the plunger presses a steel snap dome
+  { const [u, v] = RST, z1 = PT + 3.1, pz = 1.6*(1 - .75*st.rstK);
+    for (const [du, dv] of [[-3.3, -2.2], [3.3, -2.2], [-3.3, 2.2], [3.3, 2.2]]) IT.push(uIt(u + du - .3, v + dv - .4, PT, u + du + .3, v + dv + .4, PT + 1.2, uBox(u + du - .3, v + dv - .4, PT, u + du + .3, v + dv + .4, PT + 1.2, TIN, .2)));
+    const body = uBox(u - 3, v - 3, PT, u + 3, v + 3, z1 - .3, CHIP, .7) + uBox(u - 2.9, v - 2.9, z1 - .3, u + 2.9, v + 2.9, z1, TIN, .5)
+      + (vis([0,0,1]) ? ['-2.2,-2.2', '2.2,-2.2', '-2.2,2.2', '2.2,2.2'].map(q => { const [a, b] = q.split(',').map(Number); return shape(ucirc(u + a, v + b, z1 + .02, .35, 8), TIN.d, .2); }).join('') : '');
+    const inner = () => loft(ucirc(u, v, PT + 1.2, 2.3, 16), ucirc(u, v, PT + 2.2 - .5*st.rstK, 1.0, 16), n => toneI(n, TIN)) + shape(ucirc(u, v, PT + 2.2 - .5*st.rstK, 1.0, 16), TIN.l, .3)
+      + rod(UW(u, v, PT + 2.2), UW(u, v, z1), .7, CHIP, toneI, .3);
+    IT.push(uIt(u - 3, v - 3, PT, u + 3, v + 3, z1, act('reset', ghost(body, inner, k))));
+    IT.push(uIt(u - 1.75, v - 1.75, z1, u + 1.75, v + 1.75, z1 + pz, act('reset', uCyl(u, v, z1, z1 + pz, 1.75, CHIP, .7, 20)))); }
+
+  // ATmega16U2 (QFN-32, 5 x 5): the USB chip
+  { const [u, v] = U2, h = 2.5, zt = PT + .9, pads = [];
+    for (let i = 0; i < 8; i++){ const a = -1.75 + i*.5; pads.push([u + a, v - 1.25, u + a*1.25, v - h + .05], [u + a, v + 1.25, u + a*1.25, v + h - .05], [u - 1.25, v + a, u - h + .05, v + a*1.25], [u + 1.25, v + a, u + h - .05, v + a*1.25]); }
+    let extra = '';
+    if (vis([0,0,1])) extra = txU(u, v + .6, zt + .02, 'ATMEGA', .78, '#c9c4ba', 700) + txU(u, v - .6, zt + .02, '16U2-MU', .78, '#c9c4ba', 700) + fill(pd(ucirc(u - 1.7, v + 1.7, zt + .02, .25, 8)), '#6c6862');
+    const edge = () => { let e = ''; for (let i = 0; i < 8; i++){ const a = -1.75 + i*.5;
+      e += uBox(u + a - .12, v - h - .02, PT, u + a + .12, v - h + .3, PT + .2, TIN, .1) + uBox(u + a - .12, v + h - .3, PT, u + a + .12, v + h + .02, PT + .2, TIN, .1); } return e; };
+    chipBody(IT, u - h, v - h, u + h, v + h, PT, zt, k, extra + edge(), () => dieArt(u, v, PT + .45, 1.1, pads.map(([a, b, c, d]) => [a, b, c, d]))); }
+
+  // 16 MHz HC-49 crystal for the 16U2: a steel can; inside, a quartz blank on two spring clips
+  { const [u, v] = XTAL, half = 5.7, hw = 2.33, z1 = PT + 3.5, ring = z => uon(z, [...arcUV(u + half - hw, v, hw, -90, 90, 8), ...arcUV(u - half + hw, v, hw, 90, 270, 8)]);
+    const A = ring(PT + .3), B = ring(z1), osc = sg.pow;
+    let body = uon(PT, rectUV(u - half, v - hw - .1, u + half, v + hw + .1)).length ? shape(uon(PT + .3, rrUV(u - half, v - hw, u + half, v + hw, 1.2, 4)), HDR.m, .3) : '';
+    body += loft(A, B, n => toneI(n, ALU)) + fill(pd(B), ALU.l) + ink(pd(B), .5) + hullInk([...A, ...B], .9);
+    if (vis([0,0,1])) body += txU(u, v - .6, z1 + .02, '16.000', 1.6, '#5a5651', 800);
+    const inner = () => { let q = uBox(u - half + .8, v - .9, PT + .3, u + half - .8, v + .9, PT + .6, HDR, .25);
+      q += rod(UW(18.56, v, PT + .6), UW(18.56, v, PT + 2), .22, TIN, toneI, .2) + rod(UW(23.44, v, PT + .6), UW(23.44, v, PT + 2), .22, TIN, toneI, .2);
+      const dv = osc ? .12*Math.sin(now/40) : 0, pl = (du, dz, w) => rrUV(u - 4 + du, PT + 1 + dz, u + 4 - du, PT + 3.2 - dz, w, 4).map(([a, z]) => UW(a, v + dv, z));
+      q += shape(pl(0, 0, 1), QUARTZ.m, .35) + shape(pl(1.2, .45, .6), '#c6ccce', .25);
+      if (osc) q += `<path d="${pd(pl(-.5, -.3, 1.2))}" fill="none" stroke="#8af0ae" ${mw(.18)} opacity=".8"/>`;
+      return q; };
+    IT.push({ box: boxOf([...A, ...B]), svg: ghost(body, inner, k) }); }
+  smd(IT, 16.0, 28, .8, 1.6, .5, CAPT, false); smd(IT, 26.0, 28, .8, 1.6, .5, CAPT, false);   // load caps
+
+  // 22 ohm USB resistors, 1 k serial resistors, auto-reset cap, pull-up, decoupling, LED resistors
+  smd(IT, 13, 35.5, 1.6, .8, .45, SMDK); smd(IT, 13, 37.5, 1.6, .8, .45, SMDK);
+  smd(IT, 26.2, 35.4, 1.6, .8, .45, SMDK); smd(IT, 26.2, 34.2, 1.6, .8, .45, SMDK);
+  smd(IT, 26.5, 41.5, 1.6, .8, .5, CAPT);
+  smd(IT, 60.4, 22.6, .8, 1.6, .45, SMDK, false);
+  smd(IT, 51.4, 21.4, 1.6, .8, .5, CAPT);
+  smd(IT, 33.6, 44, 1.6, .8, .45, SMDK); smd(IT, 33.6, 40.5, 1.6, .8, .45, SMDK); smd(IT, 33.6, 38.3, 1.6, .8, .45, SMDK); smd(IT, 61.6, 44.2, 1.6, .8, .45, SMDK);
+
+  // the four little LEDs (0805): white body, coloured lens that lights
+  const lit = { L: sg.pin, TX: sg.tx, RX: sg.rx, ON: sg.pow };
+  for (const [n, [u, v, c]] of Object.entries(LEDS)){ const on = lit[n], z1 = PT + .8;
+    let s = uBox(u - 1, v - .62, PT, u + 1, v + .62, PT + .45, WHITE, .3) + uBox(u - .7, v - .5, PT + .45, u + .7, v + .5, z1, on ? matOf(mix(c, '#ffffff', .35)) : matOf(mix(c, '#8d877a', .55)), .3);
+    if (on){ const [X, Y] = P(...UW(u, v, z1)); s += `<circle cx="${f(X)}" cy="${f(Y)}" r="2.6" fill="${c}" opacity=".45"/><circle cx="${f(X)}" cy="${f(Y)}" r="1.1" fill="#fffbe2" opacity=".9"/>`; }
+    IT.push(uIt(u - 1, v - .62, PT, u + 1, v + .62, z1, s)); }
+
+  // polyfuse, M7 diode, two 47 uF caps
+  smd(IT, 12.5, 27, 4.5, 3.2, 1.0, FUSE, true, TIN, .6);
+  chipBody(IT, 3.0, 14.7, 6.0, 17.3, PT, PT + 2.1, k, vis([0,0,1]) ? fill(pd(urect(3.0, 14.7, 3.6, 17.3, PT + 2.12)), '#bfb8a6') : '');
+  IT.push(uIt(2.2, 15.4, PT, 3.0, 16.6, PT + .3, uBox(2.2, 15.4, PT, 3.0, 16.6, PT + .3, TIN, .2)), uIt(6.0, 15.4, PT, 6.8, 16.6, PT + .3, uBox(6.0, 15.4, PT, 6.8, 16.6, PT + .3, TIN, .2)));
+  for (const cu of [17, 24.5]){ const cv = 14.6;
+    IT.push(uIt(cu - 3.3, cv - 3.3, PT, cu + 3.3, cv + 3.3, PT + 1, uBox(cu - 3.3, cv - 3.3, PT, cu + 3.3, cv + 3.3, PT + 1, HDR, .5)));
+    let body = uCyl(cu, cv, PT + 1, PT + 5.8, 3.15, ALU, .8, 24);
+    if (vis([0,0,1])){ const half = uon(PT + 5.82, arcUV(cu, cv, 2.9, 90, 270, 10)); body += fill(pd(half), '#2a2725') + txU(cu + 1.3, cv - .5, PT + 5.84, '47', 1.3, '#3d3935', 800)
+      + `<path d="${pd([UW(cu - 1.6, cv, PT + 5.84), UW(cu + 1.6, cv, PT + 5.84)], false)}${pd([UW(cu, cv - 1.6, PT + 5.84), UW(cu, cv + 1.6, PT + 5.84)], false)}" fill="none" stroke="${INK}" ${mw(.15)} opacity=".6"/>`; }
+    const inner = () => { let r = uCyl(cu, cv, PT + 1.3, PT + 5.4, 2.75, matOf('#e2cf9a'), .4, 24), sp2 = [];
+      for (let i = 0; i <= 60; i++){ const a = i/60*5*2*Math.PI, rr = .4 + 2.2*i/60; sp2.push(UW(cu + rr*Math.cos(a), cv + rr*Math.sin(a), PT + 5.42)); }
+      return r + `<path d="${pd(sp2, false)}" fill="none" stroke="#8a7a50" ${mw(.12)}/>`; };
+    IT.push(uIt(cu - 3.15, cv - 3.15, PT + 1, cu + 3.15, cv + 3.15, PT + 5.8, ghost(body, inner, k))); }
+
+  // NCP1117 5 V regulator (SOT-223): body, three leads, wide tab; inside the die on the tab
+  { const u0 = 15.25, u1 = 21.75, v0 = 6.05, v1 = 9.55, z1 = PT + 1.7;
+    leads(IT, [[16.2, v0, 'v-'], [18.5, v0, 'v-'], [20.8, v0, 'v-']], z1, 1.75, .7);
+    IT.push(uIt(17, v1, PT, 20, v1 + 1.75, PT + .3, uBox(17, v1, PT, 20, v1 + 1.75, PT + .25, TIN, .3)));
+    const extra = vis([0,0,1]) ? txU(18.5, 8.2, z1 + .02, 'AMS1117', .95, '#c9c4ba') + txU(18.5, 6.8, z1 + .02, '5.0', .95, '#c9c4ba') : '';
+    chipBody(IT, u0, v0, u1, v1, PT + .1, z1, k, extra, () => dieArt(18.5, 8.0, PT + .9, .7, [[17.8, 7.3, 16.2, 6.3], [18.5, 7.3, 18.5, 6.3], [19.2, 7.3, 20.8, 6.3]])); }
+  // LP2985 3.3 V regulator, FDN340P MOSFET, LMV358 op-amp, resonator
+  leads(IT, [[25.55, 6.7, 'v-'], [26.5, 6.7, 'v-'], [27.45, 6.7, 'v-'], [25.55, 8.3, 'v+'], [27.45, 8.3, 'v+']], PT + 1.1, .7, .35);
+  chipBody(IT, 25.05, 6.7, 27.95, 8.3, PT + .1, PT + 1.1, k, '');
+  leads(IT, [[29.05, 23.95, 'v-'], [30.95, 23.95, 'v-'], [30, 25.25, 'v+']], PT + 1, .5, .35);
+  chipBody(IT, 28.55, 23.95, 31.45, 25.25, PT + .1, PT + 1, k, '');
+  leads(IT, [29.1, 30.37, 31.64, 32.9].flatMap(u => [[u, 28.55, 'v-'], [u, 32.45, 'v+']]), PT + 1.5, 1, .4);
+  chipBody(IT, 28.55, 28.55, 33.45, 32.45, PT + .1, PT + 1.5, k, vis([0,0,1]) ? fill(pd(ucirc(29.2, 29.2, PT + 1.52, .3, 8)), '#6c6862') : '');
+  IT.push(uIt(RESO[0] - 1.6, RESO[1] - .65, PT, RESO[0] + 1.6, RESO[1] + .65, PT + .9, uBox(RESO[0] - 1.6, RESO[1] - .65, PT, RESO[0] + 1.6, RESO[1] + .65, PT + .9, matOf('#7f9bb3'), .3)));
+
+  // ATmega328P-PU in its DIP socket: socket rails, 28 legs, the body; inside the lead frame, die and bond wires
+  { const r0 = DIPV - 3.81, r1 = DIPV + 3.81, bv0 = DIPV - 3.17, bv1 = DIPV + 3.17;
+    for (const [a, b] of [[r0 - 1, r0 + 1], [r1 - 1, r1 + 1]]) IT.push(uIt(29.7, a, PT, 65.3, b, PT + 3, uBox(29.7, a, PT, 65.3, b, PT + 3, HDR, .6)));
+    for (const [a, b] of [[29.7, 30.7], [64.3, 65.3]]) IT.push(uIt(a, r0 + 1, PT, b, r1 - 1, PT + 2.2, uBox(a, r0 + 1, PT, b, r1 - 1, PT + 2.2, HDR, .5)));
+    for (let p = 1; p <= 28; p++){ const u = dipPinU(p), rv = dipPinV(p), out = rv > DIPV ? 1 : -1, ev = out > 0 ? bv1 : bv0;
+      const va = Math.min(ev, rv + .15*out), vb = Math.max(ev, rv + .15*out);
+      IT.push(uIt(u - .76, va, PT + 4.55, u + .76, vb, PT + 4.85, uBox(u - .76, va, PT + 4.55, u + .76, vb, PT + 4.85, TIN, .2)));
+      IT.push(uIt(u - .76, rv - .15, PT + 3.4, u + .76, rv + .15, PT + 4.55, uBox(u - .76, rv - .15, PT + 3.4, u + .76, rv + .15, PT + 4.55, TIN, .2)));
+      IT.push(uIt(u - .25, rv - .13, PT + 3, u + .25, rv + .13, PT + 3.4, uBox(u - .25, rv - .13, PT + 3, u + .25, rv + .13, PT + 3.4, TIN, .2))); }
+    let extra = '';
+    if (vis([0,0,1])){ const zt = DIPZ1 + .02;
+      extra = fill(pd(uon(zt, arcUV(65.3, DIPV, 1.1, 90, 270, 10))), '#1c1a19') + fill(pd(ucirc(63.4, DIPV + 1.9, zt, .55, 12)), '#2a2725')
+        + txU(DIPU, DIPV + .4, zt, 'ATMEGA328P-PU', 1.75, '#d4cfc5', 800) + txU(DIPU, DIPV - 1.7, zt, 'ATMEL 1748', 1.2, '#b8b2a6', 700); }
+    const zm = PT + 5.45;
+    const inner = () => { let s = '', fr = '';
+      for (let p = 1; p <= 28; p++){ const u = dipPinU(p), out = dipPinV(p) > DIPV ? 1 : -1, eu = DIPU + (u - DIPU)*.17, ev = DIPV + out*2.2;
+        fr += pd([UW(u - .45, DIPV + out*3.1, zm), UW(u + .45, DIPV + out*3.1, zm), UW(eu + .18, ev, zm), UW(eu - .18, ev, zm)]); }
+      s += fill(fr, TIN.m) + `<path d="${fr}" fill="none" stroke="${INK}" ${mw(.08)}/>`;
+      const pads = []; for (let p = 1; p <= 28; p++){ const u = dipPinU(p), out = dipPinV(p) > DIPV ? 1 : -1; pads.push([DIPU + (u - DIPU)*.085, DIPV + out*1.5, DIPU + (u - DIPU)*.17, DIPV + out*2.2]); }
+      s += dieArt(DIPU, DIPV, zm, 1.7, pads);
+      // die regions: flash (rows fill as pages are written), SRAM, CPU
+      const fz = zm + .05, rows = 16, wr = Math.ceil(st.bytes / 2048), pulse = sg.wr && ((now/90) | 0) % 2;
+      s += shape(urect(DIPU - 1.55, DIPV - 1.55, DIPU - .15, DIPV + 1.55, fz), '#3f4a78', .15);
+      for (let i = 0; i < rows; i++){ if (i >= wr) break; const a = DIPV - 1.55 + i*3.1/rows;
+        s += fill(pd(urect(DIPU - 1.5, a + .02, DIPU - .2, a + 3.1/rows - .02, fz + .01)), i === wr - 1 && pulse ? '#ffffff' : '#f2c230'); }
+      s += shape(urect(DIPU + .05, DIPV + .25, DIPU + 1.55, DIPV + 1.55, fz), '#5c6a9a', .15) + shape(urect(DIPU + .05, DIPV - 1.55, DIPU + 1.55, DIPV + .05, fz), '#6f6a92', .15);
+      return s; };
+    chipBody(IT, 29.7, bv0, 65.3, bv1, DIPZ0, DIPZ1, k, extra, inner); }
+}
+
+/* ---------- breadboard, resistor, LED, jumpers ---------- */
+function circuit(IT, st, k, sg){
+  // breadboard body with its holes; inside, a spring-clip strip under each column of five
+  { let body = box(BBX0, BBY0, BH, BBX0 + BBW, BBY0 + BBL, BBT, BBM, toneI, .9), holes = '';
+    if (vis([0,0,1])){
+      body += fill(pd([[ROWX.e + 1.6, BBY0 + 1, BBT + .02], [ROWX.f - 1.6, BBY0 + 1, BBT + .02], [ROWX.f - 1.6, BBY0 + BBL - 1, BBT + .02], [ROWX.e + 1.6, BBY0 + BBL - 1, BBT + .02]]), BBM.d);
+      for (const r of Object.values(ROWX)) for (let c = 1; c <= 17; c++){ const x = r, y = colY(c); holes += pd([[x - .45, y - .45, BBT + .03], [x + .45, y - .45, BBT + .03], [x + .45, y + .45, BBT + .03], [x - .45, y + .45, BBT + .03]]); }
+      body += fill(holes, '#5a544a');
+      for (const c of [1, 5, 10, 15]) body += txW(BBX0 + BBW - 1.6, colY(c), BBT + .03, String(c), 1.2, '#8d877a');
+      for (const [r, x] of Object.entries(ROWX)) body += txW(x - .45, BBY0 + .95, BBT + .03, r, 1.1, '#8d877a');
+    }
+    body += hullInk([[BBX0, BBY0, BH], [BBX0 + BBW, BBY0 + BBL, BBT], [BBX0 + BBW, BBY0, BH], [BBX0, BBY0 + BBL, BBT], [BBX0, BBY0, BBT], [BBX0 + BBW, BBY0 + BBL, BH], [BBX0 + BBW, BBY0, BBT], [BBX0, BBY0 + BBL, BH]], 1.6);
+    const inner = () => { let c = ''; for (let i = 1; i <= 17; i++) for (const [a, b] of [['a', 'e'], ['f', 'j']]) c += box(ROWX[a] - .8, colY(i) - .45, BH + 3, ROWX[b] + .8, colY(i) + .45, BH + 7.6, TIN, toneI, .2); return c; };
+    IT.push({ box: [[BBX0, BBY0, BH], [BBX0 + BBW, BBY0 + BBL, BBT]], svg: ghost(body, inner, k) }); }
+
+  // 220 ohm resistor: legs in column 5 and 9 of row b, body bridged above
+  { const x = ROWX.i, ya = colY(4), yb = colY(9), zb = BBT + 2.2, y0 = ya + 2.0, y1 = yb - 2.0;
+    for (const [yy, ye] of [[ya, y0], [yb, y1]]){ IT.push({ box: boxOf([[x, yy, BBT], [x, yy, zb], [x, ye, zb]], .3), svg: rod([x, yy, BBT], [x, yy, zb - .3], .25, TIN, toneI, .4) + rod([x, yy, zb], [x, ye, zb], .25, TIN, toneI, .4) }); }
+    const bands = ['#e2483d', '#e2483d', '#7a4a22', '#d8b25a'], seg = (y0b, y1b, m) => rod([x, y0b, zb], [x, y1b, zb], 1.15, m, toneI, .5, 1.15, 16);
+    const len = y1 - y0, pieces = [[0, .16, RESB], [.16, .26, matOf(bands[0])], [.26, .34, RESB], [.34, .44, matOf(bands[1])], [.44, .52, RESB], [.52, .62, matOf(bands[2])], [.62, .76, RESB], [.76, .86, matOf(bands[3])], [.86, 1, RESB]];
+    const segs = pieces.map(([a, b, m]) => ({ box: [[x - 1.15, y0 + a*len, zb - 1.15], [x + 1.15, y0 + b*len, zb + 1.15]], svg: seg(y0 + a*len, y0 + b*len, m) }));
+    IT.push({ box: [[x - 1.2, y0, zb - 1.2], [x + 1.2, y1, zb + 1.2]], svg: byDepth(segs) }); }
+
+  // red 5 mm LED: legs in columns 4 (cathode) and 5 (anode) of row d
+  { const [cx, cy] = LEDC, z0 = LEDZ0, zf = z0 + 1, zt = z0 + 5.4, r = 2.5, lit = st.wired && st.wireK >= 1 && sg.pin;
+    for (const y of [colY(8), colY(9)]) IT.push({ box: [[cx - .3, y - .3, BBT], [cx + .3, y + .3, z0]], svg: rod([cx, y, BBT], [cx, y, z0], .25, TIN, toneI, .4) });
+    const M = lit ? LEDRL : LEDR, rings = [0, 25, 50, 70, 85].map(a => ({ z: zt + r*Math.sin(a*Math.PI/180), rr: r*Math.cos(a*Math.PI/180) }));
+    let body = cyl(cx, cy, z0, zf, 2.9, M, toneI, .8, 24) + cyl(cx, cy, zf, zt, r, M, toneI, .8, 24);
+    for (let i = 0; i < rings.length - 1; i++) body += loft(on(PZ(rings[i].z), ellUV(cx, cy, rings[i].rr, rings[i].rr, 24)), on(PZ(rings[i+1].z), ellUV(cx, cy, rings[i+1].rr, rings[i+1].rr, 24)), n => toneI(n, M));
+    const tipR = rings[rings.length - 1], tipP = on(PZ(tipR.z), ellUV(cx, cy, tipR.rr, tipR.rr, 24));
+    body += fill(pd(tipP), M.l) + hullInk([...on(PZ(z0), ellUV(cx, cy, 2.9, 2.9, 24)), ...on(PZ(zt), ellUV(cx, cy, r, r, 24)), [cx, cy, zt + r]], 1.2);
+    const [X, Y] = P(cx, cy, zt - 1.2);
+    body += `<ellipse cx="${f(X - 1.1)}" cy="${f(Y - 1.4)}" rx=".55" ry="1.4" fill="#ffffff" opacity=".45"/>`;
+    if (lit) body += `<circle cx="${f(X)}" cy="${f(Y)}" r="7.5" fill="#ff5a3a" opacity=".22"/><circle cx="${f(X)}" cy="${f(Y)}" r="4.2" fill="#ffd2a0" opacity=".45"/>`;
+    const inner = () => {
+      const yc = colY(8), ya = colY(9), anvil = [[yc - .25, z0], [yc + .25, z0], [yc + .25, z0 + 2.6], [cy + .9, z0 + 3.3], [cy + .9, z0 + 4.1], [yc - .5, z0 + 4.1]], post = [[ya - .25, z0], [ya + .25, z0], [ya + .25, z0 + 4.4], [cy + 1.3, z0 + 4.6], [cy + 1.2, z0 + 4.2], [ya - .25, z0 + 3.8]];
+      const pl = pts => pts.map(([y, z]) => [cx, y, z]);
+      return shape(pl(anvil), TIN.m, .3) + shape(pl(post), TIN.m, .3) + shape(pl([[cy - .2, z0 + 4.1], [cy + .3, z0 + 4.1], [cy + .3, z0 + 4.45], [cy - .2, z0 + 4.45]]), lit ? '#fff4d6' : '#4a3a3a', .2)
+        + `<path d="${pd(bez([cx, cy, z0 + 4.45], [cx, cy, z0 + 5.3], [cx, cy + 1.2, z0 + 5.3], [cx, cy + 1.2, z0 + 4.6], 6), false)}" fill="none" stroke="#f3cf5a" ${mw(.12)}/>`; };
+    IT.push({ box: [[cx - 2.9, cy - 2.9, z0], [cx + 2.9, cy + 2.9, zt + r]], svg: act('led', ghost(body, inner, k)) }); }
+
+  // two Dupont jumpers: one end in the breadboard; the free end lies on the desk until it goes into the header
+  for (const j of JUMP){
+    const ybb = colY(j.col), [hx, hy] = UW(j.hu, 50.8, 0);
+    const b1 = [ROWX.j, ybb, BBT], t1 = [ROWX.j, ybb, BBT + 12];
+    const K0 = { base: [j.lx, BY0 + 15, BH + 1.25], dir: [0, -1, 0] }, K1 = { base: [hx, hy, ZH + 5], dir: [0, 0, 1] }, K2 = { base: [hx, hy, ZH], dir: [0, 0, 1] };
+    const t = st.wireK, pose = t < .75 ? (() => { const s = ease(t/.75); const b = lerp3(K0.base, K1.base, s); b[2] += 9*Math.sin(Math.PI*s); return { base: b, dir: norm(lerp3(K0.dir, K1.dir, Math.min(1, s*1.6))) }; })()
+      : { base: lerp3(K1.base, K2.base, (t - .75)/.25), dir: [0, 0, 1] };
+    const b2 = pose.base, t2 = add3(b2, scl3(pose.dir, 12));
+    const hous = (a, b) => ({ box: boxOf([a, b], 1.3), svg: rod(a, b, 1.3, HDR, toneI, .6, 1.3, 4) });
+    IT.push(hous(b1, t1), hous(b2, t2));
+    if (t < .99) { const pinA = add3(b2, scl3(pose.dir, -5.5)); IT.push({ box: boxOf([pinA, b2], .35), svg: rod(pinA, b2, .32, GOLD, toneI, .3, .32, 4) }); }
+    const h2 = 4 + 8*t, h1 = 8 + 4*t;
+    IT.push(...cable(bez(t1, add3(t1, [0, 0, h1]), add3(t2, scl3(pose.dir, h2)), t2, 14), j.col2, .7, 3));
+  }
+}
+
+/* ---------- USB plug and cable ---------- */
+function plugPose(p){
+  if (p <= .5){ const s = ease(p/.5); return { yb: FACE + 14 - 5*s, zc: ZREST + (ZJACK - ZREST)*s + 2.5*Math.sin(Math.PI*s) }; }
+  const s = ease((p - .5)/.5); return { yb: FACE + 9 - 9*s, zc: ZJACK };
+}
+function usbPlug(IT, st){
+  const { yb, zc } = plugPose(st.plugK), xc = PLUGX;
+  // overmold (16 x 11), the metal shell still outside the jack, the strain relief; the plug points toward -y
+  let om = box(xc - 8, yb, zc - 5.5, xc + 8, yb + 18, zc + 5.5, PLUGM, toneI, .9);
+  if (vis([0,0,1])) om += `<path d="${[5, 9, 13].map(dy => pd([[xc - 5.5, yb + dy, zc + 5.52], [xc + 5.5, yb + dy, zc + 5.52]], false)).join('')}" fill="none" stroke="${INK}" ${mw(.3)} opacity=".55"/>`;
+  IT.push({ box: [[xc - 8, yb, zc - 5.5], [xc + 8, yb + 18, zc + 5.5]], svg: act('plug', om) });
+  const mEnd = Math.max(yb - 9, FACE);
+  if (mEnd < yb - .05) IT.push({ box: [[xc - 4, mEnd, zc - 3.65], [xc + 4, yb, zc + 3.65]], svg: act('plug', box(xc - 4, mEnd, zc - 3.65, xc + 4, yb, zc + 3.65, ALU, toneI, .7)) });
+  IT.push({ box: boxOf([[xc, yb + 18, zc], [xc, yb + 27, zc]], 3), svg: rod([xc, yb + 18, zc], [xc, yb + 27, zc], 3.2, PLUGM, toneI, .8, 2.4, 16) });
+  const pts = bend([[xc, yb + 27, zc], [xc, yb + 31, Math.max(BH + 2.3, zc - 2)], [xc, Math.min(yb + 37, DD - 8), BH + 2.3], [xc + 6, DD - 1.2, BH + 2.3]], 4);
+  IT.push(...cable(pts, '#55504a', 2.2, 5));
+}
+const HANG = () => { const xs = PLUGX + 6; return cable(bend([[xs, DD - 1.2, BH + 2.3], [xs, DD + .6, BH + 1.6], [xs, DD + 2.3, BH - 1], [xs, DD + 2.5, -16]], 2.5), '#55504a', 2.2, 50).map(p => p.svg).join(''); };
+
+/* ---------- scene ---------- */
+const DTOP = boardTop(0, 0, DW, DD, BH, DRAD);
+let LABELS = [];
+// label bounds around the desk centre, stretched far out on the side the pills must not go
+function unoSide(side){ const B = [DW/2 - 22, DW/2 + 22, DD/2 - 22, DD/2 + 22, BH, ZH], dx = Dv(1, 0, 0)[0], dy = Dv(0, 1, 0)[0], a = Math.abs(dx) > Math.abs(dy) ? 0 : 1, d = a ? dy : dx;
+  if (d*side > 0) B[2*a] -= 1000; else B[2*a + 1] += 1000; return B; }
+function scene(st, m){
+  const now = performance.now(), k = ease(st.xr || 0), sg = sig(st, now);
+  const front = !facing([0, 1, 0]);
+  let s = (front ? HANG() : '') + board(0, 0, DW, DD, BH, DRAD, WOOD) + (front ? '' : HANG());
+  // cast shadows on the desk: the board, the breadboard, the LED, the plug
+  const { yb, zc } = plugPose(st.plugK);
+  const sh = [
+    [...uon(PT, OUTL), ...uon(BH, OUTL), UW(-6.2, 32, PT + 10.9), UW(-6.2, 44, PT + 10.9), UW(21, 50.8, ZH), UW(66, 50.8, ZH), UW(24, 2.5, ZH), UW(64, 2.5, ZH)],
+    [[BBX0, BBY0, BBT], [BBX0 + BBW, BBY0, BBT], [BBX0, BBY0 + BBL, BBT], [BBX0 + BBW, BBY0 + BBL, BBT], [BBX0, BBY0, BH], [BBX0 + BBW, BBY0 + BBL, BH]],
+    [...on(PZ(LEDZ0 + 5.4), ellUV(LEDC[0], LEDC[1], 2.5, 2.5, 12)), [LEDC[0], LEDC[1], BBT]],
+    [[PLUGX - 8, yb + 18, zc + 5.5], [PLUGX + 8, yb, zc + 5.5], [PLUGX - 8, yb, BH], [PLUGX + 8, yb + 18, BH], [PLUGX - 8, yb + 18, BH], [PLUGX + 8, yb, zc + 5.5]],
+  ];
+  s += clipTo(DTOP, sh.map(p => castShadow(p, BH)).join(''));
+  const IT = [];
+  uno(IT, st, m, k, sg, now);
+  circuit(IT, st, k, sg);
+  usbPlug(IT, st);
+  s += byDepth(IT);
+  LABELS = labels(st, sg, k);
+  if (LABELS.length){   // half the pills either side, split by where their parts are on screen
+    const all = LABELS.map(it => ({ it, X: P(...it.at)[0] })).sort((p, q) => p.X - q.X).map(p => p.it), h = (all.length + 1) >> 1;
+    s += xrCallouts(all.slice(0, h), unoSide(-1)) + xrCallouts(all.slice(h), unoSide(1)); }
+  return s;
+}
+function labels(st, sg, k){
+  const { yb, zc } = plugPose(st.plugK), led = st.wired && sg.pin;
+  if (k > .6) return [
+    { at: UW(DIPU + 8, DIPV + 3.17, DIPZ1), text: 'ATMEGA328P', on: sg.pow },
+    { at: UW(DIPU, DIPV + 1.7, PT + 5.5), text: 'SILICON DIE', on: sg.pow },
+    { at: UW(DIPU - .8, DIPV - 1.2, PT + 5.5), text: 'FLASH MEMORY', on: sg.wr },
+    { at: UW(DIPU + 1.4, DIPV - 2.2, PT + 5.8), text: 'BOND WIRES', on: false },
+    { at: UW(U2[0], U2[1], PT + .9), text: 'ATMEGA16U2 USB CHIP', on: sg.usb },
+    { at: UW(XTAL[0] + 4, XTAL[1] - 2.3, PT + 3), text: '16 MHZ CRYSTAL', on: sg.pow },
+    { at: UW(XTAL[0], XTAL[1], PT + 2.6), text: 'QUARTZ BLANK', on: sg.pow },
+    { at: UW(RESO[0], RESO[1], PT + .9), text: 'CERAMIC RESONATOR', on: sg.pow },
+    { at: UW(-2, 38, PT + 10.9), text: 'USB-B JACK', on: sg.pow },
+    { at: UW(3, 39.4, PT + 7.1), text: 'USB CONTACTS', on: sg.usb },
+    { at: [PLUGX + 8, yb + 9, zc + 5.5], text: 'USB PLUG', on: sg.pow },
+    { at: UW(4, 7.8, PT + 11), text: 'BARREL JACK', on: false },
+    { at: UW(RST[0], RST[1], PT + 3.1), text: 'RESET BUTTON', on: st.rstK > .5 },
+    { at: UW(RST[0] + 1.5, RST[1], PT + 2), text: 'SNAP DOME', on: st.rstK > .5 },
+    { at: UW(18.5, 7.8, PT + 1.7), text: '5V REGULATOR', on: false },
+    { at: UW(26.5, 7.5, PT + 1.1), text: '3.3V REGULATOR', on: sg.pow },
+    { at: UW(12.5, 27, PT + 1), text: 'POLYFUSE', on: sg.pow },
+    { at: UW(30, 24.6, PT + 1), text: 'POWER MOSFET', on: sg.pow },
+    { at: UW(31, 30.5, PT + 1.5), text: 'LMV358 OP-AMP', on: sg.pin },
+    { at: UW(LEDS.L[0], LEDS.L[1], PT + .8), text: 'L LED', on: sg.pin },
+    { at: UW(LEDS.TX[0], LEDS.TX[1] - 1, PT + .8), text: 'TX RX LEDS', on: sg.tx || sg.rx },
+    { at: UW(LEDS.ON[0], LEDS.ON[1], PT + .8), text: 'ON LED', on: sg.pow },
+    { at: UW(26.5, 41.5, PT + .5), text: 'AUTO-RESET CAP', on: sg.dtr },
+    { at: UW(13, 36.5, PT + .45), text: '22 OHM USB RESISTORS', on: sg.usb },
+    { at: UW(45, 36.8, PT), text: 'SERIAL TRACES', on: sg.ser },
+    { at: UW(39.88, 32, PT), text: 'PIN 13 TRACE', on: sg.pin },
+    { at: UW(64.5, 27, PT + 8.5), text: 'ICSP HEADER', on: false },
+    { at: UW(31.5, 50.8, ZH), text: 'DIGITAL HEADER', on: sg.pin },
+    { at: UW(34.5, 2.54, ZH), text: 'POWER HEADER', on: sg.pow },
+    { at: UW(57, 2.54, ZH), text: 'ANALOG HEADER', on: false },
+    { at: [ROWX.h, colY(14), BH + 6], text: 'SPRING CLIPS', on: led },
+    { at: [ROWX.i, (colY(4) + colY(9))/2, BBT + 3.3], text: '220 OHM RESISTOR', on: led },
+    { at: [LEDC[0], LEDC[1] + .6, LEDZ0 + 4.2], text: 'LED DIE', on: led },
+  ];
+  return [
+    { at: UW(DIPU + 8, DIPV, DIPZ1), text: 'ATMEGA328P', on: sg.pow },
+    { at: UW(U2[0], U2[1], PT + .9), text: 'USB CHIP', on: sg.usb },
+    { at: UW(XTAL[0] + 4, XTAL[1], PT + 3.5), text: '16 MHZ CRYSTAL', on: sg.pow },
+    { at: UW(18.5, 7.8, PT + 1.7), text: '5V REGULATOR', on: false },
+    { at: UW(RST[0], RST[1], PT + 4.7), text: 'RESET BUTTON', on: st.rstK > .5 },
+    { at: UW(-2, 38, PT + 10.9), text: 'USB-B JACK', on: sg.pow },
+    { at: UW(4, 7.8, PT + 11), text: 'BARREL JACK', on: false },
+    { at: UW(31.5, 50.8, ZH), text: 'DIGITAL HEADER', on: sg.pin },
+    { at: UW(34.5, 2.54, ZH), text: 'POWER HEADER', on: sg.pow },
+    { at: UW(LEDS.L[0], LEDS.L[1], PT + .8), text: 'L LED', on: sg.pin },
+    { at: UW(LEDS.ON[0], LEDS.ON[1], PT + .8), text: 'ON LED', on: sg.pow },
+    { at: [LEDC[0], LEDC[1], LEDZ0 + 7.5], text: 'RED LED', on: st.wired && sg.pin },
+    { at: [BBX0 + 8, BBY0 + 36, BBT], text: 'BREADBOARD', on: false },
+  ];
+}
+
+/* ---------- behaviour (one state object, one clock) ---------- */
+let ui, looping = false, edgeT = 0;
+const busy = st => st.frz == null && (st.plugK !== (st.plugged ? 1 : 0) || st.wireK !== (st.wired ? 1 : 0) || st.rstT != null || st.phase === 'upload' || st.phase === 'boot');
+function tick(st, dt){
+  const now = performance.now();
+  const goP = st.plugged ? 1 : 0; st.plugK = goP > st.plugK ? Math.min(1, st.plugK + dt/1.1) : goP < st.plugK ? Math.max(0, st.plugK - dt/.8) : goP;
+  if (st.plugged && st.plugK >= 1 && st.phase === 'off') setPhase(st, 'boot', now, .3);
+  const goW = st.wired ? 1 : 0; st.wireK = goW > st.wireK ? Math.min(1, st.wireK + dt/1.4) : goW < st.wireK ? Math.max(0, st.wireK - dt/1.1) : goW;
+  if (st.rstT != null){ st.rstT += dt; const r = st.rstT;
+    st.rstK = r < .08 ? r/.08 : r < .38 ? 1 : Math.max(0, 1 - (r - .38)/.08);
+    const pow = st.plugged && st.plugK >= 1;
+    if (r < .38 && pow && st.phase !== 'upload') st.phase = 'reset';
+    if (r >= .38 && st.phase === 'reset') setPhase(st, 'boot', now, 1.0);
+    if (r > .46){ st.rstT = null; st.rstK = 0; } }
+  const el = (now - st.ph0) / 1000;
+  if (st.phase === 'boot' && el > st.bootLen){ st.phase = 'run'; st.runT0 = now; }
+  if (st.phase === 'upload'){
+    st.bytes = el < .7 ? st.bytes : Math.round(924 * Math.min(1, (el - .7) / 2.2));
+    if (el >= 3.0){ st.sketch = 'blink'; st.bytes = 924; st.phase = 'run'; st.runT0 = now; ui.flash('Done uploading: Blink runs', 1800); } }
+}
+function setPhase(st, ph, now, len = 0){ st.phase = ph; st.ph0 = now; st.bootLen = len; }
+function kick(){
+  if (looping) return; looping = true;
+  ui.animate(dt => { tick(ui.st, dt); const b = busy(ui.st); if (!b){ looping = false; edges(); } return b; });
+}
+// a steady Blink only needs a redraw at each edge, once a second
+function edges(){ clearTimeout(edgeT); const st = ui.st;
+  if (st.phase === 'run' && st.sketch === 'blink' && st.plugged && st.frz == null){ const el = performance.now() - st.runT0;
+    edgeT = setTimeout(() => { ui.render(); edges(); }, 1000 - (el % 1000) + 8); } }
+function plug(st){
+  st.frz = st.frzRun = null;
+  if (!st.plugged){ st.plugged = true; ui.flash('USB in: 5 V from the computer, ON lights', 1800); }
+  else { st.plugged = false; st.phase = 'off'; ui.flash('Unplugged: the sketch stays in flash', 1800); }
+  kick();
+}
+function upload(st){
+  st.frz = st.frzRun = null;
+  if (!st.plugged){ ui.flash('Plug in the USB cable first'); return; }
+  if (st.plugK < 1){ ui.flash('Wait for the plug to seat'); return; }
+  if (st.phase === 'upload'){ ui.flash('Already uploading'); return; }
+  setPhase(st, 'upload', performance.now()); st.bytes = st.sketch === 'blink' ? 924 : 444; st.wbytes = 0;
+  ui.flash('DTR resets the chip; the bootloader takes the sketch', 2200); kick();
+}
+function wire(st){
+  st.wired = !st.wired;
+  if (st.wired) ui.flash(st.sketch === 'blink' && st.plugged ? 'D13 and GND wired: the red LED follows pin 13' : 'D13 and GND wired to the LED', 1800);
+  else ui.flash('Jumpers pulled out of the header');
+  kick();
+}
+function pressReset(st){
+  st.frz = st.frzRun = null;
+  if (st.rstT != null) return;
+  st.rstT = 0;
+  if (!st.plugged || st.plugK < 1) ui.flash('No power: nothing to reset');
+  else if (st.phase === 'upload'){ ui.flash('Upload cut short: the old sketch is kept'); st.phase = 'reset'; st.bytes = st.sketch === 'blink' ? 924 : 444; }
+  else ui.flash('Reset: Optiboot flashes L, then the sketch restarts', 2000);
+  kick();
+}
+
+ui = mountFigure({
+  fig:'21', title:'Arduino Uno', size:[DW, DD, 40], palette:'cobalt', turn:'full',
+  state:{ plugged:false, plugK:0, wired:false, wireK:0, phase:'off', ph0:0, bootLen:0, runT0:0, sketch:'none', bytes:444, rstT:null, rstK:0, frz:null, frzRun:null },
+  scene,
+  stats: st => { const sg = sig(st, performance.now());
+    return [ { label:'Pin 13', value: !sg.pow ? 'OFF' : sg.pin ? 'HIGH' : 'LOW' },
+             { label:'Flash used', value: (st.phase === 'upload' && st.bytes > 444 ? st.bytes : st.bytes) + ' B', small:true },
+             { label:'Sketch', value: st.phase === 'upload' ? 'uploading' : st.sketch === 'blink' ? 'Blink' : 'empty', small:true } ]; },
+  buttons:[
+    { label:'Plug in USB', onClick: st => plug(st) },
+    { label:'Upload Blink', onClick: st => upload(st) },
+    { label:'Wire LED to pin 13', onClick: st => wire(st) },
+    { label:'Press reset', onClick: st => pressReset(st) },
+  ],
+  acts:{ plug: st => plug(st), reset: st => pressReset(st), led: st => wire(st) },
+  params:(st, q) => {
+    const now = performance.now();
+    if (q.get('usb') === '1'){ st.plugged = true; st.plugK = 1; st.phase = 'run'; st.runT0 = now; }
+    if (q.get('sketch') === 'blink'){ st.sketch = 'blink'; st.bytes = 924; }
+    if (q.get('wire') === '1'){ st.wired = true; st.wireK = 1; }
+    if (q.has('wirek')) st.wireK = +q.get('wirek');
+    if (q.has('plugk')) st.plugK = +q.get('plugk');
+    if (q.has('pin')) st.frzRun = q.get('pin') === '1' ? 200 : 1200;
+    if (q.has('up') && st.plugged){ st.phase = 'upload'; st.ph0 = now; st.frz = +q.get('up'); st.bytes = Math.round(924 * Math.max(0, Math.min(1, (st.frz - .7)/2.2))); }
+    if (q.has('rst')) st.rstK = +q.get('rst');
+  },
+});
+xrMount(() => ui, () => '');
+if (ui.st.plugged && ui.st.frzRun == null) edges();
+</script></body></html>
