@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mechanical watch</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Mechanical watch: an automatic wristwatch, modelled about 8x, lying on a display cushion.
+
+   Truth notes
+   - Energy: the mainspring is a long steel ribbon coiled in the barrel. Its inner end is hooked to the barrel arbor
+     (turned by the ratchet wheel), its outer end to the barrel drum. Winding coils it round the arbor; as the watch runs
+     the drum turns and the coils move back out to the drum wall. About 42 h from full.
+   - Winding by hand: crown -> winding stem -> sliding pinion (square hole, turns with the stem) -> winding pinion ->
+     crown wheel -> ratchet wheel on the barrel arbor. The click lets the ratchet turn only one way. When the spring is
+     full a slipping bridle lets it slip round the drum, so it can't be overwound.
+   - Automatic winding: the rotor (a heavy half disc on a ball bearing) swings as the wrist moves. Its pinion turns two
+     reversing wheels, each with a one-way clutch, so swings both ways turn the reduction wheel one way; its pinion
+     turns the ratchet wheel. Gearing is slow on purpose: one swing adds only minutes of power.
+   - Going train: barrel teeth -> centre pinion; the centre wheel turns once an hour (minute hand), -> third pinion,
+     third wheel -> fourth pinion; the fourth wheel turns once a minute (small seconds) -> escape pinion.
+   - Escapement (Swiss lever): the balance wheel and hairspring swing 4 times a second (8 beats, 28,800 vph). Each
+     swing the impulse jewel on the roller flicks the pallet fork across between its banking pins; one pallet jewel lets
+     an escape wheel tooth go and the other catches the next, so the train moves in small steps (the tick) and the
+     tooth pushes the fork, which gives the balance a little push back (impulse). The hands jump 8 times a second.
+   - Motion works (under the dial): the cannon pinion sits on the centre arbor by friction, carries the minute hand,
+     and drives the minute wheel; its pinion drives the hour wheel (12:1), which carries the hour hand.
+   - Setting: pulling the crown pulls the stem; the setting lever pin in the stem groove turns the setting lever, which
+     moves the yoke, which slides the sliding pinion off the winding pinion and onto the setting wheel ->
+     intermediate wheel -> minute wheel -> cannon pinion (it slips on its arbor), so the hands turn but the train
+     doesn't. The stop (hack) lever touches the balance rim, so the watch stops while you set it.
+   - Jewels (synthetic ruby) are the bearings for the fast-turning pivots; the balance jewel sits in a sprung
+     shock absorber.
+
+   Parts: case (case back, case band, bezel, crystal, crown, tube, lugs), strap + buckle, cushion | structure (main plate,
+   barrel bridge, train bridge, pallet bridge, balance cock, automatic bridge, jewels) | energy (mainspring, barrel,
+   arbor, ratchet wheel, click, crown wheel, rotor, ball bearing, rotor pinion, reversing wheels, reduction wheel) |
+   train (centre, third, fourth wheels and pinions) | escapement (escape wheel, pallet fork with 2 jewels, banking pins,
+   balance wheel with screws, roller + impulse jewel, hairspring + stud) | keyless + motion works (stem, sliding pinion,
+   winding pinion, setting lever, yoke, stop lever, setting wheel, intermediate wheel, minute wheel, cannon pinion,
+   hour wheel) | dial, batons, hour / minute / small-seconds hands.
+
+   Frame: millimetres times MM. Dial plane (u, v): u = +x (3 o'clock, the crown, on the lit front), v = -y (12 o'clock,
+   screen upper right). z grows from the case back (z 0) to the crystal (10.8); the viewer is always above, so the
+   see-through looks in through the dial: motion works, then the plate, train, bridges and rotor at the back. */
+const MM = 4, CX = 20, CY = 26.5, Z0 = 16;
+const TAU = 2*Math.PI, rad = d => d*Math.PI/180, mod = (a, b) => ((a % b) + b) % b, cl1 = x => Math.max(-1, Math.min(1, x));
+const W3 = (x, y, z) => [x*MM, y*MM, z*MM];
+const wp = (u, v, z) => W3(CX + u, CY - v, Z0 + z);
+const pol = (c, r, a) => [c[0] + r*Math.cos(a), c[1] + r*Math.sin(a)];
+const circ = (c, r, n = 32, a0 = 0) => Array.from({length:n}, (_, i) => pol(c, r, a0 + i/n*TAU));
+const lift = (uv, z) => uv.map(([u, v]) => wp(u, v, z));
+const unit2 = ([x, y]) => { const l = Math.hypot(x, y) || 1; return [x/l, y/l]; };
+const add2 = (a, b, k = 1) => [a[0] + b[0]*k, a[1] + b[1]*k];
+const rot2 = ([x, y], a) => [x*Math.cos(a) - y*Math.sin(a), x*Math.sin(a) + y*Math.cos(a)];
+const rotAt = (p, c, a) => add2(c, rot2([p[0] - c[0], p[1] - c[1]], a));
+const meet = (A, ra, B, rb, side) => { const dx = B[0] - A[0], dy = B[1] - A[1], d = Math.hypot(dx, dy), ux = dx/d, uy = dy/d,
+  a = (ra*ra - rb*rb + d*d)/(2*d), h = Math.sqrt(Math.max(0, ra*ra - a*a)); return [A[0] + a*ux - side*h*uy, A[1] + a*uy + side*h*ux]; };
+const bxOf = pts => [[0, 1, 2].map(k => Math.min(...pts.map(p => p[k]))), [0, 1, 2].map(k => Math.max(...pts.map(p => p[k])))];
+const msw = w => `style="stroke-width:${(w*MM).toFixed(2)}"`;
+const ringW = (r, z, n = 64) => lift(circ([0, 0], r, n), z);
+const area2 = p => p.reduce((s, q, i) => { const r = p[(i + 1) % p.length]; return s + q[0]*r[1] - r[0]*q[1]; }, 0);
+const ccw = p => area2(p) >= 0 ? p : p.slice().reverse();
+const barUV = (p, q, wd) => { const d = unit2([q[0] - p[0], q[1] - p[1]]), n = [-d[1]*wd/2, d[0]*wd/2];
+  return [add2(p, n), add2(q, n), add2(q, n, -1), add2(p, n, -1)]; };
+const hullUV = discs => hull(discs.flatMap(([c, r]) => circ(c, r, 20)));
+const hd = (a, r, c = [0, 0]) => [c[0] + r*Math.sin(a), c[1] + r*Math.cos(a)];          // clockwise from 12
+
+// tooth outlines in (u, v)
+const gearPts = (c, R, n, a, td) => { const o = [], w = Math.PI/n;
+  for (let i = 0; i < n; i++){ const t = a + i/n*TAU; for (const [da, r] of [[-w*.5, R - td], [-w*.22, R], [w*.22, R], [w*.5, R - td]]) o.push(pol(c, r, t + da)); }
+  return o; };
+const sawPts = (c, R, n, a, td) => { const o = [], p = TAU/n;
+  for (let i = 0; i < n; i++){ const t = a + i*p; o.push(pol(c, R - td, t), pol(c, R, t + p*.9)); }
+  return o; };
+const escPts = (c, R, n, a) => { const o = [], p = TAU/n;
+  for (let i = 0; i < n; i++){ const t = a + i*p; o.push(pol(c, R - .6, t), pol(c, R, t + .42*p), pol(c, R - .1, t + .55*p), pol(c, R - .6, t + .62*p)); }
+  return o; };
+
+/* flat parts: a set of outlines (u, v) between z0 and z1, drawn from above (the viewer is always above).
+   Bottom outline dark with ink, then the top light with ink; the second fill hides the joins between pieces. */
+const flatZ = (polys, z0, z1, M, w = .6, top = '') => { polys = polys.map(ccw);
+  const A = polys.map(p => pd(lift(p, z0))).join(''), B = polys.map(p => pd(lift(p, z1))).join('');
+  return { box: bxOf(polys.flatMap(p => [...lift(p, z0), ...lift(p, z1)])),
+    svg: `<path d="${A}" fill="${M.d}" stroke="${INK}" stroke-width="${w}" stroke-linejoin="round"/><path d="${A}" fill="${M.d}"/>`
+      + `<path d="${B}" fill="${M.l}" stroke="${INK}" stroke-width="${w*.7}" stroke-linejoin="round"/><path d="${B}" fill="${M.l}"/>` + top }; };
+// a toothed wheel (gear, pinion, saw ratchet, escape wheel or plain disc) with spoke windows cut right through
+const toothed = (c, R, n, a, kind) => kind === 'saw' ? sawPts(c, R, n, a, R*.13) : kind === 'esc' ? escPts(c, R, n, a)
+  : kind === 'disc' ? circ(c, R, 40, a) : gearPts(c, R, n, a, n <= 12 ? R*.3 : Math.min(.32, R*.1));
+function wheelZ(c, R, n, a, z0, z1, M, arms = 0, kind = 'gear', extra = ''){
+  const O = toothed(c, R, n, a, kind), W = [];
+  const [na, fi, fo, fw] = Array.isArray(arms) ? arms : [arms, .3, .74, .08], ri = R*fi, ro = R*fo, wa = R*fw;
+  for (let i = 0; i < na; i++){ const a0 = a + i*TAU/na, a1 = a0 + TAU/na, w = [];
+    for (let j = 0; j <= 8; j++) w.push(pol(c, ro, a0 + wa/ro + (a1 - a0 - 2*wa/ro)*j/8));
+    for (let j = 3; j >= 0; j--) w.push(pol(c, ri, a0 + wa/ri + (a1 - a0 - 2*wa/ri)*j/3));
+    W.push(w); }
+  const path = z => [O, ...W].map(p => pd(lift(p, z))).join('');
+  return { box: bxOf([...lift(O, z0), ...lift(O, z1)]),
+    svg: `<path d="${path(z0)}" fill="${M.d}" fill-rule="evenodd" stroke="${INK}" stroke-width=".7" stroke-linejoin="round"/>`
+      + `<path d="${path(z1)}" fill="${M.l}" fill-rule="evenodd" stroke="${INK}" stroke-width=".45" stroke-linejoin="round"/>` + extra }; }
+// a vertical arbor / pin: a round-capped stroke (model-unit width), inked
+const pinZ = (c, z0, z1, r, M = STEELM) => { const a = wp(c[0], c[1], z0), b = wp(c[0], c[1], z1), d = pd([a, b], false);
+  return { box: bxOf([a, b]), svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-linecap="round" style="stroke-width:${(2*r*MM + .7).toFixed(2)}"/>`
+    + `<path d="${d}" fill="none" stroke="${M.m}" stroke-linecap="round" style="stroke-width:${(2*r*MM).toFixed(2)}"/>` }; };
+const jewel = (c, z, r = .42) => { const B = lift(circ(c, r, 14), z);
+  return fill(pd(B), RUBY.l) + ink(pd(B), .45) + fill(pd(lift(circ(add2(c, [-r*.3, r*.3]), r*.3, 8), z)), '#f6a7b3'); };
+const tint = (o, s) => o >= .995 ? s : o <= .005 ? '' : `<g opacity="${o.toFixed(2)}">${s}</g>`;
+
+const GILT = matOf('#e2b956'), STEELM = matOf('#c3cbcf'), BLUEM = matOf('#3f5f9e'), RUBY = matOf('#c8243c');
+const ROTM = matOf('#b9c0c4'), BRIDGEM = matOf('#d6dadb'), PLATEM = matOf('#cfd3d4');
+const LEATH = matOf('#9a5a2e'), CUSHM = matOf('#7f8a86'), CASEM = matOf('#d3d8da'), HANDM = matOf('#eef1f2'), REDM = matOf('#d2432f');
+const PRINT = '#f8f4ea', LUME = '#f4efdc';
+
+/* ---------- movement layout (u, v) in mm ---------- */
+const PC = [0, 0], PB = [2.5, 5.6], RB = Math.hypot(...PB) - .9;
+const PCW = [2.5 + Math.sqrt(36 - 3.8*3.8), 1.8];
+const PF = [0, -7.5], PT = meet(PC, 5.4, PF, 4.08, -1), PE = add2(PF, unit2([.85, .53]), 3.75);
+const PBAL = [7.4, -6.2], PPF = add2(PE, unit2([PBAL[0] - PE[0], PBAL[1] - PE[1]]), 2.4);
+const PRD = meet(PB, 4.6, PC, 4.0, -1), PRW = [meet(PC, 2.7, PRD, 2.7, 1), meet(PC, 2.7, PRD, 2.7, -1)];
+const PSW1 = [11.2, 2.0], PMW = [3.6, 1.5], PSW2 = meet(PSW1, 3.5, PMW, 4.6, -1);
+const PSL = [12.4, -3.48], PSET = [12.2, 4.2], PYK = [9.4, -5.0];
+const TIPH = add2(PBAL, unit2([PSL[0] - PBAL[0], PSL[1] - PBAL[1]]), 3.72);
+const PCLK = pol(PB, 4.9, rad(58));
+const STONES = [30, -30].map(d => add2(PE, rot2(unit2([PPF[0] - PE[0], PPF[1] - PE[1]]), rad(d)), 2.05));
+const JA = Math.atan2(PPF[1] - PBAL[1], PPF[0] - PBAL[0]);            // the impulse jewel points at the fork at rest
+const HS0 = rad(-118);                                                  // hairspring stud angle
+const POW_K = 3.5/TAU, AUTO_K = (1/1.7)*(.6/2.1)*(.6/4), PMAX = 42;
+
+/* ---------- kinematics: every angle from the state (math angles in (u, v): positive = anticlockwise) ---------- */
+function kin(st){
+  const T = st.hm + st.run, c = -TAU*st.run/3600, cp = -TAU*T/3600, mw = -cp*.3, sw2 = -mw*3/1.6, rd = -st.rat*4/.6;
+  const phi = st.amp*Math.sin(TAU*st.ph);
+  return { T, c, b: -c*.9/RB, t: -c*8, fo: -TAU*st.run/60, e: TAU*st.run/5,      // escape wheel: 20 teeth, half a tooth a beat
+    cp, mw, hw: -TAU*T/43200, sw2, sw1: -sw2*1.6/1.9,
+    crown: st.crownA + .5625*TAU*st.hm/3600, wind: st.windA,
+    cw: -st.rat*2, rd, rwp: -rd*2.1/.6, rww: -st.rot/1.7,
+    phi, psi: -rad(6)*cl1(phi/.3) };
+}
+
+/* ---------- cushion, strap, buckle ---------- */
+const CUY = 25, CUH = 16, CUR = 7, STH = 1.3, SRAD = 7.65, SW = 9.8;
+const CUSH = rrUV((CY - CUY)*MM, 0, (CY + CUY)*MM, CUH*MM, CUR*MM, 6), CX0 = (CX - 20)*MM, CX1 = (CX + 20)*MM;
+function cushion(){
+  let s = extrude(CUSH, CX0, CX1, CUSHM, tone);
+  for (const [x, n] of [[CX0, [-1, 0, 0]], [CX1, [1, 0, 0]]]) if (facing(n)) s += shape(on(PX(x), CUSH), tone(n, CUSHM), 1.4);
+  return s + hullInk([...on(PX(CX0), CUSH), ...on(PX(CX1), CUSH)], 2.4);
+}
+// strap centre line in (|y|, z): out of the lugs, round the cushion's top corner, down its side and under
+const SL = (() => { const A = [22.3, Z0 + 4.6], O = [18, 9], d = Math.hypot(A[0] - O[0], A[1] - O[1]);
+  const t0 = Math.atan2(A[1] - O[1], A[0] - O[0]) - Math.acos(SRAD/d), p = [A];
+  for (const t of [t0, t0/2, 0]) p.push(pol(O, SRAD, t));
+  for (let i = 0; i <= 5; i++) p.push(pol([18, 7], SRAD, -rad(62)*i/5));
+  return p; })();
+const SN = SL.slice(1).map((q, i) => { const p = SL[i], d = unit2([q[0] - p[0], q[1] - p[1]]); let n = [d[1], -d[0]];
+  if (n[0]*(p[0] + q[0])/2 + n[1]*((p[1] + q[1])/2 - 8) < 0) n = [-n[0], -n[1]]; return n; });
+const PN = SL.map((_, i) => unit2(add2(SN[Math.max(0, i - 1)], SN[Math.min(SN.length - 1, i)])));
+const SOFF = (i, k) => add2(SL[i], PN[i], k*STH/2);
+function strapSegs(sg){
+  const sv = (x, [Y, Z]) => W3(x, CY + sg*Y, Z), out = [];
+  for (let i = 0; i < SN.length; i++){
+    const o0 = SOFF(i, 1), o1 = SOFF(i + 1, 1), i0 = SOFF(i, -1), i1 = SOFF(i + 1, -1), n = [0, sg*SN[i][0], SN[i][1]];
+    const OUT = [sv(CX - SW, o0), sv(CX + SW, o0), sv(CX + SW, o1), sv(CX - SW, o1)], INN = [sv(CX - SW, i0), sv(CX + SW, i0), sv(CX + SW, i1), sv(CX - SW, i1)];
+    const fc = facing(n), fn = j => j >= 0 && j < SN.length && facing([0, sg*SN[j][0], SN[j][1]]);
+    let s = facing(n.map(v => -v)) ? face(pd(INN), LEATH.d) : '';
+    for (const x of [CX - SW, CX + SW]){ const nx = [x > CX ? 1 : -1, 0, 0];
+      if (facing(nx)) s += shape([sv(x, o0), sv(x, o1), sv(x, i1), sv(x, i0)], tone(nx, LEATH), .7); }
+    if (fc){
+      s += face(pd(OUT), tone(n, LEATH)) + line([OUT[0], OUT[3]], 1) + line([OUT[1], OUT[2]], 1)
+        + [-8.6, 8.6].map(dx => `<path d="${pd([sv(CX + dx, o0), sv(CX + dx, o1)], false)}" fill="none" stroke="#f1dfb8" ${msw(.22)} stroke-dasharray="${.9*MM} ${.6*MM}"/>`).join('');
+      if (!fn(i + 1)) s += line([OUT[2], OUT[3]], 1);
+      if (i > 0 && !fn(i - 1)) s += line([OUT[0], OUT[1]], 1);
+      if (sg > 0 && i >= 3 && i <= 5){ const a = sv(CX, o0), b = sv(CX, o1), c = avg([a, b]), et = norm(sub(b, a)), r = .38*MM;
+        s += fill(pd(Array.from({length:12}, (_, j) => { const t = j/12*TAU; return [c[0] + r*Math.cos(t), c[1] + et[1]*r*Math.sin(t), c[2] + et[2]*r*Math.sin(t)]; })), '#3b2316'); }
+    }
+    out.push({ strap: 1, fc, box: bxOf([...OUT, ...INN]), svg: s });
+  }
+  return out;
+}
+function buckle(){
+  const y = (CY - 26.65)*MM, R = .35*MM, C4 = [[-10.5, 6.3], [10.5, 6.3], [10.5, 9.7], [-10.5, 9.7]].map(([x, z]) => [(CX + x)*MM, y, z*MM]);
+  let s = ''; for (let i = 0; i < 4; i++) s += rod(C4[i], C4[(i + 1) % 4], R, STEELM, toneI, .9);
+  s += rod([CX*MM, y, 9.7*MM], [CX*MM, y, 6.9*MM], .28*MM, STEELM, toneI, .8);
+  return { vs: q => q.strap ? 1 : 0, box: bxOf(C4.flatMap(p => [p.map(v => v - R), p.map(v => v + R)])), svg: s };
+}
+
+/* ---------- case: lugs, case back + band (holds the see-through), bezel + dial + crystal, crown ---------- */
+function lug(sx, sg){
+  const prof = x => { const ri = Math.sqrt(19.5*19.5 - x*x) - .05;
+    return [[ri, 1.8], [22.5, 2.6], [24.3, 4.4], [23.6, 6.6], [ri, 8.6]].map(([Y, z]) => W3(CX + sx*x, CY + sg*Y, Z0 + z)); };
+  const A = prof(10), B = prof(12.2);
+  let s = loft(A, B, n => tone(n, CASEM));
+  for (const [Q, n] of [[B, [sx, 0, 0]], [A, [-sx, 0, 0]]]) if (facing(n)) s += shape(Q, tone(n, CASEM), .9);
+  const near = dot([sx*10.5, sg*16.4, 0], CAM_V) > 0;
+  return { vs: q => q.lower ? (near ? 1 : -1) : 0, box: bxOf([...A, ...B]), svg: s + hullInk([...A, ...B], 1.6) };
+}
+function lower(st, K, k){
+  const back = loft(ringW(17.2, 0), ringW(19.5, 1.2), n => tone(n, CASEM));
+  const band = loft(ringW(19.5, 1.2), ringW(19.5, 9), n => tone(n, CASEM)) + hullInk([...ringW(17.2, 0), ...ringW(19.5, 9)], 2.2);
+  const svg = k < .02 ? back + band
+    : tint(.5*k, fill(pd(ringW(19.2, .6)), mix(CASEM.d, '#f2efe7', .5)) + loft(ringW(19.2, .6), ringW(19.2, 10.8), n => mix(toneI(n.map(v => -v), CASEM), '#f2efe7', .55), true))
+      + back + tint(k, movement(st, K)) + tint(1 - .8*k, band);
+  return { lower: 1, box: [W3(CX - 19.5, CY - 19.5, Z0), W3(CX + 19.5, CY + 19.5, Z0 + 8.6)], svg };
+}
+const STREAKS = [[[-10, 5.5], [-7.4, 9.6], [-6.2, 8.9], [-8.9, 4.8]], [[-6.6, 3.0], [-4.6, 6.4], [-4.0, 6.0], [-6.0, 2.6]]];
+function upper(st, K, k, m){
+  const R9 = ringW(19.5, 9), R18 = ringW(18.7, 10.8), RO = ringW(15.6, 10.8);
+  const inside = loft(ringW(15.0, 8.1), ringW(15.6, 10.8), n => toneI(n, CASEM), true) + dial(m) + (k < .5 ? hands(st) : '')
+    + fill(pd(RO), '#cfe9f0', 'opacity=".22"') + STREAKS.map(p => fill(pd(lift(p, 10.8)), '#ffffff', 'opacity=".38"')).join('');
+  const body = loft(R9, R18, n => tone(n, CASEM)) + fill(pd(R18) + pd(RO), CASEM.l, 'fill-rule="evenodd"') + ink(pd(R18), 1)
+    + clipTo(RO, inside) + ink(pd(RO), 1.3) + hullInk([...R9, ...R18], 2.2);
+  return { box: [W3(CX - 19.5, CY - 19.5, Z0 + 8.6), W3(CX + 19.5, CY + 19.5, Z0 + 10.9)], svg: k < .02 ? body : tint(1 - .8*k, body) + (k >= .5 ? hands(st) : '') };
+}
+function crownItem(st, K){
+  const y = CY*MM, z = (Z0 + 4.8)*MM, x0 = CX + 20.4 + 1.6*st.co, x1 = x0 + 3.2;
+  let s = cylX((CX + 19.3)*MM, (CX + 20.4)*MM, y, z, 1.5*MM, CASEM, tone, 1);
+  if (st.co > .02) s += cylX((CX + 20.4)*MM, x0*MM, y, z, .5*MM, STEELM, toneI, .8);
+  s += cylX(x0*MM, x1*MM, y, z, 3*MM, CASEM, tone, 1.4, 32);
+  for (let i = 0; i < 24; i++){ const t = K.crown + i*TAU/24, n = [0, Math.cos(t), Math.sin(t)];
+    if (facing(n)) s += line([[(x0 + .25)*MM, y + 3*MM*n[1], z + 3*MM*n[2]], [(x1 - .25)*MM, y + 3*MM*n[1], z + 3*MM*n[2]]], .5); }
+  return { box: [W3(CX + 19.5, CY - 3, Z0 + 1.8), W3(CX + 25.3, CY + 3, Z0 + 7.8)], svg: act('crown', s) };
+}
+
+/* ---------- dial and hands ---------- */
+const txD = (s, size, u, v) => `<text transform="${txM(P(...wp(u, v - .35*size, 8.1)), Dv(1, 0, 0), Dv(0, 1, 0))}" font-size="${(size*MM).toFixed(1)}" fill="${PRINT}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="700" letter-spacing=".1em">${s}</text>`;
+const tick1 = (c, a, r0, r1, w) => `<path d="${pd([wp(...hd(a, r0, c), 8.1), wp(...hd(a, r1, c), 8.1)], false)}" stroke="${PRINT}" ${msw(w)}/>`;
+function dial(m){
+  const SUB = lift(circ(PF, 3.5, 40), 8.1);
+  let s = fill(pd(lift(circ(PC, 15, 72), 8.1)), m.l);
+  for (let i = 0; i < 60; i++) s += tick1(PC, i*TAU/60, i % 5 ? 14.35 : 14.0, 14.8, i % 5 ? .12 : .22);
+  s += fill(pd(SUB), mix(m.l, '#000000', .12)) + `<path d="${pd(SUB)}" fill="none" stroke="${PRINT}" ${msw(.1)}/>`;
+  for (let i = 0; i < 12; i++) s += tick1(PF, i*TAU/12, i % 3 ? 2.9 : 2.6, 3.3, .12);
+  s += txD('TICKWORK', 1.3, 0, 5.6) + txD('AUTOMATIC', .75, 0, -2.6);
+  const bars = [], lume = [];
+  for (let i = 0; i < 12; i++){ const a = i*TAU/12, nn = [Math.cos(a), -Math.sin(a)];
+    for (const o of i ? [0] : [-.5, .5]){ bars.push(barUV(add2(hd(a, 11.4), nn, o), add2(hd(a, 13.9), nn, o), .7)); lume.push(barUV(add2(hd(a, 11.8), nn, o), add2(hd(a, 13.5), nn, o), .28)); } }
+  return s + flatZ(bars, 8.1, 8.32, STEELM, .5, lume.map(p => fill(pd(lift(p, 8.32)), LUME)).join('')).svg;
+}
+const handPoly = (c, a, len, w, tail, k = 1) => { const q = (s, t) => [c[0] + s*Math.sin(a) + t*Math.cos(a), c[1] + s*Math.cos(a) - t*Math.sin(a)];
+  return k === 1 ? [q(-tail, -w*.35), q(0, -w/2), q(len*.9, -w*.32), q(len, 0), q(len*.9, w*.32), q(0, w/2), q(-tail, w*.35)]
+    : [q(len*.28, -w*.2), q(len*.86, -w*.15), q(len*.95, 0), q(len*.86, w*.15), q(len*.28, w*.2)]; };
+function hands(st){
+  const T = st.hm + st.run, H = (a, len, w, tail, z) => flatZ([handPoly(PC, a, len, w, tail), circ(PC, w*.9, 16)], z, z + .1, HANDM, .6,
+    fill(pd(lift(handPoly(PC, a, len, w, tail, 0), z + .1)), LUME) + ink(pd(lift(handPoly(PC, a, len, w, tail, 0), z + .1)), .35)).svg;
+  return flatZ([handPoly(PF, TAU*st.run/60, 3.2, .16, 1.0), circ(PF, .35, 12)], 8.3, 8.36, REDM, .45).svg
+    + H(TAU*T/43200, 8.2, .75, 1.8, 8.42) + H(TAU*T/3600, 13.0, .55, 2.2, 8.65) + flatZ([circ(PC, .55, 16)], 8.75, 8.9, HANDM, .5).svg;
+}
+
+/* ---------- the movement (see-through only) ---------- */
+const prismX = (prof, x0, x1, M, w = .7) => { const A = on(PX(x0), prof), B = on(PX(x1), prof), e = facing([1, 0, 0]) ? [B, [1, 0, 0]] : facing([-1, 0, 0]) ? [A, [-1, 0, 0]] : null;
+  return { box: bxOf([...A, ...B]), svg: loft(A, B, n => toneI(n, M)) + (e ? shape(e[0], toneI(e[1], M), w*.6) : '') + hullInk([...A, ...B], w) }; };
+const stemAt = (u0, u1, r = .5) => u1 - u0 < .03 ? null : prismX(circ([CY*MM, (Z0 + 4.8)*MM], r*MM, 18), (CX + u0)*MM, (CX + u1)*MM, STEELM, .7);
+const stemGear = (u0, u1, a) => prismX(gearPts([CY*MM, (Z0 + 4.8)*MM], 1.6*MM, 12, a, .3*MM), (CX + u0)*MM, (CX + u1)*MM, STEELM, .8);
+const cylAt = (c, z0, z1, r, M) => { const [x, y] = wp(c[0], c[1], 0); return { box: [wp(c[0] - r, c[1] + r, z0), wp(c[0] + r, c[1] - r, z1)], svg: cyl(x, y, (Z0 + z0)*MM, (Z0 + z1)*MM, r*MM, M, toneI, .7, 18) }; };
+const tinted = (o, it) => ({ ...it, svg: tint(o, it.svg) });
+const yokeEnd = co => { const u = 8.6 + 2*co; return [u, -5 + Math.sqrt(11.56 - (u - 9.4)**2)]; };
+const setPin = co => { const u = 10.6 + 1.6*co; return [u, 4.2 - Math.sqrt(16 - (12.2 - u)**2)]; };
+const stopTail = co => add2(PSL, rot2(rot2([0, 3.33], -.3), .6*(1 - co)));
+function movement(st, K){
+  const co = st.co, B = [], A = [], ang = (p, c) => Math.atan2(p[1] - c[1], p[0] - c[0]);
+  // automatic works (at the back, under the case back)
+  const rotor = [...Array.from({length:25}, (_, i) => pol(PC, 13.2, st.rot + rad(90) + i/24*Math.PI)), ...Array.from({length:13}, (_, i) => pol(PC, 2.6, st.rot + rad(270) + i/12*Math.PI))];
+  B.push(flatZ([rotor], .8, 1.4, ROTM, .8, `<path d="${pd(lift(Array.from({length:17}, (_, i) => pol(PC, 11.6, st.rot + rad(100) + i/16*rad(160))), 1.4), false)}" fill="none" stroke="${ROTM.d}" stroke-width=".7"/>`));
+  B.push(wheelZ(PC, 2.2, 0, 0, 1.4, 1.75, STEELM, 0, 'disc',
+    fill(pd(lift(circ(PC, 1.85, 24), 1.75)) + pd(lift(circ(PC, 1.15, 18), 1.75)), STEELM.d, 'fill-rule="evenodd"')
+    + Array.from({length:8}, (_, i) => { const b = lift(circ(pol(PC, 1.5, st.rot*.5 + i*TAU/8), .3, 10), 1.75); return fill(pd(b), '#f4f6f7') + ink(pd(b), .3); }).join('')));
+  B.push(tinted(.6, flatZ([hullUV([[PC, 2.4], [PRW[0], 1.0], [PRW[1], 1.0], [PRD, 1.0]])], 1.8, 2.1, BRIDGEM)));
+  B.push(wheelZ(PC, 1.0, 10, st.rot, 2.15, 2.4, STEELM));
+  PRW.forEach((p, i) => { B.push(wheelZ(p, 1.7, 16, K.rww + i*.1, 2.15, 2.4, GILT, 3)); B.push(wheelZ(p, .6, 8, K.rwp + i*.3, 2.45, 2.7, STEELM)); });
+  B.push(wheelZ(PRD, 2.1, 20, K.rd, 2.45, 2.7, GILT, 4), wheelZ(PRD, .6, 8, K.rd, 2.75, 3.15, STEELM));
+  // ratchet wheel, crown wheel and click (outside the barrel bridge)
+  B.push(wheelZ(PB, 4.0, 24, st.rat, 2.8, 3.2, STEELM, 0, 'saw'), wheelZ(PCW, 2.0, 18, K.cw, 2.8, 3.2, STEELM));
+  const ph = mod(rad(80) - st.rat, TAU/24)/(TAU/24), tip = pol(PB, 3.53 + .52*Math.min(1, ph/.9), rad(80));
+  B.push(flatZ([barUV(PCLK, tip, .55), circ(PCLK, .45, 12)], 2.8, 3.2, STEELM, .5));
+  // bridges
+  for (const d of [[[PB, 4.6], [PCW, 1.0]], [[PC, 1.3], [PT, 1.3], [PF, 1.3], [PE, 1.1]], [[PPF, .7], [[4.6, -8.4], .8]], [[PBAL, 1.0], [[9.3, -8.2], 1.1]]])
+    B.push(tinted(.55, flatZ([hullUV(d)], 3.2, 3.6, BRIDGEM, .7)));
+  // escapement: hairspring, balance, roller + impulse jewel, pallet fork + jewels, banking pins, escape wheel
+  const hs = []; for (let i = 0; i <= 324; i++){ const s = i/324; hs.push(pol(PBAL, .5 + 2.2*s, HS0 + K.phi*(1 - s) + 9*TAU*s)); }
+  B.push({ box: bxOf([...lift(circ(PBAL, 2.7, 8), 3.62), ...lift(circ(PBAL, 2.7, 8), 3.8)]),
+    svg: `<path d="${pd(lift(hs, 3.7), false)}" fill="none" stroke="#5d6d80" stroke-width=".45"/>` + flatZ([barUV(pol(PBAL, 2.55, HS0), pol(PBAL, 3.05, HS0), .45)], 3.6, 3.8, STEELM, .4).svg });
+  B.push(wheelZ(PBAL, 3.6, 0, K.phi, 3.85, 4.15, GILT, [3, .15, .875, .05], 'disc',
+    Array.from({length:12}, (_, i) => { const b = lift(circ(pol(PBAL, 3.42, K.phi + (i + .5)*TAU/12), .2, 8), 4.15); return fill(pd(b), GILT.d) + ink(pd(b), .3); }).join('')));
+  B.push(wheelZ(PBAL, .7, 0, K.phi, 4.15, 4.3, STEELM, 0, 'disc'), pinZ(pol(PBAL, .55, K.phi + JA), 4.15, 4.5, .11, RUBY));
+  const dF = unit2([PBAL[0] - PPF[0], PBAL[1] - PPF[1]]), nF = [-dF[1], dF[0]], fp = (s, t) => rotAt(add2(add2(PPF, dF, s), nF, t), PPF, K.psi);
+  const stones = STONES.map(s0 => rotAt(s0, PPF, K.psi));
+  B.push(flatZ([barUV(fp(-.2, 0), fp(1.3, 0), .4), barUV(fp(1.2, .34), fp(1.62, .34), .26), barUV(fp(1.2, -.34), fp(1.62, -.34), .26), circ(PPF, .5, 14),
+    ...stones.map(c => barUV(PPF, c, .45))], 4.3, 4.55, STEELM, .5));
+  B.push(flatZ(stones.map(c => { const d = unit2([c[0] - PE[0], c[1] - PE[1]]); return barUV(add2(c, d, -.15), add2(c, d, .35), .3); }), 4.28, 4.57, RUBY, .4));
+  for (const t of [.42, -.42]) B.push(pinZ(add2(add2(PPF, dF, 1.0), nF, t), 4.3, 5.4, .12));
+  B.push(wheelZ(PE, 2.1, 20, K.e, 4.3, 4.55, STEELM, [3, .25, .62, .07], 'esc'));
+  // stop (hack) lever
+  const dl = .6*(1 - co), sTip = add2(PSL, rot2([TIPH[0] - PSL[0], TIPH[1] - PSL[1]], dl)), sTail = stopTail(co);
+  B.push(flatZ([barUV(PSL, sTail, .5), barUV(PSL, sTip, .5), circ(PSL, .55, 14)], 3.95, 4.15, STEELM, .5), pinZ(sTail, 4.15, 4.3, .15));
+  // barrel: toothed drum, mainspring, arbor
+  const DA = lift(circ(PB, 5.0, 48), 3.9), DB = lift(circ(PB, 5.0, 48), 4.55), [bx, by] = wp(...PB, 0);
+  const p = st.pow/PMAX, N = 6 + 3*p, D = TAU*N + mod(K.b - st.rat - TAU*N + Math.PI, TAU) - Math.PI, ms = [];
+  for (let i = 0; i <= 300; i++){ const s = i/300; ms.push(pol(PB, 1.05 + 3.7*(p*s**4 + (1 - p)*(1 - (1 - s)**4)), st.rat + D*s)); }
+  B.push(wheelZ(PB, RB, 48, K.b, 3.65, 3.9, GILT));
+  B.push({ box: bxOf([...DA, ...DB]), svg: openShell(DA, DB, n => toneI(n, GILT), fill(pd(DA), GILT.d)
+      + `<path d="${pd(lift(ms, 4.22), false)}" fill="none" stroke="#4d5966" ${msw(.16)}/>` + cyl(bx, by, (Z0 + 3.9)*MM, (Z0 + 4.6)*MM, MM, STEELM, toneI, .7, 16))
+    + ink(pd(DB), .6) + hullInk([...DA, ...DB], .9) });
+  // going train
+  B.push(wheelZ(PC, .9, 10, K.c, 3.65, 3.9, STEELM), wheelZ(PT, 3.6, 36, K.t, 4.1, 4.35, GILT, 4), wheelZ(PF, .48, 8, K.fo, 4.1, 4.35, STEELM));
+  B.push(wheelZ(PC, 4.8, 40, K.c, 4.65, 4.9, GILT, 4), wheelZ(PT, .6, 8, K.t, 4.65, 4.9, STEELM));
+  B.push(wheelZ(PF, 3.3, 32, K.fo, 5.0, 5.25, GILT, 4), wheelZ(PE, .45, 7, K.e, 5.0, 5.25, STEELM));
+  for (const [c, segs, r] of [[PC, [[3.9, 4.65], [4.9, 5.4]], .22], [PT, [[3.6, 4.1], [4.35, 4.65], [4.9, 5.4]], .2], [PF, [[3.6, 4.1], [4.35, 5.0], [5.25, 5.4]], .2],
+    [PE, [[3.6, 4.3], [4.55, 5.0], [5.25, 5.4]], .17], [PPF, [[3.6, 4.3], [4.55, 5.4]], .17], [PBAL, [[3.6, 3.85], [4.3, 5.4]], .2], [PB, [[4.6, 5.4]], .4]])
+    for (const [z0, z1] of segs) B.push(pinZ(c, z0, z1, r));
+  // keyless works: stem, sliding pinion, winding pinion, setting lever, yoke
+  B.push(stemAt(4.8 + 1.6*co, 6.5), stemAt(7.8, 7.9 + 2*co), stemAt(9.3 + 2*co, 19.5), stemGear(6.5, 7.8, K.wind), stemGear(7.9 + 2*co, 9.3 + 2*co, K.crown));
+  const pin = setPin(co), lam = ang(pin, PSET) - ang(setPin(0), PSET), ye = yokeEnd(co), lamY = ang(ye, PYK) - ang(yokeEnd(0), PYK);
+  B.push(flatZ([barUV(PSET, pin, .8), circ(PSET, .7, 14), barUV(PSET, add2(PSET, rot2([-1.2, -2.9], lam)), .7)], 5.0, 5.3, STEELM, .5), pinZ(pin, 4.6, 5.0, .18));
+  B.push(flatZ([barUV(PYK, ye, .7), circ(PYK, .6, 14), barUV(PYK, add2(PYK, rot2([2.4, 1.3], lamY)), .6)], 5.0, 5.3, STEELM, .5), pinZ(ye, 4.5, 5.0, .2));
+  // main plate with its jewels and the balance shock absorber
+  const lyre = Array.from({length:36}, (_, i) => { const t = i/36*TAU; return pol(PBAL, .8 + .22*Math.cos(3*t), t); });
+  const plate = tint(.3, flatZ([circ(PC, 13.5, 72)], 5.4, 6.4, PLATEM, .8).svg) + [PT, PF, PE, PPF].map(c => jewel(c, 6.4)).join('')
+    + jewel(PBAL, 6.4, .5) + `<path d="${pd(lift(lyre, 6.42))}" fill="none" stroke="${GILT.d}" stroke-width=".9"/>`;
+  // motion works and setting wheels (dial side)
+  A.push(wheelZ(PSW1, 1.9, 16, K.sw1, 6.4, 6.75, STEELM), wheelZ(PSW2, 1.6, 14, K.sw2, 6.4, 6.75, STEELM));
+  A.push(wheelZ(PMW, 3.0, 30, K.mw, 6.4, 6.75, STEELM), wheelZ(PMW, .8, 10, K.mw, 6.75, 7.1, STEELM), wheelZ(PC, .9, 10, K.cp, 6.4, 6.75, STEELM));
+  A.push(wheelZ(PC, 3.1, 32, K.hw, 6.8, 7.1, GILT, 4), cylAt(PC, 7.1, 8.35, .95, GILT), cylAt(PC, 8.35, 8.6, .5, STEELM), pinZ(PF, 6.4, 8.3, .2));
+  return byDepth(B) + plate + byDepth(A);
+}
+
+/* ---------- labels ---------- */
+const BOUNDS = [(CX - 19.5)*MM, (CX + 25)*MM, (CY - 26)*MM, (CY + 26)*MM, Z0*MM, (Z0 + 11)*MM];
+const running = st => st.amp > 1 && st.co < .5 && st.pow > 0;
+function watchCallouts(items){
+  const svg = document.getElementById('fig'), vb = svg.viewBox.baseVal, matrix = svg.getScreenCTM().inverse();
+  const mobile = innerWidth <= 560, k = INK_K, u = mobile ? LBL_U() : 0, fs = u ? 8*u : 8.6*k, h = u ? 12*u : fs*1.8;
+  const columns = [[], []], projected = items.map(it => ({...it, p: P(...it.at)})).sort((a, b) => a.p[0] - b.p[0]);
+  projected.forEach((it, i) => columns[i < Math.ceil(items.length/2) ? 0 : 1].push(it));
+  return columns.map((col, side) => {
+    const control = document.getElementById(side ? 'stats' : 'btns').getBoundingClientRect();
+    const top = Math.max(h, new DOMPoint(control.left, control.bottom + 16).matrixTransform(matrix).y + h/2);
+    const bottom = vb.height - h - (mobile ? 40 : 16)*k, gap = Math.min(h + 3*k, (bottom - top)/Math.max(1, col.length - 1));
+    return col.sort((a, b) => a.p[1] - b.p[1]).map((it, i) => {
+      const n = ((window.__ln || (window.__ln = {}))[it.text] || (__ln[it.text] = Object.keys(__ln).length + 1));
+      const w = u ? h*(n > 9 ? 1.3 : 1) : it.text.length*fs*.62 + fs*1.5;
+      const x = side ? vb.width - w/2 - 3*k : w/2 + 3*k, y = top + i*gap, edge = x + (side ? -w/2 : w/2);
+      return `<g class="tag${it.on ? ' on' : ''}" data-n="${n}" data-t="${it.text}">`
+        + `<path d="M${f(it.p[0])} ${f(it.p[1])}L${f(edge)} ${f(y)}" fill="none" stroke="${INK}" stroke-width=".7"/>`
+        + `<circle cx="${f(it.p[0])}" cy="${f(it.p[1])}" r="${f(1.3*k)}" fill="${INK}"/>`
+        + `<rect x="${f(x - w/2)}" y="${f(y - h/2)}" width="${f(w)}" height="${f(h)}" rx="${f(h/2)}" fill="${it.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(x)}" y="${f(y + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">${u ? n : it.text}</text></g>`;
+    }).join('');
+  }).join('');
+}
+function labels(st, K){
+  const co = st.co, job = st.jobs[0] ? st.jobs[0].kind : '', go1 = running(st), win = job === 'wind', set = job === 'set' || job === 'pull', sw = job === 'swing';
+  const lb = (text, uv, z, on) => ({ at: wp(uv[0], uv[1], z), text, on: !!on });
+  const T = st.hm + st.run, va = Math.atan2(CAM_V[1], CAM_V[0]), near = (r, z, da) => W3(CX + r*Math.cos(va + da), CY + r*Math.sin(va + da), Z0 + z);
+  const crown = W3(CX + 22 + 1.6*co, CY, Z0 + 7.8);
+  if (st.xr > .5) return watchCallouts([
+    { at: crown, text: 'CROWN', on: win || set }, lb('WINDING STEM', [15, 0], 5.3, win || set), lb('WINDING PINION', [7.15, 0], 6.4, win),
+    lb('SLIDING PINION', [8.6 + 2*co, 0], 6.4, win || set), lb('YOKE', yokeEnd(co), 5.3, set), lb('SETTING LEVER', setPin(co), 5.3, set),
+    lb('SETTING WHEEL', PSW1, 6.75, set), lb('INTERMEDIATE WHEEL', PSW2, 6.75, set), lb('MINUTE WHEEL', pol(PMW, 2.4, rad(60)), 6.75, set || go1),
+    lb('CANNON PINION', [.9, -.4], 6.75, set || go1), lb('HOUR WHEEL', hd(rad(200), 2.6), 7.1, set || go1), lb('STOP LEVER', PSL, 4.15, set),
+    lb('CROWN WHEEL', PCW, 3.2, win), lb('RATCHET WHEEL', pol(PB, 3.4, rad(140)), 3.2, win || sw), lb('CLICK', PCLK, 3.2, win || sw),
+    lb('MAINSPRING', add2(PB, [-2.4, .6]), 4.22, win || sw || go1), lb('BARREL', pol(PB, 5.0, rad(70)), 4.55, go1),
+    lb('CENTRE WHEEL', pol(PC, 4.4, rad(205)), 4.9, go1), lb('THIRD WHEEL', pol(PT, 3.2, rad(200)), 4.35, go1), lb('FOURTH WHEEL', pol(PF, 3.0, rad(225)), 5.25, go1),
+    lb('ESCAPE WHEEL', pol(PE, 1.8, rad(-70)), 4.55, go1), lb('PALLET FORK', PPF, 4.55, go1), lb('PALLET JEWELS', STONES[1], 4.57, go1),
+    lb('IMPULSE JEWEL', pol(PBAL, .55, K.phi + JA), 4.5, go1), lb('BALANCE WHEEL', pol(PBAL, 3.4, rad(-40)), 4.15, go1), lb('HAIRSPRING', pol(PBAL, 2.0, rad(40)), 3.7, go1),
+    lb('BALANCE COCK', [9.3, -8.2], 3.6), lb('ROTOR', pol(PC, 10, st.rot + Math.PI), 1.4, sw), lb('BALL BEARING', pol(PC, 1.5, rad(120)), 1.75, sw),
+    lb('REVERSING WHEELS', PRW[0], 2.4, sw), lb('REDUCTION WHEEL', pol(PRD, 1.6, rad(200)), 2.7, sw), lb('AUTOMATIC BRIDGE', add2(PRD, [.4, .5]), 2.1),
+    lb('BARREL BRIDGE', pol(PB, 4.2, rad(20)), 3.6), lb('TRAIN BRIDGE', PF, 3.6), lb('MAIN PLATE', pol(PC, 12.6, rad(160)), 6.4),
+    lb('JEWEL BEARINGS', PT, 6.4), lb('SHOCK ABSORBER', add2(PBAL, [0, .8]), 6.42)], BOUNDS);
+  const xs = Math.sign(CAM_V[0]) || 1, ys = Math.sign(CAM_V[1]) || 1, strap = SOFF(2, 1), ah = TAU*T/43200, am = TAU*T/3600;
+  const items = [{ at: crown, text: 'CROWN', on: win || set }, { at: near(19.5, 5, .55), text: 'CASE' }, { at: near(19.1, 9.9, -.6), text: 'BEZEL' },
+    lb('CRYSTAL', [-7.2, 6.8], 10.8), lb('DIAL', [-10.5, -4], 8.1), lb('HOUR HAND', hd(ah, 5.5), 8.52, set || go1), lb('MINUTE HAND', hd(am, 9.5), 8.75, set || go1),
+    lb('SMALL SECONDS', add2(PF, [-2.3, -1.2]), 8.1, go1), { at: W3(CX + xs*11.1, CY + ys*24, Z0 + 4.4), text: 'LUG' },
+    { at: W3(CX + 3, CY + ys*strap[0], strap[1]), text: 'STRAP' },
+    { at: facing([1, 0, 0]) ? W3(CX + 20, CY - 8, 8) : facing([-1, 0, 0]) ? W3(CX - 20, CY + 8, 8) : W3(CX + 14, CY + ys*25, 8), text: 'CUSHION' }];
+  if (facing([0, -1, 0])) items.push({ at: W3(CX + 6, CY - 26.7, 9.7), text: 'BUCKLE' });
+  return xrCallouts(items, BOUNDS);
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const K = kin(st), k = st.xr || 0, segs = [...strapSegs(1), ...strapSegs(-1)];
+  const items = [...segs.filter(s => s.fc), lug(1, 1), lug(1, -1), lug(-1, 1), lug(-1, -1), lower(st, K, k), upper(st, K, k, m), crownItem(st, K)];
+  if (facing([0, -1, 0])) items.push(buckle());
+  items.sort((a, b) => (a.vs ? a.vs(b) : 0) || (b.vs ? -b.vs(a) : 0) || sepOrder(a, b) || depthOf(boxMid(a.box)) - depthOf(boxMid(b.box)));
+  const top = on(PZ(CUH*MM), rectUV(CX0, (CY - 18)*MM, CX1, (CY + 18)*MM));
+  return castShadow([...on(PX(CX0), CUSH), ...on(PX(CX1), CUSH), ...ringW(19.5, 10.8)], 0)
+    + byDepth(segs.filter(s => !s.fc)) + cushion() + castShadow([...ringW(19.5, 0), ...ringW(18.7, 10.8)], CUH*MM, top)
+    + items.map(i => i.svg).join('') + labels(st, K);
+}
+
+/* ---------- simulation: a queue of timed jobs, plus the balance, which runs while the spring has power ---------- */
+const queue = (st, kind, d, start) => st.jobs.push({ kind, d, t: 0, start, f: null });
+function tick(st, dt){
+  const j = st.jobs[0];
+  if (j){ j.t += dt; if (!j.f) j.f = j.start(st); const e = Math.min(1, j.t/j.d); j.f(e, Math.min(j.t, j.d)); if (e >= 1) st.jobs.shift(); }
+  const sdt = dt*(st.slow ? .1 : 1), free = st.co < .5, tgt = st.pow > 0 && free ? 4.7 : 0;
+  st.amp += (tgt - st.amp)*Math.min(1, sdt*(tgt ? 1.6 : free ? 3 : 16));
+  if (!tgt && st.amp < .03) st.amp = 0;
+  if (st.amp > 0 || tgt){ const b0 = Math.floor(st.ph*2); st.ph += 4*sdt;
+    if (tgt && st.amp > 1) for (let i = Math.floor(st.ph*2) - b0; i > 0; i--){ st.run += 1/8; st.pow = Math.max(0, st.pow - 1/8/3600); } }
+}
+let ui, looping = false;
+function go(){ if (looping) return; looping = true;
+  ui.animate(dt => { const st = ui.st; tick(st, dt); const on = st.jobs.length > 0 || st.amp > 0 || (st.pow > 0 && st.co < .5); if (!on) looping = false; return on; }); }
+const busy = st => st.jobs.length ? (ui.flash('One thing at a time…', 1000), true) : false;
+const pushIn = st => { if (st.co > 0) queue(st, 'push', .3, s => { const c0 = s.co; return e => { s.co = c0*(1 - ease(e)); }; }); };
+function wind(st){
+  if (busy(st)) return; pushIn(st);
+  queue(st, 'wind', 1.67, s => { const a0 = s.crownA, w0 = s.windA, r0 = s.rat, p0 = s.pow;
+    ui.flash(p0 >= PMAX - .1 ? 'Already full: a slipping bridle lets the spring slip round the barrel, so it cannot be overwound'
+      : 'The crown turns the ratchet wheel, which coils the mainspring round its arbor. The click stops it unwinding.', 2600);
+    return e => { const da = 20*Math.PI*e; s.crownA = a0 + da; s.windA = w0 + da; s.rat = r0 + .4*da; s.pow = Math.min(PMAX, p0 + .4*da*POW_K); }; });
+  go();
+}
+function setHands(st, Tt){
+  if (busy(st)) return;
+  if (st.co < 1) queue(st, 'pull', .35, s => { const c0 = s.co;
+    ui.flash('Crown pulled out: the sliding pinion moves onto the setting wheel and the stop lever holds the balance', 2600); return e => { s.co = c0 + (1 - c0)*ease(e); }; });
+  queue(st, 'set', 1.4, s => { const cur = mod(s.hm + s.run, 43200), dT = mod(Tt - (cur - mod(cur, 60)), 43200), h0 = s.hm; return e => { s.hm = h0 + dT*ease(e); }; });
+  go();
+}
+function letRun(st, slow){
+  st.slow = slow;
+  if (busy(st)) return; pushIn(st);
+  if (st.pow <= 0) ui.flash('The mainspring is empty: wind the crown first', 2200);
+  else if (slow) ui.flash('Each swing of the balance flicks the pallet fork, and the escape wheel moves on half a tooth: tick', 2600);
+  go();
+}
+function swing(st){
+  if (busy(st)) return;
+  queue(st, 'swing', 2.4, s => { const r0 = s.rot, p0 = s.pow; let last = r0;
+    return (e, t) => { const r = r0 + rad(120)*e + rad(150)*Math.sin(TAU*t/1.1)*Math.pow(1 - e, 1.5), d = Math.abs(r - last); last = r;
+      s.rot = r; s.rat += d*AUTO_K; s.pow = Math.min(PMAX, s.pow + d*AUTO_K*POW_K);
+      if (e >= 1) ui.flash(`The rotor swung both ways; the reversing wheels turn both swings into winding: +${Math.round((s.pow - p0)*60)} min of power`, 2600); }; });
+  go();
+}
+const pad2 = n => String(n).padStart(2, '0');
+const nowT = () => { const d = new Date(); return (d.getHours() % 12)*3600 + d.getMinutes()*60; };
+const hhmm = T => `${Math.floor(T/3600) % 12 || 12}:${pad2(Math.floor(T/60) % 60)}`;
+
+ui = mountFigure({
+  fig:'W1', title:'Mechanical watch', turn:'full', size:[46*MM, 53*MM, 28*MM], center:[CX*MM, CY*MM], palette:'cobalt',
+  idea:'A wound spring pushes a train of gears, and a balance wheel swinging four times a second lets them move on one tiny step at a time.',
+  state:{ pow:0, run:35, hm:36600, co:0, crownA:0, windA:0, rat:0, rot:0, amp:0, ph:0, slow:false, jobs:[] },
+  scene,
+  readout: st => running(st) ? `running · the balance swings 4 times a second${st.slow ? ' (slow motion)' : ''}`
+    : st.co > .5 ? 'crown pulled out · setting the hands · the stop lever holds the balance'
+    : st.pow <= 0 ? 'stopped · the mainspring is empty · wind the crown' : 'starting…',
+  stats: st => { const T = mod(st.hm + st.run, 43200);
+    return [{ label:'Power reserve', value:`${st.pow.toFixed(1)} h` },
+      { label:'Time', value:`${hhmm(T)}:${pad2(Math.floor(mod(st.run, 60)))}`, small:true },
+      { label:'Beat', value: running(st) ? (st.slow ? '28,800 vph ÷10' : '28,800 vph') : 'stopped', small:true }]; },
+  buttons:[
+    { label:'Wind the crown', onClick: st => wind(st) },
+    { label:'Set the hands', choices: () => [[`Now (${hhmm(nowT())})`, nowT()], ['10:10', 36600], ['12:00', 0]].map(([label, T]) => ({ label, onClick: s => setHands(s, T) })) },
+    { label:'Let it run', choices: st => [['Real speed', false], ['Slow motion 1/10', true]].map(([label, slow]) => ({ label, current: running(st) && st.slow === slow, onClick: s => letRun(s, slow) })) },
+    { label:'Swing the wrist', onClick: st => swing(st) },
+  ],
+  acts:{ crown: st => wind(st) },
+  params:(st, q) => {
+    for (const key of ['pow', 'run', 'co', 'rot', 'amp', 'ph', 'crownA', 'rat']) if (q.has(key)) st[key] = +q.get(key);
+    if (q.has('t')){ const [h, mi] = q.get('t').split(':').map(Number); st.hm = (h % 12)*3600 + mi*60 - st.run; }
+    if (q.get('slow') === '1') st.slow = true;
+  },
+});
+xrMount(() => ui, () => 'Through the dial: the mainspring in its barrel drives the centre, third and fourth wheels; the escape wheel is let go one tooth per two swings of the balance by the pallet fork. Behind them the rotor winds the spring as the wrist moves.');
+</script></body></html>
