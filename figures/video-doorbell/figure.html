@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Video doorbell</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. A representative battery-powered Wi-Fi doorbell, with enlarged electronics for legibility.
+   Sources. https://ring.com/support/products/doorbells/video-doorbell-gen-2
+   https://static.ring.com/assets/static/RING-MEDIA-KIT-8818533c56ed35d9abb217b36c110282.pdf
+   Button closes a tactile switch. The processor wakes the camera, encodes frames and sends an alert through
+   the Wi-Fi router and network service to the paired chime and phone. Motion wakes video and alerts the
+   phone, but does not ring this chime. Talk sends phone microphone audio back to the doorbell amplifier
+   and speaker. Doorbell microphone audio travels the other way. Night mode represents the automatic
+   low-light change. Infrared LEDs light the visitor, the IR-cut filter moves clear, and the image is monochrome.
+   Dashed paths and sound waves are explanatory overlays, never physical wires. No cloud storage is implied.
+   Parts and supports.
+   CASE. Backplate screwed to the jamb, weather gasket, rounded shell, security screw, board standoffs.
+   VISION. Camera PCB on standoffs, image sensor on PCB, lens barrel above sensor, lens in barrel,
+   IR-cut filter on slider beside its actuator, IR LED pair and light sensor on camera PCB.
+   MOTION. PIR sensor and amplifier on main PCB, Fresnel lens retained in the front shell.
+   CONTROL. Main PCB, processor, RAM, flash, crystal, Wi-Fi radio, antenna and coax, tactile switch,
+   plunger, button cap, LED ring and diffuser. All chips soldered to the main board.
+   AUDIO. Microphone and codec on main PCB, acoustic gasket to microphone port, amplifier on PCB,
+   speaker magnet, voice coil and cone held by a basket on the lower shell, wires to PCB connector.
+   POWER. Battery retained against backplate, connector and protection board, regulator, inductor,
+   capacitor, charging port and reset switch on main PCB. Camera ribbon joins the two boards.
+   SCENE. Door and jamb on threshold. Chime fixed to inside jamb, powered from a wall socket;
+   its board, radio, amplifier and speaker are retained in its shell. Phone in a stand, router on shelf.
+   State. phase is idle, sending or live. event is ring or motion. A single finite animation owns
+   event age, button travel, visitor travel, network pulses and speaker vibration. Night is independent. */
+const vdGreen = matOf('#579471'), vdGold = matOf('#e9be61'), vdBlue = matOf('#6496c2');
+const vdBounds = [30, 49, 77, 103, 46, 105];
+const vdOutline = rrUV(77, 46, 103, 105, 5);
+const vdPart = (b, svg) => ({box:b, svg});
+const vdBox = (b, m, extra='') => vdPart(b, box(...b[0], ...b[1], m, toneI, .7) + extra);
+const vdLine = (pts, col, w=.6, dash='') => `<path d="${pd(pts,false)}" fill="none" stroke="${col}" stroke-width="${w}" ${dash ? `stroke-dasharray="${dash}"` : ''} stroke-linecap="round" stroke-linejoin="round"/>`;
+function vdRounded(profile, x0, x1, m){
+  const a=on(PX(x0),profile), b=on(PX(x1),profile);
+  return extrude(profile,x0,x1,m) + (vis([1,0,0]) ? shape(b,tone([1,0,0],m),1) : shape(a,tone([-1,0,0],m),1)) + hullInk([...a,...b],2.6);
+}
+function vdPerson(x,y,z,night=false){
+  const skin=matOf(night ? '#d4d5ce' : '#dfac80'), coat=matOf(night ? '#7f8e90' : '#de7054');
+  const p=[];
+  p.push(vdBox([[x-2,y-4,z],[x+2,y-1,z+12]],DARK), vdBox([[x-2,y+1,z],[x+2,y+4,z+12]],DARK));
+  p.push(vdBox([[x-3,y-6,z+12],[x+3,y+6,z+27]],coat));
+  p.push(vdPart([[x-3,y-3,z+27],[x+3,y+3,z+34]],cyl(x,y,z+27,z+34,3.6,skin)));
+  for(const side of [-1,1]) p.push(vdPart([[x-2,y+side*8-1,z+11],[x+2,y+side*8+1,z+25]],rod([x,y+side*6,z+24],[x+1,y+side*8,z+12],1.5,coat)));
+  return byDepth(p);
+}
+function vdWaves(at,age,col){
+  if(age<=0) return '';
+  let s='';
+  for(let i=0;i<3;i++){
+    const r=3+((age*9+i*4)%13);
+    s+=vdLine(on(PX(at[0]+r*.25),arcUV(at[1],at[2],r,-60,60,12)),col,1.3);
+  }
+  return s;
+}
+function vdInside(st){
+  const p=[], labels=[];
+  const active=st.phase!=='idle', speak=st.talk>0, night=st.night;
+  const add=(text,b,m,on=false) => {
+    const piece=vdBox(b,m);
+    if(['MOUNTING PLATE','MAIN CIRCUIT BOARD','BATTERY CELL'].includes(text)&&vis([-1,0,0])) piece.svg=`<g opacity=".25">${piece.svg}</g>`;
+    p.push(piece); labels.push({text,at:boxMid(b),on});
+  };
+  const disc=(text,x0,x1,y,z,r,m,on=false) => {const b=[[x0,y-r,z-r],[x1,y+r,z+r]];p.push(vdPart(b,cylX(x0,x1,y,z,r,m)));labels.push({text,at:[x1,y,z],on});};
+  add('MOUNTING PLATE',[[30,78,47],[31,102,104]],METAL);
+  add('BATTERY CELL',[[31,80,49],[35,100,67]],vdBlue,true);
+  add('BATTERY PROTECTION',[[35,80,49],[35.8,86,55]],vdGreen,true);
+  add('BATTERY CONNECTOR',[[35,86,64],[37,89,67]],CERAMIC,true);
+  for(const y of [79,101]) for(const z of [69,101]) p.push(vdPart([[31,y-.7,z-.7],[37,y+.7,z+.7]],cylX(31,37,y,z,.7,METAL)));
+  add('BOARD STANDOFF',[[31,78.3,68.3],[37,79.7,69.7]],METAL);
+  add('MAIN CIRCUIT BOARD',[[37,78,48],[38,102,103]],vdGreen,true);
+  add('PROCESSOR',[[38,81,80],[40,89,87]],active?vdGold:DARK,active);
+  add('RAM',[[38,92,82],[39.5,99,86]],DARK,active);
+  add('FLASH MEMORY',[[38,93,75],[39.5,100,79]],DARK,active);
+  add('CLOCK CRYSTAL',[[38,80,88],[39.2,85,90]],METAL,active);
+  add('WI-FI RADIO',[[38,94,94],[40,101,100]],active?vdGold:METAL,active);
+  add('ANTENNA',[[38,79,101],[38.5,93,103]],vdGold,active);
+  add('VOLTAGE REGULATOR',[[38,80,68],[39.5,84,72]],DARK,true);
+  add('POWER INDUCTOR',[[38,80,73],[40,85,77]],METAL,true);
+  add('CAPACITOR',[[38,86,69],[40,89,73]],vdGold,true);
+  add('CHARGING PORT',[[38,96,48],[41,101,51]],METAL);
+  add('RESET SWITCH',[[38,97,53],[40,100,56]],CERAMIC);
+  add('AUDIO CODEC',[[38,91,69],[40,96,73]],DARK,active);
+  add('AUDIO AMPLIFIER',[[38,96,60],[40,101,64]],speak?vdGold:DARK,speak);
+  add('MICROPHONE',[[38,79,94],[41,82,97]],vdGold,active);
+  disc('MICROPHONE SEAL',41,45,80.5,95.5,1.4,DARK,active);
+  add('CAMERA BOARD',[[40,84,89],[41,96,100]],vdGreen,active);
+  add('IMAGE SENSOR',[[41,88,92],[42,92,96]],DARK,active);
+  const filterY=night?95:90;
+  add('IR-CUT FILTER',[[42,filterY-2,92],[42.4,filterY+2,96]],matOf('#c68799'),!night);
+  add('FILTER ACTUATOR',[[41,96,89],[43,99,93]],METAL,night);
+  disc('LENS BARREL',42.5,45,90,94,4,DARK,active);
+  disc('CAMERA LENS',45,46,90,94,2.8,vdBlue,active);
+  for(const y of [82,98]) disc(y===82?'IR LED LEFT':'IR LED RIGHT',41,45,y,88,1.5,night?matOf('#d96666'):CERAMIC,night);
+  add('LIGHT SENSOR',[[40,99,90],[44,101,92]],DARK,night);
+  disc('PIR SENSOR',38,41,90,84,2.6,METAL,st.event==='motion'&&active);
+  add('PIR AMPLIFIER',[[38,94,85],[40,98,88]],DARK,st.event==='motion'&&active);
+  disc('FRESNEL LENS',43,46,90,84,4,CERAMIC,st.event==='motion'&&active);
+  disc('TACTILE SWITCH',38,40,90,74,2.2,DARK,st.age<.25&&active);
+  disc('BUTTON PLUNGER',40,45,90,74,1.1,METAL,st.age<.25&&active);
+  disc('STATUS LED RING',44,45,90,74,5,active?vdBlue:CERAMIC,active);
+  disc('SPEAKER MAGNET',38,41,90,58,3.2,METAL,speak);
+  disc('VOICE COIL',41,42,90,58,2,vdGold,speak);
+  disc('SPEAKER BASKET',42,43,90,58,4.5,METAL,speak);
+  disc('SPEAKER CONE',43,44+(speak?Math.sin(st.age*45)*.3:0),90,58,3.8,DARK,speak);
+  const routes=[
+    ['CAMERA RIBBON',[[38.1,93,87],[38.1,93,89],[40,93,89]],'#d3a45a'],
+    ['ANTENNA COAX',[[40,98,100],[40,98,102],[38.5,93,102]],'#45413b'],
+    ['SPEAKER WIRES',[[40,98,62],[40,101,62],[40,101,58],[42,94,58]],'#d77854'],
+    ['BATTERY LEADS',[[36,88,65],[36,79,65],[38,79,69]],'#d77854']
+  ];
+  for(const [text,pts,col] of routes){
+    for(let i=1;i<pts.length;i++) p.push(vdPart([[0,1,2].map(k=>Math.min(pts[i-1][k],pts[i][k])-.2),[0,1,2].map(k=>Math.max(pts[i-1][k],pts[i][k])+.2)],vdLine([pts[i-1],pts[i]],col,1)));
+    labels.push({text,at:pts[1],on:active});
+  }
+  const smallParts=['BOARD STANDOFF','MOUNTING PLATE','BATTERY PROTECTION','RESET SWITCH','CAPACITOR','VOLTAGE REGULATOR','POWER INDUCTOR','CLOCK CRYSTAL','RAM','CAMERA RIBBON','ANTENNA COAX','BATTERY LEADS','MICROPHONE SEAL','SPEAKER BASKET'];
+  return {svg:byDepth(p),labels:labels.filter(part=>!smallParts.includes(part.text))};
+}
+function vdLabels(items){
+  const fig=document.getElementById('fig'), vb=fig.viewBox.baseVal, unit=window.LBL_U?LBL_U():0;
+  const fs=unit?10*unit:8.6*INK_K, h=unit?17*unit:fs*1.8;
+  const points=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  const columns=[points.slice(0,15),points.slice(15)];
+  const matrix=fig.getScreenCTM(), btn=document.getElementById('btns');
+  const controls=matrix&&btn?new DOMPoint(0,btn.getBoundingClientRect().bottom+12).matrixTransform(matrix.inverse()).y:vb.y;
+  const top=Math.max(vb.y+h,controls), bottom=vb.y+vb.height-h;
+  return columns.map((column,side)=>{
+    column.sort((a,b)=>a.p[1]-b.p[1]);
+    const width=unit?h*1.3:Math.max(...column.map(it=>it.text.length))*fs*.62+fs*1.5;
+    const edge=side?Math.max(...points.map(it=>it.p[0]))+width/2+10*INK_K:Math.min(...points.map(it=>it.p[0]))-width/2-10*INK_K;
+    const x=Math.max(vb.x+width/2+2*INK_K,Math.min(vb.x+vb.width-width/2-2*INK_K,edge));
+    return column.map((it,i)=>{
+      const y=top+(bottom-top)*i/(column.length-1);
+      return tag(it.at,(x-it.p[0])/INK_K,(y-it.p[1])/INK_K,it.text,it.on);
+    }).join('');
+  }).join('');
+}
+function vdDoorbell(st,m){
+  const k=ease(st.xr||0), front=vis([1,0,0]);
+  let body=vdRounded(vdOutline,31,46,m);
+  if(front){
+    body+=shape(on(PX(46.1),rrUV(78,80,102,104,4)),DARK.m,1);
+    body+=cylX(46.1,47,90,94,4.2,DARK)+cylX(47,47.2,90,94,2.8,vdBlue);
+    body+=shape(on(PX(47.25),ellUV(89,95,1,1,12)),'#e4f2f4',0);
+    body+=cylX(46.1,46.5,90,84,3.7,CERAMIC);
+    for(const y of [82,98]) body+=shape(on(PX(46.3),ellUV(y,88,1.2,1.2,12)),st.night?'#b76565':'#928378',.5);
+    for(let z=54;z<=62;z+=2) body+=vdLine([[46.1,85,z],[46.1,95,z]],INK,.8);
+    body+=shape(on(PX(46.2),ellUV(80.5,95.5,.7,.7,10)),INK,0);
+  }
+  const capX=47-(st.event==='ring'&&st.age<.25&&st.phase!=='idle'?.8:0);
+  const button=act('ring',cylX(46,capX,90,74,5,st.phase==='idle'?CERAMIC:vdBlue));
+  let result=body;
+  if(k>0){const inside=vdInside(st);result=xrGhost(body,'',k,vdOutline,31,46,m)+`<g opacity="${k}">${inside.svg}</g>`;}
+  result=byDepth([vdPart([[31,77,46],[46,103,105]],result),vdPart([[46,85,69],[47,95,79]],button)]);
+  return result;
+}
+function vdPhone(st){
+  let s=vdRounded(rrUV(30,5,58,64,4),82,86,DARK);
+  if(vis([1,0,0])){
+    const screen=on(PX(86.1),rrUV(32,9,56,59,2));
+    s+=shape(screen,st.phase==='live'?(st.night?'#bcc3bb':'#c4dce0'):'#23343c',.8);
+    if(st.phase==='live'){
+      const cameraPicture=shape(on(PX(86.2),rectUV(33,11,55,48)),st.night?'#d7d9d0':'#d6c8a7',0)
+        +shape(on(PX(86.3),rrUV(38,21,50,36,2)),st.night?'#6b7776':'#de7054',.7)
+        +shape(on(PX(86.3),ellUV(44,41,3,3.7,16)),st.night?'#a8afaa':'#dfac80',.7)
+        +vdLine([[86.3,40,21],[86.3,39,12]],INK,2)+vdLine([[86.3,48,21],[86.3,49,12]],INK,2);
+      s+=clipTo(screen,cameraPicture)+tx(86.4,44,53,st.event==='ring'?'DOORBELL':'MOTION',2.2,INK);
+      s+=tx(86.4,44,15,st.talk>0?'TALKING':'LIVE',2.2,st.talk>0?'#f5c759':INK);
+    }else s+=tx(86.3,44,34,st.phase==='sending'?'CONNECTING':'STANDBY',2.1,'#cfe9f0');
+    s+=shape(on(PX(86.2),rrUV(39,60,49,61,0.5)),INK,0);
+  }
+  return s;
+}
+function vdChime(st){
+  const profile=rrUV(118,68,144,99,4), k=ease(st.xr||0), ringing=st.chime>0&&st.phase==='live';
+  let shell=vdRounded(profile,24,34,CERAMIC);
+  if(vis([1,0,0])) for(let i=0;i<8;i++) shell+=vdLine([[34.1,123+i*2.3,75],[34.1,123+i*2.3,91]],INK,.8);
+  if(k>0){
+    const pieces=[vdBox([[25,120,71],[26,142,96]],vdGreen),vdBox([[26,120,72],[29,125,78]],METAL),vdBox([[26,121,88],[28,127,93]],DARK),vdBox([[26,136,88],[28,141,94]],DARK),vdPart([[28,126,76],[33,138,88]],cylX(28,33,132,82,6,DARK))];
+    shell=xrGhost(shell,'',k,profile,24,34,CERAMIC)+`<g opacity="${k}">${byDepth(pieces)}</g>`;
+  }
+  return shell+vdWaves([35,132,82],ringing?st.age:0,'#ba813c');
+}
+function vdScene(st,m){
+  const p=[], k=ease(st.xr||0), wall=matOf('#d9c6a3');
+  let s=board(10,9,109,153,3,4);
+  s+=castShadow([[18,12,3],[18,148,3],[18,148,124],[18,12,124]],3,boardTop(10,9,109,153,3,4));
+  p.push(vdBox([[18,12,3],[23,72,124]],m));
+  if(vis([1,0,0])){
+    for(const z of [15,64]) p.push(vdPart([[23,20,z],[23.2,63,z+39]],shape(on(PX(23.15),rrUV(20,z,63,z+39,2)),mix(m.m,'#ffffff',.18),1)));
+    p.push(vdPart([[23,58,53],[27,64,59]],cylX(23,27,61,56,2,METAL)));
+  }
+  p.push(vdPart([[18,73,3],[24,109,124]],`<g opacity="${1-.9*k}">${box(18,73,3,24,109,124,wall)}</g>`));
+  p.push(vdPart([[18,112,3],[24,148,108]],`<g opacity="${1-.9*k}">${box(18,112,3,24,148,108,wall)}</g>`));
+  p.push(vdPart([[24,76,45],[30,104,106]],`<g opacity="${1-.9*k}">${box(24,76,45,30,104,106,METAL)}</g>`));
+  p.push(vdPart([[30,77,46],[48,103,105]],vdDoorbell(st,m)));
+  p.push(vdPart([[24,118,68],[35,144,99]],vdChime(st)));
+  p.push(vdBox([[24,117,46],[34,126,58]],CERAMIC));
+  const cord=[[25,122,70],[25,118,65],[25,118,55],[26,122,55]];
+  for(let i=1;i<cord.length;i++)p.push(vdPart([[24,117,54],[27,123,71]],vdLine([cord[i-1],cord[i]],DARK.m,1.4)));
+  p.push(vdBox([[24,115,16],[46,148,18]],WOOD));
+  p.push(vdBox([[29,120,18],[43,145,24]],DARK,vis([1,0,0])?tx(43.1,132,20,'WI-FI',2.1,'#8af0ae'):''));
+  p.push(vdPart([[30,122,24],[31,123,36]],rod([30,122,24],[30,122,36],.6,DARK)));
+  p.push(vdPart([[30,142,24],[31,143,36]],rod([30,142,24],[30,142,36],.6,DARK)));
+  p.push(vdBox([[78,28,3],[90,60,5]],METAL));
+  p.push(vdBox([[80,29,5],[82,59,14]],METAL));
+  p.push(vdPart([[82,30,5],[86,58,64]],vdPhone(st)));
+  const visitorY=st.event==='motion'?91+18*(1-ease(Math.min(1,st.age/1.2))):91;
+  p.push(vdPart([[62,visitorY-10,3],[69,visitorY+10,37]],vdPerson(65,visitorY,3,st.night)));
+  s+=byDepth(p);
+  if(st.phase!=='idle'&&st.age<2.8){
+    const path=st.talk>0?[[86,44,49],[38,132,36],[47,90,58]]:[[47,90,97],[38,132,36],[86,44,49]];
+    s+=vdLine(path,'#428eb1',1.1,'2 3');
+    const travel=(st.age*1.7)%2, seg=Math.floor(travel), t=travel-seg, a=path[seg], b=path[seg+1];
+    const q=P(...a.map((v,i)=>v+(b[i]-v)*t));
+    s+=`<circle cx="${q[0]}" cy="${q[1]}" r="2" fill="#428eb1"/>`;
+  }
+  s+=vdWaves([48,90,58],st.talk>0?st.age:0,'#428eb1');
+  if(k>.6){
+    s+=vdLabels(vdInside(st).labels);
+    if(st.night) s+=vdLine([[47,82,88],[65,visitorY,30],[47,98,88]],'#b56868',1,'3 3');
+  }
+  return s;
+}
+function vdStart(st,ui,event){
+  st.phase='sending';st.event=event;st.age=0;st.talk=0;st.chime=event==='ring'?3.2:0;
+  vdAnimate(st,ui);
+  if(event==='ring') vdDing();
+}
+function vdAnimate(st,ui){
+  if(st.animating)return;
+  st.animating=true;
+  ui.animate(dt=>{
+    st.age+=dt;
+    if(st.phase==='sending'&&st.age>=.75)st.phase='live';
+    st.talk=Math.max(0,st.talk-dt);st.chime=Math.max(0,st.chime-dt);
+    const more=st.age<3.2||st.talk>0;
+    if(!more)st.animating=false;
+    return more;
+  });
+}
+let vdAudio;
+function vdDing(){
+  try{
+    vdAudio=vdAudio||new (window.AudioContext||window.webkitAudioContext)();
+    vdAudio.resume().then(()=>{
+      for(const [hz,delay] of [[660,.75],[523,1.08]]){
+        const oscillator=vdAudio.createOscillator(),gain=vdAudio.createGain(),t=vdAudio.currentTime+delay;
+        oscillator.frequency.value=hz;gain.gain.setValueAtTime(.0001,t);gain.gain.exponentialRampToValueAtTime(.1,t+.02);gain.gain.exponentialRampToValueAtTime(.0001,t+.5);
+        oscillator.connect(gain);gain.connect(vdAudio.destination);oscillator.start(t);oscillator.stop(t+.55);
+      }
+    }).catch(()=>{});
+  }catch(e){}
+}
+const vdUI=mountFigure({
+  fig:'27',turn:'full',title:'Video doorbell',size:[113,158,130],palette:'cobalt',
+  state:{phase:'idle',event:'ring',age:4,talk:0,chime:0,night:false,animating:false},scene:vdScene,
+  stats:st=>[{label:'Phone',value:st.phase==='live'?(st.event==='ring'?'Visitor':'Motion'):st.phase==='sending'?'Connecting':'Standby'},{label:'Camera',value:st.night?'Infrared':'Daylight',small:true}],
+  buttons:[
+    {label:'Press the button',onClick:(st,ui)=>vdStart(st,ui,'ring')},
+    {label:'Trigger motion',onClick:(st,ui)=>vdStart(st,ui,'motion')},
+    {label:'Talk back',onClick:(st,ui)=>{if(st.phase!=='live')return ui.flash('Ring or trigger motion to open the live picture first');st.talk=2.5;st.age=0;vdAnimate(st,ui);}},
+    {label:'Night mode',onClick:(st,ui)=>{st.night=!st.night;ui.flash(st.night?'Infrared LEDs on. Camera filter moves clear.':'Daylight. Infrared filter restored.');}}
+  ],
+  acts:{ring:(st,el,ui)=>vdStart(st,ui,'ring')},
+  params:(st,q)=>{st.night=q.get('night')==='1';if(['ring','motion'].includes(q.get('event'))){st.phase='live';st.event=q.get('event');}if(q.get('talk')==='1'){st.phase='live';st.talk=2.5;}}
+});
+xrMount(()=>vdUI,()=> '');
+</script></body></html>
