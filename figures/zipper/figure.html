@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Zipper</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   The saved 2016 book page 17 identifies the separator and converging sides as inclined planes.
+   YKK https://www.ykk.com/english/ykk/tech/01.html documents the Y passage.
+   Sundback https://patents.google.com/patent/US1219881A/en documents staggered cup teeth,
+   their projections and recesses, and jaws clamped on corded tape edges.
+   Close moves the slider toward x=18. Open rows enter its wide end at x=slider-10,
+   converge inside it, and emerge joined at x=slider+5. Each tooth stays on its tape.
+   Open reverses that path. The diamond separates one nested pair after another.
+   Tug first closes, then applies a staged sideways pull to the fabric. The cloth stretches;
+   the nested teeth and slider stay in place. This is a modest teaching load, not a strength test.
+   Parts and supports.
+   Textile. Two fabric panels rest on the table. Stitches join each panel to a zipper tape.
+   Each tape has a corded inner edge. Tooth jaws grip that cord. Each scoop has a rounded
+   projection on its +x face and a matching recess on its -x face. Opposite rows alternate.
+   Slider. Upper and lower wings are joined by the separator diamond. Turned-in guide
+   flanges on both wings leave a gap for the tapes. A crown on the upper wing holds the tab.
+   Stops. Two top stops grip the corded edges. One bottom stop bridges the corded edges.
+   Adaptation. Enlarged non-locking closed-end metal zipper. No motor or lock is implied.
+   Rounded cup teeth are simplified solids. Textile strain and externally applied force arrows
+   are staged teaching effects. They are not extra hardware or anatomy labels.
+   Data shape. closed and pull are bounded fractions. action is one replaceable animation record.
+   Checkpoint. Build this unit, inspect seven yaws in both modes, then run real button journeys.
+   Principles. Model the Domain chose one action record. Prove It Works requires the built page.
+*/
+const zipClamp = n => Math.max(0, Math.min(1, n));
+const zipSlider = st => 108 - 90*st.closed;
+const zipSpread = (x, st) => 9*ease(zipClamp((zipSlider(st)+5-x)/15));
+const zipCord = (x, side, st) => 50 + side*(7.5+zipSpread(x,st));
+const zipBounds = pts => [[0,1,2].map(k=>Math.min(...pts.map(p=>p[k]))),[0,1,2].map(k=>Math.max(...pts.map(p=>p[k])))];
+function zipSlab(poly, z0, z1, material){
+  const a=on(PZ(z0),poly), b=on(PZ(z1),poly);
+  return loft(a,b,n=>tone(n,material))+shape(b,tone([0,0,1],material),.75)+hullInk([...a,...b],1.6);
+}
+function zipTooth(x,side,st){
+  const root=zipCord(x,side,st), cy=root-side*7.5, cz=5.1;
+  const outer=on(PX(x-1.4),ellUV(cy,cz,2.45,1.15,12));
+  const rear=on(PX(x+1.4),ellUV(cy,cz,2.45,1.15,12));
+  const inner=on(PX(x-1.41),ellUV(cy,cz,1.6,.7,12));
+  const pocket=on(PX(x+.65),ellUV(cy,cz,1.15,.45,12));
+  const nose=on(PX(x+2.15),ellUV(cy,cz,1.45,.6,12));
+  let svg=loft(outer,rear,n=>toneI(n,METAL));
+  if(vis([-1,0,0])) svg+=loft(inner,pocket,n=>toneI(n,DARK),true)
+    +fill(pd(pocket),METAL.d)+`<path d="${pd(outer)}${pd(inner)}" fill="${METAL.m}" fill-rule="evenodd"/>`+ink(pd(inner),.45);
+  svg+=loft(rear,nose,n=>toneI(n,METAL))+(vis([1,0,0])?shape(nose,METAL.l,.4):'')+hullInk([...outer,...rear,...nose],1);
+  const lo=Math.min(root,cy),hi=Math.max(root,cy);
+  svg=box(x-1.05,lo,4.45,x+1.05,hi,5.85,METAL,toneI,.5)+svg;
+  const jaw=box(x-1.15,root-1.15,4.05,x+1.15,root+1.15,4.45,METAL,toneI,.4)
+    +box(x-1.15,root-1.15,5.2,x+1.15,root+1.15,5.8,METAL,toneI,.4);
+  return {box:[[x-1.4,Math.min(root-1.2,cy-2.45),3.95],[x+2.15,Math.max(root+1.2,cy+2.45),6.25]],svg:jaw+svg};
+}
+function zipLabels(st){
+  const sx=zipSlider(st), moving=!!st.action;
+  return [
+    {at:[78,zipCord(78,1,st)+22,3.6],text:'FABRIC PANEL',on:st.pull>0},
+    {at:[90,zipCord(90,-1,st)-15,4.15],text:'STITCHING',on:st.pull>0},
+    {at:[68,zipCord(68,1,st)+8,4.1],text:'ZIPPER TAPE',on:moving},
+    {at:[55,zipCord(55,-1,st),4.7],text:'CORDED EDGE',on:moving},
+    {at:[90.2,zipCord(90.2,-1,st),5.8],text:'TOOTH JAWS',on:st.pull>0},
+    {at:[67.8,zipCord(67.8,-1,st)+7.5,6.2],text:'COUPLING SCOOP',on:moving||st.pull>0},
+    {at:[97.95,zipCord(95.8,-1,st)+7.5,5.1],text:'LOCKING PROJECTION',on:st.pull>0},
+    {at:[12,zipCord(12,-1,st),5.6],text:'TOP STOPS',on:false},
+    {at:[119,50,5.2],text:'BOTTOM STOP',on:false},
+    {at:[sx+6,58,7.2],text:'UPPER WING',on:moving},
+    {at:[sx+7,42,3.6],text:'LOWER WING',on:moving},
+    {at:[sx-4,50,5.6],text:'SEPARATOR DIAMOND',on:st.action?.kind==='open'},
+    {at:[sx-3,59.5+zipSpread(sx-3,st),6.4],text:'GUIDE FLANGES',on:st.action?.kind!=='open'&&moving},
+    {at:[sx+13,50,10.5+(moving?3:0)],text:'PULL TAB',on:moving},
+    {at:[sx-4,50,9.1],text:'CROWN',on:moving}
+  ];
+}
+function zipScene(st,m){
+  const sx=zipSlider(st),k=ease(st.xr||0), parts=[];
+  const put=(points,svg)=>parts.push({box:zipBounds(points),svg});
+  let svg=board(0,0,132,100,3,4,WOOD);
+  for(const side of [-1,1]){
+    for(let x=8;x<124;x+=4){
+      const x1=Math.min(124,x+4),a=zipCord(x,side,st),b=zipCord(x1,side,st);
+      const stretch=2.5*st.pull*Math.sin(Math.PI*(x-8)/116);
+      const stretch1=2.5*st.pull*Math.sin(Math.PI*(x1-8)/116);
+      const cloth=[[x,a+side*10],[x1,b+side*10],[x1,b+side*(29+stretch1)],[x,a+side*(29+stretch)]];
+      const footprint=[[x,a],[x1,b],cloth[2],cloth[3]];
+      svg+=castShadow(on(PZ(4.05),footprint),3,boardTop(0,0,132,100,3,4));
+      put([...on(PZ(3.2),cloth),...on(PZ(3.65),cloth)],zipSlab(cloth,3.2,3.65,m));
+      const tape=[[x,a],[x1,b],[x1,b+side*17],[x,a+side*17]];
+      let piece=zipSlab(tape,3.65,4.05,matOf(mix(m.m,'#fff4d6',.24)));
+      for(const offset of [12.3,15.2]) piece+=line([[x+.8,a+side*offset,4.1],[x1-.5,b+side*offset,4.1]],.65).replaceAll(INK,'#fff4d6');
+      put([...on(PZ(3.65),tape),...on(PZ(4.15),tape)],piece);
+      put([[x,Math.min(a,b)-.6,4.05],[x1,Math.max(a,b)+.6,5.3]],rod([x,a,4.7],[x1,b,4.7],.6,DARK,toneI,.4));
+    }
+    const topY=zipCord(12,side,st);
+    put([[10.5,topY-1.6,4],[13.5,topY+1.6,6.1]],box(10.5,topY-1.6,4,13.5,topY+1.6,6.1,METAL,toneI,.7));
+  }
+  put([[117.5,41,3.8],[121,59,5.8]],box(117.5,41,3.8,121,59,5.8,METAL,toneI,.7));
+  const wing=[[-10,-19.2],[-10,19.2],[9,10.2],[9,-10.2]].map(([x,y])=>[sx+x,50+y]);
+  svg+=castShadow(on(PZ(7.2),wing),3,boardTop(0,0,132,100,3,4));
+  const lower=zipSlab(wing,3.1,3.7,METAL);
+  put([...on(PZ(3.1),wing),...on(PZ(3.7),wing)],`<g opacity="${1-.65*k}">${lower}</g>`);
+  for(let i=0;i<32;i++) parts.push(zipTooth(23+2.8*i,i%2?1:-1,st));
+  const diamond=[[-10,-6.55],[-6,-5.27],[-.54,0],[-6,5.27],[-10,6.55]].map(([x,y])=>[sx+x,50+y]);
+  put([...on(PZ(3.7),diamond),...on(PZ(6.5),diamond)],zipSlab(diamond,3.7,6.5,matOf('#89979e')));
+  for(const side of [-1,1]){
+    for(let j=0;j<5;j++){
+      const xa=-10+19*j/5,xb=-10+19*(j+1)/5;
+      const wa=10.2+zipSpread(sx+xa,st),wb=10.2+zipSpread(sx+xb,st);
+      const poly=[[sx+xa,50+side*wa],[sx+xb,50+side*wb],[sx+xb,50+side*(wb-1.5)],[sx+xa,50+side*(wa-1.5)]];
+      for(const z of [3.1,5.8])put([...on(PZ(z),poly),...on(PZ(z+.7),poly)],zipSlab(poly,z,z+.7,METAL));
+    }
+  }
+  svg+=byDepth(parts);
+  const upper=zipSlab(wing,6.5,7.2,METAL);
+  svg+=`<g opacity="${1-.88*k}">${upper}</g>`;
+  const tabParts=[];
+  const tabPut=(a,b,r)=>tabParts.push({box:zipBounds([a.map(v=>v-r),b.map(v=>v+r)]),svg:rod(a,b,r,METAL,toneI,.8)});
+  for(const sy of [47,53]) tabParts.push({box:[[sx-5.3,sy-.8,7.2],[sx-2.7,sy+.8,9.8]],svg:box(sx-5.3,sy-.8,7.2,sx-2.7,sy+.8,9.8,METAL,toneI,.65)});
+  tabPut([sx-4,46.2,9.2],[sx-4,53.8,9.2],.65);
+  const tabZ=10.5+(st.action?3:0), tabA=[sx-4,47,9.2],tabB=[sx-4,53,9.2],tabC=[sx+13,53,tabZ],tabD=[sx+13,47,tabZ];
+  for(const [a,b] of [[tabA,tabB],[tabB,tabC],[tabC,tabD],[tabD,tabA]])tabPut(a,b,.7);
+  svg+=byDepth(tabParts);
+  if(st.pull>0){
+    for(const side of [-1,1]){
+      const start=50+side*31,end=50+side*(39+st.pull*3);
+      svg+=`<g opacity="${st.pull}" data-overlay="applied-sideways-pull">`+line([[75,start,5],[75,end,5]],1.8).replaceAll(INK,'#cf5038')
+        +shape([[73,end-side*3,5],[75,end,5],[77,end-side*3,5]],'#cf5038',0)+'</g>';
+    }
+  }
+  if(k>.6)svg+=xrCallouts(zipLabels(st),[8,124,8,92,3,12]);
+  return svg;
+}
+function zipStep(st,dt){
+  const a=st.action;if(!a)return false;
+  a.t+=dt;
+  const closeTime=Math.abs(a.from-a.to)*1.4;
+  const p=closeTime?zipClamp(a.t/closeTime):1;
+  st.closed=a.from+(a.to-a.from)*ease(p);
+  st.pull=a.kind==='tug' ? (p===1?ease(zipClamp((a.t-closeTime)/1.2)):0) : a.pull*(1-ease(p));
+  if(p===1&&(a.kind!=='tug'||st.pull===1)){st.closed=a.to;st.action=null;return false;}
+  return true;
+}
+function zipCommand(kind,st,ui){
+  const to=kind==='open'?0:1;
+  if(!st.action&&st.closed===to&&st.pull===(kind==='tug'?1:0))return ui.flash(kind==='tug'?'The teeth stay meshed under this sideways pull.':to?'Already closed.':'Already open.');
+  st.action={kind,from:st.closed,to,pull:st.pull,t:0};
+  if(st.running)return;
+  st.running=true;ui.animate(dt=>{const more=zipStep(st,dt);st.running=more;return more;});
+}
+const zipUI=mountFigure({fig:'17',title:'Zipper',turn:'full',size:[132,100,15],palette:'cobalt',
+  state:{closed:1,pull:0,action:null,running:false},scene:zipScene,
+  buttons:['Close','Open','Tug'].map(label=>({label,onClick:(st,ui)=>zipCommand(label.toLowerCase(),st,ui)})),
+  params:(st,q)=>{for(const key of ['closed','pull']){const v=Number(q.get(key));if(q.has(key)&&Number.isFinite(v))st[key]=zipClamp(v);}if(q.get('open')==='1')st.closed=0;if(st.closed<1)st.pull=0;}
+});
+xrMount(()=>zipUI,()=> '');
+</script></body></html>

@@ -1,0 +1,89 @@
+{
+  "slug": "zipper",
+  "title": "Zipper",
+  "prompt": "a large zipper sewn into two fabric strips on a table with three buttons: \u201cClose\u201d draws the slider upward and meshes the teeth; \u201cOpen\u201d pulls it downward and separates the teeth; \u201cTug\u201d pulls the closed strips sideways without opening them; see-through reveals the slider's separating wedge and converging channels",
+  "source": "book",
+  "sourceUrl": "https://en.wikipedia.org/wiki/The_Way_Things_Work",
+  "category": "home",
+  "buttons": [
+    "Close",
+    "Open",
+    "Tug"
+  ],
+  "blurb": "An enlarged sewn zipper shows how a slider joins nested teeth and how the closed chain resists a staged sideways tug.",
+  "expectedAnatomyMinimum": 10,
+  "representativeMechanism": "Closed-end metal scoop zipper with a non-locking Y-channel slider.",
+  "sources": [
+    {
+      "title": "The Way Things Work Now, 2016, printed page 17",
+      "url": "https://archive.org/details/the-way-things-work-now-david-macaulay-neil-ardley-z-library/page/n18/mode/1up",
+      "savedEvidence": "/home/nm/.bb/thread-storage/thr_mr6grtbcjs/book-catalog-audit/raw/now-pages.json",
+      "rawJsonIndex": 18,
+      "supports": "Separator wedge opens; converging slider sides close."
+    },
+    {
+      "title": "YKK, zipper structure",
+      "url": "https://www.ykk.com/english/ykk/tech/01.html",
+      "supports": "Tape, elements and slider; Y-shaped passage joins and separates elements."
+    },
+    {
+      "title": "Gideon Sundback, US1219881A",
+      "url": "https://patents.google.com/patent/US1219881A/en",
+      "supports": "Corded tapes, clamped jaws, staggered cup teeth with projections and recesses, slider channels and stops."
+    }
+  ],
+  "truthNotes": [
+    "Educational adaptation, not a reproduction of the book illustration or a dimensioned YKK product.",
+    "The table is a teaching support. External hands are represented by red force arrows, excluded from anatomy.",
+    "Close and Open animate slider travel. Tug closes first when needed and then stretches the cloth under a modest staged pull; it is not a load rating or an assertion that zippers cannot fail.",
+    "The metal cup surfaces are simplified; the model retains a physical recess, projection and alternating rows.",
+    "See-through fades slider wings to expose its diamond and converging flange channels.",
+    "The slider is non-locking. No hidden automatic lock, gears or motors are implied.",
+    "No page caption is added."
+  ],
+  "editionProvenance": {
+    "2016": "direct_page_support",
+    "1998": "not_individually_verified",
+    "1988": "access_restricted_unverified",
+    "union": "not_verified"
+  },
+  "verification": {
+    "telemetry": "n/a; standalone static figure has no production telemetry",
+    "live": "untested",
+    "repairRounds": 1,
+    "local": "passed",
+    "independent": "pending coordinator assignment",
+    "job": "b84b617737939bd316fa8c72700d4848d7bd41ed7d27a55c7c58942e61e33af0-local-1",
+    "command": "bb pod check --local --heavy -- timeout --kill-after=10s 600s python3 /home/nm/workspaces/how-things-work/figures/zipper/evidence/verify.py",
+    "repositoryCheck": "unchanged verify_figure.sh zipper 10 passed",
+    "browserChecks": 28,
+    "browserErrors": [],
+    "anatomyLabels": 15,
+    "views": [
+      "yaw=45",
+      "yaw=110",
+      "yaw=170",
+      "yaw=230",
+      "yaw=300",
+      "yaw=20&pitch=62",
+      "yaw=200&pitch=70"
+    ],
+    "viewsInspected": "All seven in normal and see-through modes, including native 2x crops; 4x mechanism close-up inspected.",
+    "video": "evidence/video/page@0328e231c1350efbde17760814fb553c.webm",
+    "videoReview": "Sampled frames every 3 seconds reviewed in evidence/video-contact.png; initial state, opening, closing, tug, see-through, rear view and phone states visible.",
+    "commands": "evidence/commands.json",
+    "receipt": "evidence/browser-receipt.json",
+    "sha256": {
+      "figure.html": "642207d87025704ee1bf5f3b2ea8bda8e9a1aba3ad255c3e7a3eb20f9c3fbb60",
+      "index.html": "6739ac607b9b39ec4240da2486da04257404b9a8b0cd21023d982995fc095579"
+    },
+    "harnessCorrection": "An initial repair check read animation state after a screenshot and failed after the animation ended. The corrected test captures state at the condition boundary; failure retained in evidence/round1-failed.",
+    "limitations": [
+      "Independent other-family verification remains for the coordinator to assign.",
+      "Live verification untested; no production telemetry is installed in this standalone static figure. Dashboard not applicable.",
+      "Minor cosmetics retained: segmented cloth outlines and crossed label leaders. On the 390px phone view badge 15 overlaps zoom, while its BOTTOM STOP legend entry remains readable and buttons work.",
+      "Educational geometry and staged textile strain are not a dimensioned product model, physical collision simulation, or load rating.",
+      "1988 inaccessible/unverified; 1998 not independently verified; no verified three-edition union."
+    ]
+  }
+}
