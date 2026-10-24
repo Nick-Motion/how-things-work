@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Axe</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   The 2016 book, printed p.14, names the axe and its two wedges. The bit turns a
+   downward stroke into sideways forces. A metal sliver expands the handle in its eye.
+   Sources and edition limits are retained in meta.json and evidence/research.json.
+   Swing follows a hand-driven arc, ending with the edge in the end grain. Split
+   continues the stroke, propagates the crack along the grain and separates two halves.
+   Both halves stay on the chopping block. Reset replaces the specimen and lifts the
+   axe. It is a teaching action, not wood healing or hardware self-repair.
+   Parts and attachments.
+   TOOL. Steel poll, eye walls, cheeks, bit, bevel, cutting edge, toe and heel form
+   one head. The handle passes through its eye. A metal retaining wedge is driven
+   into the exposed handle end. The shoulder bears on the eye; grip and end swell
+   are continuous wood. No motor, hinge or mechanical pivot is implied by the arc.
+   WOOD. Bark surrounds end grain; the specimen rests on a solid chopping block,
+   which rests on the tabletop. The split faces follow the vertical grain.
+   Adaptation. A small single-bit axe with enlarged retention detail. Hands are
+   omitted. Displacements and forces are qualitative, not a fracture simulation.
+   At least 8 anatomy labels were declared in the brief. Force arrows are overlays.
+   Data. stroke 0..1 and split 0..1 locate the tool and wood. phase is ready,
+   swinging, embedded, splitting or split. An animation token cancels old motion.
+*/
+const axeWood = {l:'#edc281',m:'#c89a61',d:'#987044'};
+const axeBark = {l:'#a87c55',m:'#805938',d:'#513923'};
+const axeSteel = {l:'#8fa3ad',m:'#607580',d:'#344852'};
+const axeBounds = ps => [[0,1,2].map(i=>Math.min(...ps.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...ps.map(p=>p[i])))];
+const axeAngle = st => (50*(1-st.stroke)+8*st.stroke*(1-st.split))*Math.PI/180;
+function axePoint(st,[x,y,z]){
+  const a=axeAngle(st), dx=x-54;
+  return [36+x*Math.cos(a)+(z+16)*Math.sin(a),45+y,46-dx*Math.sin(a)+z*Math.cos(a)];
+}
+function axeSolid(A,B,material){
+  const pts=A.concat(B), faces=[];
+  const add=ps=>{let n=norm(cross(sub(ps[1],ps[0]),sub(ps[2],ps[0])));if(dot(n,sub(avg(ps),avg(pts)))<0)n=n.map(v=>-v);if(vis(n))faces.push({box:axeBounds(ps),at:avg(ps),svg:shape(ps,tone(n,material),.8)});};
+  add(A);add(B);for(let i=0;i<A.length;i++)add([A[i],A[(i+1)%A.length],B[(i+1)%B.length],B[i]]);
+  return byDepth(faces)+hullInk(pts,2.4);
+}
+function axeArrow(a,b,text,color){
+  const u=P(...a),v=P(...b),d=norm([v[0]-u[0],v[1]-u[1],0]),r=3*INK_K;
+  return `<g class="force-overlay"><path d="M${u[0]} ${u[1]}L${v[0]} ${v[1]}" stroke="${color}" stroke-width="2" fill="none"/><path d="M${v[0]} ${v[1]}L${v[0]-d[0]*r*3-d[1]*r} ${v[1]-d[1]*r*3+d[0]*r}L${v[0]-d[0]*r*3+d[1]*r} ${v[1]-d[1]*r*3-d[0]*r}Z" fill="${color}"/><text x="${(u[0]+v[0])/2}" y="${(u[1]+v[1])/2-5*INK_K}" font-size="${7*INK_K}" text-anchor="middle" fill="${color}" font-family="monospace" font-weight="800">${text}</text></g>`;
+}
+function axeScene(st,m){
+  const k=ease(st.xr||0), parts=[], labels=[], tool=ps=>ps.map(p=>axePoint(st,p));
+  const put=(pts,svg)=>parts.push({box:axeBounds(pts),at:avg(pts),svg});
+  const solid=(A,B,mat,opacity=1)=>{const ps=A.concat(B);put(ps,`<g opacity="${opacity}">${axeSolid(A,B,mat)}</g>`);};
+  const prism=(lo,hi,mat,opacity=1)=>solid(tool([[lo[0],lo[1],lo[2]],[hi[0],lo[1],lo[2]],[hi[0],hi[1],lo[2]],[lo[0],hi[1],lo[2]]]),tool([[lo[0],lo[1],hi[2]],[hi[0],lo[1],hi[2]],[hi[0],hi[1],hi[2]],[lo[0],hi[1],hi[2]]]),mat,opacity);
+  const label=(p,text,on=false)=>labels.push({at:axePoint(st,p),text,on});
+  let svg=board(0,0,108,90,4,5,BOARD);
+  const top=boardTop(0,0,108,90,4,5);
+  svg+=castShadow([[13,21,4],[61,69,16],...tool([[-4,-10,-16],[62,10,9]])],4,top);
+  put([[12,21,4],[60,69,16]],cyl(36,45,4,16,24,axeBark,toneI,1.5,40)
+    +shape(on(PZ(16.05),ellUV(36,45,22.8,22.8,40)),axeWood.m,1)
+    +[7,13,19].map(r=>line(on(PZ(16.1),ellUV(36,45,r,r,40)),.5)).join(''));
+  const gap=st.stroke*(1.5+7.5*st.split);
+  for(const sign of [-1,1]){
+    const arc=arcUV(36,45,12,sign>0?0:180,sign>0?180:360,20);
+    const woodAt=(p,z)=>[p[0],p[1]+sign*gap*(st.split+(1-st.split)*(z-16)/24),z];
+    const A=arc.map(p=>woodAt(p,16)),B=arc.map(p=>woodAt(p,40));
+    let log=axeSolid(A,B,axeBark);
+    const cap=B.map(p=>[36+(p[0]-36)*.94,45+(p[1]-45-sign*gap)*.94+sign*gap,40.05]);
+    log+=shape(cap,axeWood.l,.6);
+    for(const r of [3,6,9]) log+=line(arcUV(36,45,r,sign>0?0:180,sign>0?180:360,16).map(p=>woodAt(p,40.1)),.55);
+    for(const a of sign>0?[20,60,110,150]:[195,235,285,330]){
+      const rad=a*Math.PI/180,normal=[Math.cos(rad),Math.sin(rad),0];
+      if(vis(normal))log+=line([17,23,31,39].map(z=>woodAt([36+12.05*normal[0],45+12.05*normal[1]],z)),.6);
+    }
+    const cut=[woodAt([24,45],16),woodAt([48,45],16),woodAt([48,45],40),woodAt([24,45],40)];
+    if(gap>.01&&vis([0,-sign,0])){
+      log+=shape(cut,axeWood.m,.75);
+      for(const x of [27,31,36,41,45])log+=line([woodAt([x,45],16.3),woodAt([x+.4,45],27),woodAt([x,45],39.8)],.5);
+    }
+    put(A.concat(B),`<g opacity="${1-.62*k}">${log}</g>`);
+  }
+  const shaft=(a,b,r,r1)=>{const p=axePoint(st,a),q=axePoint(st,b);put([p.map(v=>v-r),p.map(v=>v+r),q.map(v=>v-r1),q.map(v=>v+r1)],rod(p,q,r,axeWood,tone,1.25,r1,20));};
+  shaft([4,0,0],[12,0,0],2.8,1.9);
+  shaft([12,0,0],[49,0,0],1.9,1.55);
+  shaft([49,0,0],[60,0,0],1.55,2.2);
+  shaft([60,0,0],[62,0,0],2.2,2.3);
+  const headOpacity=1-.77*k;
+  prism([-4,-5,3],[4,5,9],axeSteel,headOpacity);
+  prism([-4,-6,-3],[4,-2.3,3],axeSteel,headOpacity);
+  prism([-4,2.3,-3],[4,6,3],axeSteel,headOpacity);
+  prism([-4,-2.3,-3],[4,2.3,-2.2],axeSteel,headOpacity);
+  prism([-4,-2.3,2.2],[4,2.3,3],axeSteel,headOpacity);
+  solid(tool([[-6,-4,-3],[6,-4,-3],[6,4,-3],[-6,4,-3]]),tool([[-9,-1.45,-12],[9,-1.45,-12],[9,1.45,-12],[-9,1.45,-12]]),m,headOpacity);
+  solid(tool([[-9,-1.45,-12],[9,-1.45,-12],[9,1.45,-12],[-9,1.45,-12]]),tool([[-10,-.22,-16],[10,-.22,-16],[10,.22,-16],[-10,.22,-16]]),METAL,headOpacity);
+  const held=tool([[-5,-2.2,-2.2],[4,2.2,2.2]]);
+  put(held,`<g opacity="${1-.68*k}">${rod(axePoint(st,[-5,0,0]),axePoint(st,[4,0,0]),2.2,axeWood,tone,1,2.2,20)}</g>`);
+  svg+=byDepth(parts);
+  if(k>0){
+    const sectionTop=tool([[-.4,-4,-3],[.4,-4,-3],[.4,4,-3],[-.4,4,-3]]);
+    const sectionBevel=tool([[-.4,-1.45,-12],[.4,-1.45,-12],[.4,1.45,-12],[-.4,1.45,-12]]);
+    const sectionEdge=tool([[-.4,-.22,-16],[.4,-.22,-16],[.4,.22,-16],[-.4,.22,-16]]);
+    svg+=`<g opacity="${k}">${axeSolid(sectionTop,sectionBevel,METAL)+axeSolid(sectionBevel,sectionEdge,METAL)}</g>`;
+  }
+  const wedgeA=tool([[-5.15,-.65,-1.6],[-5.15,.65,-1.6],[-5.15,.65,1.6],[-5.15,-.65,1.6]]);
+  const wedgeB=tool([[-.3,-.08,-1.3],[-.3,.08,-1.3],[-.3,.08,1.3],[-.3,-.08,1.3]]);
+  // The concealed portion is drawn over the ghost only in see-through.
+  if(k>0)svg+=`<g opacity="${k}">${axeSolid(wedgeA,wedgeB,matOf('#e8a65c'))}</g>`;
+  else if(vis(norm(sub(axePoint(st,[-1,0,0]),axePoint(st,[0,0,0])))))svg+=shape(wedgeA,METAL.m,.6);
+  if(k>.6){
+    const working=st.phase==='swinging'||st.phase==='splitting';
+    label([0,0,9],'POLL');label([4,2.3,1.8],'EYE');label([-3,0,.8],'RETAINING WEDGE');
+    label([0,-3.7,-4],'CHEEK');label([6,0,-9],'BIT',working);label([8,1,-13],'BEVEL',working);
+    label([0,0,-16],'CUTTING EDGE',working);label([-10,0,-16],'TOE');label([10,0,-16],'HEEL');
+    label([8,1.8,0],'SHOULDER');label([28,1.9,0],'WOODEN HANDLE',working);label([53,1.8,0],'GRIP');label([62,0,0],'END SWELL');
+    labels.push({at:[43,45+gap,40.1],text:'END GRAIN'},{at:[36,57+gap,27],text:'BARK'},
+      {at:[36,63,16.1],text:'CHOPPING BLOCK'},{at:[100,75,4],text:'TABLETOP'});
+    svg+=axeArrow([36,36-gap,30],[36,24-gap,30],'SPREAD','#bb4938');
+    svg+=axeArrow([36,54+gap,30],[36,66+gap,30],'SPREAD','#bb4938');
+    svg+=axeArrow(axePoint(st,[0,-15,7]),axePoint(st,[0,-15,-9]),'STROKE','#326e77');
+    svg+=xrCallouts(labels,[12,101,21,69,4,100]);
+  }
+  return svg;
+}
+function axeMove(st,ui,kind){
+  if(kind==='swing'&&st.phase!=='ready')return ui.flash(st.phase==='split'?'Reset to replace the wood':'The axe is already in motion or embedded');
+  if(kind==='split'&&st.phase!=='embedded')return ui.flash(st.phase==='ready'?'Swing into the log first':'Finish this stroke or reset the specimen');
+  const token=++st.motion;st.phase=kind==='swing'?'swinging':'splitting';let elapsed=0;
+  ui.animate(dt=>{if(token!==st.motion)return false;elapsed=Math.min(1,elapsed+dt/1.2);st[kind==='swing'?'stroke':'split']=ease(elapsed);if(elapsed===1){st.phase=kind==='swing'?'embedded':'split';return false;}return true;});
+}
+const axeUI=mountFigure({fig:'Axe',title:'Axe',turn:'full',size:[108,90,107],palette:'tomato',
+  state:{phase:'ready',stroke:0,split:0,motion:0},scene:axeScene,
+  buttons:[{label:'Swing',onClick:(st,ui)=>axeMove(st,ui,'swing')},{label:'Split',onClick:(st,ui)=>axeMove(st,ui,'split')},
+    {label:'Reset',onClick:(st)=>{st.motion++;st.phase='ready';st.stroke=st.split=0;}}],
+  params:(st,q)=>{if(q.get('state')==='embedded'){st.stroke=1;st.phase='embedded';}if(q.get('state')==='split'){st.stroke=st.split=1;st.phase='split';}}
+});
+xrMount(()=>axeUI,()=> '');
+if(!document.documentElement.hasAttribute('data-errors'))document.documentElement.dataset.errors='';
+</script></body></html>
