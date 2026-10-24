@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hand water pump</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Hand water pump: a cast-iron village pump over a brick-lined well (a deep-well lift pump).
+   The figure stands on a block of ground cut from the village green: paving on top, the soil layers on its sides,
+   the well inside (depth squeezed to fit, everything else ~1 unit per cm).
+
+   Truth first: how a deep-well lift pump moves water
+   1. Rest: the rising main (galvanised pipe, 32 mm bore) hangs from a base plate on the stone plinth, down the well to
+      a brass cylinder (76 mm bore) that sits below the water table. A foot valve closes the cylinder's bottom; the
+      plunger inside carries leather cups and its own plunger valve. Both are check valves: water may only go up.
+      Overnight a little leaks back past the foot valve, so the column in the main stands a few strokes short of the spout.
+   2. Lift the handle: the long arm goes up, the short arm on the other side of the pivot pin goes down, the link pushes
+      the crosshead and the pump rod down. The plunger slides down through the water in the cylinder: the foot valve
+      stays shut (it holds the column) and the plunger valve lifts open, so water passes up through the plunger.
+   3. Push the handle down: the rod pulls the plunger up. Its valve shuts under the weight of the water above, so the
+      plunger lifts the whole column in the main by one stroke (11.2 cm x 45 cm2 = 0.51 L, 63 cm up the 32 mm main);
+      below it the foot valve lifts and well water flows in through the strainer to fill the cylinder.
+   4. Once the column reaches the tee at the top of the main, every push spills 0.51 L out of the tee, through the
+      spout nipple and the cast spout into the bucket (or onto the paving if there is no bucket).
+   Water path: aquifer -> well -> strainer -> foot valve -> cylinder -> plunger valve -> rising main -> tee -> spout -> bucket.
+
+   Parts list (each held by the part named after the dot)
+   GROUND   paving . topsoil, clay, dry gravel, aquifer . water table . brick lining (on the gravel bed) . well water .
+            gravel bed . round well cover slab (on the lining)
+   STAND    stone plinth (on the slab) . base flange with four hold-down bolts (on the plinth) . flared skirt . fluted
+            cast-iron column with a band . moulding . head . dome cap . rod gland (on the cap) . cast spout (on the column)
+            . fulcrum bracket (bolted to the head)
+   LEVER    handle with grip . pivot pin (in the bracket) . two link straps (on the handle's short arm) . crosshead (on
+            the rod top)
+   PUMP     pump rod (crosshead to plunger) . rod guide (on top of the tee) . pump tee (on the main) . spout nipple (tee to
+            spout) . rising main . pipe couplings . pipe stay (bolted to the lining) . base plate (on the plinth, holds
+            the main) . cylinder top cap and bottom cap . brass cylinder . plunger . two leather cups . plunger valve .
+            foot valve disc . valve seat . valve cage . strainer (screwed into the bottom cap)
+   PROPS    galvanised bucket with its bail */
+
+/* ---------- geometry (x = depth, y = width, z = up; ~1 unit per cm, the well squeezed) ---------- */
+const GW = 104, GD = 135, G = 62;                          // ground block depth, width; ground level
+const CX = 50, CY = 45;                                    // pump axis
+const WT = 43, BED = 5;                                    // water table; top of the gravel bed at the well bottom
+const SH_R = 26, SH_RO = 30, SLAB_R = 32;                  // well shaft (inside, outside the brick lining), cover slab
+const PIV = [CX, CY + 15, G + 137], ARM_S = 15, ARM_L = 70, LINK_L = 10, A_UP = 22, A_DN = -22;
+const MAIN_Z0 = 41, OUTZ = G + 73;                         // bottom of the rising main, tee outlet
+const BAR = [12, 37], BAR_R = 5.5, PL_H = 6, PL_Z0 = 18;    // cylinder (barrel) z range and bore, plunger height, lowest plunger
+const MAIN_R = 2.4, ROD_R = .8;
+const SPOUT_PTS = [[CX + 9.8, CY, G + 74.5], [CX + 25, CY, G + 73.5], [CX + 32, CY, G + 70.5], [CX + 36, CY, G + 64]];
+const SPOUT_RAD = [4, 3.7, 3.4, 3.2];
+const BK_R0 = 10.5, BK_R1 = 13, BK_H = 26, BK_CAP = 10, BK_Z = G + .6;
+const SPOT_SIDE = [CX + 33, CY + 46], SPOT_SPOUT = [CX + 36.5, CY];
+const VOL = .51, RISE = .07, STROKE_T = .75;                // litres per stroke, share of the main filled per stroke
+const TOPZ = PIV[2] + ARM_L*Math.sin(A_UP*Math.PI/180) + 3;
+
+const STONE = matOf('#d6cdb9'), CONC = matOf('#c4beb0'), BRICK = matOf('#b8653f'), BRASS = matOf('#dcb45c'), GALV = matOf('#c9d0d2');
+const LEATHER = matOf('#7a4a2a'), IRON = matOf('#6f7378'), WATER = '#86c8e4', WATER_D = '#3f86b3';
+const WATERM = { l:'#bfe6f4', m:'#86c8e4', d:'#4f97c0' };
+const PAPER = '#f2efe7';
+
+const rad = a => a*Math.PI/180;
+const addv = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]], scl = (a, k) => a.map(v => v*k);
+const boxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const ringZ = (x, y, z, r, n = 28) => on(PZ(z), ellUV(x, y, r, r, n));
+const mw = w => `style="stroke-width:${f(w)}"`;            // a stroke in model units (not rescaled)
+const camXY = () => norm([CAM_V[0], CAM_V[1], 0]);
+const toward = (r, z, x = CX, y = CY) => { const v = camXY(); return [x + r*v[0], y + r*v[1], z]; };   // a point on a round part facing the viewer
+
+// handle: angle a (deg, + = grip up). Short arm end S, grip end E, crosshead pin height Cz (the link hangs S -> crosshead)
+function hg(a){
+  const u = [0, Math.cos(rad(a)), Math.sin(rad(a))], s = addv(PIV, scl(u, -ARM_S)), e = addv(PIV, scl(u, ARM_L));
+  return { u, s, e, cz: s[2] - Math.sqrt(LINK_L*LINK_L - (s[1] - CY)**2) };
+}
+const CZ_MIN = hg(A_UP).cz, STROKE = hg(A_DN).cz - CZ_MIN;
+const plungerZ = a => PL_Z0 + hg(a).cz - CZ_MIN;            // bottom of the plunger (the rod is rigid)
+const lvlZ = st => Math.max(WT, MAIN_Z0 + st.lvl*(OUTZ - MAIN_Z0));
+
+/* ---------- drawing helpers ---------- */
+function silV(x, y, z0, z1, r0, r1 = r0, w = 1.1){          // the two silhouette edges of an upright round part
+  const t = rad(YAW); let s = '';
+  for (const g of [1, -1]){ const a = t + g*Math.PI/2; s += line([[x + r0*Math.cos(a), y + r0*Math.sin(a), z0], [x + r1*Math.cos(a), y + r1*Math.sin(a), z1]], w); }
+  return s;
+}
+const nearArc = (x, y, z, r, w = 1) => line(on(PZ(z), arcUV(x, y, r, YAW - 90, YAW + 90, 16)), w);
+// an upright drum; o.cap: top face (default on), o.bot: ink its front bottom edge, o.r1: radius at the top (a cone)
+function drum(x, y, z0, z1, r, M, o = {}){
+  const w = o.w || 1.1, sh = o.shade || tone, n = o.n || 28, r1 = o.r1 != null ? o.r1 : r;
+  const A = ringZ(x, y, z0, r, n), B = ringZ(x, y, z1, r1, n);
+  let s = loft(A, B, nr => sh(nr, M));
+  if (o.cap !== false) s += fill(pd(B), sh([0,0,1], M)) + ink(pd(B), w*.75);
+  s += silV(x, y, z0, z1, r, r1, w);
+  if (o.bot) s += nearArc(x, y, z0, r, w);
+  return s;
+}
+// a see-through tube wall (near half only, faint) with inked edges
+const glassWall = (x, y, z0, z1, r, M, op, w = .8) => `<g opacity="${f(op)}">${loft(ringZ(x, y, z0, r, 20), ringZ(x, y, z1, r, 20), n => toneI(n, M))}</g>` + silV(x, y, z0, z1, r, r, w);
+// a tube along a path (spout, water inside it): rings square to the path, side vector y
+function tubePath(pts, radii, colour, n = 18){
+  const rings = pts.map((p, i) => { const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)], t = norm(sub(b, a)), e1 = [0, 1, 0], e2 = norm(cross(t, e1));
+    return Array.from({length: n}, (_, k) => { const q = k/n*2*Math.PI; return addv(p, addv(scl(e1, radii[i]*Math.cos(q)), scl(e2, radii[i]*Math.sin(q)))); }); });
+  let s = ''; for (let i = 0; i < rings.length - 1; i++) s += loft(rings[i], rings[i + 1], colour);
+  return { rings, svg: s };
+}
+
+/* ---------- the ground block ---------- */
+const STRATA = [ { z0:0, z1:WT, col:'#a7ad9a', peb:'#7d8473' }, { z0:WT, z1:50, col:'#dcc28e', peb:'#a98f5c' },
+  { z0:50, z1:56, col:'#c58c58' }, { z0:56, z1:G, col:'#7d5c3f' } ];
+const FACES = [ { n:[1,0,0], q:(z0, z1) => [[GW,0,z0],[GW,GD,z0],[GW,GD,z1],[GW,0,z1]] }, { n:[-1,0,0], q:(z0, z1) => [[0,0,z0],[0,GD,z0],[0,GD,z1],[0,0,z1]] },
+  { n:[0,1,0], q:(z0, z1) => [[0,GD,z0],[GW,GD,z0],[GW,GD,z1],[0,GD,z1]] }, { n:[0,-1,0], q:(z0, z1) => [[0,0,z0],[GW,0,z0],[GW,0,z1],[0,0,z1]] } ];
+const PEBBLES = (() => { let sd = 7; const rnd = () => (sd = (sd*16807) % 2147483647) / 2147483647; return Array.from({length: 34}, () => [rnd(), rnd(), .5 + rnd()*.9]); })();
+// sides of the block: outward faces (the closed block), or inward far walls (see-through, inner = true)
+function blockSides(inner){
+  let s = '';
+  for (const F of FACES){
+    if (inner ? vis(F.n) : !vis(F.n)) continue;
+    const span = F.n[0] ? GD : GW;
+    for (const L0 of STRATA){ const M = matOf(L0.col), c = inner ? mix(toneI(F.n.map(v => -v), M), PAPER, .35) : tone(F.n, M);
+      s += face(pd(F.q(L0.z0, L0.z1)), c);
+      if (L0.peb && !inner){ let pp = '';
+        for (const [u, v, r] of PEBBLES){ const z = L0.z0 + 1.5 + v*(L0.z1 - L0.z0 - 3), t = 2 + u*(span - 4);
+          const c3 = F.n[0] ? [F.q(0, 0)[0][0] + F.n[0]*.1, t, z] : [t, F.q(0, 0)[0][1] + F.n[1]*.1, z];
+          const d1 = F.n[0] ? [0, r, 0] : [r, 0, 0];
+          pp += pd([addv(c3, d1), addv(c3, [0, 0, r*.7]), addv(c3, scl(d1, -1)), addv(c3, [0, 0, -r*.7])]); }
+        s += fill(pp, mix(L0.peb, tone(F.n, M), .35)); } }
+    const wt = F.q(WT, WT);
+    s += `<path d="${pd([wt[0], wt[1]], false)}" fill="none" stroke="#2f73a8" ${mw(.7)} stroke-dasharray="3 2"/>`;
+    if (!inner) s += ink(pd(F.q(0, G)), 1.4);
+  }
+  return s;
+}
+const FLAGS = ['#dcd6c8', '#d2cbba', '#e3ded1', '#cdc6b5', '#d8d1c0'];
+function blockTop(){
+  let s = '';
+  for (let i = 0; i < GW/20; i++) for (let j = 0; j < GD/20; j++){
+    const x1 = Math.min(GW, i*20 + 20), y1 = Math.min(GD, j*20 + 20), q = [[i*20, j*20, G], [x1, j*20, G], [x1, y1, G], [i*20, y1, G]];
+    s += face(pd(q), FLAGS[(i*3 + j*5 + i*j) % FLAGS.length]); }
+  let jn = ''; for (let i = 20; i < GW; i += 20) jn += pd([[i, 0, G], [i, GD, G]], false);
+  for (let j = 20; j < GD; j += 20) jn += pd([[0, j, G], [GW, j, G]], false);
+  s += `<path d="${jn}" fill="none" stroke="#9c937f" stroke-width=".8"/>`;
+  return s + ink(pd([[0,0,G],[GW,0,G],[GW,GD,G],[0,GD,G]]), 1.6);
+}
+const BLOCK_PTS = [[0,0,0],[GW,0,0],[GW,GD,0],[0,GD,0],[0,0,G],[GW,0,G],[GW,GD,G],[0,GD,G]];
+const TOP_CLIP = [[0,0,G],[GW,0,G],[GW,GD,G],[0,GD,G]];
+
+/* ---------- the pump above ground: parts with boxes, sorted per view ---------- */
+function slabSvg(){
+  const A = ringZ(CX, CY, G, SLAB_R, 40), B = ringZ(CX, CY, G + .6, SLAB_R, 40);
+  return loft(A, B, n => tone(n, CONC)) + fill(pd(B), CONC.l) + ink(pd(B), 1) + nearArc(CX, CY, G, SLAB_R, 1)
+    + line(on(PZ(G + .62), arcUV(CX, CY, SLAB_R - 3, YAW - 70, YAW + 70, 14)), .6);
+}
+function standParts(m){
+  const out = [], put = (b, svg) => out.push({ box: b, svg }), cbox = (r, z0, z1) => [[CX - r, CY - r, z0], [CX + r, CY + r, z1]];
+  // stone plinth on the slab, with its date cut into the front
+  let pl = box(CX - 20, CY - 20, G + .6, CX + 20, CY + 20, G + 12, STONE, tone, 1.4);
+  if (facing([1,0,0])) pl += tx(CX + 20.1, CY, G + 4.4, '1887', 4.6, mix(STONE.d, INK, .45), 800);
+  put([[CX - 20, CY - 20, G + .6], [CX + 20, CY + 20, G + 12]], pl);
+  // base flange + four hold-down bolts + flared skirt (one casting; nuts behind the skirt first, then those in front)
+  { const nuts = [45, 135, 225, 315].map(a => [CX + 14.6*Math.cos(rad(a)), CY + 14.6*Math.sin(rad(a))]);
+    const dz = p => depthOf([p[0], p[1], 0]) - depthOf([CX, CY, 0]), nut = p => drum(p[0], p[1], G + 17, G + 18.8, 1.4, IRON, { n:6, w:.7, shade:toneI });
+    let s = drum(CX, CY, G + 12, G + 17, 16.5, m, { bot:true, w:1.4 });
+    s += nuts.filter(p => dz(p) <= 0).map(nut).join('');
+    s += drum(CX, CY, G + 17, G + 24, 13, m, { r1:10.5, cap:false, bot:true, w:1.3 });
+    s += nuts.filter(p => dz(p) > 0).map(nut).join('');
+    put(cbox(16.5, G + 12, G + 24), s); }
+  // fluted column in sections (so the spout and bracket sort against the section beside them)
+  const flutes = (z0, z1) => { let d = ''; const v = camXY();
+    for (let k = 0; k < 16; k++){ const a = k/16*2*Math.PI, dir = [Math.cos(a), Math.sin(a), 0];
+      if (dir[0]*v[0] + dir[1]*v[1] > .3) d += pd([[CX + 10.55*dir[0], CY + 10.55*dir[1], z0], [CX + 10.55*dir[0], CY + 10.55*dir[1], z1]], false); }
+    return `<path d="${d}" fill="none" stroke="${INK}" stroke-width=".6" opacity=".55"/>`; };
+  const shaft = (z0, z1) => drum(CX, CY, z0, z1, 10.5, m, { cap:false, w:1.4 }) + flutes(z0 + 1, z1 - 1);
+  put(cbox(10.5, G + 24, G + 40), shaft(G + 24, G + 40));
+  put(cbox(12, G + 40, G + 43), drum(CX, CY, G + 40, G + 43, 12, m, { bot:true, w:1.2 }));
+  put(cbox(10.5, G + 43, G + 62), shaft(G + 43, G + 62));
+  put(cbox(10.5, G + 62, G + 82), shaft(G + 62, G + 82));
+  put(cbox(11.5, G + 82, G + 90), shaft(G + 82, G + 86) + drum(CX, CY, G + 86, G + 90, 11.5, m, { bot:true, w:1.2 }));
+  put(cbox(12.5, G + 90, G + 104), drum(CX, CY, G + 90, G + 104, 12.5, m, { bot:true, w:1.4 }) + nearArc(CX, CY, G + 95, 12.55, .7));
+  { const rings = []; for (let i = 0; i <= 6; i++){ const t = i/6*Math.PI/2; rings.push(ringZ(CX, CY, G + 104 + 9*Math.sin(t), Math.max(3, 12*Math.cos(t)), 28)); }
+    let s = ''; for (let i = 0; i < 6; i++) s += loft(rings[i], rings[i + 1], n => tone(n, m));
+    s += hullInk(rings.flat(), 1.4);
+    put(cbox(12, G + 104, G + 113), s); }
+  put(cbox(3, G + 113, G + 117), drum(CX, CY, G + 113, G + 117, 3, BRASS, { w:.9, shade:toneI }) + fill(pd(ringZ(CX, CY, G + 117.02, 1.1, 12)), '#2b2523'));
+  // cast spout out of the column's front
+  { const t = tubePath(SPOUT_PTS, SPOUT_RAD, n => tone(n, m)), last = t.rings[t.rings.length - 1], d = norm(sub(SPOUT_PTS[3], SPOUT_PTS[2]));
+    let s = t.svg + hullInk([...t.rings[0], ...t.rings[1]], 1.4) + hullInk([...t.rings[1], ...t.rings[2], ...last], 1.4);
+    if (vis(d)){ s += fill(pd(last), tone(d, m)) + ink(pd(last), .9);
+      const inner = last.map(p => addv(SPOUT_PTS[3], scl(sub(p, SPOUT_PTS[3]), .62))); s += fill(pd(inner), '#2b2523'); }
+    put(SPOUT_BOX, s); }
+  // fulcrum bracket: lower web bolted to the head's side, two cheeks up to the pivot pin
+  put([[CX - 3, CY + 12.5, G + 92], [CX + 3, CY + 18.5, G + 128]], box(CX - 3, CY + 12.5, G + 92, CX + 3, CY + 18.5, G + 128, m, tone, 1.1)
+    + (facing([0,1,0]) ? [G + 96, G + 122].map(z => shape(on(PY(CY + 18.55), ellUV(CX, z, 1.2, 1.2, 6)), IRON.m, .5)).join('') : ''));
+  for (const xs of [[CX + 1.7, CX + 3], [CX - 3, CX - 1.7]])
+    put([[xs[0], CY + 12.5, G + 128], [xs[1], CY + 18.5, PIV[2] + 4]], box(xs[0], CY + 12.5, G + 128, xs[1], CY + 18.5, PIV[2] + 4, m, tone, 1));
+  for (const [x0, x1] of [[CX + 3, CX + 4.3], [CX - 4.3, CX - 3]])
+    put([[x0, PIV[1] - 1.6, PIV[2] - 1.6], [x1, PIV[1] + 1.6, PIV[2] + 1.6]], rod([x0, PIV[1], PIV[2]], [x1, PIV[1], PIV[2]], 1.5, IRON, toneI, .8));
+  return out;
+}
+const SPOUT_BOX = (() => { const t = tubePath(SPOUT_PTS, SPOUT_RAD, () => ''); const b = boxOf(t.rings.flat()); b[0][0] = CX + 10.5; return b; })();
+const STREAM_TOP = [SPOUT_PTS[3][0], CY, SPOUT_BOX[0][2] - .05];
+
+// the handle, link, crosshead and the rod above the cap (they move)
+function leverParts(st, m){
+  const g = hg(st.a), out = [], put = (b, svg) => out.push({ box: b, svg });
+  const p1 = addv(PIV, scl(g.u, 4)), gripA = addv(g.e, scl(g.u, -13));
+  // short arm with the end boss (between the link straps) and the pivot boss (between the cheeks)
+  put(boxOf([g.s, PIV].flatMap(p => [addv(p, [0, 0, -2.4]), addv(p, [0, 0, 2.4]), addv(p, [-1.5, 0, 0]), addv(p, [1.5, 0, 0])])),
+    act('handle', rod(g.s, PIV, 1.7, m, tone, 1) + rod([CX - 1.5, g.s[1], g.s[2]], [CX + 1.5, g.s[1], g.s[2]], 2.2, m, tone, .9) + rod([CX - 1.5, PIV[1], PIV[2]], [CX + 1.5, PIV[1], PIV[2]], 3.2, m, tone, 1)));
+  put(boxOf([PIV, p1].flatMap(p => [addv(p, [-1.5, 0, -2]), addv(p, [1.5, 0, 2])])), act('handle', rod(PIV, p1, 1.6, m, tone, 1)));
+  put(boxOf([p1, g.e].flatMap(p => [addv(p, [-2.2, 0, -2.4]), addv(p, [2.2, 0, 2.4])])),
+    act('handle', rod(p1, gripA, 1.6, m, tone, 1, 1.35) + rod(gripA, g.e, 2.1, DARK, toneI, 1, 2.3)));
+  // two link straps either side of the short arm's end, down to the crosshead
+  for (const x of [CX + 2.1, CX - 2.1]){ const a = [x, g.s[1], g.s[2]], b = [x, CY, g.cz];
+    put(boxOf([a, b], .7).map((p, i) => [x + (i ? .6 : -.6), p[1], p[2]]), rod(a, b, .55, METAL, toneI, .7)); }
+  put([[CX - 1.5, CY - 1.8, g.cz - 1.5], [CX + 1.5, CY + 1.8, g.cz + 1.5]], box(CX - 1.5, CY - 1.8, g.cz - 1.5, CX + 1.5, CY + 1.8, g.cz + 1.5, DARK, toneI, .8));
+  put([[CX - .9, CY - .9, G + 117], [CX + .9, CY + .9, g.cz - 1.5]], rod([CX, CY, G + 117], [CX, CY, g.cz - 1.5], ROD_R + .1, METAL, toneI, .8));
+  return out;
+}
+
+/* ---------- bucket + stream ---------- */
+function bucketPos(st){
+  const t = ease(st.bkT), x = SPOT_SIDE[0] + (SPOT_SPOUT[0] - SPOT_SIDE[0])*t, y = SPOT_SIDE[1] + (SPOT_SPOUT[1] - SPOT_SIDE[1])*t;
+  let z = BK_Z + 9*Math.sin(Math.PI*t), al = 1;
+  if (st.away){ const a = st.away; if (a < .6){ z += 14*ease(a/.6); al = 1 - a/.6; } else if (a < 1) al = 0;
+    else { al = (a - 1)/.6; return { x: SPOT_SIDE[0], y: SPOT_SIDE[1], z: BK_Z, al, fill: 0 }; } }
+  return { x, y, z, al, fill: st.bkL };
+}
+function bucketSvg(b, st, inStream){
+  const A = ringZ(b.x, b.y, b.z, BK_R0, 32), B = ringZ(b.x, b.y, b.z + BK_H, BK_R1, 32), col = n => tone(n, GALV);
+  let inside = fill(pd(A), GALV.d);
+  if (b.fill > .02){ const h = 1 + (BK_H - 2)*b.fill/BK_CAP, r = BK_R0 + (BK_R1 - BK_R0)*h/BK_H, wz = b.z + h, srf = ringZ(b.x, b.y, wz, r - .2, 32);
+    inside += fill(pd(srf), WATER) + ink(pd(srf), .5);
+    if (st.flow > .05 && inStream){ const t = performance.now()/260;
+      for (let i = 0; i < 2; i++){ const rr = 2 + ((t + i*.5) % 1)*(r - 4); inside += `<path d="${pd(ringZ(b.x, b.y, wz + .05, rr, 24))}" fill="none" stroke="#ffffff" ${mw(.45)} opacity="${f(.8*(1 - ((t + i*.5) % 1)))}"/>`; } } }
+  if (inStream) inside += inStream;
+  let s = openShell(A, B, col, inside) + ink(pd(B), 1.1) + line(on(PZ(b.z + 3), arcUV(b.x, b.y, BK_R0 + .25, YAW - 90, YAW + 90, 16)), .6)
+    + line(on(PZ(b.z + BK_H - 3), arcUV(b.x, b.y, BK_R1 - .25, YAW - 90, YAW + 90, 16)), .6) + hullInk([...A, ...B], 1.8);
+  // bail: ears on the sides, the wire folded back over the rim (toward -x)
+  const bail = Array.from({length: 17}, (_, i) => { const q = i/16*Math.PI; return [b.x - 12.4*Math.sin(q), b.y + 13.6*Math.cos(q), b.z + BK_H - 2.5 + 4.5*Math.sin(q)]; });
+  s += `<path d="${pd(bail, false)}" fill="none" stroke="${INK}" ${mw(1.25)} stroke-linecap="round"/><path d="${pd(bail, false)}" fill="none" stroke="${GALV.m}" ${mw(.55)} stroke-linecap="round"/>`;
+  for (const yy of [b.y + 13.4, b.y - 13.4]) s += shape(on(PY(yy), ellUV(b.x, b.z + BK_H - 2.5, 1.1, 1.1, 8)), GALV.m, .5);
+  return act('bucket', b.al < 1 ? `<g opacity="${f(b.al)}">${s}</g>` : s);
+}
+const streamPath = (a, b, k) => { const d = pd([a, b], false), w = .9 + 1.3*k;
+  return `<path d="${d}" fill="none" stroke="${WATER_D}" ${mw(w + .7)} stroke-linecap="round"/><path d="${d}" fill="none" stroke="${WATER}" ${mw(w)} stroke-linecap="round"/>`
+    + `<path d="${pd([addv(a, [0, .25, -.5]), addv(b, [0, .25, .5])], false)}" fill="none" stroke="#e9f8ff" ${mw(.35)} opacity=".9"/>`; };
+function splash(p, k){ const t = performance.now()/180; let s = '';
+  for (let i = 0; i < 6; i++){ const a = i*1.05 + t*.3, ph = (t*.6 + i*.37) % 1, r = 1.5 + 4*ph, z = p[2] + 3.2*Math.sin(Math.PI*ph)*k;
+    const q = P(p[0] + r*Math.cos(a), p[1] + r*Math.sin(a), z); s += `<circle cx="${f(q[0])}" cy="${f(q[1])}" r="${f(.55*k + .2)}" fill="${WATER}" stroke="${WATER_D}" ${mw(.25)}/>`; }
+  return s; }
+
+/* ---------- see-through: the pump's insides above ground and the well below ---------- */
+// one piece of the rising main: rod inside, water up to the level, faint pipe wall, optional band (coupling, clamp)
+function mainSeg(st, z0, z1, band){
+  const lz = lvlZ(st); let s = line([[CX, CY, z0], [CX, CY, z1]], .4) + `<path d="${pd([[CX, CY, z0], [CX, CY, z1]], false)}" fill="none" stroke="${METAL.m}" ${mw(1.3)}/>`;
+  if (lz > z0){ const zt = Math.min(z1, lz); s += `<g opacity=".72">${loft(ringZ(CX, CY, z0, MAIN_R - .25, 18), ringZ(CX, CY, zt, MAIN_R - .25, 18), n => toneI(n, WATERM))}</g>`;
+    if (lz < z1) s += fill(pd(ringZ(CX, CY, lz, MAIN_R - .25, 18)), WATERM.l) + ink(pd(ringZ(CX, CY, lz, MAIN_R - .25, 18)), .4);
+    if (st.up){ const v = camXY(), span = lz - MAIN_Z0; let dd = '';
+      for (let i = 0; i < 40; i++){ const zz = MAIN_Z0 + ((st.ph + i*9) % span + span) % span; if (zz < z0 || zz > Math.min(z1, lz) - 2) continue;
+        const px = CX + 1.4*v[0] - .5*v[1], py = CY + 1.4*v[1] + .5*v[0]; dd += pd([[px, py, zz], [px, py, zz + 2]], false); }
+      if (dd) s += `<path d="${dd}" fill="none" stroke="#ffffff" ${mw(.45)} stroke-linecap="round"/>`; } }
+  s += glassWall(CX, CY, z0, z1, MAIN_R, GALV, .3);
+  if (band) s += drum(CX, CY, band[0], band[1], band[2], band[3] || GALV, { w:.7, shade:toneI, bot:true });
+  return { box: [[CX - 3.2, CY - 3.2, z0], [CX + 3.2, CY + 3.2, z1]], svg: s };
+}
+// the brass cylinder with the foot valve and plunger inside
+function barrelSvg(st){
+  const zb = plungerZ(st.a), A = ringZ(CX, CY, BAR[0], BAR_R, 28), B = ringZ(CX, CY, BAR[1], BAR_R, 28);
+  let s = loft(A, B, n => mix(toneI(n, BRASS), WATER, .45), true);
+  // foot valve: seat ring, disc lifting off it, cage of three posts and a ring
+  s += drum(CX, CY, BAR[0], BAR[0] + 1.2, BAR_R - .1, BRASS, { w:.6, shade:toneI }) + fill(pd(ringZ(CX, CY, BAR[0] + 1.22, 2.4, 16)), '#2b2523');
+  const fz = BAR[0] + 1.2 + 1.7*st.fv, cage = [0, 120, 240].map(a => [CX + 3.9*Math.cos(rad(a + 30)), CY + 3.9*Math.sin(rad(a + 30))]);
+  const back = p => depthOf([p[0], p[1], 0]) < depthOf([CX, CY, 0]);
+  s += cage.filter(back).map(p => rod([p[0], p[1], BAR[0] + 1.2], [p[0], p[1], BAR[0] + 4.6], .3, METAL, toneI, .4)).join('');
+  s += drum(CX, CY, fz, fz + .8, 3.1, matOf(st.fv > .3 ? '#ff9a3a' : '#b9c2c6'), { w:.6, shade:toneI });
+  s += cage.filter(p => !back(p)).map(p => rod([p[0], p[1], BAR[0] + 1.2], [p[0], p[1], BAR[0] + 4.6], .3, METAL, toneI, .4)).join('');
+  s += ink(pd(ringZ(CX, CY, BAR[0] + 4.6, 3.9, 20)), .5);
+  if (st.fv > .3){ const v = camXY(); for (const o of [-1.6, 1.6]){ const x = CX + o*v[1], y = CY - o*v[0];
+    s += `<path d="${pd([[x, y, BAR[0] - 1], [x, y, BAR[0] + 3.4]], false)}" fill="none" stroke="#ffffff" ${mw(.5)} opacity="${f(st.fv)}"/>`; } }
+  // plunger: brass body, two leather cups, the ring port and its valve disc sliding on the rod
+  s += drum(CX, CY, zb, zb + 1.2, BAR_R - .15, LEATHER, { w:.6, shade:toneI, bot:true });
+  s += drum(CX, CY, zb + 1.2, zb + 2.6, 4.6, BRASS, { w:.6, shade:toneI, cap:false });
+  s += drum(CX, CY, zb + 2.6, zb + 3.8, BAR_R - .15, LEATHER, { w:.6, shade:toneI });
+  s += drum(CX, CY, zb + 3.8, zb + PL_H, 4.6, BRASS, { w:.6, shade:toneI });
+  s += fill(pd(ringZ(CX, CY, zb + PL_H + .02, 2.5, 18)), '#2b2523');
+  const vz = zb + PL_H + 1.3*st.pv;
+  s += drum(CX, CY, vz, vz + .7, 2.9, matOf(st.pv > .3 ? '#ff9a3a' : '#b9c2c6'), { w:.55, shade:toneI });
+  s += `<path d="${pd([[CX, CY, zb + PL_H], [CX, CY, BAR[1]]], false)}" fill="none" stroke="${INK}" ${mw(1.9)}/><path d="${pd([[CX, CY, zb + PL_H], [CX, CY, BAR[1]]], false)}" fill="none" stroke="${METAL.m}" ${mw(1.2)}/>`;
+  s += glassWall(CX, CY, BAR[0], BAR[1], BAR_R, BRASS, .28, .9) + nearArc(CX, CY, BAR[0], BAR_R, .8);
+  return s;
+}
+function wellMech(st){
+  const v = camXY(), lz = lvlZ(st);
+  let s = '';
+  // brick lining: inside of the far half, with courses and staggered joints
+  s += loft(ringZ(CX, CY, BED - 3, SH_R, 36), ringZ(CX, CY, G, SH_R, 36), n => toneI(n, BRICK), true);
+  let br = '';
+  for (let z = BED - 3, c = 0; z < G; z += 4, c++){ br += pd(on(PZ(z), arcUV(CX, CY, SH_R - .05, YAW + 90, YAW + 270, 24)), false);
+    for (let a = (c % 2) * 9; a < 360; a += 18){ const d = ((a - YAW - 90) % 360 + 360) % 360; if (d > 180) continue;
+      const p = [CX + (SH_R - .05)*Math.cos(rad(a)), CY + (SH_R - .05)*Math.sin(rad(a))]; br += pd([[p[0], p[1], z], [p[0], p[1], Math.min(G, z + 4)]], false); } }
+  s += `<path d="${br}" fill="none" stroke="#6e3a22" stroke-width=".5" opacity=".7"/>`;
+  // gravel bed at the bottom
+  s += drum(CX, CY, BED - 3, BED, SH_R - .05, matOf('#cbb88e'), { w:.7, shade:toneI });
+  let pb = ''; for (const [u, w2, r] of PEBBLES.slice(0, 22)){ const a = u*2*Math.PI, rr = w2*(SH_R - 3); pb += pd(on(PZ(BED + .05), ellUV(CX + rr*Math.cos(a), CY + rr*Math.sin(a), r*.9, r*.6, 6))); }
+  s += fill(pb, '#9c8a62');
+  // the water in the well (seen through), the submerged parts, then its surface
+  s += fill(sp(hull([...ringZ(CX, CY, BED, SH_R - .1, 28), ...ringZ(CX, CY, WT, SH_R - .1, 28)].map(p => P(...p)))), WATER, 'opacity=".28"');
+  s += drum(CX, CY, BED + .5, BED + 1, 2.8, IRON, { w:.6, shade:toneI });
+  { let sl = drum(CX, CY, BED + 1, BAR[0] - 2, 2.6, GALV, { w:.7, shade:toneI, cap:false }), d = '';
+    for (let z = BED + 2; z < BAR[0] - 2.5; z += 1.4) d += pd(on(PZ(z), arcUV(CX, CY, 2.65, YAW - 50, YAW + 50, 6)), false);
+    s += sl + `<path d="${d}" fill="none" stroke="${INK}" stroke-width=".7"/>`; }
+  s += drum(CX, CY, BAR[0] - 2, BAR[0], 6.6, BRASS, { w:.8, shade:toneI, bot:true });
+  s += barrelSvg(st);
+  s += drum(CX, CY, BAR[1], BAR[1] + 2, 6.6, BRASS, { w:.8, shade:toneI, bot:true });
+  s += drum(CX, CY, BAR[1] + 2, MAIN_Z0, 3.4, BRASS, { w:.7, shade:toneI, r1:3, bot:true });
+  s += mainSeg(st, MAIN_Z0, WT).svg;
+  const srf = ringZ(CX, CY, WT, SH_R - .1, 40);
+  s += fill(pd(srf), WATER, 'opacity=".42"') + ink(pd(srf), .7);
+  if (st.fv > .2){ const t = performance.now()/300; for (let i = 0; i < 2; i++){ const rr = 4 + ((t + i*.5) % 1)*14;
+    s += `<path d="${pd(ringZ(CX, CY, WT + .05, rr, 28))}" fill="none" stroke="#ffffff" ${mw(.5)} opacity="${f(.7*(1 - ((t + i*.5) % 1)))}"/>`; } }
+  // above the water: the main in pieces with a clamp and a coupling, the stay bolted to the lining
+  const parts = [ mainSeg(st, WT, 47), mainSeg(st, 47, 49.5, [47.2, 49.3, 3.3, IRON]), mainSeg(st, 49.5, 54), mainSeg(st, 54, 56.5, [54, 56.5, 3.1]), mainSeg(st, 56.5, G) ];
+  const sx = CX - SH_R, sv = CX - 3.3;
+  parts.push({ box: [[sx, CY - 1, 47.6], [sv, CY + 1, 48.9]], svg: box(sx, CY - 1, 47.6, sv, CY + 1, 48.9, IRON, toneI, .7)
+    + (facing([0,0,1]) ? shape(on(PZ(48.95), ellUV(sx + 2, CY, .7, .7, 6)), METAL.l, .4) : '') });
+  s += byDepth(parts);
+  // the near half of the lining, faint
+  s += `<g opacity=".22">${loft(ringZ(CX, CY, BED - 3, SH_RO, 36), ringZ(CX, CY, G, SH_RO, 36), n => tone(n, BRICK))}</g>` + silV(CX, CY, BED - 3, G, SH_RO, SH_RO, .9)
+    + nearArc(CX, CY, BED - 3, SH_RO, .9);
+  return s;
+}
+// above ground, inside the plinth and the column
+function headMech(st){
+  const out = [];
+  out.push(mainSeg(st, G, G + 12));
+  { const s = drum(CX, CY, G + 12, G + 13.5, 6, IRON, { w:.8, shade:toneI, bot:true })
+      + (facing([0,0,1]) ? [0, 90, 180, 270].map(a => shape(on(PZ(G + 13.55), ellUV(CX + 4.6*Math.cos(rad(a + 45)), CY + 4.6*Math.sin(rad(a + 45)), .8, .8, 6)), METAL.l, .4)).join('') : '');
+    out.push({ box: [[CX - 6, CY - 6, G + 12], [CX + 6, CY + 6, G + 13.5]], svg: s }); }
+  out.push(mainSeg(st, G + 13.5, G + 40), mainSeg(st, G + 40, G + 42.5, [G + 40, G + 42.5, 3.1]), mainSeg(st, G + 42.5, G + 69));
+  { const lz = lvlZ(st), full = lz >= OUTZ - .5;
+    out.push({ box: [[CX - 3.4, CY - 3.4, G + 69], [CX + 3.4, CY + 3.4, G + 77]], svg: drum(CX, CY, G + 69, G + 77, 3.4, full ? matOf('#a9d6e8') : GALV, { w:.8, shade:toneI, bot:true }) });
+    out.push({ box: [[CX + 3.4, CY - 2, OUTZ - 2], [SPOUT_BOX[0][0], CY + 2, OUTZ + 2]], svg: rod([CX + 3.4, CY, OUTZ], [CX + 10.4, CY, OUTZ + .6], 2, GALV, toneI, .8) }); }
+  out.push(mainSeg(st, G + 77, G + 81));
+  out.push({ box: [[CX - 3.2, CY - 3.2, G + 81], [CX + 3.2, CY + 3.2, G + 84]], svg: drum(CX, CY, G + 81, G + 84, 3.2, BRASS, { w:.8, shade:toneI, bot:true }) });
+  out.push({ box: [[CX - .9, CY - .9, G + 84], [CX + .9, CY + .9, G + 117]], svg: rod([CX, CY, G + 84], [CX, CY, G + 117], ROD_R + .1, METAL, toneI, .7) });
+  if (st.flow > .05){ const t = tubePath(SPOUT_PTS.map(p => addv(p, [0, 0, -.6])), [2.2, 2, 1.8, 1.8], n => toneI(n, WATERM));
+    out.push({ box: SPOUT_BOX, svg: `<g opacity="${f(.85*Math.min(1, st.flow*2))}">${t.svg}</g>` }); }
+  return out;
+}
+
+/* ---------- labels ---------- */
+function labelItems(st, inside){
+  const g = hg(st.a), b = bucketPos(st), zb = plungerZ(st.a), moving = st.a !== st.aT, up = !!st.up, v = camXY();
+  const far = [CAM_V[0] > 0 ? 0 : GW, CAM_V[1] > 0 ? 0 : GD];             // the far corner of the block: its walls show the layers
+  const farWall = z => [far[0] + (far[0] ? -1 : 1)*.5, (far[1] + GD/2)/2 + 10, z];
+  const surf = [
+    { at: addv(g.e, scl(g.u, -7)), text:'HANDLE', on: moving },
+    { at: [SPOUT_PTS[1][0], CY, SPOUT_PTS[1][2] + 3.5], text:'SPOUT', on: st.flow > .05 },
+    { at: toward(10.5, G + 55), text:'CAST-IRON COLUMN', on:false },
+    { at: [CX + 3, CY + 15.5, G + 110], text:'FULCRUM BRACKET', on: moving },
+    { at: [CX + 20, CY - 8, G + 9], text:'STONE PLINTH', on:false },
+    { at: [CX + SLAB_R*.72, CY - SLAB_R*.69, G + .6], text:'WELL COVER SLAB', on:false },
+    ...(b.al > .5 ? [{ at: [b.x + BK_R1*v[0], b.y + BK_R1*v[1], b.z + BK_H - 1], text:'BUCKET', on: st.flow > .05 && bucketUnder(st) }] : []) ];
+  if (!inside) return surf;
+  return [ ...surf,
+    { at: [CX + 4.3, PIV[1], PIV[2]], text:'PIVOT PIN', on: moving },
+    { at: [CX + 2.1, (g.s[1] + CY)/2, (g.s[2] + g.cz)/2], text:'LINK', on: moving },
+    { at: [CX + 1.5, CY, g.cz], text:'CROSSHEAD', on: moving },
+    { at: toward(3, G + 116), text:'ROD GLAND', on: moving },
+    { at: toward(16.5, G + 15), text:'BASE FLANGE', on:false },
+    { at: [CX, CY, G + 100], text:'PUMP ROD', on: moving },
+    { at: toward(3.4, G + 75), text:'PUMP TEE', on: st.flow > .05 },
+    { at: [CX + 7.5, CY, OUTZ + 1.8], text:'SPOUT NIPPLE', on: st.flow > .05 },
+    { at: toward(3.2, G + 83), text:'ROD GUIDE', on: moving },
+    { at: toward(6, G + 13), text:'BASE PLATE', on:false },
+    { at: toward(MAIN_R, G - 10), text:'RISING MAIN', on: up },
+    { at: [CX, CY, Math.max(MAIN_Z0 + 3, lvlZ(st) - 3)], text:'WATER COLUMN', on: up },
+    { at: toward(3.1, 55.5), text:'PIPE COUPLING', on:false },
+    { at: [CX - SH_R + 6, CY, 48.9], text:'PIPE STAY', on:false },
+    { at: toward(BAR_R, BAR[0] + 3), text:'BRASS CYLINDER', on:false },
+    { at: toward(4.6, zb + 5), text:'PLUNGER', on: moving },
+    { at: toward(BAR_R, zb + .6), text:'LEATHER CUPS', on: moving },
+    { at: toward(2.9, zb + PL_H + .5 + 1.3*st.pv), text:'PLUNGER VALVE', on: st.pv > .3 },
+    { at: toward(3.1, BAR[0] + 1.6 + 1.7*st.fv), text:'FOOT VALVE', on: st.fv > .3 },
+    { at: toward(3.9, BAR[0] + 4.6), text:'VALVE CAGE', on:false },
+    { at: toward(2.6, 10.5), text:'STRAINER', on: st.fv > .3 },
+    { at: toward(SH_R*.6, WT), text:'WELL WATER', on: st.fv > .3 },
+    { at: toward(SH_RO, G - 20), text:'BRICK LINING', on:false },
+    { at: farWall(WT), text:'WATER TABLE', on:false },
+    { at: farWall(20), text:'AQUIFER', on:false },
+    { at: farWall(53), text:'CLAY', on:false } ];
+}
+
+// xrCallouts, but the two columns get half the labels each (most anchors sit near the pump's axis), both start under
+// the buttons on their side, and a long column closes up to stay inside the frame
+function hpCallouts(items, B){
+  const pts = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) pts.push(P(x, y, z));
+  const xmin = Math.min(...pts.map(p => p[0])), xmax = Math.max(...pts.map(p => p[0]));
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8*k, hgt = u ? 17*u : fs*1.75, gap0 = hgt + (u ? 3*u : 2.2*k);
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, ctm = svgEl.getScreenCTM();
+  const all = items.map(it => { const [X, Y] = P(...it.at); return { ...it, X, Y }; }).sort((a, b) => a.X - b.X), half = Math.ceil(all.length/2);
+  const below = el => { if (!el || !ctm) return -1e9; const r = el.getBoundingClientRect(), q = new DOMPoint(r.right, r.bottom + 14).matrixTransform(ctm.inverse()); return q.y > 0 ? q.y + hgt/2 : -1e9; };
+  const top = { [-1]: Math.max(vb.y + fs, below(document.getElementById('btns'))), [1]: u ? vb.y + fs : Math.max(vb.y + fs, below(document.querySelector('.vset')), below(document.getElementById('stats'))) };
+  // the right column stops above the zoom chip (bottom right of the figure, added by the build)
+  const px1 = svgEl.clientHeight ? vb.height/svgEl.clientHeight : k;
+  const bot = { [-1]: vb.y + vb.height - hgt/2, [1]: vb.y + vb.height - hgt/2 - 36*px1 };
+  let s = '';
+  for (const [col, side] of [[all.slice(0, half), -1], [all.slice(half), 1]]){
+    col.sort((a, b) => a.Y - b.Y);
+    const gap = col.length > 1 ? Math.max(hgt + .5*k, Math.min(gap0, (bot[side] - top[side])/(col.length - 1))) : gap0;
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, top[side]); y = c.py; }
+    const over = col.length ? col[col.length - 1].py - bot[side] : 0, room = col.length ? col[0].py - top[side] : 0;
+    if (over > 0) for (const c of col) c.py -= Math.min(over, room);
+    for (const c of col){
+      c.n = ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)); const w = u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+      let px = side < 0 ? xmin - 10*k - w/2 : xmax + 10*k + w/2; px = Math.max(vb.x + w/2 + 2*k, Math.min(vb.x + vb.width - w/2 - 2*k, px));
+      const ex = px - side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex + side*-4*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0), g = hg(st.a), b = bucketPos(st);
+  let s = k > 0 ? `<g opacity="${f(1 - .7*k)}">${castShadow(BLOCK_PTS, 0)}</g>` : castShadow(BLOCK_PTS, 0);
+  // the block of ground: closed, or a ghost with its far walls and the well inside
+  const sides = blockSides(false) + blockTop() + hullInk(BLOCK_PTS, 2.6);
+  if (k > 0) s += `<g opacity="${f(.75*k)}">${blockSides(true)}</g><g opacity="${f(1 - .8*k)}">${sides}</g><g opacity="${f(k)}">${wellMech(st)}</g>`;
+  else s += sides;
+  // flat things on the paving: the cover slab, the shadows, a puddle
+  const slab = slabSvg();
+  s += k > 0 ? `<g opacity="${f(1 - .75*k)}">${slab}</g>` : slab;
+  const shp = [ [...ringZ(CX, CY, G + 12, 16.5, 16), ...ringZ(CX, CY, G + 117, 12.5, 16)],
+    [[CX - 20, CY - 20, G], [CX + 20, CY - 20, G], [CX + 20, CY + 20, G], [CX - 20, CY + 20, G], [CX - 20, CY - 20, G + 12], [CX + 20, CY + 20, G + 12], [CX + 20, CY - 20, G + 12], [CX - 20, CY + 20, G + 12]],
+    [...SPOUT_PTS, [CX + 9.8, CY, G + 70]],
+    [addv(g.s, [0, 0, 2]), addv(g.e, [0, 0, 2]), addv(g.e, [0, 0, -2]), addv(g.s, [0, 0, -2])],
+    [[CX, CY + 12.5, G + 92], [CX, CY + 18.5, G + 92], [CX, CY + 18.5, PIV[2] + 4], [CX, CY + 12.5, PIV[2] + 4]] ];
+  if (b.al > .3) shp.push([...ringZ(b.x, b.y, b.z, BK_R0, 14), ...ringZ(b.x, b.y, b.z + BK_H, BK_R1, 14)]);
+  s += `<g opacity="${f(1 - .5*k)}">${clipTo(TOP_CLIP, shp.map(p => castShadow(p, G)).join(''))}</g>`;
+  if (st.puddle > .02){ const r = 5 + 9*Math.min(1, st.puddle/2);
+    s += fill(pd(on(PZ(G + .05), ellUV(SPOT_SPOUT[0] - 1, SPOT_SPOUT[1], r, r*1.25, 24))), WATER, `opacity="${f(.45 + .3*Math.min(1, st.puddle))}"`); }
+  // the pump: the stand ghosts in see-through; the moving parts, the bucket and the insides draw over it
+  const stand = standParts(m), lever = leverParts(st, m), extra = [];
+  // the bucket, and the stream from the spout (into the bucket's middle, or down onto the paving)
+  const under = bucketUnder(st);
+  if (st.flow > .05){
+    const kk = Math.min(1, st.flow*1.6), x = STREAM_TOP[0], y = STREAM_TOP[1];
+    if (under){ const rim = b.z + BK_H + .2, wz = b.z + 1 + (BK_H - 2)*b.fill/BK_CAP;
+      extra.push({ box: [[x - 1, y - 1, rim], [x + 1, y + 1, STREAM_TOP[2]]], svg: streamPath(STREAM_TOP, [x, y, rim], kk) });
+      extra.push({ box: [[b.x - BK_R1, b.y - BK_R1, b.z], [b.x + BK_R1, b.y + BK_R1, b.z + BK_H]], svg: bucketSvg(b, st, streamPath([x, y, rim], [x, y, wz], kk) + splash([x, y, wz], kk*.6)) });
+    } else {
+      extra.push({ box: [[x - 1, y - 1, G], [x + 1, y + 1, STREAM_TOP[2]]], svg: streamPath(STREAM_TOP, [x, y, G + .1], kk) + splash([x, y, G + .1], kk) });
+      if (b.al > 0) extra.push({ box: [[b.x - BK_R1, b.y - BK_R1, b.z], [b.x + BK_R1, b.y + BK_R1, b.z + BK_H]], svg: bucketSvg(b, st, '') });
+    }
+  } else if (b.al > 0) extra.push({ box: [[b.x - BK_R1, b.y - BK_R1, b.z], [b.x + BK_R1, b.y + BK_R1, b.z + BK_H]], svg: bucketSvg(b, st, under ? '' : '') });
+  if (k > 0) s += `<g opacity="${f(1 - .8*k)}">${byDepth(stand)}</g>` + `<g opacity="${f(.55*k)}">${hullInk([...ringZ(CX, CY, G + 12, 16.5, 16), ...ringZ(CX, CY, G + 113, 12, 16)], 2.2)}</g>`
+    + byDepth([...lever, ...extra.map(p => ({ box: p.box, svg: `<g opacity="${f(1 - .55*k)}">${p.svg}</g>` })), ...headMech(st).map(p => ({ box: p.box, svg: `<g opacity="${f(k)}">${p.svg}</g>` }))]);
+  else s += byDepth([...stand, ...lever, ...extra]);
+  // labels: the insides in see-through, the outside parts otherwise
+  const items = labelItems(st, k > .6);
+  s += hpCallouts(items, [0, GW, 0, GD, 0, TOPZ]);
+  return s;
+}
+
+/* ---------- behaviour (one state object, one clock) ---------- */
+let ui, hpLoop = false;
+const bucketUnder = st => st.bkT === 1 && st.bkTT === 1 && !st.away;
+function pour(st, l){
+  if (bucketUnder(st)){ st.bkL += l; if (st.bkL > BK_CAP){ st.puddle = Math.min(2.5, st.puddle + st.bkL - BK_CAP); st.bkL = BK_CAP; } }
+  else st.puddle = Math.min(2.5, st.puddle + l);
+  st.out += l;
+}
+const pumpBtn = () => [...document.querySelectorAll('.act')].find(el => /pumping/i.test(el.textContent));
+function setAuto(st, on){ st.auto = on; const el = pumpBtn(); if (el) el.textContent = on ? 'Stop pumping' : 'Keep pumping'; }
+function setHandle(st, target){ st.a0 = st.a; st.aT = target; st.k = 0; hpKick(); }
+function hpStep(st, dt){
+  const zb0 = plungerZ(st.a);
+  if (st.k < 1){
+    st.k = Math.min(1, st.k + dt/STROKE_T); st.a = st.k >= 1 ? st.aT : st.a0 + (st.aT - st.a0)*ease(st.k);
+    if (st.k >= 1){
+      if (st.aT === A_DN) st.strokes++;
+      if (st.queue != null){ const q = st.queue; st.queue = null; setHandle(st, q); }
+      else if (st.auto){
+        if (st.aT === A_DN && bucketUnder(st) && st.bkL >= BK_CAP - .05){ setAuto(st, false); ui.flash('The bucket is full'); }
+        else setHandle(st, st.aT === A_DN ? A_UP : A_DN); } } }
+  const dz = plungerZ(st.a) - zb0, vk = Math.min(1, dt*12);
+  st.up = dz > 1e-6;
+  if (dz > 1e-6){
+    st.fv += (1 - st.fv)*vk; st.pv -= st.pv*vk;
+    const dv = dz/STROKE*VOL; let out = 0;
+    if (st.lvl < 1){ st.lvl += dv/VOL*RISE; if (st.lvl > 1){ out = (st.lvl - 1)/RISE*VOL; st.lvl = 1; } } else out = dv;
+    if (out > 0) pour(st, out);
+    st.rate = out/Math.max(dt, 1e-3); st.ph += dz*2.5;
+  } else if (dz < -1e-6){ st.pv += (1 - st.pv)*vk; st.fv -= st.fv*vk; st.rate = 0; }
+  else { st.fv -= st.fv*vk*.6; st.pv -= st.pv*vk*.6; st.rate = 0; if (st.fv < .003) st.fv = 0; if (st.pv < .003) st.pv = 0; }
+  const ft = Math.min(1, st.rate/1.1);
+  st.flow += (ft - st.flow)*Math.min(1, dt*(ft > st.flow ? 14 : 4)); if (st.flow < .004) st.flow = 0;
+  if (st.bkT !== st.bkTT){ const d = dt/.9; st.bkT = Math.abs(st.bkTT - st.bkT) <= d ? st.bkTT : st.bkT + Math.sign(st.bkTT - st.bkT)*d; }
+  if (st.away){ st.away += dt; if (st.away >= 1 && st.bkTT === 1){ st.bkL = 0; st.bkT = st.bkTT = 0; } if (st.away >= 1.6) st.away = 0; }
+  st.puddle = Math.max(0, st.puddle - dt*.3);
+}
+const hpBusy = st => !st.still && (st.k < 1 || st.queue != null || st.fv > 0 || st.pv > 0 || st.flow > 0 || st.bkT !== st.bkTT || st.away > 0 || st.puddle > 0);
+function hpKick(){
+  if (hpLoop) return; hpLoop = true;
+  ui.animate(dt => { const st = ui.st; if (!st.still) hpStep(st, dt); const b = hpBusy(st); if (!b){ hpLoop = false; st.up = false; } return b; });
+}
+function lift(st){
+  setAuto(st, false); st.queue = null;
+  if (st.aT === A_UP) return st.a === A_UP ? ui.flash('The handle is up: now push it down') : null;
+  setHandle(st, A_UP);
+}
+function push(st){
+  setAuto(st, false);
+  if (st.aT === A_DN && st.a === A_DN){ setHandle(st, A_UP); st.queue = A_DN; return; }   // already down: a whole stroke
+  st.queue = null; if (st.aT !== A_DN) setHandle(st, A_DN);
+}
+function keepPumping(st){
+  if (st.auto) return setAuto(st, false);
+  if (bucketUnder(st) && st.bkL >= BK_CAP - .05) return ui.flash('The bucket is full: carry it away');
+  setAuto(st, true); st.queue = null;
+  if (st.a === st.aT) setHandle(st, st.a === A_DN ? A_UP : A_DN);
+}
+function bucketToSpout(st){
+  if (st.away) return ui.flash('A fresh bucket is on its way');
+  if (st.bkTT === 1) return ui.flash(st.bkT === 1 ? 'The bucket is already under the spout' : 'It is on its way');
+  st.bkTT = 1; hpKick();
+}
+function carryAway(st){
+  if (st.away) return;
+  if (st.bkTT === 0) return ui.flash('Put the bucket under the spout first');
+  if (st.bkT !== 1) return ui.flash('Wait for the bucket to reach the spout');
+  if (st.bkL < .05) return ui.flash('The bucket is empty: pump some water first');
+  st.away = .001; hpKick();
+}
+
+ui = mountFigure({
+  fig:'31', title:'Hand water pump', size:[GW, GD, TOPZ], palette:'mint', turn:'full',
+  state:{ a:A_DN, a0:A_DN, aT:A_DN, k:1, queue:null, auto:false, lvl:.8, fv:0, pv:0, up:false, flow:0, rate:0, ph:0,
+          bkT:0, bkTT:0, bkL:0, away:0, puddle:0, strokes:0, out:0, still:false },
+  scene,
+  stats: st => [ { label:'In bucket', value: st.bkL.toFixed(1) + ' L' }, { label:'Strokes', value: String(st.strokes) },
+    { label:'Per stroke', value: VOL.toFixed(2) + ' L', small:true } ],
+  buttons:[
+    { label:'Bucket under spout', onClick: bucketToSpout },
+    { label:'Lift handle', onClick: lift },
+    { label:'Push handle', onClick: push },
+    { label:'Keep pumping', onClick: keepPumping },
+    { label:'Carry bucket away', onClick: carryAway },
+  ],
+  acts:{ handle: st => (st.aT === A_UP ? push(st) : lift(st)), bucket: st => (st.bkTT === 1 ? carryAway(st) : bucketToSpout(st)) },
+  params:(st, q) => {
+    if (q.has('a')){ st.a = st.a0 = st.aT = Math.max(A_DN, Math.min(A_UP, +q.get('a'))); }
+    if (q.has('lvl')) st.lvl = Math.max(0, Math.min(1, +q.get('lvl')));
+    if (q.get('bucket') === 'spout') st.bkT = st.bkTT = 1;
+    if (q.has('fill')) st.bkL = Math.max(0, Math.min(BK_CAP, +q.get('fill')));
+    if (q.has('flow')){ st.flow = +q.get('flow'); st.up = st.flow > 0; st.still = true; }
+    if (q.has('fv')){ st.fv = +q.get('fv'); st.still = true; }
+    if (q.has('pv')){ st.pv = +q.get('pv'); st.still = true; }
+    if (q.has('puddle')) st.puddle = +q.get('puddle');
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
