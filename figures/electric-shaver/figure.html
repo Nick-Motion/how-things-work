@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Electric shaver</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Battery current passes the switch and motor leads. The motor shaft turns a central spur gear,
+   which meshes with three equal driven gears. Each driven gear carries a sprung telescoping shaft.
+   The shaft socket engages its cutter hub. The spring holds the rotating cutter against the fixed screen.
+   Hairs enter the screen slots and are sheared at its underside. Short clippings remain in the hair chamber.
+   Opening the hinged holder stops the demonstration motor and disengages the three cutter sockets.
+   The cutter/guard pairs stay in the holder, held by their retaining rings.
+   Teaching adaptations. Enlarged slots, hairs and gears; slow rotation; an upright display pose.
+   Shave moves an externally handled model patch from the table, turns it over and brings it to the heads.
+   The patch returns with short stubble. It never grows new hairs. This is not shaver hardware or a skin model.
+   Simplified single central spur stage represents the documented three-output drive, not a particular SKU.
+   Source support. 2016 printed page 14, saved OCR index 15 in book-catalog-audit/raw/now-pages.json.
+   EP2281670B1 documents three driven gears, hair seals and sprung cutter shafts.
+   Philips S1085/04 manual documents the hinge, chamber, retaining frame, cutter and guard pairs.
+   1988 is access-restricted and unverified. No exact illustration or edition-union claim.
+   Parts and supports.
+   CASE. Bottom cap and two rounded shell halves on the internal chassis; grip insert on the front shell.
+   STRUCTURE. Battery cradle, motor saddle, head neck, gear base, three bearing bosses,
+   partition plate and hair chamber walls fixed to the chassis; hinge pin, hinge ears and latch on the head case.
+   DRIVE. Motor can, rotor, commutator, two brushes, shaft, central pinion and three driven gears.
+   Each gear is journalled in the gear base and partition; each shaft has a lower sleeve,
+   compression spring, telescoping stem and drive socket; each cutter has a hub and radial sharpened blades.
+   HEAD. Three stationary slotted guards, three retaining rings and their holder; cutter hubs captured in guards.
+   POWER. Rechargeable cell, two battery tabs, charge socket, control board, switch, LED,
+   motor suppression capacitor and two motor wires along the chassis; no invented sensors or pump.
+   Every gear contact. Centres are 10 apart; pitch radii are 4 and 6. All pitch circles touch.
+   All shaft axes coincide with their gears and cutters. Cutting plane z=63.3, guard surface z=63.8.
+*/
+const esHeads = [[40,32],[25,40.660254],[25,23.339746]];
+const esState = {phase:'idle', running:false, angle:0, lid:0, lidTarget:0, travel:0, cut:0, xr:0};
+const esBlue = matOf('#638cc3'), esRubber = matOf('#4c535a'), esGold = matOf('#e2b75b'), esGreen = matOf('#4e9870');
+let esUI, esLoop = false;
+const esBound = (pts,r=0) => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))-r),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i]))+r)];
+const esPart = (pts,svg,r=0) => ({box:esBound(pts,r),svg});
+const esRing = (x,y,z,r,n=32) => on(PZ(z),ellUV(x,y,r,r,n));
+function esSolid(a,b,m){
+  const pts=[...a,...b],axis=sub(avg(b),avg(a));
+  return loft(a,b,n=>tone(n,m))+shape(vis(axis)?b:a,tone(vis(axis)?norm(axis):norm(axis).map(v=>-v),m),.7)+hullInk(pts,2.8);
+}
+function esTransform(p,st){
+  const t=-st.lid*1.83,dx=p[0]-14,dz=p[2]-59;
+  return [14+dx*Math.cos(t)+dz*Math.sin(t),p[1],59-dx*Math.sin(t)+dz*Math.cos(t)];
+}
+function esGear(x,y,z,r,n,angle){
+  const uv=Array.from({length:n*4},(_,i)=>{const a=angle+i/(n*4)*Math.PI*2,rr=r+([0,3].includes(i%4)?-.38:.38);return [x+rr*Math.cos(a),y+rr*Math.sin(a)];});
+  const a=on(PZ(z),uv),b=on(PZ(z+1.5),uv);
+  return esSolid(a,b,esGold)+cyl(x,y,z+1.5,z+2,.95,METAL,toneI,.6,12);
+}
+function esCallouts(items){
+  const svg=document.getElementById('fig'),vb=svg.viewBox.baseVal,matrix=svg.getScreenCTM();
+  const bottom=Math.max(...['btns','stats'].map(id=>document.getElementById(id).getBoundingClientRect().bottom));
+  const top=matrix?Math.max(24*INK_K,new DOMPoint(0,bottom+14).matrixTransform(matrix.inverse()).y):vb.height*.25;
+  const sorted=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  const split=Math.ceil(sorted.length/2),cols=[sorted.slice(0,split),sorted.slice(split)];
+  const tags=cols.map((col,side)=>{
+    col.sort((a,b)=>a.p[1]-b.p[1]);
+    const width=window.LBL_U&&LBL_U()?24*LBL_U():Math.max(...col.map(it=>it.text.length))*8.6*INK_K*.62+13*INK_K;
+    const x=side?vb.width-width/2-4*INK_K:width/2+4*INK_K;
+    const gap=Math.min(21*INK_K,(vb.height-top-54*INK_K)/Math.max(1,col.length-1));
+    return col.map((it,i)=>tag(it.at,(x-it.p[0])/INK_K,(top+i*gap-it.p[1])/INK_K,it.text,it.on)).join('');
+  }).join('');
+  const leaders=[];
+  const pills=tags.replace(/<path[^>]*\/>/g,p=>{leaders.push(p);return '';});
+  return `<g class="tag">${leaders.join('')}</g>`+pills;
+}
+function esDraw(st,m){
+  const k=ease(st.xr||0), outer=[],inner=[],headOuter=[],headInner=[],labels=[];
+  const add=(list,pts,svg,r=0)=>list.push(esPart(pts,svg,r));
+  const bx=(list,a,b,mat)=>add(list,[a,b],box(...a,...b,mat,toneI,.8));
+  const rr=(list,a,b,r,mat)=>add(list,[a,b],rod(a,b,r,mat,toneI,.7),r);
+  const label=(at,text,on=false)=>labels.push({at,text,on});
+  const shellA=on(PZ(4),rrUV(20,21,40,43,8)),shellB=on(PZ(49),rrUV(17,18,43,46,9));
+  let shell=esSolid(shellA,shellB,m);
+  const collarA=on(PZ(49),rrUV(17,18,43,46,9)),collarB=on(PZ(54),rrUV(15,15,47,49,10));
+  shell+=esSolid(collarA,collarB,esRubber);
+  add(outer,[...shellA,...collarB],shell);
+  bx(outer,[22,23,3],[38,41,5],esRubber);
+  if(vis([1,0,0])){
+    add(outer,[[42.1,26,20],[43.2,38,42]],shape(on(PX(43.1),rrUV(26,20,38,42,5)),esRubber.m,1));
+    for(let i=0;i<5;i++)add(outer,[[43.2,28,23+i*2],[43.3,36,23+i*2]],line([[43.3,28,23+i*2],[43.3,36,23+i*2]],.7));
+  }
+  rr(outer,[42.7,32,37],[44.3,32,37],3,esRubber);
+  if(vis([1,0,0])){
+    add(outer,[[44.4,29,34],[44.4,35,40]],ink(pd(on(PX(44.4),arcUV(32,37,1.5,-45,225,18)),false),1)+line([[44.4,32,37.5],[44.4,32,39.2]],1));
+    add(outer,[[43.7,31,32],[43.8,33,34]],shape(on(PX(43.8),ellUV(32,33,.8,.8,12)),st.running?'#43c25c':'#78857c',.5));
+  }
+  if(vis([-1,0,0]))add(outer,[[17,25,27],[17,39,40]],shape(on(PX(16.9),rrUV(25,27,39,40,2)),'#e7e4db',.6));
+  rr(outer,[30,20.8,8],[30,19.8,8],2.5,esRubber);
+  bx(inner,[22,23,5],[38,41,7],METAL);label([23,24,7],'CHASSIS');
+  bx(inner,[22,23,7],[25,41,30],esRubber);label([23,25,18],'CELL CRADLE');
+  rr(inner,[30,32,8],[30,32,30],5.5,esBlue);label([30,32,20],'RECHARGEABLE CELL');
+  for(const z of [8,30])bx(inner,[28,31,z-.3],[32,33,z+.3],esGold);
+  label([30,32,30],'BATTERY TABS',st.running);
+  bx(inner,[35.5,24,12],[36.5,40,34],esGreen);label([36.5,25,19],'CONTROL BOARD');
+  bx(inner,[36.5,30,34],[41,34,39],esRubber);label([39,32,36],'PUSH SWITCH',st.running);
+  rr(inner,[41,32,37],[43,32,37],.8,METAL);
+  rr(inner,[36.5,32,33],[43.6,32,33],.65,matOf(st.running?'#43c25c':'#8eaa92'));label([40,32,33],'STATUS LED',st.running);
+  bx(inner,[28,20,6],[32,24,10],esRubber);label([30,21,8],'CHARGE SOCKET');
+  bx(inner,[26,25,32],[34,39,35],esRubber);label([27,26,34],'MOTOR SADDLE');
+  const motor=rod([30,32,35],[30,32,48],6,METAL,toneI,1);
+  add(inner,[[24,26,35],[36,38,48]],`<g opacity="${f(1-.8*k)}">${motor}</g>`);label([24,32,41],'MOTOR CAN',st.running);
+  rr(inner,[30,32,36],[30,32,46],2.5,matOf('#b67a4c'));label([30,32,42],'ARMATURE',st.running);
+  rr(inner,[30,32,35],[30,32,37],1.6,esGold);label([30,32,36],'COMMUTATOR',st.running);
+  bx(inner,[26,30.8,35],[28.5,33.2,37],esRubber);bx(inner,[31.5,30.8,35],[34,33.2,37],esRubber);label([27,32,36],'CARBON BRUSHES',st.running);
+  rr(inner,[30,32,46],[30,32,54],.9,METAL);label([30,32,50],'MOTOR SHAFT',st.running);
+  rr(inner,[27,27,46],[29,27,46],.7,matOf('#d9b466'));label([28,27,46],'SUPPRESSION CAPACITOR');
+  const routes=[[[30,32,30],[38,32,30],[38,32,34]],[[30,32,8],[38,40,8],[38,40,35],[34,32,35]],[[39,32,36],[40,25,36],[40,25,35],[26,32,35]]];
+  for(const [j,pts]of routes.entries())for(let i=1;i<pts.length;i++)rr(inner,pts[i-1],pts[i],.22,j===1?esRubber:matOf('#c45b43'));
+  label([40,25,36],'MOTOR LEADS',st.running);
+  const base=on(PZ(52),rrUV(13,13,49,51,10)),top=on(PZ(53),rrUV(13,13,49,51,10));
+  add(inner,[...base,...top],esSolid(base,top,esRubber));label([17,18,53],'GEAR BASE');
+  add(inner,[[25.5,27.5,54],[34.5,36.5,55.5]],esGear(30,32,54,4,16,st.angle));label([30,32,55],'DRIVE PINION',st.running);
+  for(const [i,[x,y]]of esHeads.entries()){
+    const a=esTransform([x,y,61],st),b=esTransform([x,y,64],st),stemTop=61;
+    add(inner,[[x-6.5,y-6.5,54],[x+6.5,y+6.5,55.5]],esGear(x,y,54,6,24,-st.angle*2/3));
+    rr(inner,[x,y,55.5],[x,y,58],1.5,esRubber);
+    rr(inner,[x,y,58],[x,y,stemTop],.8,METAL);
+    const coil=Array.from({length:65},(_,n)=>[x+1.8*Math.cos(n/64*Math.PI*10),y+1.8*Math.sin(n/64*Math.PI*10),57.5+n/64*3]);
+    add(inner,coil,line(coil,.85));
+    rr(inner,[x,y,60.5],[x,y,61.5],1.4,esGold);
+    for(const z of [53,56.5])rr(inner,[x,y,z],[x,y,z+.7],2.4,esRubber);
+    const guardA=esRing(x,y,63.3,8),guardB=esRing(x,y,63.8,8);
+    let guard=esSolid(guardA.map(p=>esTransform(p,st)),guardB.map(p=>esTransform(p,st)),METAL);
+    if(vis([Math.sin(-st.lid*1.83),0,Math.cos(st.lid*1.83)])){
+      for(let j=0;j<24;j++){
+        const t=j/24*Math.PI*2;
+        guard+=line([5,7.3].map(r=>esTransform([x+r*Math.cos(t),y+r*Math.sin(t),63.85],st)),.65);
+      }
+      guard+=shape(esRing(x,y,63.88,2.4).map(p=>esTransform(p,st)),METAL.m,.65);
+    }
+    add(headOuter,[...guardA,...guardB].map(p=>esTransform(p,st)),guard);
+    const ra=esRing(x,y,61,8.7),rb=esRing(x,y,62,8.7);
+    const ringSvg=loft(ra.map(p=>esTransform(p,st)),rb.map(p=>esTransform(p,st)),n=>toneI(n,esRubber))+ink(pd(rb.map(p=>esTransform(p,st))),1);
+    add(headInner,[...ra,...rb].map(p=>esTransform(p,st)),ringSvg);
+    rr(headInner,a,esTransform([x,y,62.3],st),2.2,METAL);
+    for(let j=0;j<8;j++){
+      const t=-st.angle*2/3+j*Math.PI/4;
+      const q=[[x+2*Math.cos(t),y+2*Math.sin(t),62],[x+7.3*Math.cos(t+.1),y+7.3*Math.sin(t+.1),63.3],[x+7.3*Math.cos(t+.26),y+7.3*Math.sin(t+.26),63.3],[x+2*Math.cos(t+.3),y+2*Math.sin(t+.3),62.3]].map(p=>esTransform(p,st));
+      add(headInner,q,shape(q,METAL.l,.6));
+    }
+    if(i===0)label([x,y,55],'DRIVEN GEARS',st.running);
+    label([x,y,59],`SHAFT SPRING ${i+1}`,st.running);
+    if(i===0)label([x,y,61],'DRIVE SOCKETS',st.running);
+    label(esTransform([x+5,y,62.8],st),`ROTARY CUTTER ${i+1}`,st.running);
+    label(esTransform([x,y+6,63.8],st),`SLOTTED GUARD ${i+1}`,st.phase==='shaving');
+    if(i===0)label(esTransform([x,y-8.5,61.7],st),'RETAINING RINGS');
+  }
+  const neckA=on(PZ(53),rrUV(12,12,50,52,11)),neckB=on(PZ(59),rrUV(12,12,50,52,11));
+  let chamber=loft(neckA,neckB,n=>tone(n,esRubber))+ink(pd(neckB),1.3)+shape(neckA,esRubber.d,.7);
+  const floorA=on(PZ(57),rrUV(13,13,49,51,10)),floorB=on(PZ(57.4),rrUV(13,13,49,51,10));
+  add(outer,[...floorA,...floorB],esSolid(floorA,floorB,METAL));
+  label([18,18,57.4],'PARTITION PLATE');
+  const chamberItems=[];
+  for(let i=0;i<st.cut;i++){
+    const [x,y]=esHeads[Math.floor(i/8)],t=i*Math.PI/4;
+    chamberItems.push(esPart([[x+4*Math.cos(t),y+4*Math.sin(t),57.5],[x+5*Math.cos(t),y+5*Math.sin(t),57.5]],line([[x+4*Math.cos(t),y+4*Math.sin(t),57.5],[x+5*Math.cos(t),y+5*Math.sin(t),57.5]],1.1)));
+  }
+  add(outer,[...neckA,...neckB],chamber);
+  label([47,32,58],'HAIR CHAMBER',st.cut>0);
+  const lidProfile=rrUV(11,11,50,53,12);
+  const lidA=on(PZ(59),lidProfile).map(p=>esTransform(p,st)),lidB=on(PZ(61),lidProfile).map(p=>esTransform(p,st));
+  let lid=loft(lidA,lidB,n=>tone(n,m));
+  const holes=esHeads.map(([x,y])=>esRing(x,y,61.01,8.5).map(p=>esTransform(p,st)));
+  const up=[-Math.sin(st.lid*1.83),0,Math.cos(st.lid*1.83)];
+  const lidFace=vis(up)?lidB:lidA;
+  lid+=`<path d="${pd(lidFace)}${holes.map(q=>pd(q)).join('')}" fill="${m.m}" fill-rule="evenodd"/>`+hullInk([...lidA,...lidB],2.4);
+  add(headOuter,[...lidA,...lidB],lid);
+  rr(outer,[14,25,59],[14,39,59],1.4,METAL);label([14,32,59],'HINGE PIN',st.lidTarget!==st.lid);
+  bx(outer,[47,29,56],[50,35,59],m);label([49,32,58],'HEAD LATCH');
+  for(const [x,y]of esHeads)rr(inner,[x,y,56.5],[x,y,57.3],2.3,esRubber);
+  label([40,32,57],'HAIR SEAL');
+  const table=board(0,0,106,67,3,5,WOOD);
+  let result=table+castShadow([...shellA,...shellB,...neckB],3,boardTop(0,0,106,67,3));
+  const anatomy=byDepth(inner.filter(p=>p.box[0][2]<53.9))+byDepth(inner.filter(p=>p.box[0][2]>=53.9))+byDepth(chamberItems);
+  const lidParts=byDepth([...headOuter,...headInner]);
+  const normalHead=byDepth([...headOuter,...headInner.map(p=>({...p,svg:st.lid>.2?p.svg:''}))]);
+  const normal=byDepth([...outer,esPart([...lidA,...lidB,...esHeads.flatMap(([x,y])=>esRing(x,y,64,9).map(p=>esTransform(p,st)))],normalHead)]);
+  const machine=k>0?`<g opacity="${f(1-.87*k)}">${normal}</g><g opacity="${f(k)}">${anatomy}<g opacity="${f(1-.7*k)}">${byDepth(headOuter)}</g>${byDepth(headInner)}</g>`:normal;
+  result+=byDepth([esPart([...shellA,...collarB,...neckB,...lidA,...lidB,...esHeads.flatMap(([x,y])=>esRing(x,y,64,9).map(p=>esTransform(p,st)))],machine),esPatch(st)]);
+  if(k>.6)result+=esCallouts(labels);
+  return result;
+}
+const esHairs=esHeads.flatMap(([x,y])=>Array.from({length:8},(_,j)=>{const t=j*Math.PI/4;return {u:30-x-5.9*Math.cos(t),v:y-32+5.9*Math.sin(t)};}));
+function esPatch(st){
+  const t=st.travel,active=st.phase==='shaving';
+  let x=80,z=4.5,a=0;
+  if(active){
+    if(t<.3){const e=ease(t/.3);x=80-50*e;z=4.5+76*e;a=Math.PI*e;}
+    else if(t<.4){x=30;z=80.5-16.5*ease((t-.3)/.1);a=Math.PI;}
+    else if(t<.6){x=30;z=64;a=Math.PI;}
+    else if(t<.7){x=30;z=64+16.5*ease((t-.6)/.1);a=Math.PI;}
+    else {const e=ease((t-.7)/.3);x=30+50*e;z=80.5-76*e;a=Math.PI*(1-e);}
+  }
+  const tr=([u,v,w])=>[x+u*Math.cos(a)+w*Math.sin(a),32+v,z-u*Math.sin(a)+w*Math.cos(a)];
+  const pa=on(PZ(-1),rrUV(-18,-18,18,18,4)).map(tr),pb=on(PZ(0),rrUV(-18,-18,18,18,4)).map(tr);
+  const parts=[esPart([...pa,...pb],`<g opacity="${f(1-.82*ease(st.xr||0))}">${esSolid(pa,pb,matOf('#e8ab8e'))}</g>`)];
+  for(const [i,h]of esHairs.entries()){
+    const len=i<st.cut?.7:4.5,p=tr([h.u,h.v,0]),q=tr([h.u,h.v,len]);
+    parts.push(esPart([p,q],line([p,q],1.15),.2));
+  }
+  return {box:[[0,1,2].map(i=>Math.min(...parts.map(p=>p.box[0][i]))),[0,1,2].map(i=>Math.max(...parts.map(p=>p.box[1][i])))],svg:byDepth(parts)};
+}
+function esTick(st,dt){
+  if(st.running)st.angle=(st.angle+dt*8)%(Math.PI*6);
+  st.lid+=Math.sign(st.lidTarget-st.lid)*Math.min(Math.abs(st.lidTarget-st.lid),dt/1.1);
+  if(st.phase==='shaving'){
+    st.travel=Math.min(1,st.travel+dt/4);
+    if(st.travel>=.4&&st.travel<=.6)st.cut=Math.min(24,Math.max(st.cut,Math.floor((st.travel-.4)/.2*24)));
+    if(st.travel>.6)st.cut=24;
+    if(st.travel===1)st.phase='idle';
+  }
+  return st.running||st.lid!==st.lidTarget||st.phase==='shaving';
+}
+function esKick(){
+  if(esLoop)return;esLoop=true;
+  esUI.animate(dt=>{const more=esTick(esState,dt);if(!more)esLoop=false;return more;});
+}
+function esStart(st,ui){
+  if(st.lid>0||st.lidTarget)return ui.flash('Close the head before starting');
+  if(st.phase==='shaving')return ui.flash('The patch is still on its shaving pass');
+  st.running=!st.running;esKick();
+}
+function esShave(st,ui){
+  if(st.lid>0||st.lidTarget)return ui.flash('Close the head before shaving');
+  if(!st.running)return ui.flash('Start the cutters first');
+  if(st.phase==='shaving')return ui.flash('The patch is already moving');
+  if(st.cut===24)return ui.flash('The model patch is already shaved');
+  st.phase='shaving';st.travel=0;esKick();
+}
+function esLift(st,ui){
+  if(st.phase==='shaving')return ui.flash('Wait for the model patch to return');
+  st.running=false;st.lidTarget=st.lidTarget?0:1;esKick();
+}
+esUI=mountFigure({fig:'14',turn:'full',title:'Electric shaver',size:[106,67,96],palette:'cobalt',state:esState,scene:esDraw,
+  stats:st=>[{label:'Hairs cut',value:st.cut+' / 24'},{label:'Cutters',value:st.running?'Running':'Stopped',small:true}],
+  buttons:[{label:'Start',onClick:esStart},{label:'Shave',onClick:esShave},{label:'Lift head',onClick:esLift}],
+  params:(st,q)=>{st.lid=st.lidTarget=q.get('open')==='1'?1:0;st.cut=q.get('shaved')==='1'?24:0;st.running=q.get('run')==='1'&&!st.lid;}
+});
+xrMount(()=>esUI,()=> '');
+if(esState.running)esKick();
+</script></body></html>
