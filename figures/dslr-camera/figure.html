@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DSLR camera</title></head><body>
+<script src="core.js"></script>
+<script>
+/* DSLR camera on a table, a 50 mm f/1.8 prime on the front, an apple on the table to photograph.
+   Truth (how a single-lens reflex really works, and where the light is after each step):
+   1. Looking: light from the apple goes through the lens elements and the wide-open aperture (f/1.8, bright view), hits
+      the main mirror at 45 deg and goes up onto the focusing screen, where the image forms. The condenser lens and the
+      pentaprism above it turn the image the right way round and send it out backwards through the eyepiece to the eye.
+      The shutter is cocked: the front curtain covers the sensor, so no light reaches it.
+   2. Half-press: the release switch under the shutter button closes its first stage. The centre of the main mirror is
+      half-silvered; the light that gets through falls on the sub-mirror behind it and goes down to the AF sensor in
+      the floor of the mirror box. The board reads how far out of focus the image is and drives the AF motor in the
+      lens; its lead screw moves the focus group forward until the image is sharp. The metering sensor beside the
+      eyepiece reads the brightness. A green focus dot lights in the viewfinder.
+   3. Full press: the mirror motor swings the main mirror up against the focusing screen (the sub-mirror folds flat
+      under it: the viewfinder blacks out), the aperture blades close down to f/5.6, the front curtain runs down and
+      uncovers the sensor, then the rear curtain runs down after it and covers it again (at 1/250 s the two make a
+      moving slit). The sensor's charge goes over the flex to the image processor on the main board and the picture is
+      written to the SD card and shown on the rear LCD. Then the mirror drops, the aperture opens and the motor
+      recocks both curtains together (front back over the sensor, rear back up), so the sensor never sees light.
+   4. Live view: the mirror swings up and stays up, the front curtain runs down and stays down: light falls straight on
+      the sensor and its picture goes live to the rear LCD; the viewfinder is dark. Focus is measured on the sensor.
+      A shot in live view closes the front curtain first, then runs the normal sequence and opens it again.
+   Parts (each held by another):
+   BODY    body shell . grip (rubber) . prism hump . eyecup . mode dial . command dial . top LCD . shutter button and
+           its collar . hot shoe . rear LCD . d-pad, MENU, INFO, LV, AF-ON buttons . AF-assist lamp . port cover .
+           SD door . lens release button . two strap lugs
+   LENS    mount ring . barrel . focus ring . accent ring . front rim . front element . second element . focus group
+           on its carrier arm . lead screw . AF motor . aperture housing with 7 blades . fourth element . rear element .
+           lens board . lens contacts . flex from the board round the inner wall to the motor
+   REFLEX  main mirror (half-silvered) . mirror hinge . sub-mirror on the back of the main mirror . mirror lever .
+           link rod . mirror motor and its gear . AF sensor module and its separator lens . focusing screen .
+           condenser lens . pentaprism . eyepiece lens . metering sensor
+   SHUTTER frame plate with the window . front curtain (4 blades) . rear curtain (4 blades)
+   IMAGING IR filter . image sensor in its ceramic package . sensor board . main board . image processor . buffer memory .
+           rear LCD module . SD card and its connector
+   POWER   battery in the grip . battery contacts . release switch . mode dial encoder . flex cables from every board to
+           the main board
+   x = along the lens (the lens points to +x, at the apple), y = across (the grip is at +y, on the shooter's right),
+   z = up. 1 unit = 1 mm (the camera is modelled large). */
+const Z0 = 6;                                                            // table top
+const BTOP = boardTop(0, 0, 290, 190, Z0, 10);
+const BX0 = 30, BX1 = 100, BY0 = 20, BY1 = 134, BZT = 98;                // body box (back face x = 30, front face x = 100)
+const BODY = rrUV(BY0, Z0, BY1, BZT, 7);                                 // (y, z) profile swept along x
+const GRIP = [[30,134],[30,154],[36,160],[90,162],[116,160],[126,152],[128,140],[126,134]];   // (x, y) outline, swept up
+const GZT = 102;
+const HX0 = 38, HX1 = 88;                                                // prism hump, back and front faces
+const HUMP_B = [[50,BZT],[106,BZT],[98,128],[58,128]], HUMP_F = [[50,BZT],[106,BZT],[96,128],[60,128]];
+const LY = 77, LZ = 62;                                                  // the lens axis (y, z), along +x
+const EYE = rrUV(64, 99, 90, 117, 5);
+const PRISM = [[50,86],[92,86],[66,122],[54,122],[44,114],[44,100]];     // (x, z), swept along y 62..92
+const APL = [255, LY, Z0 + 23], AR = 24;                                 // the apple
+const MH = [56, 78], ML = 42;                                            // mirror hinge (x, z), mirror length
+const LENS_SEC = [[100,104,31,'mount'],[104,122,34,'blk'],[122,152,35.5,'rub'],[152,160,34,'blk'],[160,163,34.4,'acc'],[163,176,34,'blk'],[176,188,36.5,'blk']];
+const RUB = { l:'#5d5750', m:'#45403a', d:'#2c2925' }, BLK = { l:'#4f4a44', m:'#38342f', d:'#221f1c' };
+const PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, GOLD = matOf('#e0b54a'), GLASS = { l:'#e8f6fa', m:'#c4e2ea', d:'#94bcc6' };
+const MIRM = { l:'#f4fafc', m:'#d3e2e8', d:'#a3b8c1' }, BLADEM = matOf('#5a5f65'), CHIP = matOf('#34302c'), BRASS = matOf('#d8b25a');
+const BATTM = matOf('#3f454d'), SDM = matOf('#3b6fb4'), APPLE = '#e2483d';
+const FOCUS_M = 0.21;                                                    // apple to sensor, metres
+
+/* ---------- small helpers ---------- */
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const seg = (t, a, b) => ease(clamp01((t - a) / (b - a)));
+const lerp = (a, b, t) => a + (b - a) * t;
+const txP = (o, U, V, str, size, col = INK, wt = 700) => `<text transform="${txM(P(...o), Dv(...U), Dv(...V))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${wt}" letter-spacing=".04em">${str}</text>`;
+const txBk = (x, y, z, str, size, col = INK, wt = 700) => txP([x, y, z], [0, 1, 0], [0, 0, -1], str, size, col, wt);     // on the back face
+const txL = (x, y, z, str, size, col = INK, wt = 700) => txP([x, y, z], [-1, 0, 0], [0, 0, -1], str, size, col, wt);     // on the -y side
+const rx = (x0, x1, r, m, sh = tone, w = 1.2, n = 30) => rod([x0, LY, LZ], [x1, LY, LZ], r, m, sh, w, r, n);
+const front = n => { const r = rotV(n); return r[0] + r[1] + r[2]; };
+// an oriented box from corner o along edges a, b, c (a mirror, a tilted plate): every face that faces the viewer
+function obox(o, a, b, c, m, sh = toneI, w = .7){
+  const ad = (p, q) => [p[0] + q[0], p[1] + q[1], p[2] + q[2]];
+  const cen = ad(o, [0, 1, 2].map(i => (a[i] + b[i] + c[i]) / 2));
+  let s = '';
+  for (const [p, u, v] of [[o, a, b], [ad(o, c), a, b], [o, a, c], [ad(o, b), a, c], [o, b, c], [ad(o, a), b, c]]){
+    const q = [p, ad(p, u), ad(ad(p, u), v), ad(p, v)]; let n = norm(cross(u, v));
+    if (dot(n, sub(avg(q), cen)) < 0) n = n.map(x => -x);
+    if (vis(n)) s += shape(q, sh(n, m), w); }
+  return s; }
+const oboxB = (o, a, b, c) => { const pts = []; for (const i of [0, 1]) for (const j of [0, 1]) for (const k of [0, 1]) pts.push([0, 1, 2].map(d => o[d] + i*a[d] + j*b[d] + k*c[d]));
+  return [[0, 1, 2].map(d => Math.min(...pts.map(p => p[d]))), [0, 1, 2].map(d => Math.max(...pts.map(p => p[d])))]; };
+const boxOf = (pts, e = .3) => [[0, 1, 2].map(i => Math.min(...pts.map(p => p[i])) - e), [0, 1, 2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+// round each interior corner of a cable's route, then cut it into short pieces that sort with the solids
+const bend = (pts, r = 2.5) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k]) * d/la), q = c.map((v, k) => b[k] + (v - b[k]) * d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0, 1, 2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+const wireParts = (pts, col, w = .5, L = 8) => { const q = bend(pts), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < L){ len += Math.hypot(...q[j].map((v, k) => v - q[j - 1][k])); j++; }
+    if (len < L) while (j < q.length - 1) j++;
+    const sg = q.slice(i, j + 1), d = pd(sg, false);
+    let svg = `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w + .9)}" stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    if (i === 0 || j === q.length - 1){ const [X, Y] = P(...q[i === 0 ? 0 : j]); svg += `<circle cx="${f(X)}" cy="${f(Y)}" r="1" fill="${INK}"/>`; }
+    out.push({ box: boxOf(sg), svg }); i = j; }
+  return out; };
+
+/* ---------- mirror geometry: hinge at the top back, 45 deg down to the front at rest, flat under the screen when up ---------- */
+function mirrorGeo(mir){
+  const a = -Math.PI/4 * (1 - mir), dm = [Math.cos(a), Math.sin(a)], nm = [-Math.sin(a), Math.cos(a)];
+  const sa = -Math.PI/2 - Math.PI/2 * mir, ds = [dm[0]*Math.cos(sa) - dm[1]*Math.sin(sa), dm[0]*Math.sin(sa) + dm[1]*Math.cos(sa)];
+  const sh = [MH[0] + 18.4*dm[0] - 1.6*nm[0], MH[1] + 18.4*dm[1] - 1.6*nm[1]];
+  return { dm, nm, ds, sh, mid: [MH[0] + ML/2*dm[0], MH[1] + ML/2*dm[1]] };
+}
+
+/* ---------- the apple on the table ---------- */
+function appleSvg(){
+  const [X, Y] = P(...APL), R = AR * CAM_K;
+  let s = `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="#b8342b"/>`
+    + `<circle cx="${f(X + .1*R)}" cy="${f(Y - .12*R)}" r="${f(.86*R)}" fill="${APPLE}"/>`
+    + `<ellipse cx="${f(X + .34*R)}" cy="${f(Y - .38*R)}" rx="${f(.2*R)}" ry="${f(.13*R)}" fill="#ffffff" opacity=".4"/>`
+    + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="none" stroke="${INK}" stroke-width="1.8"/>`;
+  const tz = APL[2] + AR * .9;
+  s += fill(pd(on(PZ(tz), ellUV(APL[0], APL[1], 5, 5, 14))), '#8f2a22');
+  s += rod([APL[0], APL[1], tz], [APL[0] - 1, APL[1] + 1.5, tz + 10], 1.1, matOf('#6b4a2a'), toneI, .9);
+  s += shape([[APL[0] - .6, APL[1] + 1, tz + 7], [APL[0] + 4, APL[1] - 6, tz + 11], [APL[0] + 3, APL[1] - 14, tz + 9], [APL[0] - .2, APL[1] - 7, tz + 6.5]], '#5aa04a', .9);
+  return s;
+}
+const applePts = () => { const p = []; for (let i = 0; i < 16; i++){ const t = i/16*2*Math.PI; p.push([APL[0] + AR*Math.cos(t), APL[1] + AR*Math.sin(t), APL[2]]); } p.push([APL[0], APL[1], APL[2] + AR]); return p; };
+
+/* ---------- pictures: what the sensor and the eye see ---------- */
+// the apple on the table as a flat picture, drawn into any (u, v) -> point mapping (v up)
+function picture(map, u0, v0, u1, v1){
+  const pp = pts => sp(pts.map(([u, v]) => map(u, v)));
+  const cu = (u0 + u1)/2, h = v1 - v0, r = h*.26, cv = v0 + h*.36;
+  let s = fill(pp([[u0, v0], [u1, v0], [u1, v0 + h*.42], [u0, v0 + h*.42]]), '#d9a86c')
+    + fill(pp([[u0, v0 + h*.42], [u1, v0 + h*.42], [u1, v1], [u0, v1]]), '#efe6d2');
+  s += fill(pp(ellUV(cu + r*.15, cv - r*.95, r*1.1, r*.22, 20)), '#b98b55');
+  s += fill(pp(ellUV(cu, cv, r, r*.96, 28)), APPLE) + fill(pp(ellUV(cu - r*.35, cv + r*.35, r*.28, r*.18, 14)), '#f7a093');
+  s += fill(pp([[cu - .06*r, cv + .9*r], [cu + .06*r, cv + .9*r], [cu + .2*r, cv + 1.35*r], [cu + .1*r, cv + 1.38*r]]), '#6b4a2a');
+  s += fill(pp([[cu - .1*r, cv + 1.2*r], [cu - .7*r, cv + 1.5*r], [cu - .55*r, cv + 1.18*r]]), '#5aa04a');
+  return s;
+}
+
+/* ---------- outside of the camera: every piece as a sorted part ---------- */
+function backPanel(st){
+  const X = BX0 - .25;
+  let s = shape(on(PX(X), rrUV(25, 15, 103, 71, 3)), '#26231f', 1.2);
+  s += lcdContent(st, X - .1, 1);
+  s += fill(pd(on(PX(X - .2), [[90, 66], [96, 66], [72, 20], [66, 20]])), '#ffffff', 'opacity=".12"');
+  s += shape(on(PX(X), ellUV(118, 40, 9, 9, 24)), '#3a3631', 1) + shape(on(PX(X - .1), ellUV(118, 40, 4.2, 4.2, 16)), '#5b5650', .8) + txBk(X - .2, 118, 39.1, 'SET', 2.2, '#e8e2d2');
+  for (const [dy, dz] of [[0, 6.5], [0, -6.5], [6.5, 0], [-6.5, 0]]) s += fill(pd(on(PX(X - .15), ellUV(118 + dy, 40 + dz, .9, .9, 8))), '#cfc8b8');
+  for (const [y0, y1, z0, lab] of [[106, 117, 58, 'MENU'], [119, 130, 58, 'INFO']])
+    s += shape(on(PX(X), rrUV(y0, z0, y1, z0 + 5.4, 2.4)), '#3a3631', .9) + txBk(X - .2, (y0 + y1)/2, z0 + 1.8, lab, 2.3, '#e8e2d2');
+  s += shape(on(PX(X), ellUV(110, 82, 4.6, 4.6, 18)), st.lv ? '#e2483d' : '#3a3631', 1) + txBk(X - .2, 110, 81.1, 'LV', 2.6, '#f2efe7', 800);
+  s += shape(on(PX(X), ellUV(124, 84, 5, 5, 18)), '#3a3631', 1) + txBk(X - .2, 124, 83.4, 'AF-ON', 1.7, '#f2efe7', 800);
+  return s;
+}
+// the rear screen: live picture, the last shot, or the shooting settings
+function lcdContent(st, X, outside){
+  const map = (u, v) => P(X, u, v);
+  let s = fill(pd(on(PX(X), rectUV(28, 18, 100, 68))), '#1d2a26');
+  if (st.lv || st.lcdT > 0){
+    s += `<g filter="url(#dsBlurL)">${picture(map, 28, 18, 100, 68)}</g>`;
+    if (st.lv) s += `<path d="${pd(on(PX(X - .05), rectUV(56, 30, 72, 48)))}" fill="none" stroke="${st.af ? '#43c25c' : '#ffffff'}" stroke-width="1"/>` + txBk(X - .05, 34, 63, 'LV', 3, '#ffffff', 800);
+    else s += txBk(X - .05, 64, 20.5, '1/250  F5.6  ISO200', 2.8, '#ffffff', 800);
+  } else if (outside){
+    s += txBk(X - .05, 40, 56, 'M', 7, '#8af0ae', 800) + txBk(X - .05, 70, 56, '1/250', 6, '#8af0ae', 800)
+      + txBk(X - .05, 52, 42, 'F5.6', 6, '#8af0ae', 800) + txBk(X - .05, 82, 42, 'ISO200', 4.2, '#8af0ae', 800)
+      + txBk(X - .05, 64, 26, `[${String(st.shots).padStart(3, '0')}]`, 4.4, '#8af0ae', 800);
+  }
+  return s;
+}
+function grooves(x0, x1, r, step){ let d = '';
+  for (let a = 0; a < 360; a += step){ const t = a*Math.PI/180, c = Math.cos(t), s2 = Math.sin(t); if (front([0, c, s2]) < .3) continue;
+    d += pd([[x0, LY + r*c, LZ + r*s2], [x1, LY + r*c, LZ + r*s2]], false); }
+  return d ? `<path d="${d}" fill="none" stroke="${INK}" stroke-width=".7" opacity=".6"/>` : ''; }
+function knurl(x, y, z0, z1, r, step = 15){ let d = '';
+  for (let a = 0; a < 360; a += step){ const t = a*Math.PI/180, c = Math.cos(t), s2 = Math.sin(t); if (front([c, s2, 0]) < .3) continue;
+    d += pd([[x + r*c, y + r*s2, z0 + .8], [x + r*c, y + r*s2, z1 - .8]], false); }
+  return d ? `<path d="${d}" fill="none" stroke="${INK}" stroke-width=".6" opacity=".65"/>` : ''; }
+const pressZ = st => st.press === 2 ? 2.2 : st.press === 1 ? 1 : 0;
+function shutterButton(st){
+  return [{ box: [[102, 144, GZT], [118, 160, GZT + 1.5]], svg: cyl(110, 152, GZT, GZT + 1.5, 8, METAL, tone, 1.1, 28) },
+          { box: [[104.5, 146.5, GZT + 1.5], [115.5, 157.5, GZT + 5.5]], svg: act('shutter', cyl(110, 152, GZT + 1.5, GZT + 5.5 - pressZ(st), 5.5, METAL, tone, 1.2, 24)) }];
+}
+function ext(st, m){
+  const it = [], put = (b, svg) => it.push({ box: b, svg });
+  const FX = facing([1, 0, 0]), BK = facing([-1, 0, 0]), FY = facing([0, 1, 0]), NY = facing([0, -1, 0]);
+  // body shell
+  { const A = on(PX(BX0), BODY), B = on(PX(BX1), BODY);
+    let s = loft(A, B, n => tone(n, m));
+    if (NY){ const pc = on(PY(BY0 - .2), rrUV(46, 30, 86, 76, 4));
+      s += shape(pc, '#38342f', 1.1) + txL(66, BY0 - .3, 66, 'HDMI', 2.6, '#cfc8b8') + txL(66, BY0 - .3, 52, 'USB', 2.6, '#cfc8b8') + txL(66, BY0 - .3, 38, 'MIC', 2.6, '#cfc8b8'); }
+    if (FX) s += fill(pd(B), tone([1, 0, 0], m)) + shape(on(PX(BX1 + .2), ellUV(118, 86, 2.6, 2.6, 14)), '#f08a2b', .8) + ink(pd(B), 2);
+    if (BK) s += fill(pd(A), tone([-1, 0, 0], m)) + backPanel(st) + ink(pd(A), 2);
+    // top LCD on the right shoulder
+    s += shape(on(PZ(BZT + .1), rrUV(58, 108, 92, 126, 2)), '#26231f', 1) + fill(pd(on(PZ(BZT + .15), rectUV(61, 110, 89, 124))), '#9fb59a');
+    let seg7 = ''; for (const [x, w] of [[64, 6], [72, 5], [79, 6], [85, 2]]) seg7 += pd(on(PZ(BZT + .2), rectUV(x, 113, x + w, 121)));
+    s += fill(seg7, '#2c3a2c', 'opacity=".75"');
+    s += hullInk([...A, ...B], 2.8);
+    put([[BX0, BY0, Z0], [BX1, BY1, BZT]], s); }
+  // grip: rubber sides, top in the body colour, the SD door on its outer face
+  { const A = on(PZ(Z0), GRIP), B = on(PZ(GZT), GRIP);
+    let s = loft(A, B, n => tone(n, RUB));
+    if (FY){ const yAt = x => 160 + (x - 36)/54*2 + .3; s += shape([[40, yAt(40), 42], [70, yAt(70), 42], [70, yAt(70), 80], [40, yAt(40), 80]], tone([0, 1, 0], RUB), 1.1)
+      + line([[44, yAt(44), 60], [44, yAt(44), 66]], 1.2); }
+    s += fill(pd(B), tone([0, 0, 1], m)) + ink(pd(B), 1.4) + hullInk([...A, ...B], 2.8);
+    put([[30, 134, Z0], [128, 162, GZT]], s); }
+  // prism hump with the maker's name on the front
+  { const A = on(PX(HX0), HUMP_B), B = on(PX(HX1), HUMP_F);
+    let s = loft(A, B, n => tone(n, m));
+    if (FX) s += fill(pd(B), tone([1, 0, 0], m)) + tx(HX1 + .2, 78, 109, 'COLORFLEX', 5.4, mix(m.d, '#000000', .2), 800) + ink(pd(B), 1.6);
+    if (BK) s += fill(pd(A), tone([-1, 0, 0], m)) + ink(pd(A), 1.6);
+    put([[HX0, 50, BZT], [HX1, 106, 128]], s + hullInk([...A, ...B], 2.4)); }
+  // eyecup on the back of the hump
+  { let s = extrude(EYE, 20, HX0, RUB);
+    if (BK){ const bk = on(PX(20), EYE); s += fill(pd(bk), tone([-1, 0, 0], RUB)) + shape(on(PX(19.8), rrUV(69, 103, 85, 113, 2.5)), st.lv ? '#0d0f10' : '#24343a', 1)
+      + fill(pd(on(PX(19.7), [[80, 112], [83, 112], [76, 104], [73, 104]])), '#ffffff', 'opacity=".3"') + ink(pd(bk), 1.4); }
+    put([[20, 64, 99], [HX0, 90, 117]], s + hullInk([...on(PX(20), EYE), ...on(PX(HX0), EYE)], 1.8)); }
+  // the lens, ring by ring
+  for (const [x0, x1, r, kind] of LENS_SEC){
+    const mm = kind === 'mount' ? METAL : kind === 'rub' ? RUB : kind === 'acc' ? m : BLK;
+    let s = rx(x0, x1, r, mm, tone, kind === 'acc' || kind === 'mount' ? 1 : 1.4);
+    if (kind === 'rub') s += grooves(x0 + 1.5, x1 - 1.5, r, 10);
+    if (x0 === 104 && facing([0, 0, 1])) s += fill(pd(on(PZ(LZ + 34.1), ellUV(106, LY, 1.3, 1.3, 10))), '#e2483d');
+    if (x0 === 163 && facing([0, 0, 1])) s += line([[164, LY, LZ + 34.1], [170, LY, LZ + 34.1]], 1).replace(INK, '#f2efe7');
+    if (x1 === 188 && FX){
+      s += shape(on(PX(188.1), ellUV(LY, LZ, 29, 29, 36)), '#2a3a44', 1) + fill(pd(on(PX(188.2), ellUV(LY - 1, LZ + 1, 22, 22, 32))), '#3e5866')
+        + fill(pd(on(PX(188.3), ellUV(LY - 3, LZ + 3, 11, 11, 24))), '#5d8796')
+        + fill(pd(on(PX(188.4), ellUV(LY - 11, LZ + 12, 5, 3.4, 14))), '#ffffff', 'opacity=".55"')
+        + fill(pd(on(PX(188.4), ellUV(LY + 12, LZ - 13, 2.2, 1.6, 10))), '#ffffff', 'opacity=".35"')
+        + tx(188.3, LY, LZ + 31.4, '50mm 1:1.8', 3.2, '#e8e2d2', 700);
+    }
+    put([[x0, LY - r, LZ - r], [x1, LY + r, LZ + r]], s);
+  }
+  // dials, buttons, the hot shoe, the strap lugs
+  put([[52, 28, BZT], [72, 48, BZT + 8]], cyl(62, 38, BZT, BZT + 8, 10, RUB, tone, 1.3, 32) + knurl(62, 38, BZT, BZT + 8, 10)
+    + [0, 1, 2, 3, 4, 5, 6].map(i => { const t = (200 - i*30)*Math.PI/180; return fill(pd(on(PZ(BZT + 8.05), ellUV(62 + 7*Math.cos(t), 38 + 7*Math.sin(t), .9, .9, 8))), i === 0 ? '#f4b829' : '#e8e2d2'); }).join(''));
+  put([[37, 113, BZT], [51, 127, BZT + 5]], cyl(44, 120, BZT, BZT + 5, 7, RUB, tone, 1.2, 28) + knurl(44, 120, BZT, BZT + 5, 7, 12));
+  it.push(...shutterButton(st));
+  put([[48, 66, 128], [74, 88, 130.5]], box(48, 66, 128, 74, 88, 130.5, METAL, tone, 1) + fill(pd(on(PZ(130.6), rectUV(52, 70, 70, 84))), '#8f989b')
+    + [74.5, 77, 79.5].map(y => fill(pd(on(PZ(130.7), ellUV(61, y, .8, .8, 8))), '#e0b54a')).join(''));
+  put([[100, 114, 46], [103.5, 122, 54]], rod([100, 118, 50], [103.5, 118, 50], 4, METAL, tone, 1, 4, 16));
+  put([[56, 16, 86], [64, 20, 92]], box(56, 16, 86, 64, 20, 92, METAL, tone, 1));
+  put([[52, 162, 90], [60, 165, 96]], box(52, 162, 90, 60, 165, 96, METAL, tone, 1));
+  return it;
+}
+function camShadowPts(){ const p = [];
+  for (const x of [BX0, BX1]) for (const y of [BY0, BY1]) for (const z of [Z0, BZT]) p.push([x, y, z]);
+  for (const [x, y] of GRIP) p.push([x, y, GZT]);
+  for (const x of [HX0, HX1]) for (const y of [58, 98]) p.push([x, y, 128]);
+  for (const x of [100, 188]) for (let i = 0; i < 16; i++){ const t = i/16*2*Math.PI; p.push([x, LY + 36*Math.cos(t), LZ + 36*Math.sin(t)]); }
+  return p; }
+
+/* ---------- inside: every working part, sorted ---------- */
+const xrOn = {};
+function mech(st){
+  const it = [], put = (b, svg) => it.push({ box: b, svg });
+  const bx = (x0, y0, z0, x1, y1, z1, mm, w = .7, extra = '') => put([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, mm, toneI, w) + extra);
+  const rodX = (x0, x1, y, z, r, mm, w = .8, n = 20) => put([[x0, y - r, z - r], [x1, y + r, z + r]], rod([x0, y, z], [x1, y, z], r, mm, toneI, w, r, n));
+  const glint = (x0, x1, r) => { const xc = facing([1, 0, 0]) ? x1 + .1 : x0 - .1;
+    return fill(pd(on(PX(xc), ellUV(LY - r*.42, LZ + r*.42, r*.22, r*.12, 12))), '#ffffff', 'opacity=".75"'); };
+  const glass = (x0, x1, r) => put([[x0, LY - r, LZ - r], [x1, LY + r, LZ + r]], `<g opacity=".8">${rod([x0, LY, LZ], [x1, LY, LZ], r, GLASS, toneI, .9, r, 32)}</g>` + glint(x0, x1, r));
+  const g = mirrorGeo(st.mir), lit = st.phase !== 'idle' || st.lv || st.lcdT > 0;
+  // ---- lens: elements, aperture, focus group on its carrier, lead screw, AF motor, board and contacts
+  glass(108, 112, 18); glass(124, 127, 20);
+  { const a = 24 - 16*st.ap, R = 25, xA = 140.5, phi = Math.acos(Math.min(1, a/R));
+    let bl = '';
+    for (let i = 0; i < 7; i++){ const th = i/7*2*Math.PI + .3, pts = [];
+      for (let j = 0; j <= 10; j++){ const t = th + phi - 2*phi*j/10; pts.push([LY + R*Math.cos(t), LZ + R*Math.sin(t)]); }
+      bl += shape(on(PX(xA), pts), BLADEM.m, .5); }
+    const ann = on(PX(xA + .3), ellUV(LY, LZ, R + 2.5, R + 2.5, 40)), inn = on(PX(xA + .3), ellUV(LY, LZ, R - .3, R - .3, 40));
+    bl += `<path d="${pd(ann)}${pd(inn.slice().reverse())}" fill="${METAL.m}" fill-rule="evenodd"/>` + ink(pd(ann), .8) + ink(pd(inn), .6);
+    put([[xA - .5, LY - R - 3, LZ - R - 3], [xA + .5, LY + R + 3, LZ + R + 3]], bl); }
+  const fgx = 157 + 6*st.fd;
+  glass(fgx - 3, fgx + 3, 22);
+  bx(fgx - 2, LY - 3, LZ + 21.6, fgx + 2, LY + 3, LZ + 28.3, BLADEM, .6);
+  rodX(136, 150, LY, LZ + 29.5, 3.5, st.phase === 'focus' ? matOf('#f0a64a') : BRASS, .8);
+  rodX(150, 172, LY, LZ + 29.5, 1.1, METAL, .6, 10);
+  glass(172, 176, 26); glass(180, 184, 29);
+  bx(106, 66, 31, 126, 88, 33, PCBM, .7); bx(112, 72, 33, 118, 80, 34.2, CHIP, .5);
+  bx(99.5, 69, 31.5, 101.5, 85, 34.5, GOLD, .6);
+  it.push(...wireParts([[101.5, 80, 33.5], [106, 80, 33]], '#d9a24a', .5));
+  { const pts = []; for (let i = 0; i <= 12; i++){ const t = (-80 + 165*i/12)*Math.PI/180; pts.push([124 + 12*i/12, LY + 31*Math.cos(t), LZ + 31*Math.sin(t)]); }
+    pts.push([136, LY + 2, LZ + 29.5]); it.push(...wireParts([[124, 88, 32], ...pts], '#d9a24a', .5, 6)); }
+  // ---- reflex: main mirror, sub-mirror, hinge, lever, link, motor
+  { const o = [MH[0], 58, MH[1]], a = [0, 38, 0], b = [ML*g.dm[0], 0, ML*g.dm[1]], c = [-1.6*g.nm[0], 0, -1.6*g.nm[1]];
+    let s = obox(o, a, b, c, BLK, toneI, .9);
+    if (vis([g.nm[0], 0, g.nm[1]])){ const q = t => [MH[0] + t*g.dm[0] + .05*g.nm[0], 0, MH[1] + t*g.dm[1] + .05*g.nm[1]];
+      const fq = (t0, t1, y0, y1) => [[q(t0)[0], y0, q(t0)[2]], [q(t1)[0], y0, q(t1)[2]], [q(t1)[0], y1, q(t1)[2]], [q(t0)[0], y1, q(t0)[2]]];
+      s += shape(fq(1.5, ML - 1.5, 60, 94), toneI([g.nm[0], 0, g.nm[1]], MIRM), .7) + fill(pd(fq(8, 14, 66, 88)), '#ffffff', 'opacity=".5"'); }
+    put(oboxB(o, a, b, c), s); }
+  { const o = [g.sh[0], 66, g.sh[1]], a = [0, 22, 0], b = [16*g.ds[0], 0, 16*g.ds[1]], c = [g.ds[1], 0, -g.ds[0]];
+    put(oboxB(o, a, b, c), obox(o, a, b, c, MIRM, toneI, .7)); }
+  put([[54.7, 52, 76.7], [57.3, 100, 79.3]], rod([56, 52, 78], [56, 100, 78], 1.3, METAL, toneI, .7, 1.3, 12));
+  const lev = [MH[0] + 7*g.dm[1], 52.5, MH[1] - 7*g.dm[0]];
+  put(boxOf([[56, 52.5, 78], lev], 1), rod([56, 52.5, 78], lev, 1, BLADEM, toneI, .6, 1, 10));
+  const cr = st.crank, pin = [64 + 5*Math.cos(cr), 46.6, 22 + 5*Math.sin(cr)];
+  put(boxOf([pin, lev], .8), rod(pin, lev, .7, METAL, toneI, .6, .7, 8));
+  rodX(64, 64, 0, 0, 0, METAL);
+  it.pop();
+  put([[58, 28, 16], [70, 44, 28]], rod([64, 28, 22], [64, 44, 22], 6, xrOn.motor ? matOf('#f0a64a') : CHIP, toneI, .9, 6, 20));
+  put([[56, 44, 14], [72, 46.5, 30]], rod([64, 44, 22], [64, 46.5, 22], 8, BRASS, toneI, .8, 8, 24));
+  // AF sensor in the floor of the mirror box, focusing screen, condenser, pentaprism, eyepiece, metering sensor
+  bx(56, 64, 8, 78, 90, 18, xrOn.af ? matOf('#f0a64a') : CHIP, .8);
+  put([[62, 73, 18], [70, 81, 21]], cyl(66, 77, 18, 21, 4, GLASS, toneI, .7, 16));
+  put([[50, 56, 80], [92, 98, 81.5]], `<g opacity=".85">${box(50, 56, 80, 92, 98, 81.5, matOf('#eef2ee'), toneI, .7)}</g>`);
+  put([[52, 58, 82], [90, 96, 84]], `<g opacity=".8">${box(52, 58, 82, 90, 96, 84, GLASS, toneI, .6)}</g>`);
+  { const A = on(PY(62), PRISM), B = on(PY(92), PRISM);
+    let s = loft(A, B, n => toneI(n, GLASS));
+    if (facing([0, 1, 0])) s += fill(pd(B), toneI([0, 1, 0], GLASS)) + ink(pd(B), .8);
+    if (facing([0, -1, 0])) s += fill(pd(A), toneI([0, -1, 0], GLASS)) + ink(pd(A), .8);
+    s += fill(pd([[70, 62.2, 116], [74, 62.2, 116], [60, 62.2, 96], [56, 62.2, 96]].map(p => facing([0, 1, 0]) ? [p[0], 91.8, p[2]] : p)), '#ffffff', 'opacity=".45"');
+    put([[44, 62, 86], [92, 92, 122]], `<g opacity=".85">${s + hullInk([...A, ...B], 1.2)}</g>`); }
+  put([[38, 69, 100], [41, 85, 116]], `<g opacity=".85">${rod([38, LY, 108], [41, LY, 108], 8, GLASS, toneI, .8, 8, 24)}</g>`);
+  bx(38, 70, 116.5, 43, 84, 122, xrOn.meter ? matOf('#f0a64a') : CHIP, .6);
+  // ---- shutter: frame plate with its window, then the two curtains of four blades each
+  bx(50, 54, 34, 50.8, 100, 49, BLK, .6); bx(50, 54, 75, 50.8, 100, 92, BLK, .6);
+  bx(50, 54, 49, 50.8, 58, 75, BLK, .6); bx(50, 96, 49, 50.8, 100, 75, BLK, .6);
+  for (let i = 0; i < 4; i++){
+    const top = lerp(75 - 6.5*i, 48 - 2.5*i, st.fc), bot = lerp(76 + 2.5*i, 49 + 6.5*i, st.rc);
+    bx(52.4 + .3*i, 58, top - 7, 52.65 + .3*i, 96, top, BLADEM, .5);
+    bx(51.1 + .3*i, 58, bot, 51.35 + .3*i, 96, bot + 7, matOf('#4a4e53'), .5);
+  }
+  // ---- imaging: IR filter, sensor, sensor board, main board and chips, LCD module, SD card
+  put([[48.5, 58, 49], [49.5, 96, 75]], `<g opacity=".5">${box(48.5, 58, 49, 49.5, 96, 75, GLASS, toneI, .5)}</g>`);
+  { const ex = xrOn.sensor;
+    let die = facing([1, 0, 0]) ? shape(on(PX(48.05), rectUV(59, 50, 95, 74)), ex ? '#9d8fe0' : '#4a3f6b', .7) + fill(pd(on(PX(48.1), [[62, 72], [70, 72], [64, 52], [60, 52]])), '#ffffff', 'opacity=".2"') : '';
+    bx(46, 54, 42, 48, 100, 82, CERAMIC, .7, die); }
+  bx(43, 50, 36, 45, 104, 88, PCBM, .7);
+  bx(34, 26, 12, 36, 128, 30, PCBM, .8); bx(34, 96, 30, 36, 128, 86, PCBM, .8);
+  bx(36, 104, 40, 38.5, 122, 58, lit ? matOf('#5a5048') : CHIP, .6, facing([1, 0, 0]) ? tx(38.6, 113, 48, 'IMG', 3.2, '#cfc8b8', 800) : '');
+  bx(36, 108, 66, 38, 122, 76, CHIP, .5);
+  bx(31, 26, 16, 33, 102, 70, BLK, .7, facing([-1, 0, 0]) ? lcdContent(st, 30.9, 0) : '');
+  bx(42, 131, 34, 48, 137, 70, CHIP, .6);
+  bx(44, 137, 36, 46, 160, 68, SDM, .7, facing([1, 0, 0]) ? shape(on(PX(46.05), rectUV(140, 44, 157, 62)), '#f2efe7', .5) + tx(46.1, 148.5, 50, 'SD', 5, SDM.d, 800) : '');
+  // ---- power and controls: battery, contacts, release switch, encoder under the mode dial
+  bx(74, 140, 10, 112, 156, 80, BATTM, .9, facing([0, 1, 0]) ? shape(on(PY(156.05), rectUV(80, 26, 106, 62)), '#e9e4d6', .6) + txY(93, 156.1, 47, '7.2V', 4.2, INK, 800) + txY(93, 156.1, 38, 'LI-ION', 2.8, INK, 700) : '');
+  bx(84, 142, 80, 102, 154, 84, GOLD, .6);
+  bx(105, 147, 93, 115, 157, 99, st.press ? matOf('#f0a64a') : CHIP, .6);
+  put([[108.4, 150.4, 99], [111.6, 153.6, GZT + 1.5]], cyl(110, 152, 99, GZT + 1.5, 1.6, METAL, toneI, .6, 12));
+  it.push(...shutterButton(st));
+  bx(54, 30, 92, 70, 46, 97, CHIP, .6);
+  // ---- flex cables to the main board
+  const FLX = '#d9a24a', WIR = lit ? '#ff7a3a' : '#3a3632';
+  for (const [pts, col] of [
+    [[[43, 77, 37], [40, 77, 32], [36.1, 77, 30]], FLX],
+    [[[56, 66, 12], [42, 66, 12], [36.1, 66, 15]], FLX],
+    [[[99.5, 84, 33], [94, 100, 16], [40, 100, 16], [36.1, 100, 22]], FLX],
+    [[[93, 148, 84], [93, 146, 90], [60, 128, 90], [36.1, 124, 80]], WIR],
+    [[[110, 147, 95], [98, 140, 92], [50, 126, 88], [36.1, 119, 82]], '#3a3632'],
+    [[[42, 134, 52], [38.5, 130, 52], [36.1, 126, 52]], FLX],
+    [[[54, 38, 94], [40, 38, 60], [36.1, 38, 28]], '#3a3632'],
+    [[[40.5, 70, 117], [37.5, 84, 100], [36.1, 100, 84]], '#3a3632'],
+    [[[32, 64, 16], [33, 64, 13.5], [34, 64, 13.5]], FLX]]) it.push(...wireParts(pts, col, .5));
+  return it;
+}
+function mechLabels(st){
+  const g = mirrorGeo(st.mir), fgx = 157 + 6*st.fd, foc = st.phase === 'focus', shoot = st.phase === 'shoot';
+  const view = st.vf && st.mir < .5, top0 = lerp(75, 48, st.fc), bot3 = lerp(83.5, 68.5, st.rc) + 7;
+  return [
+    { at: [182, LY, LZ + 29], text: 'FRONT ELEMENT', on: view || st.lv },
+    { at: [fgx, LY, LZ - 22], text: 'FOCUS GROUP', on: foc },
+    { at: [140.5, LY, LZ - 25], text: 'APERTURE BLADES', on: xrOn.ap },
+    { at: [143, LY, LZ + 33], text: 'AF MOTOR', on: foc },
+    { at: [165, LY, LZ + 30.6], text: 'LEAD SCREW', on: foc },
+    { at: [110, LY, LZ - 18], text: 'REAR ELEMENT', on: false },
+    { at: [100.5, 77, 32], text: 'LENS CONTACTS', on: foc || xrOn.ap },
+    { at: [116, 66, 32], text: 'LENS BOARD', on: foc },
+    { at: [102, LY, LZ + 31], text: 'LENS MOUNT', on: false },
+    { at: [g.mid[0], 92, g.mid[1]], text: 'MAIN MIRROR', on: xrOn.mir || view },
+    { at: [g.sh[0] + 8*g.ds[0], 86, g.sh[1] + 8*g.ds[1]], text: 'SUB-MIRROR', on: foc && !st.lv },
+    { at: [56, 98, 78], text: 'MIRROR HINGE', on: xrOn.mir },
+    { at: [67, 90, 13], text: 'AF SENSOR', on: xrOn.af },
+    { at: [71, 98, 81], text: 'FOCUSING SCREEN', on: view },
+    { at: [71, 58, 83], text: 'CONDENSER LENS', on: view },
+    { at: [66, 92, 108], text: 'PENTAPRISM', on: view },
+    { at: [39.5, 85, 108], text: 'EYEPIECE', on: view },
+    { at: [40.5, 84, 122], text: 'METERING SENSOR', on: xrOn.meter },
+    { at: [52.6, 96, top0], text: 'FRONT CURTAIN', on: xrOn.fc },
+    { at: [51.2, 96, bot3], text: 'REAR CURTAIN', on: xrOn.rc },
+    { at: [64, 36, 28], text: 'MIRROR MOTOR', on: xrOn.motor },
+    { at: [49.5, 58, 62], text: 'IR FILTER', on: xrOn.sensor },
+    { at: [48, 96, 52], text: 'IMAGE SENSOR', on: xrOn.sensor },
+    { at: [44, 104, 80], text: 'SENSOR BOARD', on: xrOn.sensor },
+    { at: [35, 112, 30], text: 'MAIN BOARD', on: st.lcdT > 0 || st.lv },
+    { at: [38.5, 113, 49], text: 'IMAGE PROCESSOR', on: st.lcdT > 0 || st.lv },
+    { at: [31, 40, 70], text: 'REAR LCD', on: st.lcdT > 0 || st.lv },
+    { at: [93, 156, 70], text: 'BATTERY', on: shoot || foc || st.lv },
+    { at: [93, 154, 84], text: 'BATTERY CONTACTS', on: false },
+    { at: [45, 160, 60], text: 'SD CARD', on: st.lcdT > 1.8 },
+    { at: [110, 152, GZT + 5], text: 'SHUTTER BUTTON', on: st.press > 0 },
+    { at: [110, 157, 96], text: 'RELEASE SWITCH', on: st.press > 0 } ];
+}
+
+// callouts in two columns at the edges of the view, split left/right by where the parts are on screen and sized to the
+// room each column has (the buttons sit over the left one, the switches over the right one), so 30+ labels fit
+function dsCallouts(items){
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.2*k, hgt = u ? 17*u : fs*1.75;
+  const svgEl = document.getElementById('fig'), vb = svgEl.viewBox.baseVal, M = svgEl.getScreenCTM();
+  const below = id => { const el = document.querySelector(id); if (!el || !M) return vb.y + fs; const r = el.getBoundingClientRect();
+    return Math.max(vb.y + fs, new DOMPoint(r.left, r.bottom).matrixTransform(M.inverse()).y + hgt*.9); };
+  const wOf = c => u ? hgt*(c.n > 9 ? 1.3 : 1) : c.text.length*fs*.62 + fs*1.5;
+  // the stage is wider than the viewBox: put the columns at its edges, clear of the object
+  let X0 = vb.x, X1 = vb.x + vb.width, Y1 = vb.y + vb.height;
+  if (M){ const r = (document.querySelector('.stage') || svgEl).getBoundingClientRect(), a = new DOMPoint(r.left, r.top).matrixTransform(M.inverse()), b = new DOMPoint(r.right, r.bottom).matrixTransform(M.inverse());
+    X0 = a.x; X1 = b.x; Y1 = b.y; }
+  const bot = Y1 - hgt*.6, room = y => y > vb.y + (bot - vb.y)*.5 ? vb.y + fs : y;   // a control below the figure (phone) leaves the column free
+  const top = { [-1]: room(below('#btns')), [1]: room(Math.max(below('.vset'), below('#stats'))) };
+  // the built page puts a zoom chip (about 36 px tall) in the lower right corner, added after the first draw: the right column always stops above it
+  const upx = svgEl.clientWidth ? vb.width / svgEl.clientWidth : 1, botS = { [-1]: bot, [1]: bot - 38*upx };
+  const its = items.map(c => { const [X, Y] = P(...c.at); return { ...c, X, Y, n: ((window.__ln || (window.__ln = {}))[c.text] || (__ln[c.text] = Object.keys(__ln).length + 1)) }; }).sort((a, b) => a.X - b.X);
+  const capL = Math.max(1, botS[-1] - top[-1]), capR = Math.max(1, botS[1] - top[1]), nL = Math.round(its.length*capL/(capL + capR));
+  let s = '';
+  for (const [col, side] of [[its.slice(0, nL), -1], [its.slice(nL), 1]]){
+    if (!col.length) continue;
+    col.sort((a, b) => a.Y - b.Y);
+    const t0 = top[side], b0 = botS[side], gap = Math.min(hgt + 3*k*(u ? .5 : 1), (b0 - t0)/Math.max(1, col.length - 1));
+    let y = -1e9; for (const c of col){ c.py = Math.max(c.Y, y + gap, t0); y = c.py; }
+    y = 1e9; for (let i = col.length - 1; i >= 0; i--){ col[i].py = Math.min(col[i].py, y - gap, b0); y = col[i].py; }
+    const wM = Math.max(...col.map(wOf)), ex = side < 0 ? X0 + 2*k + wM : X1 - 2*k - wM;
+    for (const c of col){
+      const w = wOf(c), px = ex + side*w/2;
+      s += `<g class="tag${c.on ? ' on' : ''}" data-n="${c.n}" data-t="${c.text}"><path d="M${f(c.X)} ${f(c.Y)}L${f(ex - side*6*k)} ${f(c.py)}L${f(ex)} ${f(c.py)}" fill="none" stroke="${INK}" stroke-width=".8" opacity=".75"/>`
+        + `<circle cx="${f(c.X)}" cy="${f(c.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px - w/2)}" y="${f(c.py - hgt/2)}" width="${f(w)}" height="${f(hgt)}" rx="${f(hgt/2)}" fill="${c.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(c.py + fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em" fill="${INK}">${u ? c.n : c.text}</text></g>`;
+    }
+  }
+  return s;
+}
+
+/* ---------- light paths, drawn over the figure ---------- */
+// returns the three legs separately: apple to lens and eyepiece to eye sort with the camera, the inside path goes on top
+function rays(st, k){
+  const show = st.vf || st.lv || st.phase !== 'idle';
+  if (!show) return { out: '', eye: '', inn: '' };
+  const via = st.mir < .5, path = (pts, op) => { const d = pd(pts, false);
+    return `<g opacity="${f(op)}" pointer-events="none"><path d="${d}" fill="none" stroke="#fff3b8" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" opacity=".8"/>`
+      + `<path d="${d}" fill="none" stroke="#f2a51a" stroke-width="1.3" stroke-dasharray="4 3" stroke-linecap="round" stroke-linejoin="round"/></g>`; };
+  const E1 = [184, LY, LZ];
+  const out = `<path d="${pd([[APL[0] - 6, LY, APL[2] + AR - 2], [APL[0] - 6, LY, APL[2] - AR + 4], [188, LY, LZ - 27], [188, LY, LZ + 27]])}" fill="#ffe58a" opacity=".22" pointer-events="none"/>`;
+ + path([[APL[0] - AR, LY, APL[2]], [188, LY, LZ]], 1);
+  let s = '';
+  if (k > .02){
+    if (via){ s += path([E1, [72, LY, LZ], [72, LY, 81], [72, LY, 113.5], [46, LY, 108], [41, LY, 108]], k);
+      if (st.phase === 'focus' && !st.lv) s += path([[72, LY, LZ], [66, LY, LZ], [66, LY, 21]], k); }
+    else s += path([E1, [48, LY, LZ]], k);
+  }
+  return { out, eye: via && st.vf ? path([[38, LY, 108], [0, LY, 108]], 1) : '', inn: s };
+}
+// what the eye at the eyepiece sees, in a bubble in the lower right corner
+function bubble(st){
+  if (!st.vf) return '';
+  const vb = document.getElementById('fig').viewBox.baseVal, w = vb.width*.3, h = w*.66, x0 = vb.x + vb.width*.985 - w, y0 = vb.y + vb.height*.97 - h;
+  const dark = st.lv || st.mir > .25, ix = x0 + w*.05, iy = y0 + h*.06, iw = w*.9, ih = h*.72;
+  const [ex, ey] = P(20, LY, 108);
+  let s = `<g pointer-events="none"><path d="M${f(ex)} ${f(ey)}L${f(x0)} ${f(y0 + h*.4)}" fill="none" stroke="${INK}" stroke-width="1" stroke-dasharray="3 2.5"/>`
+    + `<rect x="${f(x0)}" y="${f(y0)}" width="${f(w)}" height="${f(h)}" rx="${f(h*.08)}" fill="#151311" stroke="${INK}" stroke-width="1.6"/>`;
+  if (!dark){
+    const map = (u, v) => [ix + (u - 0)*iw/100, iy + ih - (v - 0)*ih/100];
+    s += `<clipPath id="vfClip"><rect x="${f(ix)}" y="${f(iy)}" width="${f(iw)}" height="${f(ih)}" rx="${f(ih*.06)}"/></clipPath><g clip-path="url(#vfClip)"><g filter="url(#dsBlurV)">${picture(map, 0, 0, 100, 100)}</g>`;
+    const pts = [[50, 50], [32, 50], [68, 50], [50, 30], [50, 70], [37, 36], [63, 36], [37, 64], [63, 64]];
+    pts.forEach(([u, v], i) => { const [X, Y] = map(u, v), r = ih*.035, on = i === 0 && (st.phase === 'focus' || st.af);
+      s += `<rect x="${f(X - r)}" y="${f(Y - r)}" width="${f(2*r)}" height="${f(2*r)}" fill="${on ? 'rgba(226,72,61,.35)' : 'none'}" stroke="${on ? '#e2483d' : '#2a2620'}" stroke-width="${on ? 1.1 : .6}"/>`; });
+    s += '</g>';
+  }
+  const fs = h*.1, ty = y0 + h*.92;
+  s += `<text x="${f(ix + iw*.04)}" y="${f(ty)}" font-size="${f(fs)}" fill="${dark ? '#2a3a2e' : '#8af0ae'}" font-family="ui-monospace,Menlo,monospace" font-weight="800">1/250  5.6  ISO200  [${st.shots}]</text>`;
+  s += `<circle cx="${f(ix + iw*.95)}" cy="${f(ty - fs*.35)}" r="${f(fs*.38)}" fill="${st.af && !dark ? '#43c25c' : '#24302a'}"/>`;
+  return s + '</g>';
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0);
+  const bl = sh => sh > .97 ? 0 : (1 - sh) * 2.4 * INK_K;
+  const sdL = bl(st.lv ? st.fd : (st.shotSharp ? 1 : .35)), sdV = bl(st.fd);
+  let s = `<defs><filter id="dsBlurL" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="${f(sdL)}"/></filter>`
+    + `<filter id="dsBlurV" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="${f(sdV)}"/></filter></defs>`;
+  s += board(0, 0, 290, 190, Z0, 10, WOOD);
+  s += castShadow(camShadowPts(), Z0, BTOP) + castShadow(applePts(), Z0, BTOP);
+  let cam = byDepth(ext(st, m));
+  if (k > 0) cam = `<g opacity="${f(1 - .8*k)}">${cam}</g><g opacity="${f(k)}">${byDepth(mech(st))}</g>`;
+  const ap = appleSvg();
+  const ry = rays(st, k), eyeOn = facing([-1, 0, 0]);
+  s += CAM_V[0] >= 0 ? (eyeOn ? '' : ry.eye) + cam + (eyeOn ? ry.eye : '') + ry.out + ap : ap + ry.out + (eyeOn ? '' : ry.eye) + cam + (eyeOn ? ry.eye : '');
+  s += ry.inn + bubble(st);
+  const B = [20, 188, 16, 166, 0, 131];
+  if (k > .6) s += dsCallouts(mechLabels(st));
+  else s += xrCallouts([
+    { at: [110, 152, GZT + 5], text: 'SHUTTER BUTTON', on: st.press > 0 },
+    { at: [62, 30, BZT + 8], text: 'MODE DIAL', on: false },
+    { at: [137, LY, LZ + 35.5], text: 'FOCUS RING', on: st.phase === 'focus' },
+    { at: [61, 88, 130.5], text: 'HOT SHOE', on: false },
+    { at: [20, 90, 108], text: 'EYECUP', on: st.vf },
+    { at: [90, 162, 60], text: 'GRIP', on: false },
+    ...(facing([-1, 0, 0]) ? [{ at: [29.5, 40, 66], text: 'REAR LCD', on: st.lv || st.lcdT > 0 }] : []) ], B);
+  return s;
+}
+
+/* ---------- behaviour: one state object, one clock ---------- */
+let ui, dsLoop = false;
+function kick(){ if (dsLoop) return; dsLoop = true;
+  ui.animate(dt => { const busy = step(ui.st, dt); if (!busy) dsLoop = false; return busy; }); }
+function step(st, dt){
+  const prev = { mir: st.mir, fc: st.fc, rc: st.rc, ap: st.ap };
+  st.t += dt;
+  if (st.lcdT > 0) st.lcdT = Math.max(0, st.lcdT - dt);
+  const t = st.t;
+  if (st.phase === 'focus'){
+    const kk = clamp01(t / .6); st.fd = st.fd0 + (1 - st.fd0) * ease(kk); st.press = 1;
+    if (kk >= 1){ st.af = true; if (st.then === 'shoot'){ st.then = null; beginShoot(st); } else { st.phase = 'idle'; st.press = 0; } }
+  } else if (st.phase === 'shoot'){
+    st.press = t < .45 ? 2 : 0;
+    if (!st.shootLV){
+      st.mir = t < 1.1 ? seg(t, 0, .25) : 1 - seg(t, 1.1, 1.35);
+      st.ap = t < 1.1 ? seg(t, .05, .25) : 1 - seg(t, 1.1, 1.3);
+      st.fc = t < 1.35 ? seg(t, .35, .6) : 1 - seg(t, 1.35, 1.75);
+      st.rc = t < 1.35 ? seg(t, .75, 1) : 1 - seg(t, 1.35, 1.75);
+      if (t >= 1 && !st.took) took(st);
+      if (t >= 1.8) endShoot(st);
+    } else {
+      st.mir = 1;
+      st.ap = t < 1.05 ? seg(t, 0, .2) : 1 - seg(t, 1.05, 1.25);
+      st.fc = t < .3 ? 1 - seg(t, 0, .2) : t < 1.05 ? seg(t, .3, .55) : t < 1.5 ? 1 - seg(t, 1.05, 1.45) : seg(t, 1.5, 1.7);
+      st.rc = t < 1.05 ? seg(t, .7, .95) : 1 - seg(t, 1.05, 1.45);
+      if (t >= .95 && !st.took) took(st);
+      if (t >= 1.75) endShoot(st);
+    }
+  } else if (st.phase === 'lvOn'){
+    st.mir = seg(t, 0, .3); st.fc = seg(t, .35, .6);
+    if (t >= .65){ st.lv = true; st.phase = 'idle'; }
+  } else if (st.phase === 'lvOff'){
+    st.fc = 1 - seg(t, 0, .25); st.mir = 1 - seg(t, .3, .6);
+    if (t >= .65){ st.lv = false; st.phase = 'idle'; }
+  }
+  const mv = k => Math.abs(st[k] - prev[k]) > 1e-5;
+  xrOn.mir = mv('mir'); xrOn.fc = mv('fc'); xrOn.rc = mv('rc'); xrOn.ap = mv('ap');
+  xrOn.motor = xrOn.mir || (st.phase === 'shoot' && xrOn.rc && st.rc < prev.rc);
+  if (xrOn.motor) st.crank += dt * 9;
+  xrOn.af = st.phase === 'focus' && !st.lv; xrOn.meter = xrOn.af;
+  xrOn.sensor = st.lv || (st.fc > .5 && st.rc < .5 && st.phase === 'shoot') || (st.phase === 'focus' && st.lv);
+  return st.phase !== 'idle' || st.lcdT > 0;
+}
+function took(st){ st.took = true; st.shots++; st.shotSharp = st.fd > .95; st.lcdT = 2.6; }
+function endShoot(st){ st.phase = 'idle'; st.press = 0; if (!st.shootLV){ st.mir = 0; st.fc = 0; st.rc = 0; } else { st.mir = 1; st.fc = 1; st.rc = 0; } st.ap = 0; }
+function beginShoot(st){ st.phase = 'shoot'; st.t = 0; st.took = false; st.shootLV = st.lv; st.lcdT = 0; kick(); }
+function focus(st){
+  if (st.phase === 'shoot') return ui.flash('wait: the shutter is still running');
+  if (st.phase === 'lvOn' || st.phase === 'lvOff') return ui.flash('wait: the mirror is moving');
+  if (st.phase === 'focus') return;
+  st.phase = 'focus'; st.t = 0; st.fd0 = st.fd > .95 ? .82 : st.fd; st.af = false; kick();
+}
+function shoot(st){
+  if (st.phase === 'shoot') return ui.flash('wait: the shutter is recocking');
+  if (st.phase === 'lvOn' || st.phase === 'lvOff') return ui.flash('wait: the mirror is moving');
+  if (st.phase === 'focus'){ st.then = 'shoot'; return; }
+  if (!st.af){ ui.flash('half-press first: it focuses, then fires'); st.phase = 'focus'; st.t = 0; st.fd0 = st.fd; st.then = 'shoot'; kick(); return; }
+  beginShoot(st);
+}
+function liveView(st){
+  if (st.phase !== 'idle') return ui.flash('wait: the camera is busy');
+  st.phase = st.lv ? 'lvOff' : 'lvOn'; st.t = 0;
+  if (!st.lv){ st.vf = false; ui.camTo(140, 24); }
+  kick();
+}
+function look(st){
+  st.vf = !st.vf;
+  if (st.vf){ ui.camTo(140, 24); if (st.lv) ui.flash('live view: the mirror is up, so the viewfinder is dark', 2200); }
+}
+
+ui = mountFigure({
+  fig:'DS', turn:'full', title:'DSLR camera',
+  size:[290, 190, 131], palette:'cobalt',
+  state:{ phase:'idle', t:0, vf:false, lv:false, fd:0, fd0:0, af:false, mir:0, fc:0, rc:0, ap:0, press:0, crank:0, shots:0, lcdT:0, shotSharp:false, took:false, then:null, shootLV:false },
+  scene,
+  stats: st => {
+    const d = st.fd > .01 ? FOCUS_M / st.fd : Infinity;
+    return [ { label:'Shots', value: st.shots },
+             { label:'Aperture', value: 'f/' + (1.8 + 3.8*st.ap).toFixed(1), small: true },
+             { label:'Focus', value: d > 9 ? '∞' : d.toFixed(2) + ' m', small: true } ]; },
+  buttons:[
+    { label:'Look through the viewfinder', onClick: st => look(st) },
+    { label:'Half-press to focus', onClick: st => focus(st) },
+    { label:'Press the shutter', onClick: st => shoot(st) },
+    { label:'Live view', onClick: st => liveView(st) },
+  ],
+  acts:{ shutter: st => shoot(st) },
+  params:(st, q) => {
+    for (const k of ['fd', 'mir', 'fc', 'rc', 'ap']) if (q.has(k)) st[k] = +q.get(k);
+    if (q.get('vf') === '1') st.vf = true;
+    if (q.get('lv') === '1'){ st.lv = true; st.mir = 1; st.fc = 1; }
+    if (q.get('af') === '1'){ st.af = true; st.fd = 1; }
+    if (q.has('review')){ st.lcdT = 1e9; st.shotSharp = true; st.shots = 1; }
+  },
+});
+addEventListener('keydown', e => {
+  if (/input|textarea|button/i.test(e.target.tagName)) return;
+  const k = e.key.toLowerCase(), st = ui.st;
+  if (k === ' ') shoot(st); else if (k === 'f') focus(st); else return;
+  e.preventDefault(); ui.render();
+});
+xrMount(() => ui, () => '');
+</script></body></html>
