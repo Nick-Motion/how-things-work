@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>A4988 stepper driver</title></head><body>
+<script src="core.js"></script>
+<script>
+/* A4988 stepper driver on a breadboard, driving a NEMA17. 1 unit = 1 mm. x = depth (front at high x), y = width, z = up.
+
+   How it really works (where the current and the signals are after each step):
+   1. Power: a 12 V adapter plugs into a barrel-jack board on the back rails (12 V rail + GND rail). The 100 uF
+      electrolytic sits across those rails right by the driver. VMOT and the motor GND pin take 12 V from them. The
+      Arduino Nano (powered over USB) puts 5 V and GND on the front rails; the A4988's VDD takes 5 V from there, and a
+      black jumper bridges the two GND rails. SLEEP is linked to RESET so the chip stays awake; ENABLE is left open
+      (pulled low on the carrier, so the outputs are on).
+   2. Current limit: the trimpot sets VREF. The chip chops each coil's current off when the voltage across that coil's
+      sense resistor (0.100 ohm, "R100") reaches VREF / 8, so I_max = VREF / (8 x 0.1) = 1.25 x VREF.
+      A NEMA17 17HS4401 is rated 1.7 A; 0.5 / 1.0 / 1.5 A need VREF 0.40 / 0.80 / 1.20 V.
+   3. Step mode: MS1, MS2, MS3 all LOW (wired to GND) = full step; all HIGH (wired to 5 V) = 1/16 step. The pins have
+      internal pull-downs; the blue jumpers make the choice explicit.
+   4. Step: the Nano drives A0 -> STEP and A1 -> DIR. Each rising edge on STEP moves the translator one position:
+      full step = 1.8 deg (both coils at 70.7 % of the limit, in 4 phases), 1/16 = 0.1125 deg (sine and cosine currents in
+      64 positions per electrical cycle). The two H-bridges push that current through coil A (1A-1B) and coil B (2A-2B).
+      200 pulses = one turn in full step, 22.5 deg in 1/16 step. DIR HIGH turns the other way.
+   5. Inside the motor: 8 stator poles carry the two coils (A on every other pole). The rotor is two 50-tooth steel cups
+      with an axial permanent magnet between them, on a shaft in two ball bearings. Each full step the teeth line up
+      with the next energised pole pair.
+
+   Parts (each held by another):
+   DESK      wooden desk top
+   BREADBOARD body . 300 tie points + 4 rails of 25 . centre channel . rail stripes . 64 spring clip strips inside
+   POWER     12 V barrel-jack board (2-pin header in the back rails) . jack . plug . strain relief . adapter cable over
+             the back edge . 100 uF capacitor (legs in the back rails) . VMOT jumper . motor GND jumper . GND rail bridge
+   NANO      blue PCB on two 15-pin headers . ATmega328P (TQFP, turned 45 deg) . USB mini-B port . USB plug and cable over
+             the right edge . reset button . 16 MHz resonator . 5 V regulator . 4 LEDs . 5 V and GND jumpers to the
+             front rails . STEP (yellow, A0) and DIR (green, A1) jumpers
+   A4988     green carrier on two 8-pin headers . A4988 QFN chip . stick-on heatsink (base + fins) . trimpot . two R100
+             sense resistors . charge-pump and VREG capacitors . VDD capacitor . pull-down resistor . SLEEP-RESET link .
+             three MS jumpers (to GND or 5 V) . VDD jumper (5 V) across the channel
+   MOTOR     rear end cap . lamination stack with sticker . front flange with 4 M3 holes . boss . shaft . paper dial .
+             printed pointer on the shaft . grommet . four leads (black 1A, green 1B, red 2A, blue 2B) into row h
+   INSIDE    stator bore . 8 poles with shoes . coil A on poles 0 2 4 6, coil B on 1 3 5 7 . two toothed rotor cups .
+             magnet . shaft . front and rear bearings . 4 through bolts
+   TOOLS     tuning screwdriver (only while the trimpot is being set) */
+
+/* ---------- layout ---------- */
+const BH = 3;                                                    // desk top
+const BX0 = 24, BY0 = 36, BBW = 54.6, BBL = 82.5, BT = BH + 8.5;  // half-size breadboard
+const ROWS = { j:13.33, i:15.87, h:18.41, g:20.95, f:23.49, e:31.11, d:33.65, c:36.19, b:38.73, a:41.27 };
+const RX = r => BX0 + ROWS[r];
+const RAIL = { bm: BX0 + 5.0, bp: BX0 + 7.54, fp: BX0 + 47.06, fm: BX0 + 49.6 };   // back GND, back 12 V, front 5 V, front GND
+const CY = c => BY0 + 4.42 + (c - 1)*2.54;
+const RAILYS = []; for (let g = 0; g < 5; g++) for (let k = 0; k < 5; k++) RAILYS.push(BY0 + 7 + g*15.24 + k*2.54);
+const RY = c => RAILYS.reduce((a, b) => Math.abs(b - CY(c)) < Math.abs(a - CY(c)) ? b : a);
+const WZ = BT + .9, WR = .62;                                    // jumper run height, wire radius
+const AZ = BT + 2.5, AZT = AZ + 1.6;                             // module PCB bottom / top (on 2.5 mm header spacers)
+const MC = [BX0 + 27.3, (CY(18) + CY(25))/2];                    // A4988 carrier centre (pins in rows d and g, cols 18-25)
+const NC = [(RX('h') + RX('d'))/2, (CY(1) + CY(15))/2];          // Nano centre (pins in rows d and h, cols 1-15)
+const POT = [MC[0] + 1.7, MC[1] + 7];
+const MO = { x: BX0 + 27.3, y: BY0 + 118, h: 21.15, ch: 4.5 };   // NEMA17 centre, half size, corner chamfer
+const MZ = { r1: BH + 8, s1: BH + 32, f1: BH + 40, b1: BH + 42, top: BH + 64 };
+const DESK = [0, 0, 90, BY0 + 150];
+const LIMS = [.5, 1.0, 1.5], RS = .1;                            // current limits (A), sense resistors (ohm)
+const PPS = 125;                                                 // STEP pulses per second from the Nano
+
+/* ---------- colours ---------- */
+const BBM = { l:'#fbfaf3', m:'#e6e2d6', d:'#c2bcae' };
+const PCBG = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, PCBB = { l:'#3f7fc9', m:'#2c64a8', d:'#1b3f6e' };
+const BLK = { l:'#4a4642', m:'#34312e', d:'#211f1d' }, ALU = { l:'#e9ecee', m:'#c3c9cc', d:'#8e979b' };
+const COPC = '#d08a52', LAM = { l:'#d6dadc', m:'#aab1b5', d:'#737c81' }, MOTB = { l:'#5a5651', m:'#3d3935', d:'#262321' };
+const TANM = matOf('#c9a46a'), WHT = matOf('#f3efe4'), CAPB = matOf('#2f4f8f'), JACKP = matOf('#2f6e9e');
+const WRED = '#e2483d', WBLK = '#2b2724', WYEL = '#f2c230', WGRN = '#3fa55b', WBLU = '#3e86d9', WORG = '#ef8a3a';
+
+/* ---------- helpers ---------- */
+const aItem = (b, svg) => ({ box: b, svg });
+const aBoxI = (x0, y0, z0, x1, y1, z1, m, w = .5, extra = '') => aItem([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, m, toneI, w) + (vis([0,0,1]) ? extra : ''));
+function aPrism(poly, z0, z1, m, w = .6, shade = toneI, top = ''){
+  const A = poly.map(([x, y]) => [x, y, z0]), B = poly.map(([x, y]) => [x, y, z1]);
+  let s = loft(A, B, n => shade(n, m));
+  if (vis([0,0,1])) s += fill(pd(B), shade([0,0,1], m)) + top + ink(pd(B), w*.8);
+  return s + hullInk([...A, ...B], w);
+}
+const aRect = (cx, cy, hu, hv, a = 0) => { const c = Math.cos(a*Math.PI/180), s2 = Math.sin(a*Math.PI/180);
+  return [[-hu,-hv],[hu,-hv],[hu,hv],[-hu,hv]].map(([u, v]) => [cx + u*c - v*s2, cy + u*s2 + v*c]); };
+const aStack = its => { const lo = its.filter(i => i.box[1][2] <= AZT + 1e-6), hi = its.filter(i => i.box[1][2] > AZT + 1e-6);
+  return aItem([[0,1,2].map(k => Math.min(...its.map(i => i.box[0][k]))), [0,1,2].map(k => Math.max(...its.map(i => i.box[1][k])))], byDepth(lo) + byDepth(hi)); };
+const aCirc = (cx, cy, r, n = 20) => ellUV(cx, cy, r, r, n);
+const aBounds = (pts, e = .05, zf = -1e9) => { const b = [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+  b[0][2] = Math.max(b[0][2], zf); return b; };
+const aDisc = (x, y, z, r, col, w = .3, n = 14) => { const d = pd(on(PZ(z), aCirc(x, y, r, n))); return fill(d, col) + (w ? ink(d, w) : ''); };
+const aTxZ = (x, y, z, str, size, col = INK) => `<text transform="${txM(P(x, y, z), Dv(0,-1,0), Dv(1,0,0))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800">${str}</text>`;
+const glowM = (base, g) => matOf(mix(base, '#ff7a2a', Math.max(0, Math.min(1, g))));
+// round each corner of a route (a wire bends, it doesn't kink)
+const aBend = (pts, r = .9) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...sub(a, b)), lc = Math.hypot(...sub(c, b)), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k])*d/la), q = c.map((v, k) => b[k] + (v - b[k])*d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+// a wire cut into short pieces, each with its own box, so it sorts behind or in front of what it passes
+function aWire(pts, col, r = WR, zf = BT, Lp = 4){
+  const q = aBend(pts, Math.max(.7, r*1.4)), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = Math.hypot(...sub(q[j], q[i]));
+    while (j < q.length - 1 && len < Lp){ j++; len += Math.hypot(...sub(q[j], q[j - 1])); }
+    const seg = q.slice(i, j + 1), d = pd(seg, false);
+    out.push(aItem(aBounds(seg, r, zf), `<path d="${d}" fill="none" stroke="${INK}" style="stroke-width:${(2*r + .45).toFixed(2)}" stroke-linecap="butt" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" style="stroke-width:${(2*r).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`));
+    i = j; }
+  return out;
+}
+const wireSvg = (pts, col, r) => { const d = pd(aBend(pts, 1.4), false);
+  return `<path d="${d}" fill="none" stroke="${INK}" style="stroke-width:${(2*r + .45).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" style="stroke-width:${(2*r).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`; };
+
+/* ---------- electrical state ---------- */
+const vref = st => LIMS[st.lim]*8*RS;
+const potAng = i => -135 + 270*(LIMS[i]*8*RS)/2.4;                         // wiper angle for a VREF (0..2.4 V over 270 deg)
+const mechAng = st => st.pos*.1125;                                       // pos counts 1/16 steps
+const coilI = st => { const e = (st.pos*5.625 + 45)*Math.PI/180, I = LIMS[st.lim]; return [Math.cos(e)*I, Math.sin(e)*I]; };
+
+/* ---------- jumper wires ---------- */
+function wires(st){
+  const J = (x0, y0, x1, y1, via = []) => [[x0, y0, BT], [x0, y0, WZ], ...via.map(([x, y]) => [x, y, WZ]), [x1, y1, WZ], [x1, y1, BT]];
+  const lit = c => mix(c, '#ffffff', .55), run = st.run > 0;
+  const W = [
+    { id:'step', col: run && st.pulse ? lit(WYEL) : WYEL, pts: J(RX('c'), CY(4), RX('c'), CY(19)) },
+    { id:'dir', col: st.dir < 0 ? lit(WGRN) : WGRN, pts: J(RX('b'), CY(5), RX('b'), CY(18)) },
+    { id:'5v', col: WRED, pts: J(RX('a'), CY(12), RAIL.fp, RY(12)) },
+    { id:'gndn', col: WBLK, pts: J(RX('a'), CY(14), RAIL.fm, RY(14)) },
+    { id:'slp', col: WORG, pts: J(RX('b'), CY(20), RX('b'), CY(21)) },
+    { id:'vdd', col: WRED, pts: J(RX('i'), CY(19), RAIL.fp, RY(28), [[RX('i'), CY(28)]]) },
+    { id:'vmot', col: WRED, pts: J(RX('j'), CY(25), RAIL.bp, RY(26)) },
+    { id:'gndm', col: WBLK, pts: J(RX('j'), CY(24), RAIL.bm, RY(24)) },
+    { id:'bridge', col: WBLK, pts: J(RAIL.bm, RY(30), RAIL.fm, RY(30)) },
+  ];
+  // MS jumpers: the rail end hops from GND (outer) to 5 V (inner) as st.ms goes 0 -> 1
+  const t = st.ms, h = 7*Math.sin(Math.PI*t), xe = RAIL.fm + (RAIL.fp - RAIL.fm)*t;
+  for (const [c, id] of [[24, 'ms1'], [23, 'ms2'], [22, 'ms3']]){ const y0 = CY(c), y1 = RY(c);
+    W.push({ id, col: WBLU, pts: [[RX('c'), y0, BT], [RX('c'), y0, WZ], [xe - 2, y1, WZ + h*.7], [xe, y1, WZ + h], [xe, y1, BT + h]], loose: h > .3 }); }
+  return W;
+}
+const LEADS = [[20, WGRN, -1.5], [21, WBLK, -.5], [22, WRED, .5], [23, WBLU, 1.5]];   // 1B 1A 2A 2B into row h
+const leadPts = (c, o) => { const y = CY(c);
+  return [[MO.x + o*.9, MO.y - MO.h - 1.6, BH + 4.5], [MO.x + o*.9, MO.y - MO.h - 6, BH + 5], [MO.x - 3.3 + o*.6, BY0 + BBL + 2, BH + 13 + o*.3],
+    [RX('h') - .3 + o*.3, y + 12, BH + 17 + o*.3], [RX('h'), y + 2.2, BH + 14], [RX('h'), y, BT + 1.6], [RX('h'), y, BT]]; };
+
+/* everything that goes into a breadboard hole, for the see-through pin stubs */
+function plugs(st){
+  const out = [];
+  for (let c = 18; c <= 25; c++) out.push([RX('d'), CY(c)], [RX('g'), CY(c)]);
+  for (let c = 1; c <= 15; c++) out.push([RX('d'), CY(c)], [RX('h'), CY(c)]);
+  for (const w of wires(st)){ const a = w.pts[0], b = w.pts[w.pts.length - 1]; out.push([a[0], a[1]]); if (!w.loose) out.push([b[0], b[1]]); }
+  for (const [c] of LEADS) out.push([RX('h'), CY(c)]);
+  out.push([RAIL.bm, RY(28)], [RAIL.bp, RY(28)], [RAIL.bm, RAILYS[0]], [RAIL.bp, RAILYS[0]]);
+  return out;
+}
+
+/* ---------- breadboard ---------- */
+function bbTop(){
+  const z = BT + .02, sq = (x, y, h = .5) => pd([[x - h, y - h, z], [x + h, y - h, z], [x + h, y + h, z], [x - h, y + h, z]]);
+  const strip = (x0, x1, col) => fill(pd([[x0, BY0 + 3, z], [x1, BY0 + 3, z], [x1, BY0 + BBL - 3, z], [x0, BY0 + BBL - 3, z]]), col);
+  let s = strip(BX0 + 25.9, BX0 + 28.7, mix(BBM.m, '#000000', .14));
+  s += strip(BX0 + 2.3, BX0 + 2.8, WBLU) + strip(BX0 + 9.7, BX0 + 10.2, WRED) + strip(BX0 + 44.4, BX0 + 44.9, WRED) + strip(BX0 + 51.8, BX0 + 52.3, WBLU);
+  let holes = '';
+  for (let c = 1; c <= 30; c++) for (const r of 'abcdefghij') holes += sq(RX(r), CY(c));
+  for (const x of Object.values(RAIL)) for (const y of RAILYS) holes += sq(x, y);
+  return s + fill(holes, '#3a3632');
+}
+function bbInside(st){
+  const parts = [], [ia, ib] = coilI(st), pulse = st.run > 0 && st.pulse;
+  const coilStrip = { 20: Math.abs(ia), 21: Math.abs(ia), 22: Math.abs(ib), 23: Math.abs(ib) };
+  for (let c = 1; c <= 30; c++) for (const back of [true, false]){
+    const x0 = back ? RX('j') - 1.1 : RX('e') - 1.1, x1 = back ? RX('f') + 1.1 : RX('a') + 1.1, y = CY(c);
+    const g = back ? (coilStrip[c] || 0)/1.5 : ((c === 19 || c === 4) && pulse ? .8 : 0);
+    parts.push(aBoxI(x0, y - .65, BH + 3, x1, y + .65, BT - 1, g ? glowM(METAL.l, g) : METAL, .35)); }
+  for (const [x, col] of [[RAIL.bm, METAL.l], [RAIL.bp, mix(METAL.l, WRED, .35)], [RAIL.fp, mix(METAL.l, WORG, .35)], [RAIL.fm, METAL.l]])
+    parts.push(aBoxI(x - .65, RAILYS[0] - 1.6, BH + 3, x + .65, RAILYS[24] + 1.6, BT - 1, matOf(col), .35));
+  let stubs = '';
+  for (const [x, y] of plugs(st)){ const d = pd([[x, y, BT], [x, y, BH + 3.6]], false);
+    stubs += `<path d="${d}" stroke="${INK}" style="stroke-width:.95" fill="none"/><path d="${d}" stroke="#e6e9ea" style="stroke-width:.55" fill="none"/>`; }
+  return byDepth(parts) + stubs;
+}
+function bbItem(st, k){
+  let body = box(BX0, BY0, BH, BX0 + BBW, BY0 + BBL, BT, BBM, tone, .9) + (vis([0,0,1]) ? bbTop() : '');
+  body += hullInk([[BX0, BY0, BH], [BX0 + BBW, BY0, BH], [BX0 + BBW, BY0 + BBL, BH], [BX0, BY0 + BBL, BH],
+    [BX0, BY0, BT], [BX0 + BBW, BY0, BT], [BX0 + BBW, BY0 + BBL, BT], [BX0, BY0 + BBL, BT]], 2.4);
+  const svg = k > 0 ? `<g opacity="${f(k)}">${bbInside(st)}</g><g opacity="${f(1 - .8*k)}">${body}</g>` : body;
+  return aItem([[BX0, BY0, BH], [BX0 + BBW, BY0 + BBL, BT]], svg);
+}
+
+/* ---------- A4988 carrier ---------- */
+const A_LOG = ['DIR', 'STEP', 'SLP', 'RST', 'MS3', 'MS2', 'MS1', 'EN'], A_PWR = ['GND', 'VDD', '1B', '1A', '2A', '2B', 'GND', 'VMOT'];
+function smd(x0, y0, x1, y1, h, m, along = 'y', txt = ''){
+  // a chip resistor / capacitor: body with tinned ends at both ends of its long side
+  const z0 = AZT, z1 = AZT + h, e = .45;
+  const ends = along === 'y' ? [[x0, y0, x1, y0 + e], [x0, y1 - e, x1, y1]] : [[x0, y0, x0 + e, y1], [x1 - e, y0, x1, y1]];
+  const mid = along === 'y' ? [x0, y0 + e, x1, y1 - e] : [x0 + e, y0, x1 - e, y1];
+  const parts = [aBoxI(ends[0][0], ends[0][1], z0, ends[0][2], ends[0][3], z1, ALU, .35), aBoxI(ends[1][0], ends[1][1], z0, ends[1][2], ends[1][3], z1, ALU, .35),
+    aBoxI(mid[0], mid[1], z0, mid[2], mid[3], z1, m, .35, txt ? aTxZ((x0 + x1)/2 + .3, (y0 + y1)/2, z1 + .01, txt, .75, '#f3efe4') : '')];
+  return aItem([[x0, y0, z0], [x1, y1, z1]], byDepth(parts));
+}
+function a4988Items(st, k){
+  const it = [], x0 = MC[0] - 7.62, x1 = MC[0] + 7.62, y0 = MC[1] - 10.16, y1 = MC[1] + 10.16;
+  for (const x of [RX('d'), RX('g')]) it.push(aBoxI(x - 1.27, y0, BT, x + 1.27, y1, AZ, BLK, .5));
+  // board: traces, pads and solder joints on top
+  let top = '', tr = '';
+  const T = (pts) => tr += pd(pts.map(([x, y]) => [x, y, AZT + .01]), false);
+  T([[RX('g') + .9, CY(20)], [MC[0] - 3.4, CY(20)], [MC[0] - 3.4, MC[1] - 2]]); T([[RX('g') + .9, CY(23)], [MC[0] - 3.4, CY(23)], [MC[0] - 3.4, MC[1] + 1]]);
+  T([[RX('d') - .9, CY(22)], [MC[0] + 3.4, CY(22)], [MC[0] + 3.4, MC[1]]]); T([[RX('d') - .9, CY(19)], [MC[0] + 3.4, CY(19)], [MC[0] + 3.4, MC[1] - 2]]);
+  T([[POT[0], POT[1] - 1.5], [POT[0], MC[1] + 3]]); T([[RX('g') + .9, CY(25)], [MC[0] - 2, CY(25)]]);
+  top += `<path d="${tr}" fill="none" stroke="${PCBG.l}" style="stroke-width:.45" stroke-linecap="round" stroke-linejoin="round"/>`;
+  for (let c = 18; c <= 25; c++) for (const x of [RX('d'), RX('g')]) top += aDisc(x, CY(c), AZT + .02, .85, '#e3e6e3', .3, 12) + aDisc(x, CY(c), AZT + .04, .38, '#9aa2a4', 0, 8);
+  top += aDisc(MC[0] - 6.35, y0 + .7, AZT + .03, .25, '#f3efe4', 0, 6);   // pin-1 dot
+  it.push(aItem([[x0, y0, AZ], [x1, y1, AZT]], box(x0, y0, AZ, x1, y1, AZT, PCBG, toneI, .6) + (vis([0,0,1]) ? top : '')));
+  // the A4988 chip (QFN 5 x 5)
+  const cy = MC[1] - .5;
+  it.push(aBoxI(MC[0] - 2.5, cy - 2.5, AZT, MC[0] + 2.5, cy + 2.5, AZT + .9, BLK, .5,
+    aTxZ(MC[0] - .2, cy, AZT + .91, 'A4988', 1.15, '#d9d4c7') + aTxZ(MC[0] + 1.1, cy, AZT + .91, 'SETT', .8, '#b9b3a6') + aDisc(MC[0] - 1.8, cy - 1.8, AZT + .92, .3, '#8a847a', 0, 8)));
+  // stick-on heatsink: base and fins; it fades in see-through to show the chip
+  { const hz0 = AZT + 1.0, hz1 = hz0 + 1.1, fz = hz0 + 5.2, hs = [aBoxI(MC[0] - 4.5, MC[1] - 5, hz0, MC[0] + 4.5, MC[1] + 4, hz1, ALU, .5)];
+    for (let i = 0; i < 5; i++){ const fx = MC[0] - 4.2 + i*2.05; hs.push(aBoxI(fx, MC[1] - 5, hz1, fx + .7, MC[1] + 4, fz, ALU, .45)); }
+    it.push(aItem([[MC[0] - 4.5, MC[1] - 5, hz0], [MC[0] + 4.5, MC[1] + 4, fz]], `<g opacity="${f(1 - .85*k)}">${byDepth(hs)}</g>`)); }
+  // sense resistors, capacitors, pull-down
+  it.push(smd(MC[0] - 5.1, MC[1] - 9.3, MC[0] - 3.5, MC[1] - 6.1, .6, BLK, 'y', 'R100'));
+  it.push(smd(MC[0] - 5.1, MC[1] + 5.0, MC[0] - 3.5, MC[1] + 8.2, .6, BLK, 'y', 'R100'));
+  it.push(smd(MC[0] - 2.5, MC[1] + 5.3, MC[0] - .5, MC[1] + 6.55, .8, TANM, 'x'));
+  it.push(smd(MC[0] - 2.5, MC[1] + 7.6, MC[0] - .5, MC[1] + 8.85, .8, TANM, 'x'));
+  it.push(smd(MC[0] + 1.2, MC[1] - 9.1, MC[0] + 3.2, MC[1] - 7.85, .8, TANM, 'x'));
+  it.push(smd(MC[0] + 1.2, MC[1] - 7.2, MC[0] + 2.8, MC[1] - 6.4, .45, BLK, 'x'));
+  // trimpot: white body, metal rotor with a slot that shows the wiper angle
+  { const a = st.pot*Math.PI/180, rz = AZT + 1.3, ca = Math.cos(a), sa = Math.sin(a), [px, py] = POT;
+    let rot = cyl(px, py, rz, rz + .55, 1.2, ALU, toneI, .5, 18);
+    if (vis([0,0,1])) rot += line([[px - 1*ca, py - 1*sa, rz + .57], [px + 1*ca, py + 1*sa, rz + .57]], .55) + aDisc(px + .75*ca, py + .75*sa, rz + .58, .2, WRED, 0, 6);
+    it.push(aItem([[px - 1.5, py - 1.5, AZT], [px + 1.5, py + 1.5, rz + .55]], box(px - 1.5, py - 1.5, AZT, px + 1.5, py + 1.5, rz, WHT, toneI, .5) + rot)); }
+  return [aStack(it)];
+}
+
+/* ---------- Arduino Nano ---------- */
+function nanoItems(st){
+  const it = [], x0 = NC[0] - 9, x1 = NC[0] + 9, y0 = NC[1] - 21.59, y1 = NC[1] + 21.59;
+  for (const x of [RX('d'), RX('h')]) it.push(aBoxI(x - 1.27, CY(1) - 1.27, BT, x + 1.27, CY(15) + 1.27, AZ, BLK, .5));
+  let top = '';
+  for (let c = 1; c <= 15; c++) for (const x of [RX('d'), RX('h')]) top += aDisc(x, CY(c), AZT + .02, .85, '#e3e6e3', .3, 12) + aDisc(x, CY(c), AZT + .04, .38, '#9aa2a4', 0, 8);
+  const lit = ['#e2483d', st.run > 0 && st.pulse ? '#f2c230' : '#8d877a', '#8d877a', '#8d877a'];
+  [-19, -17, -15, -13].forEach((dy, i) => { const y = NC[1] + dy;
+    top += fill(pd([[NC[0] + 4.4, y - .6, AZT + .3], [NC[0] + 5.6, y - .6, AZT + .3], [NC[0] + 5.6, y + .6, AZT + .3], [NC[0] + 4.4, y + .6, AZT + .3]]), lit[i]) + ink(pd([[NC[0] + 4.4, y - .6, AZT + .3], [NC[0] + 5.6, y - .6, AZT + .3], [NC[0] + 5.6, y + .6, AZT + .3], [NC[0] + 4.4, y + .6, AZT + .3]]), .3); });
+  top += aTxZ(NC[0] + 7.2, NC[1] - 2, AZT + .02, 'NANO V3', .95, '#e8eef6');
+  it.push(aItem([[x0, y0, AZ], [x1, y1, AZT]], box(x0, y0, AZ, x1, y1, AZT, PCBB, toneI, .6) + (vis([0,0,1]) ? top : '')));
+  // ATmega328P, turned 45 degrees, on its ring of gull-wing leads
+  { const c = [NC[0], NC[1] + 1.8];
+    it.push(aItem([[c[0] - 6.3, c[1] - 6.3, AZT], [c[0] + 6.3, c[1] + 6.3, AZT + 1.2]], aPrism(aRect(c[0], c[1], 4.4, 4.4, 45), AZT, AZT + .3, ALU, .4)
+      + aPrism(aRect(c[0], c[1], 3.5, 3.5, 45), AZT + .3, AZT + 1.2, BLK, .5, toneI, aTxZ(c[0], c[1], AZT + 1.21, 'ATMEGA', .9, '#d9d4c7') + aTxZ(c[0] + 1.1, c[1], AZT + 1.21, '328P', .9, '#d9d4c7')))); }
+  // USB mini-B port at the end, opening toward -y
+  { const ux0 = NC[0] - 3.8, ux1 = NC[0] + 3.8, uy0 = y0 - 1.5, uy1 = y0 + 7.5;
+    it.push(aItem([[ux0, uy0, AZT], [ux1, uy1, AZT + 3.9]], box(ux0, uy0, AZT, ux1, uy1, AZT + 3.9, ALU, toneI, .5))); }
+  // reset button, resonator, regulator
+  it.push(aItem([[NC[0] - 1.75, NC[1] - 11.2, AZT], [NC[0] + 1.75, NC[1] - 5.2, AZT + 2.4]], box(NC[0] - 1.75, NC[1] - 11.2, AZT, NC[0] + 1.75, NC[1] - 5.2, AZT + 1.5, WHT, toneI, .45)
+    + cyl(NC[0], NC[1] - 8.2, AZT + 1.5, AZT + 2.4, 1.0, BLK, toneI, .45, 14)));
+  it.push(aBoxI(NC[0] - 6.2, NC[1] + 10, AZT, NC[0] - 3.6, NC[1] + 13, AZT + 1.1, ALU, .45));
+  it.push(aItem([[NC[0] + 1, NC[1] + 12, AZT], [NC[0] + 5.5, NC[1] + 19.6, AZT + 1.6]], byDepth([aBoxI(NC[0] + 1, NC[1] + 12, AZT, NC[0] + 5.5, NC[1] + 18.4, AZT + 1.6, BLK, .45),
+    aBoxI(NC[0] + 1.9, NC[1] + 18.4, AZT, NC[0] + 4.6, NC[1] + 19.6, AZT + .4, ALU, .35)])));
+  // USB plug, strain relief and cable on the desk
+  const cz = AZT + 1.95; it.splice(0, it.length, aStack(it));
+  it.push(aBoxI(NC[0] - 4.4, y0 - 16.6, AZT - 1.3, NC[0] + 4.4, y0 - 1.5, AZT + 5, matOf('#3a3632'), .7));
+  it.push(aItem([[NC[0] - 2.6, y0 - 21, cz - 2.6], [NC[0] + 2.6, y0 - 16.6, cz + 2.6]], rod([NC[0], y0 - 16.6, cz], [NC[0], y0 - 21, cz], 2.4, matOf('#3a3632'), toneI, .7, 1.5)));
+  it.push(...aWire([[NC[0], y0 - 21, cz], [NC[0], y0 - 25, cz - 1], [NC[0] + 1, y0 - 29, BH + 1.6], [NC[0] + 2, y0 - 32, BH + 1.3], [NC[0] + 2.5, .4, BH + 1.3]], '#3a3632', 1.3, BH));
+  return it;
+}
+const usbTail = () => wireSvg([[NC[0] + 2.5, .4, BH + 1.3], [NC[0] + 2.5, -1.2, BH - .2], [NC[0] + 2.5, -1.7, -7]], '#3a3632', 1.3);
+
+/* ---------- 12 V barrel jack, 100 uF capacitor ---------- */
+const JK = { y: RAILYS[0], z: AZT + 5.5 };
+function powerItems(){
+  const it = [], y = JK.y;
+  it.push(aBoxI(RAIL.bm - 1.3, y - 1.27, BT, RAIL.bp + 1.3, y + 1.27, AZ, BLK, .5));
+  it.push(aBoxI(BX0 + 2, y - 4.5, AZ, BX0 + 11, y + 4.5, AZT, JACKP, .6, aDisc(RAIL.bm, y, AZT + .02, .8, '#e3e6e3', .3, 10) + aDisc(RAIL.bp, y, AZT + .02, .8, '#e3e6e3', .3, 10)
+    + aTxZ(BX0 + 9.6, y, AZT + .02, '12V', 1.2, '#f3efe4')));
+  it.push(aBoxI(BX0 - 4.5, y - 4.5, AZT, BX0 + 8.5, y + 4.5, AZT + 11, BLK, .7)); it.splice(0, 3, aStack(it));
+  it.push(aItem([[BX0 - 16, y - 4.2, JK.z - 4.2], [BX0 - 4.5, y + 4.2, JK.z + 4.2]], cylX(BX0 - 16, BX0 - 4.5, y, JK.z, 4.2, matOf('#3a3632'), toneI, .9, 22)));
+  it.push(aItem([[BX0 - 20.5, y - 4.2, JK.z - 4.2], [BX0 - 16, y + 4.2, JK.z + 4.2]], rod([BX0 - 16, y, JK.z], [BX0 - 20.5, y, JK.z], 3.6, matOf('#3a3632'), toneI, .8, 1.8)));
+  it.push(...aWire([[BX0 - 20.5, y, JK.z], [BX0 - 22.5, y, JK.z - .6], [.4, y, JK.z - 2.4]], '#3a3632', 1.5, BH));
+  // 100 uF electrolytic across the back rails, by the driver: legs, sleeve with the minus stripe, vented top
+  { const cx = (RAIL.bm + RAIL.bp)/2, cy = RY(28), z0 = BT + 2.2, z1 = z0 + 11, r = 3.15;
+    let s = line([[RAIL.bm, cy, BT], [RAIL.bm, cy, z0]], .6) + line([[RAIL.bp, cy, BT], [RAIL.bp, cy, z0]], .6);
+    s += cyl(cx, cy, z0, z1, r, CAPB, toneI, .9, 24);
+    // the stripe faces the GND rail (-x)
+    const seg = a => [cx + r*1.01*Math.cos(a*Math.PI/180), cy + r*1.01*Math.sin(a*Math.PI/180)];
+    if (vis([-1, 0, 0])){ const pts = []; for (let a = 150; a <= 210; a += 10){ const [x, yy] = seg(a); pts.push([x, yy, z0 + .3]); } for (let a = 210; a >= 150; a -= 10){ const [x, yy] = seg(a); pts.push([x, yy, z1 - .3]); }
+      s += fill(pd(pts), '#c9cfd6', 'opacity=".9"'); }
+    s += aDisc(cx, cy, z1 + .01, r - .5, '#d8dcdc', .4, 20) + line([[cx - 1.6, cy, z1 + .02], [cx + 1.6, cy, z1 + .02]], .4) + line([[cx, cy - 1.6, z1 + .02], [cx, cy + 1.6, z1 + .02]], .4);
+    it.push(aItem([[cx - r, cy - r, BT], [cx + r, cy + r, z1]], s)); }
+  return it;
+}
+const jackTail = () => wireSvg([[.4, JK.y, JK.z - 2.4], [-1.2, JK.y, JK.z - 4.5], [-1.8, JK.y, -7]], '#3a3632', 1.5);
+
+/* ---------- NEMA17 ---------- */
+const octo = (h, ch) => [[h, -h + ch], [h, h - ch], [h - ch, h], [-h + ch, h], [-h, h - ch], [-h, -h + ch], [-h + ch, -h], [h - ch, -h]].map(([u, v]) => [MO.x + u, MO.y + v]);
+function motorBody(st){
+  const O = octo(MO.h, MO.ch), Oi = octo(MO.h - .35, MO.ch), z0 = BH;
+  let s = aPrism(O, z0, MZ.r1, MOTB, 2.2, tone);
+  let lam = aPrism(Oi, MZ.r1, MZ.s1, LAM, 2.2, tone), hl = '';
+  for (let i = 0; i < 8; i++){ const a = Oi[i], b = Oi[(i + 1) % 8], n = norm([b[1] - a[1], -(b[0] - a[0]), 0]);
+    const nn = dot(n, [a[0] - MO.x, a[1] - MO.y, 0]) < 0 ? n.map(v => -v) : n;
+    if (vis(nn)) for (let z = MZ.r1 + 1.6; z < MZ.s1 - .8; z += 1.6) hl += pd([[a[0], a[1], z], [b[0], b[1], z]], false); }
+  lam += `<path d="${hl}" fill="none" stroke="${LAM.d}" style="stroke-width:.25"/>`;
+  if (vis([1, 0, 0])){ const x = MO.x + MO.h - .3;
+    lam += shape(on(PX(x), rectUV(MO.y - 12, MZ.r1 + 4, MO.y + 12, MZ.s1 - 4)), '#f3efe4', .6)
+      + tx(x + .05, MO.y, MZ.s1 - 9.5, 'NEMA 17', 3.2, INK, 800) + tx(x + .05, MO.y, MZ.s1 - 14, '17HS4401', 2.4, INK, 700) + tx(x + .05, MO.y, MZ.s1 - 18, '1.8 DEG 1.7A', 2, INK, 700); }
+  if (vis([-1, 0, 0])){ const x = MO.x - MO.h + .3;
+    lam += `<text transform="${txM(P(x - .05, MO.y, MZ.s1 - 12), Dv(0,1,0), Dv(0,0,-1))}" font-size="2.6" fill="${LAM.d}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800">STEPPING MOTOR</text>`; }
+  s += lam;
+  // flange top: M3 holes, paper dial with ticks every 22.5 deg (200 pulses at 1/16)
+  let topD = '';
+  for (const [u, v] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) topD += aDisc(MO.x + 15.5*u, MO.y + 15.5*v, MZ.f1 + .02, 1.5, '#1d1a17', .4, 12);
+  topD += aDisc(MO.x, MO.y, MZ.f1 + .03, 18, '#fbf7ea', .6, 40);
+  let tk = '';
+  for (let i = 0; i < 16; i++){ const a = i*22.5*Math.PI/180, r0 = i % 4 ? 15.6 : 13.6;
+    tk += pd([[MO.x + r0*Math.cos(a), MO.y + r0*Math.sin(a), MZ.f1 + .05], [MO.x + 17.5*Math.cos(a), MO.y + 17.5*Math.sin(a), MZ.f1 + .05]], false); }
+  topD += `<path d="${tk}" fill="none" stroke="${INK}" style="stroke-width:.45"/>`;
+  s += aPrism(O, MZ.s1, MZ.f1, MOTB, 2.2, tone, topD);
+  return s;
+}
+function grommet(){ return box(MO.x - 2.6, MO.y - MO.h - 1.6, BH + 2.5, MO.x + 2.6, MO.y - MO.h, BH + 6.5, BLK, toneI, .6); }
+function motorTop(st, m){
+  // boss, shaft and the printed pointer on it
+  let s = cyl(MO.x, MO.y, MZ.f1, MZ.b1, 11, ALU, toneI, 1, 32);
+  s += cyl(MO.x, MO.y, MZ.b1, BH + 52, 2.5, ALU, toneI, .7, 16);
+  const a = mechAng(st)*Math.PI/180, d = [Math.cos(a), Math.sin(a)], pz0 = BH + 53.6, pz1 = BH + 55.6;
+  const hub = cyl(MO.x, MO.y, BH + 52, BH + 58, 3.6, m, toneI, .9, 20);
+  const arm = aPrism(aRect(MO.x + d[0]*10, MO.y + d[1]*10, 6.6, 1.3, mechAng(st)), pz0, pz1, m, .8)
+    + aPrism([[MO.x + d[0]*16.4 - d[1]*2.6, MO.y + d[1]*16.4 + d[0]*2.6], [MO.x + d[0]*20.4, MO.y + d[1]*20.4], [MO.x + d[0]*16.4 + d[1]*2.6, MO.y + d[1]*16.4 - d[0]*2.6]], pz0, pz1, m, .8);
+  s += vis([d[0], d[1], 0]) ? hub + arm : arm + hub;
+  s += cyl(MO.x, MO.y, BH + 58, MZ.top, 2.5, ALU, toneI, .7, 16);
+  if (vis([0,0,1])) s += line([[MO.x - 2.1*d[1] + .9*d[0], MO.y + 2.1*d[0] + .9*d[1], MZ.top + .02], [MO.x + 2.1*d[1] + .9*d[0], MO.y - 2.1*d[0] + .9*d[1], MZ.top + .02]], .4);   // the D-flat
+  return s;
+}
+function motorInside(st){
+  const parts = [], cx = MO.x, cy = MO.y, ang = mechAng(st), [ia, ib] = coilI(st);
+  const ring = (z, r, n = 32) => on(PZ(z), aCirc(cx, cy, r, n));
+  const far = loft(ring(MZ.r1, 19), ring(MZ.s1, 19), n => mix(toneI(n.map(v => -v), LAM), '#f2efe7', .45), true);
+  for (let i = 0; i < 8; i++){
+    const a = i*45, ca = Math.cos(a*Math.PI/180), sa = Math.sin(a*Math.PI/180), A = i % 2 === 0, g = Math.abs(A ? ia : ib)/1.5;
+    const shoe = aPrism(aRect(cx + 13.1*ca, cy + 13.1*sa, .55, 3.7, a), BH + 9.6, BH + 30.7, LAM, .5);
+    const coil = aPrism(aRect(cx + 15.7*ca, cy + 15.7*sa, 2.1, 3.1, a), BH + 10.6, BH + 29.7, glowM(COPC, g*.9), .6);
+    let wind = '';
+    if (vis([0,0,1])) for (let t = -2.4; t <= 2.4; t += .8) wind += pd([[cx + (13.7)*ca - t*sa, cy + 13.7*sa + t*ca, BH + 29.75], [cx + 17.7*ca - t*sa, cy + 17.7*sa + t*ca, BH + 29.75]], false);
+    const coilS = coil + (wind ? `<path d="${wind}" fill="none" stroke="${mix(COPC, '#000000', .35)}" style="stroke-width:.2"/>` : '');
+    const pts = [...aRect(cx + 15.5*ca, cy + 15.5*sa, 3.2, 3.8, a)].map(([x, y]) => [x, y, 0]);
+    const b = aBounds(pts); b[0][2] = BH + 9.6; b[1][2] = BH + 30.7;
+    parts.push(aItem(b, vis([-ca, -sa, 0]) ? coilS + shoe : shoe + coilS)); }
+  // rotor: two toothed cups (half a tooth apart) and the magnet between them
+  const teeth = (z, rot) => Array.from({ length: 200 }, (_, j) => { const t = (rot + j*1.8)*Math.PI/180, r = j % 4 < 2 ? 12.4 : 11.7; return [cx + r*Math.cos(t), cy + r*Math.sin(t), z]; });
+  const cup = (z0, z1, rot) => { const A = teeth(z0, rot), B = teeth(z1, rot);
+    return loft(A, B, n => toneI(n, LAM)) + fill(pd(B), LAM.l) + ink(pd(B), .35) + hullInk([...A, ...B], .9); };
+  parts.push(aItem([[cx - 12.4, cy - 12.4, BH + 9.6], [cx + 12.4, cy + 12.4, BH + 30.7]],
+    cup(BH + 9.7, BH + 19.6, ang) + cyl(cx, cy, BH + 19.6, BH + 20.7, 10.8, matOf('#6b7a99'), toneI, .6, 28) + cup(BH + 20.7, BH + 30.6, ang + 3.6)));
+  // shaft, bearings, through bolts
+  parts.push(aItem([[cx - 5.5, cy - 5.5, BH + 1], [cx + 5.5, cy + 5.5, BH + 9.5]], cyl(cx, cy, BH + 1, BH + 6, 5.5, ALU, toneI, .7, 24) + aDisc(cx, cy, BH + 6.02, 3.4, '#8e979b', .35, 18)
+    + cyl(cx, cy, BH + 1, BH + 9.5, 2.5, ALU, toneI, .6, 14)));
+  parts.push(aItem([[cx - 5.5, cy - 5.5, BH + 30.8], [cx + 5.5, cy + 5.5, MZ.f1 - .5]], cyl(cx, cy, BH + 30.8, BH + 34.5, 2.5, ALU, toneI, .6, 14)
+    + cyl(cx, cy, BH + 34.5, MZ.f1 - .5, 5.5, ALU, toneI, .7, 24) + aDisc(cx, cy, MZ.f1 - .48, 3.4, '#8e979b', .35, 18) + cyl(cx, cy, MZ.f1 - 1, MZ.f1 - .3, 2.5, ALU, toneI, .5, 14)));
+  for (const [u, v] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]){ const x = cx + 15.5*u, y = cy + 15.5*v;
+    parts.push(aItem([[x - 1.4, y - 1.4, BH + .5], [x + 1.4, y + 1.4, MZ.f1 - .3]], rod([x, y, BH + .5], [x, y, MZ.f1 - .3], 1.3, METAL, toneI, .5, 1.3, 10))); }
+  // the four leads from the coil ends down to the grommet
+  const lw = LEADS.map(([c, col, o]) => wireSvg([[cx + o*.9, cy - MO.h + .5, BH + 4.5], [cx + o*1.4, cy - 15, BH + 6], [cx + o*1.5 + (o < 0 ? -3 : 3), cy - 13.6, BH + 10.6]], col, .4)).join('');
+  return { far, mech: lw + byDepth(parts) };
+}
+function motorItem(st, m, k){
+  const g = grommet(), gF = vis([0, -1, 0]);
+  let body = (gF ? '' : g) + motorBody(st) + (gF ? g : '');
+  if (k > 0){ const mi = motorInside(st); body = `<g opacity="${f(.6*k)}">${mi.far}</g><g opacity="${f(k)}">${mi.mech}</g><g opacity="${f(1 - .8*k)}">${body}</g>`; }
+  return aItem([[MO.x - MO.h, MO.y - MO.h, BH], [MO.x + MO.h, MO.y + MO.h, MZ.top]], body + motorTop(st, m));
+}
+
+/* ---------- tuning screwdriver (only while the trimpot is set) ---------- */
+function screwdriver(st, m){
+  if (st.drvT >= 1) return null;
+  const t = st.drvT, lift = t < .22 ? 16*(1 - ease(t/.22)) : t > .8 ? 16*ease((t - .8)/.2) : 0;
+  const op = t < .08 ? t/.08 : t > .93 ? (1 - t)/.07 : 1;
+  const [x, y] = POT, z0 = AZT + 1.9 + lift;
+  const blade = aPrism(aRect(x, y, 1.0, .22, st.pot), z0, z0 + 2.2, METAL, .4);
+  const s = blade + rod([x, y, z0 + 1.8], [x, y, z0 + 20], .7, METAL, toneI, .6, .7, 12) + rod([x, y, z0 + 20], [x, y, z0 + 38], 2.8, m, toneI, .9, 2.5, 18);
+  return aItem([[x - 2.8, y - 2.8, z0], [x + 2.8, y + 2.8, z0 + 38]], `<g opacity="${f(op)}">${s}</g>`);
+}
+
+/* ---------- labels ---------- */
+// label frame centred on the driver, so its crowd of pin labels splits between the two columns
+const LB = [MC[0] - 26, MC[0] + 26, MC[1] - 56, MC[1] + 56, BH, MZ.top];
+function insideLabels(st){
+  const run = st.run > 0, [ia, ib] = coilI(st), hi = st.msT === 1, vh = norm([CAM_V[0], CAM_V[1], 0]);
+  const near = (r, z) => [MO.x + r*vh[0], MO.y + r*vh[1], z];
+  const nearPole = A => { let best = null, bd = -1e9; for (let i = A ? 0 : 1; i < 8; i += 2){ const a = i*Math.PI/4, d = Math.cos(a)*vh[0] + Math.sin(a)*vh[1]; if (d > bd){ bd = d; best = a; } }
+    return [MO.x + 17.8*Math.cos(best), MO.y + 17.8*Math.sin(best), BH + 18]; };
+  const a = mechAng(st)*Math.PI/180;
+  return [
+    { at:[MC[0] - .2, MC[1] - .5, AZT + .9], text:'A4988 CHIP', on: run },
+    { at:[MC[0] + 3.8, MC[1] - 4.5, AZT + 6.2], text:'HEATSINK', on: false },
+    { at:[POT[0], POT[1], AZT + 1.8], text:'TRIMPOT VREF', on: st.drvT < 1 },
+    { at:[MC[0] - 4.3, MC[1] - 7.7, AZT + .6], text:'SENSE RES A', on: run },
+    { at:[MC[0] - 4.3, MC[1] + 6.6, AZT + .6], text:'SENSE RES B', on: run },
+    { at:[RX('d'), CY(24), AZT + .2], text:'MS1 PIN', on: hi },
+    { at:[RX('d'), CY(23), AZT + .2], text:'MS2 PIN', on: hi },
+    { at:[RX('d'), CY(22), AZT + .2], text:'MS3 PIN', on: hi },
+    { at:[RX('d'), CY(19), AZT + .2], text:'STEP PIN', on: run },
+    { at:[RX('d'), CY(18), AZT + .2], text:'DIR PIN', on: st.dir < 0 },
+    { at:[RX('d'), CY(25), AZT + .2], text:'ENABLE PIN', on: false },
+    { at:[RX('b'), (CY(20) + CY(21))/2, WZ + .6], text:'SLP-RST LINK', on: false },
+    { at:[RX('g'), CY(25), AZT + .2], text:'VMOT PIN', on: run },
+    { at:[RX('g'), CY(21), AZT + .2], text:'COIL OUT 1A', on: run && Math.abs(ia) > .05 },
+    { at:[RX('g'), CY(20), AZT + .2], text:'COIL OUT 1B', on: run && Math.abs(ia) > .05 },
+    { at:[RX('g'), CY(22), AZT + .2], text:'COIL OUT 2A', on: run && Math.abs(ib) > .05 },
+    { at:[RX('g'), CY(23), AZT + .2], text:'COIL OUT 2B', on: run && Math.abs(ib) > .05 },
+    { at:[RX('i') + .4, CY(9), BT - 1], text:'SPRING CLIPS', on: false },
+    { at:[RAIL.bp, RAILYS[8], BT - 1], text:'12V RAIL', on: false },
+    { at:[RAIL.fp, RAILYS[6], BT - 1], text:'5V RAIL', on: false },
+    { at:[(RAIL.bm + RAIL.bp)/2, RY(28), BT + 13.2], text:'100UF CAP', on: run },
+    { at:[BX0 + 2, JK.y, AZT + 11], text:'DC JACK 12V', on: false },
+    { at:[NC[0], NC[1] + 1.8, AZT + 1.2], text:'ATMEGA328P', on: run },
+    { at: near(19, BH + 13), text:'STATOR', on: false },
+    { at: nearPole(true), text:'COIL A', on: run && Math.abs(ia) > .05 },
+    { at: nearPole(false), text:'COIL B', on: run && Math.abs(ib) > .05 },
+    { at: near(12.4, BH + 14), text:'ROTOR TEETH', on: run },
+    { at: near(10.8, BH + 20.2), text:'MAGNET', on: false },
+    { at: near(5.5, BH + 4), text:'BEARING', on: run },
+    { at: near(2.5, MZ.b1 + 4), text:'SHAFT', on: run },
+    { at:[MO.x + 18*Math.cos(a), MO.y + 18*Math.sin(a), BH + 55.6], text:'POINTER', on: run },
+    { at:[MO.x - .5, MO.y - MO.h - 1.6, BH + 5], text:'MOTOR LEADS', on: run },
+  ].filter(Boolean);
+}
+function surfaceLabels(st){
+  return [
+    { at:[MC[0] + 3, MC[1] - 3, AZT + 6.2], text:'A4988 DRIVER', on: st.run > 0 },
+    { at:[POT[0], POT[1], AZT + 1.8], text:'TRIMPOT', on: st.drvT < 1 },
+    { at:[RAIL.fm - 1.5, CY(23), WZ], text:'MS JUMPERS', on: st.ms !== st.msT },
+    { at:[NC[0], NC[1] - 8, AZT + 1], text:'ARDUINO NANO', on: st.run > 0 },
+    { at:[RX('c'), CY(10), WZ + .6], text:'SIGNAL WIRES', on: st.run > 0 },
+    { at:[BX0 + 2, BY0 + 20, BT], text:'BREADBOARD', on: false },
+    { at:[BX0 + 2, JK.y, AZT + 11], text:'12V JACK', on: false },
+    { at:[MO.x + MO.h, MO.y + 8, BH + 20], text:'NEMA17 MOTOR', on: st.run > 0 },
+  ];
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0);
+  const backF = vis([-1, 0, 0]), rightF = vis([0, -1, 0]);
+  let s = '';
+  if (!backF) s += jackTail();
+  if (!rightF) s += usbTail();
+  s += board(DESK[0], DESK[1], DESK[2], DESK[3], BH, 6, WOOD);
+  const top = boardTop(DESK[0], DESK[1], DESK[2], DESK[3], BH, 6);
+  const bbP = []; for (const x of [BX0, BX0 + BBW]) for (const y of [BY0, BY0 + BBL]) for (const z of [BH, BT]) bbP.push([x, y, z]);
+  const moP = [...octo(MO.h, MO.ch).map(([x, y]) => [x, y, BH]), ...octo(MO.h, MO.ch).map(([x, y]) => [x, y, MZ.f1]), [MO.x, MO.y, MZ.top]];
+  s += castShadow(bbP, BH, top) + castShadow(moP, BH, top);
+  const items = [bbItem(st, k), ...a4988Items(st, k), ...nanoItems(st), ...powerItems()];
+  for (const w of wires(st)) items.push(...aWire(w.pts, w.col));
+  for (const [c, col, o] of LEADS) items.push(...aWire(leadPts(c, o), col, .55, BH, 3));
+  const sd = screwdriver(st, m), mot = motorItem(st, m, k).svg, motorNear = vis([0, 1, 0]);
+  s += (motorNear ? '' : mot) + byDepth(items) + (sd ? sd.svg : '') + (motorNear ? mot : '');
+  if (backF) s += jackTail();
+  if (rightF) s += usbTail();
+  const lab = k > .6 ? insideLabels(st) : surfaceLabels(st);
+  return s + xrCallouts(lab, LB);
+}
+
+/* ---------- behaviour (one state object, one loop) ---------- */
+let ui, looping = false;
+function tick(dt){
+  const st = ui.st; let busy = false;
+  if (st.drvT < 1){ st.drvT = Math.min(1, st.drvT + dt/1.7); const r = Math.max(0, Math.min(1, (st.drvT - .25)/.5));
+    st.pot = st.potFrom + (st.potTo - st.potFrom)*ease(r); busy = true; }
+  if (st.ms !== st.msT){ st.ms = st.msT > st.ms ? Math.min(st.msT, st.ms + dt/.7) : Math.max(st.msT, st.ms - dt/.7); busy = true; }
+  if (st.run > 0){ st.acc += dt*PPS;
+    while (st.acc >= 1 && st.run > 0){ st.acc -= 1; st.run--; st.pos += st.dir*(st.mode === 'full' ? 16 : 1); st.pulses++; }
+    st.pulse = !st.pulse; busy = true; if (!st.run) st.pulse = false; }
+  return busy;
+}
+function kick(){ if (looping) return; looping = true; ui.animate(dt => { const b = tick(dt); if (!b) looping = false; return b; }); }
+function setLimit(st, i){ st.lim = i; st.potFrom = st.pot; st.potTo = potAng(i); st.drvT = 0; kick(); }
+function setMode(st, mode){
+  if (st.run > 0) return ui.flash('wait until the 200 steps are done');
+  st.mode = mode; st.msT = mode === 'full' ? 0 : 1;
+  if (mode === 'full') st.pos = Math.round(st.pos/16)*16;      // the translator goes to the next full-step position
+  kick();
+}
+function send(st){
+  if (st.run > 0) return ui.flash('still stepping, wait for the 200 pulses');
+  if (st.ms !== st.msT) return ui.flash('the MS jumpers are still moving');
+  st.run = 200; st.acc = 0; kick();
+}
+function reverse(st){ st.dir = -st.dir; ui.flash(st.dir < 0 ? 'DIR is HIGH: the shaft turns clockwise' : 'DIR is LOW: the shaft turns anticlockwise', 1400); }
+
+const deg = st => { const a = ((mechAng(st) % 360) + 360) % 360; return (Math.round(a*10)/10).toFixed(1); };
+ui = mountFigure({
+  fig:'A4', title:'A4988 stepper driver',
+  size:[DESK[2], DESK[3], 70], palette:'tomato', turn:'full',
+  state:{ lim:1, pot:potAng(1), potFrom:potAng(1), potTo:potAng(1), drvT:1, mode:'full', ms:0, msT:0, pos:0, dir:1, run:0, acc:0, pulse:false, pulses:0 },
+  scene,
+  stats: st => [
+    { label:'VREF', value: vref(st).toFixed(2) + ' V' },
+    { label:'Limit', value: LIMS[st.lim].toFixed(1) + ' A', small:true },
+    { label:'Per pulse', value: st.mode === 'full' ? '1.8°' : '0.1125°', small:true },
+    { label:'Shaft', value: deg(st) + '°', small:true },
+  ],
+  buttons:[
+    { label:'Set current limit', choices: st => LIMS.map((I, i) => ({ label: I.toFixed(1) + ' A', current: st.lim === i, onClick: st => setLimit(st, i) })) },
+    { label:'Step mode', choices: st => [
+        { label:'Full step', current: st.mode === 'full', disabled: st.run > 0, why:'wait until the 200 steps are done', onClick: st => setMode(st, 'full') },
+        { label:'1/16 step', current: st.mode === '16', disabled: st.run > 0, why:'wait until the 200 steps are done', onClick: st => setMode(st, '16') } ] },
+    { label:'Send 200 steps', onClick: st => send(st) },
+    { label:'Reverse direction', onClick: st => reverse(st) },
+  ],
+  params:(st, q) => {
+    if (q.get('mode') === '16'){ st.mode = '16'; st.ms = st.msT = 1; }
+    if (q.has('ms')) st.ms = +q.get('ms');
+    if (q.has('lim')){ st.lim = Math.max(0, Math.min(2, +q.get('lim') | 0)); st.pot = st.potFrom = st.potTo = potAng(st.lim); }
+    if (q.has('pos')) st.pos = +q.get('pos');
+    if (q.get('dir') === '-1') st.dir = -1;
+    if (q.has('drv')) st.drvT = +q.get('drv');
+    if (q.get('run') === '1'){ st.run = 100; st.pulse = true; }
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
