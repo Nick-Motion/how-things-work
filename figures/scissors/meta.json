@@ -1,0 +1,51 @@
+{
+  "slug": "scissors",
+  "title": "Scissors",
+  "prompt": "a pair of scissors holding a strip of paper on a table with three buttons: “Open” separates the blades; “Cut” closes the handles and shears the paper; “Move paper” places it nearer the pivot to increase cutting force; see-through reveals the pivot and overlapping wedge-shaped cutting edges",
+  "source": "book",
+  "sourceUrl": "https://en.wikipedia.org/wiki/The_Way_Things_Work",
+  "category": "workshop",
+  "buttons": [
+    "Open",
+    "Cut",
+    "Move paper",
+    "Reset"
+  ],
+  "blurb": "A teaching adaptation of paired levers and wedge-shaped edges that shear paper with more force near the pivot.",
+  "minimumLabels": 8,
+  "adaptation": {
+    "initialState": "Closed blades with a completed snip. Reset supplies fresh paper and opens the blades.",
+    "geometry": "Generic scissors enlarged for legibility; paper and bevel thickness exaggerated. No exact book artwork reproduction.",
+    "force": "Ideal per-blade force from a 10 N perpendicular effort at a 65 mm handle arm. Load arm changes from 70 to 34 mm. Omits blade friction, flex, grip angle, fracture toughness and force fluctuations.",
+    "movePaper": "Opens before sliding; preserves existing cuts. Reset replaces the specimen as a teaching action.",
+    "editionScope": {
+      "1988": "access_restricted_unverified",
+      "1998": "not_individually_verified",
+      "2016": "direct_page_support_printed_14"
+    }
+  },
+  "sources": [
+    {
+      "title": "The Way Things Work Now, printed page 14",
+      "url": "https://archive.org/details/the-way-things-work-now-david-macaulay-neil-ardley-z-library/page/n15/mode/1up",
+      "evidence": "/home/nm/.bb/thread-storage/thr_mr6grtbcjs/book-catalog-audit/raw/now-pages.json",
+      "index": 15
+    },
+    {
+      "title": "Mahvash et al. Modeling the Forces of Cutting with Scissors, 2008",
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC2709828/",
+      "supports": "Shared pivot, blade contact and fracture; handle force relates to cutting torque and contact distance. Real forces include friction and fracture."
+    }
+  ],
+  "verification": {
+    "productionTelemetry": "n/a, standalone static HTML with no installed production telemetry",
+    "liveVerification": "untested",
+    "local": "pass_builder_local",
+    "labelsRendered": 20,
+    "checks": 24,
+    "review": "evidence/review.json",
+    "receipt": "evidence/browser-receipt.json",
+    "video": "/home/nm/workspaces/how-things-work/figures/scissors/evidence/video/page@746e37ace85a618e180567afd4ea6659.webm",
+    "independentVerification": "pending coordinator assignment"
+  }
+}

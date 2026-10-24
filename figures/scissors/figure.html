@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Scissors</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Two first-class levers share a screw pivot. Each steel blade continues into its handle shank.
+   Squeezing the handles rotates the sharpened bevels past one another. The contact advances
+   from the heel towards the tips, trapping and shearing the strip across its width.
+   Open separates the edges. Cut closes them and leaves two pieces on the table.
+   Move paper opens the blades and slides the same strip closer to the pivot, preserving cuts.
+   Reset supplies a fresh strip and opens the blades. This is a teaching control, not repair.
+   Initial closed view shows a completed snip. Reset prepares an intact specimen.
+   Structure: tabletop supports the lower handle and blade. Upper blade bears on the lower blade.
+   Mechanism: upper and lower blades, spines, heels, tips, flat inner faces and ground bevels.
+   Pivot: screw head, shank through both blade holes, threaded end in the lower blade.
+   Controls: thumb ring, finger bow, steel shanks and moulded grips attached to those shanks.
+   Material: paper strip and its two cut edges. No power, gears, springs or hidden actuator.
+   Sources: saved 2016 book p14, and Mahvash et al., IEEE TBME 2008, PMC2709828.
+   Adaptation: generic proportions enlarged 5x; paper thickness exaggerated for visibility.
+   Ideal force per blade = 10 N x 65 mm / load arm. Friction, flex and fracture are omitted.
+   The 1988 edition is restricted and unverified; 1998 has not been individually verified. */
+const scPivot = [60, 50], scTable = [130,100,3], scSteel = matOf('#c9d6dc');
+const scPaperMat = matOf('#fff6c9'), scEdgeMat = matOf('#f5fafb');
+const scState = {angle:0, targetAngle:0, distance:35, targetDistance:35, cut:1, phase:'idle', running:false};
+const scPoint = (u,v,z,side,angle) => {
+  const a = side*angle*Math.PI/180;
+  return [scPivot[0]+u*Math.cos(a)-v*Math.sin(a),scPivot[1]+u*Math.sin(a)+v*Math.cos(a),z];
+};
+const scBounds = pts => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i])))];
+function scSolid(bottom,top,material,w=.8){
+  return loft(bottom,top,n=>tone(n,material))
+    + (vis([0,0,1]) ? fill(pd(top),tone([0,0,1],material)) : fill(pd(bottom),tone([0,0,-1],material)))
+    + hullInk([...bottom,...top],w);
+}
+function scTick(st,dt){
+  st.angle += Math.sign(st.targetAngle-st.angle)*Math.min(Math.abs(st.targetAngle-st.angle),dt*(st.phase==='cutting'?5+st.angle*.7:30));
+  st.distance += Math.sign(st.targetDistance-st.distance)*Math.min(Math.abs(st.targetDistance-st.distance),dt*22);
+  if(st.phase==='cutting'){
+    const a=st.angle*Math.PI/180, contact=4/(Math.sin(a)+.08*Math.cos(a));
+    st.cut=Math.max(st.cut,Math.min(1,Math.max(0,(contact-(st.distance-5))/10)));
+  }
+  if(st.pendingMove && st.angle>=25.9){st.pendingMove=false;st.targetDistance=17;st.phase='moving';return true;}
+  if(st.angle===st.targetAngle && st.distance===st.targetDistance){st.phase='idle';return false;}
+  return true;
+}
+function scRun(st,ui){
+  if(st.running)return;
+  st.running=true;
+  ui.animate(dt=>{const busy=scTick(st,dt);if(!busy)st.running=false;return busy;});
+}
+function scOpen(st,ui){st.targetAngle=26;st.phase='opening';scRun(st,ui);}
+function scCut(st,ui){
+  if(st.cut===1)return ui.flash('This strip is cut. Reset supplies fresh paper.');
+  if(st.angle<.1 && st.phase!=='opening')return ui.flash('Open the blades first.');
+  st.pendingMove=false;st.targetDistance=st.distance;st.targetAngle=0;st.phase='cutting';scRun(st,ui);
+}
+function scMove(st,ui){
+  if(st.targetDistance===17)return ui.flash('The paper is already near the pivot.');
+  st.targetAngle=26;st.phase='opening';scRun(st,ui);
+  // The paper slides only after the blades clear its whole width.
+  st.pendingMove=true;
+}
+function scReset(st,ui){
+  st.angle=26;st.targetAngle=26;st.distance=35;st.targetDistance=35;st.cut=0;st.phase='idle';st.pendingMove=false;
+  ui.flash('Fresh paper specimen.');
+}
+function scLabels(items){
+  const vb=document.getElementById('fig').viewBox.baseVal, phone=innerWidth<=560;
+  const ordered=items.map(it=>({...it,xy:P(...it.at)})).sort((a,b)=>a.xy[0]-b.xy[0]);
+  const half=Math.ceil(ordered.length/2), cols=[ordered.slice(0,half),ordered.slice(half)];
+  return cols.map((col,side)=>{
+    col.sort((a,b)=>a.xy[1]-b.xy[1]);
+    const px=side?vb.width-30:30, y0=vb.height*(phone?.18:.33), y1=vb.height*(phone?.80:.78);
+    return col.map((it,i)=>tag(it.at,(px-it.xy[0])/INK_K,(y0+(y1-y0)*i/Math.max(1,col.length-1)-it.xy[1])/INK_K,it.text,it.on)).join('');
+  }).join('');
+}
+function scScene(st,m){
+  const xr=ease(st.xr||0), parts=[], labels=[], shadows=[];
+  const tableTop=boardTop(0,0,130,100,3,5);
+  const put=(pts,svg)=>{parts.push({box:scBounds(pts),svg});shadows.push(castShadow(pts,3,tableTop));};
+  const label=(at,text,on=false)=>labels.push({at,text,on});
+  let result=board(0,0,...scTable.slice(0,2),3,5,WOOD);
+  const paperX=60+st.distance, crackX=paperX-5+10*st.cut, gap=2.4*st.cut;
+  const paperPolys = [
+    [[paperX-5,15],[paperX+5,15],[paperX+5,50],[crackX,50],[crackX,50-gap/2],[paperX-5,50-gap/2]],
+    [[paperX-5,50+gap/2],[crackX,50+gap/2],[crackX,50],[paperX+5,50],[paperX+5,85],[paperX-5,85]]
+  ];
+  for(const poly of paperPolys){
+    const a=poly.map(([x,y])=>[x,y,4.18]), b=poly.map(([x,y])=>[x,y,4.32]);
+    put([...a,...b],scSolid(a,b,scPaperMat,.9));
+  }
+  label([paperX,24,4.32],'PAPER STRIP',st.phase==='cutting');
+  label([25,86,3],'TABLETOP');
+  for(const side of [-1,1]){
+    const upper=side===1, bottom=upper?4.25:3.25, top=upper?5.25:4.25;
+    const q=(u,v,z)=>scPoint(u,v*side,z,side,st.angle);
+    const profile=[[-4,-4],[0,-4],[48,-.16],[50,1.1],[43,5],[4,5],[-4,3]];
+    const flat=profile.map(([u,v])=>q(u,v,4.25));
+    const outer=profile.map(([u,v],i)=>q(u,v+(i<3?1.7:0),upper?top:bottom));
+    const bladeA=upper?flat:outer, bladeB=upper?outer:flat;
+    put([...bladeA,...bladeB],`<g opacity="${1-.78*xr}">${scSolid(bladeA,bladeB,scSteel,1.7)}</g>`);
+    const edgeA=[q(0,-4,4.25),q(48,-.16,4.25)], edgeB=[q(0,-2.3,upper?top:bottom),q(48,1.54,upper?top:bottom)];
+    put([...edgeA,...edgeB],shape([edgeA[0],edgeA[1],edgeB[1],edgeB[0]],upper?'#f8fcff':'#a7c1d0',.7));
+    const shank=[[-29,-11],[-10,-5],[0,-3],[1,2],[-12,1],[-30,-5]];
+    const sa=shank.map(([u,v])=>q(u,v,bottom)), sb=shank.map(([u,v])=>q(u,v,top));
+    put([...sa,...sb],scSolid(sa,sb,scSteel,1));
+    const rx=upper?10:13, ry=upper?6.4:7.4, cu=-35, cv=-9, z0=upper?4.25:3, z1=z0+2.2;
+    for(let j=0;j<32;j++){
+      const a=j/32*2*Math.PI,b=(j+1)/32*2*Math.PI;
+      const ring=[[cu+rx*Math.cos(a),cv+ry*Math.sin(a)],[cu+rx*Math.cos(b),cv+ry*Math.sin(b)],
+        [cu+(rx-2.8)*Math.cos(b),cv+(ry-2.8)*Math.sin(b)],[cu+(rx-2.8)*Math.cos(a),cv+(ry-2.8)*Math.sin(a)]];
+      const ra=ring.map(([u,v])=>q(u,v,z0)),rb=ring.map(([u,v])=>q(u,v,z1));
+      let svg=loft(ra,rb,n=>tone(n,m))+fill(pd(rb),tone([0,0,1],m));
+      svg+=line([rb[0],rb[1]],1.25)+line([rb[2],rb[3]],1);
+      put([...ra,...rb],`<g opacity="${1-.65*xr}">${svg}</g>`);
+    }
+    if(xr>.05){
+      const tang=[q(upper?-27:-24,-9,upper?4.75:3.75),q(-20,-6,upper?4.75:3.75)];
+      put(tang,`<g opacity="${xr}">${rod(...tang,.65,scSteel,toneI,.7)}</g>`);
+    }
+    label(q(-35,-9-ry+1,z1),upper?'THUMB RING':'FINGER BOW',st.phase!=='idle');
+    label(q(-17,-4.5,top),upper?'UPPER SHANK':'LOWER SHANK',st.phase!=='idle');
+    label(q(28,3,top),upper?'UPPER BLADE':'LOWER BLADE',st.phase==='cutting');
+    label(q(23,-4+.08*23+.9,upper?4.8:3.8),upper?'UPPER BEVEL':'LOWER BEVEL',st.phase==='cutting');
+    label(q(49,.8,top),upper?'UPPER TIP':'LOWER TIP');
+    label(q(40,5,top),upper?'UPPER SPINE':'LOWER SPINE');
+    label(q(4,-3,4.25),upper?'UPPER HEEL':'LOWER HEEL');
+    if(xr>.6)label(q(13,1,4.25),upper?'UPPER INNER FACE':'LOWER INNER FACE');
+  }
+  const headA=on(PZ(5.25),ellUV(60,50,2.8,2.8,24)),headB=on(PZ(6.4),ellUV(60,50,2.8,2.8,24));
+  put([...headA,...headB],`<g opacity="${1-.86*xr}">${scSolid(headA,headB,METAL,1.1)+line([[58.3,50,6.42],[61.7,50,6.42]],1.4)}</g>`);
+  if(xr>0){
+    const axA=[60,50,3.25],axB=[60,50,6.4];
+    put([[58.8,48.8,3.25],[61.2,51.2,6.4]],`<g opacity="${xr}">${rod(axA,axB,1.05,matOf('#b89254'),toneI,.8)}</g>`);
+  }
+  label([60,50,6.4],'PIVOT SCREW',st.phase!=='idle');
+  if(xr>.6)label([60.8,50,4.3],'PIVOT SHANK',st.phase!=='idle');
+  result+=shadows.join('')+byDepth(parts);
+  if(xr>.6)result+=scLabels(labels);
+  return result;
+}
+const scUi=mountFigure({fig:'S',turn:'full',title:'Scissors',size:[130,100,12],palette:'tomato',state:scState,scene:scScene,
+  stats:st=>[{label:'Load arm',value:(st.distance*2).toFixed(0)+' mm'},
+    {label:'Ideal edge force',value:(10*65/(st.distance*2)).toFixed(1)+' N'}],
+  buttons:[{label:'Open',onClick:scOpen},{label:'Cut',onClick:scCut},{label:'Move paper',onClick:scMove},{label:'Reset',onClick:scReset}],
+  params:(st,q)=>{
+    if(q.get('open')==='1')st.angle=st.targetAngle=26;
+    if(q.get('near')==='1')st.distance=st.targetDistance=17;
+    if(q.get('cut')==='0')st.cut=0;
+  }
+});
+xrMount(()=>scUi,()=>'');
+if(!document.documentElement.hasAttribute('data-errors'))document.documentElement.dataset.errors='';
+</script></body></html>
