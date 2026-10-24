@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TB6612FNG motor driver</title></head><body>
+<script src="core.js"></script>
+<script>
+/* ============================================================
+   TB6612FNG dual motor driver on a bench, with two N20 gear motors.
+
+   HOW IT REALLY WORKS
+   1. Power: a 9V battery is the motor supply (VM). Its snap clip carries + and - over red/black leads into the breadboard
+      strips of the breakout's VM and GND pins. The XIAO RP2040 runs from its USB-C cable and makes 3.3 V logic: a jumper
+      from its 3V3 pin feeds the driver's VCC, another joins the grounds.
+   2. Commands: seven jumpers on breadboard row a carry the XIAO's pins D6..D0 to PWMA, AIN2, AIN1, STBY, BIN1, BIN2, PWMB.
+   3. Inside the TB6612FNG (SSOP24) are two H-bridges, A and B. Each is four power MOSFETs: a high-side switch from VM and
+      a low-side switch to ground on each output (AO1, AO2 / BO1, BO2). Gate drivers switch them as the control logic
+      decodes IN1, IN2, PWM and STBY. Datasheet truth table:
+        STBY low                     -> all four off (standby)
+        IN1 H, IN2 L, PWM H          -> OUT1 H, OUT2 L: forward   (high-side 1 + low-side 2 on)
+        IN1 L, IN2 H, PWM H          -> OUT1 L, OUT2 H: reverse   (high-side 2 + low-side 1 on)
+        IN1 H, IN2 L or L, H, PWM L  -> short brake (both low-sides on)
+        IN1 H, IN2 H                 -> short brake: the motor's own back-EMF current circulates and stops it fast
+        IN1 L, IN2 L, PWM H          -> stop / coast: all off, the outputs float and the motor spins down by itself
+      So PWM chops each drive between "drive" and "short brake"; the duty sets the average voltage, so the speed.
+      Limits: VM 4.5-13.5 V, VCC 2.7-5.5 V, 1.2 A average / 3.2 A peak per channel, PWM up to 100 kHz, about 0.5 ohm
+      (upper + lower switch), built-in thermal shutdown and low-voltage detection.
+   4. Each N20 gear motor: current enters at the end-cap terminals, through two brushes onto a three-segment commutator and
+      into three armature coils; their field pulls against two ferrite magnets and the commutator flips the coil currents
+      as it turns. A spur-gear train between two plates slows it down to the D output shaft, which carries a wheel.
+   5. Motor B is mounted mirror-image, so its leads go in swapped (red to BO2): "forward" turns both wheels the same way.
+
+   PARTS (each held by another)
+   BENCH   wooden board . mini breadboard (17 x 10 holes) and its 34 spring clips . USB-C cable over the bench edge
+   MCU     XIAO RP2040: PCB on two header strips, 14 pins, RP2040, flash chip, USB-C socket, boot/reset buttons, power LED
+   DRIVER  breakout PCB on two header strips, 16 pins with silkscreen names, copper traces, 10uF + 0.1uF VM caps, 0.1uF
+           VCC cap, TB6612FNG package and its 24 leads; inside: lead frame paddle and fingers, die, 8 power MOSFETs,
+           gate drivers, control logic, thermal + UVLO block, 24 bond wires
+   WIRING  7 logic jumpers on row a, 3V3 and GND jumpers on row j, red/black battery leads, red/black leads of each motor
+   POWER   9V battery (six AAAA cells inside, contact plate), + stud and - hex terminals, snap clip
+   MOTORS  printed stand . bracket with two feet and screws . can . two magnets . armature: shaft, core, three coils and
+           pole shoes . commutator . two brushes . end cap, boss and two terminals . gearbox: two plates, four pins,
+           four spur gears and their pinions . bushing . D output shaft . wheel: rubber tyre, hub with five holes, boss
+   ============================================================ */
+
+/* ---------- geometry (x = depth toward the viewer, y = width, z = up; 1 unit = 1 mm) ---------- */
+const tbBH = 3, tbW = 80, tbD = 131, tbHT = 36;                       // bench board
+const tbTOP = boardTop(0, 0, tbW, tbD, tbBH, 6);
+const tbBB = [39, 74, 16.5, 63.5], tbBZ = tbBH + 8.5;                  // mini breadboard x0 x1 y0 y1, its top
+const tbRow = i => 70.47 - 2.54*i - (i >= 5 ? 5.08 : 0);               // rows a..j (a at the front)
+const tbCol = c => 19.68 + (c - 1)*2.54;                               // columns 1..17 (1 at the right end)
+const tbPCB = [47.61, 67.93, 38.73, 59.05], tbPZ0 = tbBZ + 2.5, tbPZ1 = tbPZ0 + 1.6;   // driver breakout, rows c/h, cols 9..16
+const tbXI = [50.29, 67.79, 16.1, 37.1], tbXZ1 = tbBZ + 2.5 + 1.2;    // XIAO, rows c/g, cols 1..7
+const tbCX = 57.77, tbCY = 48.89;                                      // TB6612FNG centre (drawn a little larger than life)
+const tbMX = 22, tbMZ = 20;                                            // motor axis (along y)
+const tbMOT = { A:{ rear:45.5, s:-1, n:'A' }, B:{ rear:54.5, s:1, n:'B' } };          // rear face y, shaft direction
+const tbYd = (mo, d) => mo.rear + mo.s*d;
+const tbYR = (mo, d0, d1) => { const a = tbYd(mo, d0), b = tbYd(mo, d1); return [Math.min(a, b), Math.max(a, b)]; };
+const tbBAT = [46, 72.5, 68, 116.5, tbBH, tbBH + 17.5];                // 9V battery lying flat, terminals at +y
+const tbFRONT = ['PWMA', 'AI2', 'AI1', 'STBY', 'BI1', 'BI2', 'PWMB', 'GND'];   // row c, cols 9..16 (silkscreen)
+const tbBACK = ['VM', 'VCC', 'GND', 'A01', 'A02', 'B02', 'B01', 'GND'];        // row h
+const tbPinY = p => p <= 12 ? tbCY - 4.125 + (p - 1)*.75 : tbCY + 4.125 - (p - 13)*.75;   // chip leads (pitch drawn .75)
+
+const tbM = { bb: matOf('#f3f1ea'), clip: matOf('#c9ced2'), hdr: matOf('#2f2c29'), pin: matOf('#e9c766'), xiao: matOf('#2f3237'),
+  chip: matOf('#2c2b2e'), lead: matOf('#d5d9dc'), die: matOf('#a3b0c8'), fet: matOf('#6a7ca3'), lit: matOf('#ff9a3a'),
+  logic: matOf('#c4cce0'), cer: matOf('#c9a77a'), cu: matOf('#d2803f'), stand: matOf('#7f8c9a'), brk: matOf('#3a3835'),
+  cap2: matOf('#45413c'), brass: matOf('#d8b25a'), mag: matOf('#7d7973'), steel: matOf('#c3c8cc'), tyre: matOf('#3d3936'),
+  hub: matOf('#f1ede2'), bat: matOf('#35353b'), batc: matOf('#cf7d32'), cell: matOf('#d3d9de'), snap: matOf('#2e2d2b'), usb: matOf('#3b3936') };
+const tbGOLD = '#e2b84c';
+const tbCAN = Array.from({length:28}, (_, i) => { const a = i/28*2*Math.PI; return [Math.max(-5, Math.min(5, 6*Math.cos(a))), 6*Math.sin(a)]; });
+const tbCAP = Array.from({length:28}, (_, i) => { const a = i/28*2*Math.PI; return [Math.max(-4.8, Math.min(4.8, 5.8*Math.cos(a))), 5.8*Math.sin(a)]; });
+const tbBRK = (() => { const o = [[6.9, -6]]; for (let i = 0; i <= 14; i++){ const a = i/14*Math.PI; o.push([6.9*Math.cos(a), 6.9*Math.sin(a)]); } o.push([-6.9, -6]); return o; })();
+const tbRingY = (uv, y) => uv.map(([u, v]) => [tbMX + u, y, tbMZ + v]);
+const tbCirY = (cx, y, cz, r, n = 24, a0 = 0) => Array.from({length:n}, (_, i) => { const a = a0 + i/n*2*Math.PI; return [cx + r*Math.cos(a), y, cz + r*Math.sin(a)]; });
+const tbBoxPts = (x0, y0, z0, x1, y1, z1) => { const o = []; for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) o.push([x, y, z]); return o; };
+const tbBoxOf = (pts, e = .02) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+// the face of a slab between y = ya and y = yb that is toward the viewer, if any
+const tbNearY = (ya, yb) => vis([0, 1, 0]) ? { y: Math.max(ya, yb), n: [0, 1, 0] } : vis([0, -1, 0]) ? { y: Math.min(ya, yb), n: [0, -1, 0] } : null;
+// text lying on a top face, reading along -y
+const tbTxZ = (x, y, z, str, size, col = INK, w = 700) => { const o = P(x, y, z);
+  return `<text transform="${txM(o, Dv(0,-1,0), Dv(1,0,0))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${w}" letter-spacing=".02em">${str}</text>`; };
+const tbG = (k, svg) => `<g opacity="${f(k)}">${svg}</g>`;
+
+/* ---------- wires: cut into short pieces, each with its own box, so they sort with the solids ---------- */
+const tbBend = (pts, r = 1.2) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k]) * d/la), q = c.map((v, k) => b[k] + (v - b[k]) * d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+function tbWire(pts, col, r = .5, L = 4, br = 1.3){
+  const q = tbBend(pts, br), out = [], cap = 'fill="none" stroke-linecap="round" stroke-linejoin="round"';
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < L){ len += Math.hypot(...q[j].map((v, k) => v - q[j - 1][k])); j++; }
+    if (len < L) while (j < q.length - 1) j++;
+    const seg = q.slice(i, j + 1), d = pd(seg, false);
+    out.push({ box: tbBoxOf(seg), svg: `<path d="${d}" ${cap} stroke="${INK}" style="stroke-width:${f(2*r + 1.5*INK_K)}"/><path d="${d}" ${cap} stroke="${col}" style="stroke-width:${f(2*r)}"/>` });
+    i = j; }
+  return out; }
+const tbTrace = (pts, col, w) => `<path d="${pd(pts.map(([x, y]) => [x, y, tbPZ1 + .01]), false)}" fill="none" stroke="${col}" style="stroke-width:${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+
+/* ---------- the driver's state: what the pins say and which MOSFETs conduct ---------- */
+const tbVM = st => st.snap >= .999;
+function tbLogic(st){
+  const drv = st.cmd === 'fwd' || st.cmd === 'rev';
+  const pwm = drv ? (st.duty >= 1 || st.ph < st.duty ? 1 : 0) : 1;
+  const in1 = st.cmd === 'fwd' || st.cmd === 'brake' ? 1 : 0, in2 = st.cmd === 'rev' || st.cmd === 'brake' ? 1 : 0;
+  const stby = st.stby ? 1 : 0, vm = tbVM(st);
+  let on = [];
+  if (stby && vm){ if (in1 && in2) on = ['lo1', 'lo2'];
+    else if (in1) on = pwm ? ['hi1', 'lo2'] : ['lo1', 'lo2'];
+    else if (in2) on = pwm ? ['hi2', 'lo1'] : ['lo1', 'lo2']; }
+  return { pwm, in1, in2, stby, vm, on, drive: on.includes('hi1') || on.includes('hi2') };
+}
+
+/* ---------- bench parts ---------- */
+function tbBreadboard(k){
+  const [x0, x1, y0, y1] = tbBB, z0 = tbBH, z1 = tbBZ;
+  let cover = box(x0, y0, z0, x1, y1, z1, tbM.bb, toneI, 1.1);
+  cover += fill(pd(on(PZ(z1 + .01), rectUV(56.55, y0 + 1.2, 58.99, y1 - 1.2))), tbM.bb.d);   // centre channel
+  let hd = '';
+  for (let i = 0; i < 10; i++) for (let c = 1; c <= 17; c++){ const x = tbRow(i), y = tbCol(c); hd += pd(on(PZ(z1 + .02), rectUV(x - .42, y - .42, x + .42, y + .42))); }
+  cover += `<path d="${hd}" fill="#5d574d"/>`;
+  let svg = cover;
+  if (k > 0){ const cl = [];
+    for (const [ra, rb] of [[0, 4], [5, 9]]) for (let c = 1; c <= 17; c++){ const y = tbCol(c), xa = tbRow(rb) - .9, xb = tbRow(ra) + .9;
+      cl.push({ box:[[xa, y - .45, z0 + 1.6], [xb, y + .45, z1 - 1]], svg: box(xa, y - .45, z0 + 1.6, xb, y + .45, z1 - 1, tbM.clip, toneI, .4) }); }
+    svg = tbG(k, byDepth(cl)) + tbG(1 - .75*k, cover); }
+  const top = on(PZ(z1), rectUV(x0, y0, x1, y1));
+  svg += castShadow(tbBoxPts(tbXI[0], tbXI[2], z1, tbXI[1], tbXI[3], tbXZ1 + 1), z1, top) + castShadow(tbBoxPts(tbPCB[0], tbPCB[2], z1, tbPCB[1], tbPCB[3], tbPZ1 + 1.4), z1, top);
+  return { box:[[x0, y0, z0], [x1, y1, z1]], svg };
+}
+// a header pin standing out of a board top: solder fillet and square post
+const tbPin = (x, y, z, out) => { out.push({ box:[[x - .75, y - .75, z], [x + .75, y + .75, z + 1.5]],
+  svg: cyl(x, y, z, z + .35, .75, matOf('#d9dcdf'), toneI, .5, 12) + box(x - .32, y - .32, z + .35, x + .32, y + .32, z + 1.5, tbM.pin, toneI, .4) }); };
+function tbXiao(st){
+  const [x0, x1, y0, y1] = tbXI, zb = tbBZ, zp = zb + 2.5, zt = tbXZ1, it = [];
+  const put = (b, svg) => it.push({ box:b, svg }), bx = (a, b, M, w = .6, extra = '') => put([a, b], box(...a, ...b, M, toneI, w) + extra);
+  let under = '';
+  for (const r of [2, 6]) under += box(tbRow(r) - 1.25, tbCol(1) - 1.27, zb, tbRow(r) + 1.25, tbCol(7) + 1.27, zp, tbM.hdr, toneI, .6);
+  let pads = '';
+  for (const r of [2, 6]) for (let c = 1; c <= 7; c++) pads += fill(pd(on(PZ(zt + .01), rectUV(tbRow(r) - .85, tbCol(c) - .85, tbRow(r) + .85, tbCol(c) + .85))), tbGOLD);
+  under += box(x0, y0, zp, x1, y1, zt, tbM.xiao, toneI, .9) + pads + tbTxZ(64.6, 30.5, zt + .01, 'XIAO', 1.1, '#e9e4d8');
+  bx([54.57, 15.4, zt], [63.51, 22.8, zt + 3.26], METAL, .7);                                       // USB-C socket
+  bx([55.54, 24.4, zt], [62.54, 31.4, zt + .85], tbM.chip, .6, tbTxZ(59.04, 27.9, zt + .86, 'RP2040', .95, '#b9b6ae'));
+  bx([56.3, 32.4, zt], [59.3, 35.0, zt + .7], tbM.chip, .5);                                       // flash
+  bx([51.6, 23.0, zt], [53.4, 25.6, zt + 1], matOf('#dcdad4'), .5);                               // boot / reset buttons
+  bx([64.7, 23.0, zt], [66.5, 25.6, zt + 1], matOf('#dcdad4'), .5);
+  bx([52.2, 27.2, zt], [53.2, 28.4, zt + .5], matOf('#43c25c'), .4);                              // power LED (on USB)
+  for (const r of [2, 6]) for (let c = 1; c <= 7; c++) tbPin(tbRow(r), tbCol(c), zt, it);
+  return { box:[[x0, 15.4, zb], [x1, y1, zt + 3.3]], svg: under + byDepth(it) };
+}
+function tbChip(st, k){
+  const cx = tbCX, cy = tbCY, z0 = tbPZ1, lg = tbLogic(st), it = [];
+  const put = (b, svg) => it.push({ box:b, svg });
+  for (let p = 1; p <= 24; p++){ const y = tbPinY(p), back = p <= 12, xa = back ? cx - 4.3 : cx + 3.2, xb = back ? cx - 3.2 : cx + 4.3;
+    put([[xa, y - .18, z0], [xb, y + .18, z0 + .45]], box(xa, y - .18, z0, xb, y + .18, z0 + .45, tbM.lead, toneI, .3)); }
+  const bz0 = z0 + .15, bz1 = z0 + 1.65;
+  let body = box(cx - 3.2, cy - 4.5, bz0, cx + 3.2, cy + 4.5, bz1, tbM.chip, toneI, .9)
+    + fill(pd(on(PZ(bz1 + .01), ellUV(cx - 2.3, cy - 3.6, .4, .4, 12))), '#55524c') + tbTxZ(cx + .5, cy, bz1 + .01, 'TB6612FNG', 1.05, '#c9c6bd');
+  let inner = '';
+  if (k > 0){ const q = [], qp = (b, svg) => q.push({ box:b, svg }), dz0 = z0 + .75, dz1 = dz0 + .2, dx0 = cx - 1.95;
+    // lead frame: paddle and the 24 fingers, then the die and its blocks
+    qp([[cx - 2.2, cy - 3.6, dz0 - .12], [cx + 2.2, cy + 3.6, dz0]], box(cx - 2.2, cy - 3.6, dz0 - .12, cx + 2.2, cy + 3.6, dz0, tbM.lead, toneI, .3));
+    for (let p = 1; p <= 24; p++){ const y = tbPinY(p), back = p <= 12, xa = back ? cx - 3.2 : cx + 2.45, xb = back ? cx - 2.45 : cx + 3.2;
+      qp([[xa, y - .15, dz0 - .12], [xb, y + .15, dz0]], box(xa, y - .15, dz0 - .12, xb, y + .15, dz0, tbM.lead, toneI, .25)); }
+    let blocks = box(cx - 1.95, cy - 3.3, dz0, cx + 1.95, cy + 3.3, dz1, tbM.die, toneI, .5);
+    const tile = (x0, y0, x1, y1, M, fing) => { let s = shape(on(PZ(dz1 + .01), rectUV(x0, y0, x1, y1)), M.l, .35);
+      if (fing) for (let i = 1; i < 6; i++){ const x = x0 + (x1 - x0)*i/6; s += `<path d="${pd([[x, y0 + .12, dz1 + .02], [x, y1 - .12, dz1 + .02]], false)}" stroke="${M.d}" style="stroke-width:.1" fill="none"/>`; }
+      return s; };
+    // power MOSFETs: one column per output (AO1, AO2, BO2, BO1), low-side at the back edge, high-side next to it
+    const outs = [['A', 1], ['A', 2], ['B', 2], ['B', 1]];
+    outs.forEach(([ch, n], i) => { const y0 = cy - 3.22 + i*1.63, y1 = y0 + 1.5;
+      for (const hi of [0, 1]){ const lit = lg.on.includes((hi ? 'hi' : 'lo') + n), xa = dx0 + (hi ? 1.02 : .08);
+        blocks += tile(xa, y0, xa + .87, y1, lit ? tbM.lit : tbM.fet, true); } });
+    blocks += tile(cx + .05, cy - 3.2, cx + .6, cy + 3.2, lg.on.length ? matOf('#f7c873') : tbM.logic, false);    // gate drivers
+    blocks += tile(cx + .7, cy - 3.2, cx + 1.88, cy + 1.4, lg.stby ? matOf('#f7c873') : tbM.logic, false);           // control logic
+    blocks += tile(cx + .7, cy + 1.5, cx + 1.88, cy + 3.2, tbM.logic, false);                                        // thermal + UVLO
+    // bond wires, die pads to fingers
+    let bw = '';
+    for (let p = 1; p <= 24; p++){ const y = tbPinY(p), back = p <= 12, s = back ? -1 : 1, yp = Math.max(cy - 3.1, Math.min(cy + 3.1, y));
+      const a = [cx + s*1.82, yp, dz1], b = [cx + s*2.55, y, dz0], m = [cx + s*2.2, (yp + y)/2, dz1 + .55];
+      bw += pd([a, [cx + s*1.95, yp, dz1 + .4], m, [cx + s*2.45, y, dz0 + .3], b], false); }
+    blocks += `<path d="${bw}" fill="none" stroke="${tbGOLD}" stroke-width=".6"/>`;
+    qp([[cx - 1.95, cy - 3.3, dz0], [cx + 1.95, cy + 3.3, dz1 + .6]], blocks);
+    inner = byDepth(q); }
+  const bodyB = [[cx - 3.2, cy - 4.5, bz0], [cx + 3.2, cy + 4.5, bz1]];
+  put(bodyB, k > 0 ? tbG(k, inner) + tbG(1 - .9*k, body) + tbG(.6*k, hullInk(tbBoxPts(cx - 3.2, cy - 4.5, bz0, cx + 3.2, cy + 4.5, bz1), 1)) : body);
+  return it;
+}
+function tbBreakout(st, m, k){
+  const [x0, x1, y0, y1] = tbPCB, zb = tbBZ, zp = tbPZ0, zt = tbPZ1, lg = tbLogic(st), it = [];
+  const put = (b, svg) => it.push({ box:b, svg }), bx = (a, b, M, w = .5, extra = '') => put([a, b], box(...a, ...b, M, toneI, w) + extra);
+  let under = '';
+  for (const r of [2, 7]) under += box(tbRow(r) - 1.25, tbCol(9) - 1.27, zb, tbRow(r) + 1.25, tbCol(16) + 1.27, zp, tbM.hdr, toneI, .6);
+  // board: copper traces under the mask, tinned pads, silkscreen pin names
+  const tr = mix(m.l, '#ffffff', .28), hot = k > 0 && lg.drive ? '#ff9a3a' : tr;
+  let pcb = box(x0, y0, zp, x1, y1, zt, m, toneI, 1);
+  const fr = [23, 22, 21, 19, 17, 16, 15];
+  fr.forEach((p, i) => { const yh = tbCol(9 + i), yc = tbPinY(p); pcb += tbTrace([[64.6, yh], [63.4, yh], [62.7, yc], [62.07, yc]], tr, .38); });
+  [[12, 45.14], [13, 48.14], [14, 49.64], [15, 52.64]].forEach(([c, yc]) => { const yh = tbCol(c); pcb += tbTrace([[50.95, yh], [51.9, yh], [52.9, yc], [53.47, yc]], hot, .75); });
+  pcb += tbTrace([[50.95, 40], [61.2, 40], [61.2, 43.6], [62.07, 44.77]], tr, .75);                  // VM
+  for (const r of [2, 7]) for (let c = 9; c <= 16; c++) pcb += fill(pd(on(PZ(zt + .015), ellUV(tbRow(r), tbCol(c), .95, .95, 12))), '#d9dcdf');
+  tbFRONT.forEach((t, i) => pcb += tbTxZ(67.65, tbCol(9 + i), zt + .02, t, .78, '#fbf6ea'));
+  tbBACK.forEach((t, i) => pcb += tbTxZ(49.15, tbCol(9 + i), zt + .02, t, .78, '#fbf6ea'));
+  under += pcb;
+  // capacitors: 10uF and 0.1uF on VM, 0.1uF on VCC (ceramic bodies, tinned ends)
+  const capY = (xa, xb, ya, yb, h) => { const e = (yb - ya)*.2; bx([xa, ya, zt], [xb, ya + e, zt + h], METAL, .35); bx([xa, ya + e, zt], [xb, yb - e, zt + h], tbM.cer, .4); bx([xa, yb - e, zt], [xb, yb, zt + h], METAL, .35); };
+  const capX = (xa, xb, ya, yb, h) => { const e = (xb - xa)*.2; bx([xa, ya, zt], [xa + e, yb, zt + h], METAL, .35); bx([xa + e, ya, zt], [xb - e, yb, zt + h], tbM.cer, .4); bx([xb - e, ya, zt], [xb, yb, zt + h], METAL, .35); };
+  capX(55.0, 58.2, 40.9, 42.5, 1.2); capY(58.9, 59.7, 40.9, 42.5, .8); capX(55.4, 57.0, 54.5, 55.3, .8);
+  it.push(...tbChip(st, k));
+  for (const r of [2, 7]) for (let c = 9; c <= 16; c++) tbPin(tbRow(r), tbCol(c), zt, it);
+  return { box:[[x0, y0, zb], [x1, y1, zt + 1.7]], svg: under + byDepth(it) };
+}
+
+/* ---------- the motors ---------- */
+function tbGearY(mo, d0, d1, cx, cz, r, M, ph, nT){
+  const a = [cx, tbYd(mo, d0), cz], b = [cx, tbYd(mo, d1), cz];
+  let s = rod(a, b, r, M, toneI, .55, r, 22);
+  if (nT) for (let i = 0; i < nT; i++){ const t = (ph + i*360/nT)*Math.PI/180;
+    if (!vis([Math.cos(t), 0, Math.sin(t)])) continue; const p = y => [cx + r*Math.cos(t), y, cz + r*Math.sin(t)];
+    s += line([p(a[1]), p(b[1])], .3); }
+  return s;
+}
+function tbMotorInside(mo, st){
+  const yy = d => tbYd(mo, d), X = tbMX, Z = tbMZ, it = [], put = (b, svg) => it.push({ box:b, svg }), ps = (st.arm || 0)*mo.s;
+  const spin = Math.abs(st.sp) > .02;
+  for (const sx of [-1, 1]){ const xa = sx < 0 ? X - 4.75 : X + 3.95, [a, b] = tbYR(mo, 2.5, 12.5);
+    put([[xa, a, Z - 3.1], [xa + .8, b, Z + 3.1]], box(xa, a, Z - 3.1, xa + .8, b, Z + 3.1, tbM.mag, toneI, .6)); }
+  { const [a, b] = tbYR(mo, -.5, 16.5); put([[X - .5, a, Z - .5], [X + .5, b, Z + .5]], rod([X, yy(-.5), Z], [X, yy(16.5), Z], .5, METAL, toneI, .5, .5, 10)); }
+  for (let i = 0; i < 3; i++){ const a = (ps + i*120)*Math.PI/180, c = [X + 2.05*Math.cos(a), Z + 2.05*Math.sin(a)], o = [X + 3.3*Math.cos(a), Z + 3.3*Math.sin(a)], [ya, yb] = tbYR(mo, 3.3, 11.7);
+    put([[c[0] - 1.05, ya, c[1] - 1.05], [c[0] + 1.05, yb, c[1] + 1.05]], rod([c[0], yy(3.3), c[1]], [c[0], yy(11.7), c[1]], 1.05, spin ? matOf('#e8904a') : tbM.cu, toneI, .5, 1.05, 12));
+    put([[o[0] - .45, ya, o[1] - .45], [o[0] + .45, yb, o[1] + .45]], rod([o[0], yy(3), o[1]], [o[0], yy(12), o[1]], .45, tbM.steel, toneI, .4, .45, 8)); }
+  { const [a, b] = tbYR(mo, .5, 2.4); let s = rod([X, yy(.5), Z], [X, yy(2.4), Z], 1.3, tbM.cu, toneI, .5, 1.3, 16);
+    for (let i = 0; i < 3; i++){ const t = (ps + 60 + i*120)*Math.PI/180; if (!vis([Math.cos(t), 0, Math.sin(t)])) continue;
+      s += line([[X + 1.3*Math.cos(t), yy(.5), Z + 1.3*Math.sin(t)], [X + 1.3*Math.cos(t), yy(2.4), Z + 1.3*Math.sin(t)]], .4); }
+    put([[X - 1.3, a, Z - 1.3], [X + 1.3, b, Z + 1.3]], s); }
+  for (const sz of [-1, 1]){ const [a, b] = tbYR(mo, 0, 1.7), za = Z + sz*1.32, zb = Z + sz*1.75;
+    put([[X - .6, a, Math.min(za, zb)], [X + .6, b, Math.max(za, zb)]], box(X - .6, a, Math.min(za, zb), X + .6, b, Math.max(za, zb), matOf('#4a4643'), toneI, .4));
+    const [c, e] = tbYR(mo, -.1, .15), zc = Z + sz*1.75, zd = Z + sz*3.1;
+    put([[X - .5, c, Math.min(zc, zd)], [X + .5, e, Math.max(zc, zd)]], box(X - .5, c, Math.min(zc, zd), X + .5, e, Math.max(zc, zd), tbM.brass, toneI, .3)); }
+  return byDepth(it);
+}
+function tbMotor(mo, st, k, out){
+  const yy = d => tbYd(mo, d), yr = (d0, d1) => tbYR(mo, d0, d1), X = tbMX, Z = tbMZ, put = (b, svg) => out.push({ box:b, svg });
+  { const [a, b] = yr(1, 22); put([[14, a, tbBH], [30, b, 14]], box(14, a, tbBH, 30, b, 14, tbM.stand, toneI, 1.1)); }
+  const can = (d0, d1) => { const A = tbRingY(tbCAN, yy(d0)), B = tbRingY(tbCAN, yy(d1)); return loft(A, B, n => toneI(n, METAL)) + hullInk([...A, ...B], 1.1); };
+  const band = () => { const A = tbRingY(tbBRK, yy(4.5)), B = tbRingY(tbBRK, yy(9.5)); let s = loft(A, B, n => toneI(n, tbM.brk));
+    const nf = tbNearY(yy(4.5), yy(9.5)); if (nf){ const F = tbRingY(tbBRK, nf.y); s += fill(pd(F), toneI(nf.n, tbM.brk)) + ink(pd(F), .7); }
+    return s + hullInk([...A, ...B], 1.1); };
+  if (k > 0){ const [a, b] = yr(0, 14.5);
+    put([[X - 6.9, a, 14], [X + 6.9, b, Z + 6.9]], tbG(k, tbMotorInside(mo, st)) + tbG(1 - .8*k, can(0, 4.5) + can(9.5, 14.5) + can(4.5, 9.5) + band())); }
+  else { for (const [d0, d1] of [[0, 4.5], [9.5, 14.5]]){ const [a, b] = yr(d0, d1); put([[X - 6, a, Z - 6], [X + 6, b, Z + 6]], can(d0, d1)); }
+    const [a, b] = yr(4.5, 9.5); put([[X - 6.9, a, 14], [X + 6.9, b, Z + 6.9]], can(4.5, 9.5) + band()); }
+  for (const sx of [-1, 1]){ const xa = sx < 0 ? X - 10.6 : X + 6.9, xb = sx < 0 ? X - 6.9 : X + 10.6, [a, b] = yr(4.5, 9.5), xc = (xa + xb)/2, yc = (a + b)/2;
+    put([[xa, a, 14], [xb, b, 16]], box(xa, a, 14, xb, b, 15.2, tbM.brk, toneI, .7) + cyl(xc, yc, 15.2, 15.9, 1.1, METAL, toneI, .6, 12) + line([[xc - .7, yc, 15.92], [xc + .7, yc, 15.92]], .5)); }
+  // end cap with its boss and the two terminals
+  { const [a, b] = yr(-3, 0), A = tbRingY(tbCAP, yy(-1.5)), B = tbRingY(tbCAP, yy(0)), nr = [0, -mo.s, 0];
+    const tabs = [-1, 1].map(sz => { const [c, e] = yr(-3, -1.5), za = Z + sz*3.0, zb = Z + sz*3.55;
+      return box(X - .9, c, Math.min(za, zb), X + .9, e, Math.max(za, zb), tbM.brass, toneI, .4) + cyl(X, yy(-2.6), Math.min(za, zb) - .1, Math.max(za, zb) + .1, .55, matOf('#d9dcdf'), toneI, .3, 10); }).join('');
+    const boss = rod([X, yy(-1.5), Z], [X, yy(-2.1), Z], 1.3, tbM.cap2, toneI, .6, 1.3, 12);
+    let s = loft(A, B, n => toneI(n, tbM.cap2)) + hullInk([...A, ...B], 1);
+    s = vis(nr) ? s + fill(pd(A), toneI(nr, tbM.cap2)) + ink(pd(A), .8) + boss + tabs : tabs + boss + s;
+    put([[X - 5.8, a, Z - 5.8], [X + 5.8, b, Z + 5.8]], k > 0 ? tbG(1 - .6*k, s) : s); }
+  // gearbox: back plate, gears on two pins, front plate, bushing, output shaft, wheel
+  const plate = (d0, d1) => { const [a, b] = yr(d0, d1); put([[X - 5, a, Z - 6], [X + 5, b, Z + 6]], box(X - 5, a, Z - 6, X + 5, b, Z + 6, tbM.steel, toneI, .8)); };
+  plate(14.5, 15.3);
+  { const g = [], gp = (d0, d1, cx, cz, r, M, ph, nT) => { const [a, b] = yr(d0, d1); g.push({ box:[[cx - r, a, cz - r], [cx + r, b, cz + r]], svg: tbGearY(mo, d0, d1, cx, cz, r, M, ph, nT) }); };
+    const ph = (st.arm || 0)*mo.s, X2 = X + 1.8, Z2 = Z + 3.1;
+    for (const [px, pz] of [[X - 4.1, Z - 5.1], [X + 4.1, Z - 5.1], [X - 4.1, Z + 5.1], [X + 4.1, Z + 5.1]]) gp(15.3, 22.7, px, pz, .45, tbM.steel, 0, 0);
+    gp(15.3, 22.7, X2, Z2, .35, tbM.steel, 0, 0);
+    gp(15.3, 16.6, X, Z, .75, tbM.brass, ph, 8);
+    gp(15.6, 16.3, X2, Z2, 2.9, tbM.brass, -ph*.26, 18); gp(16.3, 18.1, X2, Z2, .75, tbM.brass, -ph*.26, 8);
+    gp(17.4, 18.1, X, Z, 2.9, tbM.steel, ph*.07, 18); gp(18.1, 19.9, X, Z, .75, tbM.steel, ph*.07, 8);
+    gp(19.2, 19.9, X2, Z2, 2.9, tbM.brass, -ph*.018, 18); gp(19.9, 21.7, X2, Z2, .75, tbM.brass, -ph*.018, 8);
+    gp(21.0, 21.7, X, Z, 2.9, tbM.steel, (st.ang || 0)*mo.s, 18);
+    const [a, b] = yr(15.3, 22.7); put([[X - 5, a, Z - 6], [X + 5, b, Z + 6]], byDepth(g)); }
+  plate(22.7, 23.5);
+  { const [a, b] = yr(23.5, 24.3); put([[X - 2, a, Z - 2], [X + 2, b, Z + 2]], rod([X, yy(23.5), Z], [X, yy(24.3), Z], 2, tbM.brass, toneI, .6, 2, 16)); }
+  { const [a, b] = yr(24.3, 25.5); put([[X - 1.5, a, Z - 1.5], [X + 1.5, b, Z + 1.5]], rod([X, yy(24.3), Z], [X, yy(25.5), Z], 1.5, METAL, toneI, .6, 1.5, 12)); }
+  { const [a, b] = yr(25.5, 33.7); put([[X - 15.5, a, Z - 15.5], [X + 15.5, b, Z + 15.5]], tbWheel(mo, st.ang || 0)); }
+}
+function tbWheel(mo, th){
+  const [ya, yb] = tbYR(mo, 25.5, 32.5), R = 15.5, X = tbMX, Z = tbMZ;
+  const A = tbCirY(X, ya, Z, R, 40), B = tbCirY(X, yb, Z, R, 40);
+  let s = loft(A, B, n => toneI(n, tbM.tyre));
+  for (let i = 0; i < 24; i++){ const a = (i*15 - th)*Math.PI/180; if (!vis([Math.cos(a), 0, Math.sin(a)])) continue;
+    const p = y => [X + R*Math.cos(a), y, Z + R*Math.sin(a)]; s += line([p(ya + .9), p(yb - .9)], .45); }
+  s += hullInk([...A, ...B], 1.5);
+  const nf = tbNearY(ya, yb);
+  if (nf){ const yf = nf.y, out = nf.n[1];
+    // the wheel's outside face is the one away from the motor: the boss sits there
+    const outer = (out > 0) === (mo.s > 0);
+    s += fill(pd(tbCirY(X, yf, Z, R, 40)), toneI(nf.n, tbM.tyre)) + ink(pd(tbCirY(X, yf, Z, R, 40)), .9);
+    s += fill(pd(tbCirY(X, yf, Z, 11, 36)), toneI(nf.n, tbM.hub)) + ink(pd(tbCirY(X, yf, Z, 11, 36)), .8);
+    for (let i = 0; i < 5; i++){ const a = (90 + i*72 - th)*Math.PI/180, hole = tbCirY(X + 6.4*Math.cos(a), yf, Z + 6.4*Math.sin(a), 1.9, 14);
+      s += fill(pd(hole), '#4b453d') + ink(pd(hole), .5); }
+    if (outer) s += rod([X, yf, Z], [X, yf + out*1.2, Z], 2.6, tbM.hub, toneI, .7, 2.6, 16) + fill(pd(tbCirY(X, yf + out*1.21, Z, 1.5, 12)), METAL.m) + line([[X - 1.5, yf + out*1.22, Z + .6], [X + 1.5, yf + out*1.22, Z + .6]], .4);
+    else s += fill(pd(tbCirY(X, yf, Z, 2.6, 16)), tbM.hub.d) + ink(pd(tbCirY(X, yf, Z, 2.6, 16)), .6); }
+  return s;
+}
+// the motor's leads, from its end-cap terminals to the breadboard: motor A in AO1/AO2, motor B swapped into BO2/BO1
+function tbMotorLeads(mo){
+  const X = tbMX, Z = tbMZ, yt = tbYd(mo, -3.1), yrun = mo.n === 'A' ? 48.9 : 51.1, holes = mo.n === 'A' ? [12, 13] : [14, 15], out = [];
+  [[1, holes[0], '#d8402f'], [-1, holes[1], '#2b2a28']].forEach(([sz, c, col]) => { const yh = tbCol(c), zt = Z + sz*3.3;
+    out.push(...tbWire([[X, yt, zt], [X, yrun, zt + sz*.4], [X + 7, yrun, sz > 0 ? 24 : 15.6], [36, (yrun + yh)/2, sz > 0 ? 20 : 15.4], [43.3, yh, sz > 0 ? 14.6 : 13.4], [45.07, yh, tbBZ + .05]], col, .45, 4, 1.4)); });
+  return out;
+}
+
+/* ---------- battery, snap clip, USB plug ---------- */
+const tbSnapAt = st => { const e = ease(st.snap); return { y: 124 + (116.5 - 124)*e, z: tbBH + (5 - tbBH)*e }; };
+function tbBattery(st, k, out){
+  const [x0, x1, y0, y1, z0, z1] = tbBAT, put = (b, svg) => out.push({ box:b, svg });
+  const body = box(x0, y0, z0, x1, 104, z1, tbM.bat, toneI, 1.2) + tbTxZ(59.25, 88, z1 + .01, '9V', 8, '#f1ece0', 800) + tbTxZ(53.5, 88, z1 + .01, 'ALKALINE', 2.2, '#bdb8ac');
+  const band = box(x0, 104, z0, x1, y1, z1, tbM.batc, toneI, 1.2);
+  if (k > 0){ const c = [];
+    for (const cx of [50.9, 59.2, 67.5]) for (const cz of [7.55, 15.85]) c.push({ box:[[cx - 4.1, 69.2, cz - 4.1], [cx + 4.1, 115.3, cz + 4.1]], svg: rod([cx, 69.2, cz], [cx, 115.3, cz], 4.1, tbM.cell, toneI, .7, 4.1, 18) });
+    c.push({ box:[[47, 115.4, 4], [71.5, 116.2, 19.5]], svg: box(47, 115.4, 4, 71.5, 116.2, 19.5, matOf('#8c7b62'), toneI, .5) });
+    put([[x0, y0, z0], [x1, y1, z1]], tbG(k, byDepth(c)) + tbG(1 - .8*k, body + band)); }
+  else { put([[x0, y0, z0], [x1, 104, z1]], body); put([[x0, 104, z0], [x1, y1, z1]], band); }
+  // terminals (+ round stud, - hex) and the snap clip; while the clip is on, it covers them
+  const sn = tbSnapAt(st), zc = 11.75, sx0 = 49.3, sx1 = 69.2;
+  let t = '';
+  if (st.snap < .98) t += rod([65.6, y1, zc], [65.6, y1 + 2.9, zc], 2.8, METAL, toneI, .7, 2.8, 16) + rod([52.9, y1, zc], [52.9, y1 + 2.9, zc], 4.1, METAL, toneI, .7, 4.1, 6);
+  let snap = box(sx0, sn.y, sn.z, sx1, sn.y + 5.5, sn.z + 13.5, tbM.snap, toneI, 1.1);
+  const nf = tbNearY(sn.y, sn.y + 5.5);
+  if (nf && nf.n[1] > 0) snap += tbTxZ(59.25, sn.y + 2.75, sn.z + 13.51, '+  -', 2.4, '#8f8a80');
+  if (nf && nf.n[1] < 0 && st.snap < .98) for (const [hx, r, n] of [[65.6, 2.6, 16], [52.9, 3.8, 6]]) snap += fill(pd(tbCirY(hx, sn.y - .01, sn.z + 6.75, r, n)), '#151413');
+  put([[sx0, y1, sn.z], [sx1, Math.max(y1 + 2.9, sn.y + 5.5), sn.z + 13.5]], t + act('snap', snap));
+}
+function tbBatteryLeads(st){
+  const sn = tbSnapAt(st), r = .55, zf = tbBH + r, zt = tbBZ + r;
+  return [...tbWire([[49.2, sn.y + 3.2, sn.z + 9], [46.2, sn.y + 3, sn.z + 6], [42.6, sn.y + 1, zf], [42.6, 70, zf], [41, 64.6, zf], [41, 64.05, tbBH + 3], [41, 64.05, tbBZ + .2], [41, 62.6, zt], [41, 40, zt], [43.6, 40, zt], [45.07, 40, tbBZ + .05]], '#d8402f', r, 5),
+          ...tbWire([[49.2, sn.y + 2.3, sn.z + 4], [46.5, sn.y + 2, tbBH + 1.5], [44.4, sn.y, zf], [44.4, 70, zf], [44.2, 64.6, zf], [44.2, 64.05, tbBH + 3], [44.2, 64.05, tbBZ + .2], [44.2, 62.6, zt], [44.2, 57.78, zt], [45.07, 57.78, tbBZ + .05]], '#2b2a28', r, 5)];
+}
+function tbUsb(out){
+  const zc = tbXZ1 + 1.63;
+  out.push({ box:[[53.3, 2.5, zc - 3], [64.8, 13.6, zc + 3]], svg: box(53.3, 2.5, zc - 3, 64.8, 13.6, zc + 3, tbM.usb, toneI, 1) });
+  out.push({ box:[[55.1, 13.6, zc - 1.25], [63, 15.4, zc + 1.25]], svg: box(55.1, 13.6, zc - 1.25, 63, 15.4, zc + 1.25, METAL, toneI, .6) });
+  out.push(...tbWire([[59.05, 2.5, zc], [59.05, .9, zc - 1.2], [59.05, .4, 9]], DARK.l, 1.6, 5, 1));
+}
+const tbUsbDrop = () => tbWire([[59.05, .4, 9], [59.05, -.6, 4.5], [59.05, -1.8, -10]], DARK.l, 1.6, 30, 1).map(p => p.svg).join('');
+
+/* ---------- jumpers ---------- */
+const tbFRONT_J = [[7, 9, 3.5, '#f2c230'], [6, 10, 5.5, '#3fae5a'], [5, 11, 7.5, '#3d7fd6'], [4, 12, 9.5, '#f4f1e8'], [3, 13, 11.5, '#3d7fd6'], [2, 14, 13.5, '#3fae5a'], [1, 15, 15.5, '#f2c230']];
+const tbBACK_J = [[2, 11, 9, '#2b2a28'], [3, 10, 6.5, '#d8402f']];
+const tbArch = (x, cA, cB, h, col) => tbWire([[x, tbCol(cA), tbBZ + .05], [x, tbCol(cA), tbBZ + h], [x, tbCol(cB), tbBZ + h], [x, tbCol(cB), tbBZ + .05]], col, .5, 4, 1.4);
+
+/* ---------- scene ---------- */
+function tbShadows(st){
+  const sn = tbSnapAt(st), sh = [tbBoxPts(39, 16.5, tbBH, 74, 63.5, tbBZ), [...tbBoxPts(46, 68, tbBH, 72.5, 116.5, tbBH + 17.5), ...tbBoxPts(49.3, sn.y, sn.z, 69.2, sn.y + 5.5, sn.z + 13.5)]];
+  for (const mo of [tbMOT.A, tbMOT.B]){ const [a, b] = tbYR(mo, -3, 23.5);
+    sh.push([...tbBoxPts(14, a, tbBH, 30, b, tbMZ + 6), ...tbCirY(tbMX, tbYd(mo, 25.5), tbMZ, 15.5, 16), ...tbCirY(tbMX, tbYd(mo, 32.5), tbMZ, 15.5, 16)]); }
+  return sh.map(p => castShadow(p, tbBH, tbTOP)).join('');
+}
+function tbScene(st, m){
+  const k = ease(st.xr || 0), behind = facing([0, -1, 0]);
+  let s = (behind ? '' : tbUsbDrop()) + board(0, 0, tbW, tbD, tbBH, 6, WOOD) + (behind ? tbUsbDrop() : '') + tbShadows(st);
+  const parts = [tbBreadboard(k), tbXiao(st), tbBreakout(st, m, k)];
+  for (const [cA, cB, h, col] of tbFRONT_J) parts.push(...tbArch(tbRow(0), cA, cB, h, col));
+  for (const [cA, cB, h, col] of tbBACK_J) parts.push(...tbArch(tbRow(9), cA, cB, h, col));
+  parts.push(...tbBatteryLeads(st));
+  for (const mo of [tbMOT.A, tbMOT.B]){ tbMotor(mo, st, k, parts); parts.push(...tbMotorLeads(mo)); }
+  tbBattery(st, k, parts);
+  tbUsb(parts);
+  s += byDepth(parts);
+  return s + tbLabels(st, k);
+}
+
+// the label box stretched far off the opposite side of the screen, along the bench axis that runs most across it:
+// its near edge stays the bench's, so the column sits beside the bench, and every label falls on this side
+function tbSideBox(side){ const B = [...tbLB], dx = Dv(1, 0, 0)[0], dy = Dv(0, 1, 0)[0], a = Math.abs(dx) > Math.abs(dy) ? 0 : 1, d = a ? dy : dx;
+  if (d*side > 0) B[2*a] -= 1000; else B[2*a + 1] += 1000; return B; }
+/* ---------- labels: surface parts when closed; in see-through the insides, in two columns ---------- */
+const tbLB = [0, tbW, 0, tbD, 0, tbHT];
+function tbLabels(st, k){
+  const lg = tbLogic(st), spin = Math.abs(st.sp) > .02, tip = tbPZ1 + 1.5, A = tbMOT.A, B = tbMOT.B;
+  if (k <= .6) return xrCallouts([
+    { at:[tbCX, tbCY + 2, tbPZ1 + 1.65], text:'TB6612FNG', on: lg.on.length > 0 },
+    { at:[59, 33, tbXZ1], text:'XIAO RP2040', on: true },
+    { at:[tbMX, tbYd(A, 7), tbMZ + 6], text:'MOTOR A', on: spin },
+    { at:[tbMX, tbYd(B, 7), tbMZ + 6], text:'MOTOR B', on: spin },
+    { at:[59.25, 96, tbBAT[5]], text:'9V BATTERY', on: lg.vm },
+    { at:[59.25, tbSnapAt(st).y + 2.75, tbSnapAt(st).z + 13.5], text:'SNAP CLIP', on: lg.vm },
+    { at:[72, 19, tbBZ], text:'BREADBOARD', on: false },
+    { at:[59.05, 6, tbXZ1 + 4.6], text:'USB CABLE', on: true } ], tbLB);
+  const fp = c => [tbRow(2), tbCol(c), tip], bp = c => [tbRow(7), tbCol(c), tip];
+  const fet = (i, hi, n, name) => ({ at:[tbCX - 1.95 + (hi ? 1.45 : .5), tbCY - 3.22 + i*1.63 + .75, tbPZ1 + 1], text: name, on: lg.on.includes((hi ? 'hi' : 'lo') + n) });
+  const drv = lg.on.length > 0 && spin, hiPin = lg.stby;
+  // the chip side: pins, MOSFETs, MCU; the power side: outputs, chip blocks, motor insides, cells
+  const right = [
+    { at: fp(9), text:'PWMA', on: hiPin && lg.pwm }, { at: fp(10), text:'AIN2', on: hiPin && lg.in2 }, { at: fp(11), text:'AIN1', on: hiPin && lg.in1 },
+    { at: fp(12), text:'STBY', on: !!lg.stby }, { at: fp(13), text:'BIN1', on: hiPin && lg.in1 }, { at: fp(14), text:'BIN2', on: hiPin && lg.in2 },
+    { at: fp(15), text:'PWMB', on: hiPin && lg.pwm },
+    fet(0, 1, 1, 'A1 HIGH MOSFET'), fet(0, 0, 1, 'A1 LOW MOSFET'), fet(1, 1, 2, 'A2 HIGH MOSFET'), fet(1, 0, 2, 'A2 LOW MOSFET'),
+    fet(2, 1, 2, 'B2 HIGH MOSFET'), fet(2, 0, 2, 'B2 LOW MOSFET'), fet(3, 1, 1, 'B1 HIGH MOSFET'), fet(3, 0, 1, 'B1 LOW MOSFET'),
+    { at:[59.04, 27.9, tbXZ1 + .85], text:'RP2040 MCU', on: true } ];
+  const left = [
+    { at:[tbCX + .33, tbCY + 2.5, tbPZ1 + 1], text:'GATE DRIVERS', on: lg.on.length > 0 },
+    { at:[tbCX + 1.3, tbCY - 1.5, tbPZ1 + 1], text:'CONTROL LOGIC', on: !!lg.stby },
+    { at:[tbMX, tbYd(A, 24.9), tbMZ + 1.5], text:'OUTPUT SHAFT', on: spin },
+    { at: bp(9), text:'VM IN', on: lg.vm }, { at: bp(10), text:'VCC 3V3', on: true },
+    { at: bp(12), text:'AO1 OUT', on: drv }, { at: bp(13), text:'AO2 OUT', on: drv }, { at: bp(14), text:'BO2 OUT', on: drv }, { at: bp(15), text:'BO1 OUT', on: drv },
+    { at:[tbMX + 4.75, tbYd(B, 7.5), tbMZ + 2], text:'MAGNET', on: false },
+    { at:[tbMX, tbYd(B, 7.5), tbMZ + 3], text:'ARMATURE COIL', on: spin },
+    { at:[tbMX, tbYd(B, 1.4), tbMZ + 1.3], text:'COMMUTATOR', on: spin },
+    { at:[tbMX + .6, tbYd(B, .9), tbMZ - 1.75], text:'BRUSH', on: spin },
+    { at:[59.2, 90, 19.95], text:'6 AAAA CELLS', on: lg.vm && lg.drive } ];
+  // split by where they sit on screen, so the columns stay even at any yaw; the left one starts below the buttons, so it takes fewer
+  const all = [...right, ...left].map(it => ({ it, X: P(...it.at)[0] })).sort((p, q) => p.X - q.X).map(p => p.it), h = all.length - 17;
+  return xrCallouts(all.slice(h), tbSideBox(1)) + xrCallouts(all.slice(0, h), tbSideBox(-1));
+}
+
+/* ---------- behaviour ---------- */
+function tbStep(st, dt){
+  if (st.snap !== st.snapT) st.snap += Math.sign(st.snapT - st.snap)*Math.min(Math.abs(st.snapT - st.snap), dt/.6);
+  const lg = tbLogic(st), driving = lg.vm && lg.stby && (st.cmd === 'fwd' || st.cmd === 'rev');
+  if (driving && st.duty < 1) st.ph = (st.ph + dt*1.6) % 1;
+  const tgt = driving ? (st.cmd === 'fwd' ? 1 : -1)*st.duty : 0;
+  const tau = driving ? .35 : (lg.vm && lg.stby && st.cmd === 'brake') ? .1 : .9;
+  st.sp += (tgt - st.sp)*(1 - Math.exp(-dt/tau));
+  if (!driving && Math.abs(st.sp) < .004) st.sp = 0;
+  st.ang = (st.ang + st.sp*dt*360*1.2) % 360;
+  st.arm = (st.arm + st.sp*dt*360*5) % 360;
+  return driving || st.sp !== 0 || st.snap !== st.snapT;
+}
+function tbRun(st, ui){ if (st.loop) return; st.loop = true;
+  ui.animate(dt => { const go = tbStep(st, dt); if (!go) st.loop = false; return go; }); }
+const tbPower = (st, ui) => { st.snapT = st.snapT ? 0 : 1; tbRun(st, ui); };
+const tbCmd = c => (st, ui) => {
+  if (st.cmd === c && st.stby) return ui.flash(`${tbName(st)}: already set`);
+  st.cmd = c; st.stby = 1;
+  if (!st.snapT && (c === 'fwd' || c === 'rev')) ui.flash('The pins are set, but VM has no supply: press Power on / off');
+  tbRun(st, ui); };
+const tbName = st => !st.stby ? 'STANDBY' : st.cmd === 'fwd' ? `FORWARD ${Math.round(st.duty*100)}%` : st.cmd === 'rev' ? `REVERSE ${Math.round(st.duty*100)}%` : st.cmd === 'brake' ? 'SHORT BRAKE' : 'COAST';
+
+const ui = mountFigure({
+  fig:'TB', title:'TB6612FNG motor driver',
+  size:[tbW + 45, tbD + 9, tbHT + 4], center:[tbW/2, tbD/2], palette:'tomato', turn:'full',
+  state:{ snap:0, snapT:0, cmd:'coast', stby:0, duty:.5, ph:0, sp:0, ang:0, arm:0, loop:false },
+  scene: tbScene,
+  stats: st => [ { label:'Wheel speed', value: `${Math.round(Math.abs(st.sp)*220)} rpm` },
+                 { label:'Command', value: tbName(st), small:true },
+                 { label:'VM supply', value: tbVM(st) ? '9.0 V' : '0 V', small:true } ],
+  buttons:[
+    { label:'Power on / off', onClick: tbPower },
+    { label:'Forward', onClick: tbCmd('fwd') },
+    { label:'Reverse', onClick: tbCmd('rev') },
+    { label:'Stop', choices: st => [ { label:'Short brake', current: st.stby && st.cmd === 'brake', onClick: tbCmd('brake') },
+                                     { label:'Coast', current: st.stby && st.cmd === 'coast', onClick: tbCmd('coast') } ] },
+    { label:'PWM speed', choices: st => [25, 50, 75, 100].map(p => ({ label: p + '%', current: Math.round(st.duty*100) === p,
+        onClick: (st, ui) => { st.duty = p/100; tbRun(st, ui); } })) },
+  ],
+  acts:{ snap: (st, el, ui) => tbPower(st, ui) },
+  params:(st, q) => {
+    if (q.get('on') === '1') st.snap = st.snapT = 1;
+    if (['fwd', 'rev', 'brake', 'coast'].includes(q.get('cmd'))){ st.cmd = q.get('cmd'); st.stby = 1; }
+    if ([25, 50, 75, 100].includes(+q.get('duty'))) st.duty = +q.get('duty')/100;
+    if (q.has('ph')) st.ph = +q.get('ph') % 1;
+    if (q.has('ang')){ st.ang = +q.get('ang'); st.arm = st.ang*4; }
+    const lg = tbLogic(st); if (lg.vm && lg.stby && (st.cmd === 'fwd' || st.cmd === 'rev')) st.sp = (st.cmd === 'fwd' ? 1 : -1)*st.duty;
+  },
+});
+// sit the bench low in the frame: the see-through labels need the space beside it, below the buttons and the stats
+OY += document.getElementById('fig').viewBox.baseVal.height*.25;
+ui.render();
+xrMount(() => ui, () => '');
+</script></body></html>
