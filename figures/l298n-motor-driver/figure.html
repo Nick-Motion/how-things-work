@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>L298N motor driver</title>
+<style>@media(max-width:560px){html:not(.nolabels) #fig{margin-bottom:160px}}</style>
+</head><body>
+<script src="core.js"></script>
+<script>
+/* L298N dual H-bridge module driving a DC motor from a 3S 18650 pack, commanded by an Arduino Nano.
+   1 unit = 1 mm. x = depth (front at high x), y = width (+y = viewer-left at the default view), z = up.
+
+   How it really works (where the current and the signals are after each step):
+   1. Power: the 3 x 18650 pack (11.1 V) feeds the module's blue power terminal: red lead into +12V (VS), black into GND.
+      The 5V-EN jumper is on, so the 78M05 regulator makes 5 V for the L298N's logic (VSS) and puts it out on the +5V
+      screw; a red wire from there and a black wire from GND power the Nano (VIN not used, 5 V pin fed directly).
+      The red power LED is lit. ENB keeps its jumper (bridge B enabled, no motor on OUT3/OUT4).
+   2. Set direction: the Nano drives D8 -> IN1 and D7 -> IN2. IN1 HIGH / IN2 LOW = forward, LOW / HIGH = reverse.
+      With ENA LOW all four transistors of bridge A are off, so nothing moves yet.
+   3. Enable: D9 (PWM) -> ENA (the ENA jumper was pulled off). ENA HIGH lets the logic gates switch the bridge:
+      forward turns on Q1 (VS to OUT1) and Q4 (OUT2 to sense / GND). Current runs battery + -> VS -> Q1 -> OUT1 ->
+      motor -> OUT2 -> Q4 -> GND -> battery -. The two transistors drop about 2 V together, so the motor sees about
+      9.1 V times the PWM duty. Speed builds as the back-EMF rises.
+   4. Reverse: IN1 LOW / IN2 HIGH turns on Q3 and Q2 instead: the current through the motor flips, the armature
+      slows, stops and spins the other way. When a transistor turns off, the flyback diodes carry the coil's current
+      back to VS or GND so its voltage spike can't kill the chip.
+   5. Brake: IN1 = IN2 = HIGH with ENA HIGH turns on both upper transistors: the motor's terminals are shorted
+      together, its back-EMF drives current round that loop and it stops fast. ENA LOW instead lets it coast.
+   6. Inside the motor: two ferrite magnets on the can wall, a 3-pole armature on the shaft, a commutator under two
+      carbon brushes that feed the coils from the solder tabs, sintered bushings at each end.
+
+   Parts (each held by another):
+   DESK      wooden desk top
+   MODULE    red PCB on four brass hex standoffs with pan-head screws . L298N in Multiwatt15: copper tab, black body,
+             15 staggered leads soldered through the board; inside: the die with bridge A (Q1-Q4) and bridge B (Q5-Q8),
+             logic gates, aluminium tracks, gold bond wires, lead frame . black finned heat sink on the board, the
+             chip's tab screwed to its base plate (screw, shank, nut) . 78M05 regulator (DPAK) . 5V-EN jumper on its
+             2-pin header . two 220 uF 35 V capacitors . eight SMA flyback diodes . power LED and its resistor . three
+             blue screw terminals (OUT1/OUT2, OUT3/OUT4, +12V/GND/+5V) with clamp screws . input header (ENA, IN1-IN4,
+             ENB + two 5 V pins) . ENB jumper . copper tracks VS, OUT1-OUT4 on top, GND plane underneath
+   MOTOR     steel can . black end cap with bushing boss and two solder tabs . front boss and bushing . shaft . red
+             flywheel disc with a white mark . pipe strap with two feet screwed to the desk . two saddle blocks
+             inside: two arc magnets . 3-pole armature (lamination shoes, copper windings, hub) . commutator . two
+             carbon brushes on brass holders . rear bushing
+   PACK      black 3-cell holder (floor, end walls, side walls) . three 18650 cells . two + plates, two springs on the
+             series straps, the lone + plate and lone - spring . black return wire in the floor gap . red and black leads
+   NANO      mini breadboard (170 points, spring clips) . Nano on two 15-pin headers . ATmega328P . USB mini-B .
+             reset button . resonator . regulator . LEDs . three male-to-female jumpers (D9 orange, D8 green,
+             D7 blue) . red 5 V and black GND feed wires */
+
+/* ---------- layout ---------- */
+const BH = 3;
+const DESK = [0, 18, 168, 212];
+const MX0 = 33.5, MX1 = 76.5, MY0 = 78.5, MY1 = 121.5, PB = BH + 4, PT = PB + 1.6;           // module PCB
+const HOLES = [[36.3, 81.3], [36.3, 118.7], [73.7, 81.3], [73.7, 118.7]];
+const HS = { x0: 35, bx: 48.5, x1: 51.5, y0: 87, y1: 113, z1: PT + 24 };                        // heat sink
+const FINS = [87, 90.5, 94, 104.8, 108.3, 111.8];                                              // fin y0 (1.2 thick)
+const CHP = { t0: 51.5, t1: 53, b1: 57.5, y0: 90, y1: 110, z0: PT + 6, zb: PT + 16.5, zt: PT + 23 };
+const SCR = [100, PT + 19.8];                                                                  // tab screw (y, z)
+const LEADY = i => 108.89 - i*1.27, LEADX = i => i % 2 ? 58.6 : 55;                            // pin i+1, foot row
+const TP = { x0: 68, x1: 75.6, y0: 101.2, y1: 116.44, v5: 103.74, gnd: 108.82, v12: 113.9 };    // power terminal
+const TA = { x0: 39, x1: 49.16, y0: 114, y1: 121.5, out1: 46.62, out2: 41.54 };                 // OUT1 / OUT2
+const TB = { x0: 39, x1: 49.16, y0: 78.5, y1: 86, out3: 41.54, out4: 46.62 };                   // OUT3 / OUT4
+const HDR = { x: 74.3, xj: 71.76, enA: 99.06, in1: 96.52, in2: 93.98, in3: 91.44, in4: 88.9, enB: 86.36 };
+const C1 = [54.5, 117.3], C2 = [54.5, 82.7];
+const DIODES = []; for (const x of [60.5, 64.5]) for (const y of [86.5, 91.5, 96.5, 101.5]) DIODES.push([x, y]);
+// motor (axis along x)
+const MO = { y: 165, z: 25, r: 18, x0: 22, x1: 77, ec: 19.5 };
+const DISC = { x0: 84, x1: 86, r: 15 };
+// battery holder
+const BAT = { x0: 96, x1: 160, y0: 128, y1: 205, z1: 23, fl: 5 };
+const CELLX = [107.5, 128, 148.5], CELLZ = 14.2, CELLR = 9.2;
+// breadboard + Nano
+const BB = { x0: 100, x1: 135, y0: 30, y1: 76 }, BT = BH + 8.5;
+const RX = { a: 103.53, b: 106.07, c: 108.61, d: 111.15, e: 113.69, f: 121.31, g: 123.85, h: 126.39, i: 128.93, j: 131.47 };
+const CY = c => 33 + (c - 1)*2.54;
+const AZ = BT + 2.5, AZT = AZ + 1.6;
+const NC = [116.23, (CY(2) + CY(16))/2];
+const NPIN = { D9: 13, D8: 12, D7: 11, V5: 5, GND: 3 };                                        // Nano columns (D on row c, power on row g)
+// electrical
+const VBAT = 11.1, VDROP = 2.0, KV = 1000, RM = 4.5;                                           // pack, L298 drop, rpm/V, ohm
+const DUTIES = [.3, .6, 1];
+
+/* ---------- colours ---------- */
+const PCBR = { l:'#e2574a', m:'#c23a31', d:'#7e231d' }, PCBB = { l:'#3f7fc9', m:'#2c64a8', d:'#1b3f6e' };
+const BLK = { l:'#4a4642', m:'#34312e', d:'#211f1d' }, HSK = { l:'#56524d', m:'#3a3633', d:'#221f1d' };
+const ALU = { l:'#e9ecee', m:'#c3c9cc', d:'#8e979b' }, BRASS = matOf('#d8b25a'), COPM = matOf('#d08a52');
+const TERM = { l:'#5a9ae6', m:'#2f74c4', d:'#1d4a80' }, CAPB = matOf('#2f4f8f'), BBM = { l:'#fbfaf3', m:'#e6e2d6', d:'#c2bcae' };
+const WHT = matOf('#f3efe4'), CELLM = matOf('#2d9c8f'), CARB = matOf('#3a3632'), FER = matOf('#6f6a66');
+const MAGN = matOf('#d0574a'), MAGS = matOf('#4f78c0'), ENDC = matOf('#3a3632');
+const WRED = '#e2483d', WBLK = '#2b2724', WGRN = '#3fa55b', WBLU = '#3e86d9', WORG = '#ef8a3a';
+const HOT = '#ff7a2a', IDLE = '#e8c45a', OFFC = '#8d877a';
+
+/* ---------- helpers ---------- */
+const aItem = (b, svg) => ({ box: b, svg });
+const aBoxI = (x0, y0, z0, x1, y1, z1, m, w = .5, extra = '') => aItem([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, m, toneI, w) + (vis([0,0,1]) ? extra : ''));
+function aPrism(poly, z0, z1, m, w = .6, shade = toneI, top = ''){
+  const A = poly.map(([x, y]) => [x, y, z0]), B = poly.map(([x, y]) => [x, y, z1]);
+  let s = loft(A, B, n => shade(n, m));
+  if (vis([0,0,1])) s += fill(pd(B), shade([0,0,1], m)) + top + ink(pd(B), w*.8);
+  return s + hullInk([...A, ...B], w);
+}
+// a prism along x from a convex (y, z) profile; cap on the end that faces the viewer
+function xPrism(poly, x0, x1, m, w = .6, shade = toneI){
+  const A = poly.map(([y, z]) => [x0, y, z]), B = poly.map(([y, z]) => [x1, y, z]);
+  let s = loft(A, B, n => shade(n, m));
+  const cn = vis([1,0,0]) ? [1,0,0] : [-1,0,0], cap = cn[0] > 0 ? B : A;
+  if (vis(cn)) s += fill(pd(cap), shade(cn, m)) + ink(pd(cap), w*.7);
+  return s + hullInk([...A, ...B], w);
+}
+const aRect = (cx, cy, hu, hv, a = 0) => { const c = Math.cos(a*Math.PI/180), s2 = Math.sin(a*Math.PI/180);
+  return [[-hu,-hv],[hu,-hv],[hu,hv],[-hu,hv]].map(([u, v]) => [cx + u*c - v*s2, cy + u*s2 + v*c]); };
+const aHex = (cx, cy, r, a0 = 0) => Array.from({ length: 6 }, (_, i) => { const a = (a0 + i*60)*Math.PI/180; return [cx + r*Math.cos(a), cy + r*Math.sin(a)]; });
+const aCirc = (cx, cy, r, n = 20) => ellUV(cx, cy, r, r, n);
+const aBounds = (pts, e = .05, zf = -1e9) => { const b = [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+  b[0][2] = Math.max(b[0][2], zf); return b; };
+const aDisc = (x, y, z, r, col, w = .3, n = 14) => { const d = pd(on(PZ(z), aCirc(x, y, r, n))); return fill(d, col) + (w ? ink(d, w) : ''); };
+const aTxZ = (x, y, z, str, size, col = INK) => `<text transform="${txM(P(x, y, z), Dv(0,-1,0), Dv(1,0,0))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800">${str}</text>`;
+const aStack = (its, zs) => { const lo = its.filter(i => i.box[1][2] <= zs + 1e-6), hi = its.filter(i => i.box[1][2] > zs + 1e-6);
+  return aItem([[0,1,2].map(k => Math.min(...its.map(i => i.box[0][k]))), [0,1,2].map(k => Math.max(...its.map(i => i.box[1][k])))], byDepth(lo) + byDepth(hi)); };
+const hiC = c => mix(c, '#ffffff', .5);
+// round each corner of a route (a wire bends, it doesn't kink)
+const aBend = (pts, r = .9) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...sub(a, b)), lc = Math.hypot(...sub(c, b)), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k])*d/la), q = c.map((v, k) => b[k] + (v - b[k])*d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+// a wire cut into short pieces, each with its own box, so it sorts behind or in front of what it passes.
+// flow (mm travelled, signed) draws current dots that move along it
+function aWire(pts, col, r = .6, zf = BH, Lp = 4, flow = null){
+  const q = aBend(pts, Math.max(.9, r*1.6)), out = [], cum = [0];
+  for (let i = 1; i < q.length; i++) cum.push(cum[i - 1] + Math.hypot(...sub(q[i], q[i - 1])));
+  const dots = [];
+  if (flow != null){ const sp = 7, o = ((flow % sp) + sp) % sp; for (let s0 = o; s0 < cum[cum.length - 1]; s0 += sp) dots.push(s0); }
+  const at = s0 => { let i = 1; while (i < q.length - 1 && cum[i] < s0) i++; const t = (s0 - cum[i - 1])/((cum[i] - cum[i - 1]) || 1); return q[i - 1].map((v, kk) => v + (q[i][kk] - v)*t); };
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1;
+    while (j < q.length - 1 && cum[j] - cum[i] < Lp) j++;
+    const seg = q.slice(i, j + 1), d = pd(seg, false);
+    let svg = `<path d="${d}" fill="none" stroke="${INK}" style="stroke-width:${(2*r + .45).toFixed(2)}" stroke-linecap="butt" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" style="stroke-width:${(2*r).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    for (const s0 of dots) if (s0 >= cum[i] && s0 < cum[j]){ const [X, Y] = P(...at(s0)); svg += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r*1.25)}" fill="#ffe27a" stroke="${INK}" style="stroke-width:.3"/>`; }
+    out.push(aItem(aBounds(seg, r, zf), svg));
+    i = j; }
+  return out;
+}
+
+/* ---------- electrical state ---------- */
+const lvl = st => ({ in1: st.dir === 'fwd' || st.dir === 'brake', in2: st.dir === 'rev' || st.dir === 'brake' });
+const driven = st => st.en && (st.dir === 'fwd' || st.dir === 'rev');
+const vOut = st => driven(st) ? (st.dir === 'fwd' ? 1 : -1)*st.duty*(VBAT - VDROP) : 0;   // average OUT1 - OUT2 while driven
+const termV = st => driven(st) ? vOut(st) : st.en ? 0 : st.w/KV;                          // coasting: the terminals show back-EMF
+// which bridge-A transistors are on, and whether current runs through them
+function bridgeA(st){
+  const { in1, in2 } = lvl(st), on = {};
+  if (st.en){ on[in1 ? 'Q1' : 'Q2'] = true; on[in2 ? 'Q3' : 'Q4'] = true; }
+  const carry = Math.abs(st.I) > .02;
+  return { on, carry };
+}
+
+/* ---------- the module ---------- */
+function smd(x0, y0, x1, y1, z0, h, m, along = 'y', txt = '', band = null){
+  // a chip part: body with tinned ends at both ends of its long side (band: a stripe at the cathode end)
+  const z1 = z0 + h, e = .5;
+  const ends = along === 'y' ? [[x0, y0, x1, y0 + e], [x0, y1 - e, x1, y1]] : [[x0, y0, x0 + e, y1], [x1 - e, y0, x1, y1]];
+  const mid = along === 'y' ? [x0, y0 + e, x1, y1 - e] : [x0 + e, y0, x1 - e, y1];
+  let top = txt ? aTxZ((x0 + x1)/2 + .3, (y0 + y1)/2, z1 + .01, txt, .8, '#f3efe4') : '';
+  if (band) top += fill(pd([[x0 + .1, band[0], z1 + .01], [x1 - .1, band[0], z1 + .01], [x1 - .1, band[1], z1 + .01], [x0 + .1, band[1], z1 + .01]]), '#c9c4b8');
+  const parts = [aBoxI(ends[0][0], ends[0][1], z0, ends[0][2], ends[0][3], z0 + h*.6, ALU, .35), aBoxI(ends[1][0], ends[1][1], z0, ends[1][2], ends[1][3], z0 + h*.6, ALU, .35),
+    aBoxI(mid[0], mid[1], z0, mid[2], mid[3], z1, m, .4, top)];
+  return aItem([[x0, y0, z0], [x1, y1, z1]], byDepth(parts));
+}
+function screwTerminal(x0, y0, x1, y1, pins, dir){
+  // KF301 block: blue body, a clamp screw on top per pole, a square wire entry on the face that points along dir
+  const z0 = PT, z1 = PT + 10, it = [];
+  let top = '';
+  for (const [x, y] of pins){ top += aDisc(x, y, z1 + .02, 1.9, ALU.l, .4, 16);
+    const a = .6; top += line([[x - 1.3*Math.cos(a), y - 1.3*Math.sin(a), z1 + .04], [x + 1.3*Math.cos(a), y + 1.3*Math.sin(a), z1 + .04]], .45); }
+  let s = box(x0, y0, z0, x1, y1, z1, TERM, toneI, .7);
+  if (vis([0,0,1])) s += top;
+  if (vis(dir)){ for (const [x, y] of pins){
+    const q = dir[0] ? [[x1 + .05*dir[0], y - 1.6, z0 + 1.8], [x1 + .05*dir[0], y + 1.6, z0 + 1.8], [x1 + .05*dir[0], y + 1.6, z0 + 5.2], [x1 + .05*dir[0], y - 1.6, z0 + 5.2]]
+      : [[x - 1.6, (dir[1] > 0 ? y1 : y0) + .05*dir[1], z0 + 1.8], [x + 1.6, (dir[1] > 0 ? y1 : y0) + .05*dir[1], z0 + 1.8], [x + 1.6, (dir[1] > 0 ? y1 : y0) + .05*dir[1], z0 + 5.2], [x - 1.6, (dir[1] > 0 ? y1 : y0) + .05*dir[1], z0 + 5.2]];
+    s += shape(q, '#1d2a3a', .5);
+    const cl = q.map(p => [p[0], p[1], p[2] > z0 + 3 ? p[2] - .9 : p[2] + .9]);
+    s += fill(pd([cl[0], cl[1], [cl[1][0], cl[1][1], cl[1][2] + .8], [cl[0][0], cl[0][1], cl[0][2] + .8]]), ALU.m); } }
+  return aItem([[x0, y0, z0], [x1, y1, z1]], s);
+}
+function pcbTop(st, k){
+  const z = PT + .01;
+  let s = '';
+  const TR = [
+    [[71.8, TP.v12], [67, 112.4], [61.2, 112.4], [61.2, 106], [LEADX(3), LEADY(3)]],                               // VS
+    [[LEADX(1), LEADY(1)], [59.8, 108.8], [59.8, 113.1], [TA.out1, 113.1], [TA.out1, 117.75]],                     // OUT1
+    [[LEADX(2), LEADY(2)], [53.6, LEADY(2)], [53.6, 111.4], [TA.out2, 111.4], [TA.out2, 117.75]],                 // OUT2
+    [[LEADX(12), LEADY(12)], [53.6, LEADY(12)], [53.6, 88.6], [TB.out3, 88.6], [TB.out3, 82.25]],                 // OUT3
+    [[LEADX(13), LEADY(13)], [59.8, 91.2], [59.8, 86.9], [TB.out4, 86.9], [TB.out4, 82.25]],                      // OUT4
+    [[71.8, TP.v5], [67.4, TP.v5], [67.4, 108.2]],                                                                 // +5V out of the regulator
+  ];
+  const tp = t => pd(t.map(([x, y]) => [x, y, z]), false);
+  s += `<path d="${TR.map(tp).join('')}" fill="none" stroke="${mix(PCBR.l, '#ffffff', .22)}" style="stroke-width:.9" stroke-linecap="round" stroke-linejoin="round"/>`;
+  // pads and vias: chip feet, terminal pins, header pins, GND vias down to the bottom plane
+  for (let i = 0; i < 15; i++) s += aDisc(LEADX(i), LEADY(i), z + .01, .75, '#e3e6e3', .25, 10);
+  for (const [x, y] of [[57, 109.6], [57, 90.4], [63.2, 107.3], [69.2, 106.3]]) s += aDisc(x, y, z + .01, .5, '#e3e6e3', .25, 8) + aDisc(x, y, z + .02, .22, '#5a1f1a', 0, 6);
+  for (const [x, y] of HOLES) s += aDisc(x, y, z + .01, 2.6, '#e3e6e3', .3, 16);
+  s += aTxZ(64.5, 100, z, 'L298N', 1.6, '#f6e9df') + aTxZ(39.6, 100, z + .01, 'HW-095', 1.2, '#f6e9df');
+  // in see-through, the current path glows along its copper
+  if (k > 0 && Math.abs(st.I) > .02){ const live = [TR[0], TR[1], TR[2]];
+    s += `<path d="${live.map(tp).join('')}" fill="none" stroke="${HOT}" opacity="${f(k)}" style="stroke-width:1.1" stroke-linecap="round" stroke-linejoin="round"/>`; }
+  return s;
+}
+function chipDie(st){
+  // the L298 die: bridge A on the pin-1 half (high y), bridge B on the other, logic gates along the bottom, gold bond wires to the lead frame
+  const x = 54.8, zD0 = PT + 8.5, zD1 = PT + 15.8, parts = [], br = bridgeA(st), lit = br.carry;
+  parts.push(aBoxI(x - .3, 92.6, zD0, x, 107.4, zD1, matOf('#7f8c99'), .4));
+  const zHS = PT + 14.1, zLS = PT + 10.9, zV = PT + 15.3, zG = PT + 9.5;
+  const cols = { A: [106, 102.6], B: [97.4, 94] };
+  // metal tracks on the die face: VS rail along the top, sense rails along the bottom, a column per output
+  const tr = [[[x + .02, 93, zV], [x + .02, 107, zV]], [[x + .02, 101.2, zG], [x + .02, 107.2, zG]], [[x + .02, 92.8, zG], [x + .02, 98.8, zG]]];
+  for (const y of [...cols.A, ...cols.B]) tr.push([[x + .02, y, zG], [x + .02, y, zV]]);
+  let s = `<path d="${tr.map(t => pd(t, false)).join('')}" fill="none" stroke="#dfe4e8" style="stroke-width:.35"/>`;
+  if (lit){ const fw = st.I > 0, [y1, y2] = cols.A, hs = fw ? y1 : y2, ls = fw ? y2 : y1;
+    const path = st.dir === 'brake' ? [[[x + .03, y1, zHS], [x + .03, y1, zV], [x + .03, y2, zV], [x + .03, y2, zHS]]]
+      : [[[x + .03, 107, zV], [x + .03, hs, zV], [x + .03, hs, zHS]], [[x + .03, ls, zLS], [x + .03, ls, zG], [x + .03, 101.2, zG]]];
+    s += `<path d="${path.map(t => pd(t, false)).join('')}" fill="none" stroke="${HOT}" style="stroke-width:.55" stroke-linecap="round"/>`; }
+  parts.push(aItem([[x, 92.6, zD0], [x + .05, 107.4, zD1]], s));
+  // the eight power transistors
+  const enB = true, cell = (y, z, col) => parts.push(aBoxI(x, y - 1.1, z - 1.1, x + .45, y + 1.1, z + 1.1, matOf(col), .35,
+    ''));
+  const colA = q => br.on[q] ? (lit ? HOT : IDLE) : OFFC;
+  cell(cols.A[0], zHS, colA('Q1')); cell(cols.A[0], zLS, colA('Q2')); cell(cols.A[1], zHS, colA('Q3')); cell(cols.A[1], zLS, colA('Q4'));
+  for (const y of cols.B){ cell(y, zHS, OFFC); cell(y, zLS, enB ? IDLE : OFFC); }           // ENB jumpered, IN3/IN4 low: both low sides on, no load
+  // logic gates (enable AND gates) along the bottom edge
+  for (const y of [94.4, 97.6, 102.4, 105.6]) parts.push(aBoxI(x, y - 1, zD0 + .25, x + .3, y + 1, zD0 + .75, matOf(st.en && y > 100 ? '#9fd8a8' : '#b9c4cc'), .3));
+  // lead frame fingers and bond wires
+  let bw = '';
+  for (let i = 0; i < 15; i++){ const y = LEADY(i), py = 100 + (y - 100)*.8;
+    parts.push(aBoxI(54.8, y - .35, CHP.z0, 55.5, y + .35, PT + 7.6, COPM, .3));
+    bw += pd([[x + .05, py, zD0 + .1], [55.9, (py + y)/2, PT + 8.6], [55.3, y, PT + 7.6]], false); }
+  parts.push(aItem([[x, 91, PT + 7.5], [56, 109, zD0 + .2]], `<path d="${bw}" fill="none" stroke="#e8c45a" style="stroke-width:.22"/>`));
+  return byDepth(parts);
+}
+function chipItem(st, k){
+  const g = 1 - .85*k, tab = box(CHP.t0, CHP.y0, CHP.z0, CHP.t1, CHP.y1, CHP.zt, ALU, toneI, .6), bz = box(CHP.t1, CHP.y0, CHP.z0, CHP.b1, CHP.y1, CHP.zb, BLK, toneI, .8);
+  let tabS = tab;
+  if (vis([1,0,0])) tabS += shape(on(PX(CHP.t1 + .02), ellUV(SCR[0], SCR[1], 1.7, 1.7, 14)), '#2a2724', .4);
+  let body = bz;
+  if (vis([1,0,0])) body += tx(CHP.b1 + .05, 100, PT + 12.6, 'L298N', 2.6, '#d9d4c7') + tx(CHP.b1 + .05, 100, PT + 9.6, 'ST 2B', 1.6, '#b9b3a6');
+  const head = cylX(CHP.t1, CHP.t1 + 1.8, SCR[0], SCR[1], 2.6, ALU, toneI, .6, 18) + (vis([1,0,0]) ? line([[CHP.t1 + 1.85, SCR[0] - 1.6, SCR[1]], [CHP.t1 + 1.85, SCR[0] + 1.6, SCR[1]]], .5) : '');
+  const front = vis([1,0,0]), shell = front ? tabS + body + head : head + body + tabS;
+  const die = k > 0 ? `<g opacity="${f(k)}">${chipDie(st)}</g>` : '';
+  return aItem([[CHP.t0, CHP.y0, CHP.z0], [CHP.b1, CHP.y1, CHP.zt]], k > 0 ? `<g opacity="${f(g)}">${shell}</g>` + die : shell);
+}
+function moduleItems(st, k){
+  const it = [];
+  // brass hex standoffs and pan-head screws
+  for (const [x, y] of HOLES){
+    it.push(aItem([[x - 2.6, y - 2.6, BH], [x + 2.6, y + 2.6, PB]], aPrism(aHex(x, y, 2.6, 30), BH, PB, BRASS, .6)));
+    it.push(aItem([[x - 2.2, y - 2.2, PT], [x + 2.2, y + 2.2, PT + 1.6]], cyl(x, y, PT, PT + 1.6, 2.2, ALU, toneI, .6, 16)
+      + (vis([0,0,1]) ? line([[x - 1.3, y, PT + 1.62], [x + 1.3, y, PT + 1.62]], .4) + line([[x, y - 1.3, PT + 1.62], [x, y + 1.3, PT + 1.62]], .4) : ''))); }
+  // the board
+  it.push(aItem([[MX0, MY0, PB], [MX1, MY1, PT]], box(MX0, MY0, PB, MX1, MY1, PT, PCBR, toneI, .8) + (vis([0,0,1]) ? pcbTop(st, k) : '')));
+  // heat sink: base plate and fins standing on the board (ghosted in see-through)
+  const hg = 1 - .8*k, hsk = [aBoxI(HS.bx, HS.y0, PT, HS.x1, HS.y1, HS.z1, HSK, .7)];
+  for (const y of FINS) hsk.push(aBoxI(HS.x0, y, PT, HS.bx, y + 1.2, HS.z1 - 1.5, HSK, .55));
+  for (const h of hsk) it.push(aItem(h.box, `<g opacity="${f(hg)}">${h.svg}</g>`));
+  // the tab screw's shank and nut behind the base plate, in the gap between the fins
+  it.push(aItem([[45.2, SCR[0] - 2.8, SCR[1] - 2.8], [HS.bx, SCR[0] + 2.8, SCR[1] + 2.8]],
+    cylX(45.2, 46.2, SCR[0], SCR[1], 1.4, ALU, toneI, .5, 12) + xPrism(aHex(SCR[0], SCR[1], 2.8), 46.2, HS.bx, ALU, .6)));
+  it.push(chipItem(st, k));
+  // the 15 leads: odd pins straight down, even pins formed forward into the second row
+  for (let i = 0; i < 15; i++){ const y = LEADY(i), z0 = CHP.z0;
+    const segs = i % 2 ? [aBoxI(54.8, y - .4, z0 - 1.9, 55.25, y + .4, z0, ALU, .3), aBoxI(54.8, y - .4, z0 - 1.9, 58.8, y + .4, z0 - 1.45, ALU, .3), aBoxI(58.4, y - .4, PT, 58.85, y + .4, z0 - 1.45, ALU, .3)]
+      : [aBoxI(54.8, y - .4, PT, 55.25, y + .4, z0, ALU, .3)];
+    it.push(aItem([[54.8, y - .4, PT], [58.85, y + .4, z0]], byDepth(segs))); }
+  // regulator (DPAK), 5V-EN jumper, capacitors, diodes, power LED
+  it.push(aItem([[59.6, 105.2, PT], [67.7, 111.3, PT + 2.3]], byDepth([aBoxI(59.6, 105.2, PT, 61.2, 111.3, PT + .5, ALU, .4),
+    aBoxI(61, 105.4, PT, 66.2, 111.1, PT + 2.3, BLK, .5, aTxZ(63.6, 108.25, PT + 2.31, '78M05', .95, '#d9d4c7')),
+    aBoxI(66.2, 105.6, PT, 67.7, 106.4, PT + .6, ALU, .3), aBoxI(66.2, 110.1, PT, 67.7, 110.9, PT + .6, ALU, .3)])));
+  it.push(aBoxI(60.2, 114.3, PT, 65.3, 116.9, PT + 2.5, BLK, .5));
+  it.push(aBoxI(60.3, 114.45, PT + 2.5, 65.2, 116.75, PT + 8.3, matOf('#2b2724'), .6));
+  for (const [cx, cy] of [C1, C2]){ const z1 = PT + 12, r = 4;
+    let s = cyl(cx, cy, PT, z1, r, CAPB, toneI, .9, 24);
+    if (vis([-1, 0, 0])){ const pts = []; for (let a = 150; a <= 210; a += 10) pts.push([cx + r*1.01*Math.cos(a*Math.PI/180), cy + r*1.01*Math.sin(a*Math.PI/180), PT + .4]);
+      for (let a = 210; a >= 150; a -= 10) pts.push([cx + r*1.01*Math.cos(a*Math.PI/180), cy + r*1.01*Math.sin(a*Math.PI/180), z1 - .4]); s += fill(pd(pts), '#c9cfd6', 'opacity=".9"'); }
+    if (vis([0,0,1])) s += aDisc(cx, cy, z1 + .01, r - .6, '#d8dcdc', .4, 20) + line([[cx - 2, cy, z1 + .02], [cx + 2, cy, z1 + .02]], .4) + line([[cx, cy - 2, z1 + .02], [cx, cy + 2, z1 + .02]], .4);
+    it.push(aItem([[cx - r, cy - r, PT], [cx + r, cy + r, z1]], s)); }
+  for (const [x, y] of DIODES) it.push(smd(x, y - 2.15, x + 2.6, y + 2.15, PT, 2.1, BLK, 'y', '', [y + 1.1, y + 1.6]));
+  it.push(smd(65.5, 81.4, 67.1, 82.2, PT, .5, BLK, 'x'));
+  { const g = st.pwr ? '#ff5a4a' : '#a8564f';
+    it.push(aItem([[68.4, 81.4, PT], [70, 82.2, PT + .7]], box(68.4, 81.4, PT, 70, 82.2, PT + .7, matOf(g), toneI, .35)
+      + (st.pwr ? `<circle cx="${f(P(69.2, 81.8, PT + .8)[0])}" cy="${f(P(69.2, 81.8, PT + .8)[1])}" r="2.2" fill="#ff7a5a" opacity=".35"/>` : ''))); }
+  // screw terminals
+  it.push(screwTerminal(TP.x0, TP.y0, TP.x1, TP.y1, [[71.8, TP.v5], [71.8, TP.gnd], [71.8, TP.v12]], [1, 0, 0]));
+  it.push(screwTerminal(TA.x0, TA.y0, TA.x1, TA.y1, [[TA.out2, 117.75], [TA.out1, 117.75]], [0, 1, 0]));
+  it.push(screwTerminal(TB.x0, TB.y0, TB.x1, TB.y1, [[TB.out3, 82.25], [TB.out4, 82.25]], [0, -1, 0]));
+  // input header: plastic strips, bare pins (IN3, IN4, ENA's 5 V pin), ENB jumper, female jumper housings on ENA IN1 IN2
+  it.push(aBoxI(73.03, 85.09, PT, 75.57, 100.33, PT + 2.5, BLK, .5));
+  for (const y of [HDR.enA, HDR.enB]) it.push(aBoxI(70.49, y - 1.27, PT, 73.03, y + 1.27, PT + 2.5, BLK, .5));
+  for (const [x, y] of [[HDR.x, HDR.in3], [HDR.x, HDR.in4], [HDR.xj, HDR.enA]]) it.push(aBoxI(x - .32, y - .32, PT + 2.5, x + .32, y + .32, PT + 8.5, matOf('#e8d27a'), .35));
+  it.push(aBoxI(70.6, HDR.enB - 1.2, PT + 2.5, 75.45, HDR.enB + 1.2, PT + 8.3, matOf('#2b2724'), .55));
+  for (const y of [HDR.enA, HDR.in1, HDR.in2]) it.push(aBoxI(73.06, y - 1.24, PT + 2.5, 75.54, y + 1.24, PT + 16.5, BLK, .5,
+    aDisc(HDR.x, y, PT + 16.52, .45, '#1a1816', 0, 8)));
+  return [aStack(it, PT)];
+}
+
+/* ---------- motor ---------- */
+const mRot = (a, u, v) => { const c = Math.cos(a), s2 = Math.sin(a); return [MO.y + u*c - v*s2, MO.z + u*s2 + v*c]; };
+function motorInside(st){
+  const parts = [], a = st.ang*Math.PI/180, cur = Math.abs(st.I) > .02;
+  const ring = (x, r, n = 32) => on(PX(x), aCirc(MO.y, MO.z, r, n));
+  const far = loft(ring(MO.x0, MO.r - .4), ring(MO.x1, MO.r - .4), n => mix(toneI(n.map(v => -v), ALU), '#f2efe7', .45), true);
+  // two arc magnets on the can wall: N on top, S underneath, each in four convex pieces
+  for (const [ac, mm] of [[0, MAGN], [180, MAGS]]) for (let i = 0; i < 4; i++){
+    const a0 = (ac - 55 + i*27.5)*Math.PI/180, a1 = (ac - 55 + (i + 1)*27.5)*Math.PI/180;
+    const pr = [[14.6, a0], [17.5, a0], [17.5, a1], [14.6, a1]].map(([r, t]) => [MO.y + r*Math.cos(t), MO.z + r*Math.sin(t)]);
+    const ys = pr.map(p => p[0]), zs = pr.map(p => p[1]);
+    parts.push(aItem([[27, Math.min(...ys), Math.min(...zs)], [70, Math.max(...ys), Math.max(...zs)]], xPrism(pr, 27, 70, mm, .5))); }
+  // armature: hub, then three poles (winding + lamination shoe), turning with the shaft
+  parts.push(aItem([[29, MO.y - 3.6, MO.z - 3.6], [63, MO.y + 3.6, MO.z + 3.6]], cylX(29, 63, MO.y, MO.z, 3.6, FER, toneI, .6, 18)));
+  for (let p = 0; p < 3; p++){ const t = a + p*2*Math.PI/3;
+    const wind = [[3.6, -3.1], [10.6, -3.1], [10.6, 3.1], [3.6, 3.1]].map(([u, v]) => mRot(t, u, v));
+    const shoe = [[10.6, -4.2], [13.6, -6.6], [13.6, 6.6], [10.6, 4.2]].map(([u, v]) => mRot(t, u, v));
+    const pts = [...wind, ...shoe], b = aBounds(pts.map(([y, z]) => [29, y, z])); b[1][0] = 63;
+    const wm = matOf(cur ? mix('#d08a52', '#ff7a2a', .45) : '#d08a52');
+    const sv = xPrism(wind, 29.5, 62.5, wm, .5) + xPrism(shoe, 31, 61, FER, .5);
+    const sv2 = xPrism(shoe, 31, 61, FER, .5) + xPrism(wind, 29.5, 62.5, wm, .5);
+    // seen from outside the pole tip, the shoe is in front of its winding
+    const tipOut = vis([0, Math.cos(t), Math.sin(t)]);
+    parts.push(aItem(b, tipOut ? sv : sv2)); }
+  // commutator with three slits, brushes on brass holders out to the solder tabs
+  { let c = cylX(23.4, 28.2, MO.y, MO.z, 3.2, COPM, toneI, .6, 18), sl = '';
+    for (let p = 0; p < 3; p++){ const t = a + p*2*Math.PI/3 + Math.PI/3, n = [0, Math.cos(t), Math.sin(t)];
+      if (vis(n)){ const [y, z] = mRot(t, 3.22, 0); sl += pd([[23.4, y, z], [28.2, y, z]], false); } }
+    parts.push(aItem([[23.4, MO.y - 3.2, MO.z - 3.2], [28.2, MO.y + 3.2, MO.z + 3.2]], c + (sl ? `<path d="${sl}" fill="none" stroke="${INK}" style="stroke-width:.4"/>` : ''))); }
+  for (const sgn of [1, -1]){ const y0 = MO.y + sgn*3.3, y1 = MO.y + sgn*7.4;
+    parts.push(aBoxI(24, Math.min(y0, y1), MO.z - 1.6, 27.6, Math.max(y0, y1), MO.z + 1.6, matOf(cur ? '#5a4f48' : '#3a3632'), .45));
+    parts.push(aBoxI(MO.ec + 2.5, Math.min(MO.y + sgn*7.4, MO.y + sgn*9.3), MO.z - 2.1, 27.8, Math.max(MO.y + sgn*7.4, MO.y + sgn*9.3), MO.z + 2.1, BRASS, .45)); }
+  // shaft through both bushings
+  parts.push(aItem([[MO.ec, MO.y - 1.6, MO.z - 1.6], [MO.x1, MO.y + 1.6, MO.z + 1.6]], rod([MO.ec - .5, MO.y, MO.z], [MO.x1 + .5, MO.y, MO.z], 1.6, ALU, toneI, .5)));
+  parts.push(aItem([[73, MO.y - 3.2, MO.z - 3.2], [76.8, MO.y + 3.2, MO.z + 3.2]], cylX(73, 76.8, MO.y, MO.z, 3.2, BRASS, toneI, .5, 16)));
+  return { far, mech: byDepth(parts) };
+}
+function motorBody(st, m){
+  const fy = vis([0, 1, 0]), fx = vis([1, 0, 0]);
+  const leg = sgn => { const y0 = MO.y + sgn*18.4, y1 = MO.y + sgn*19.2;
+    return box(48, Math.min(y0, y1), BH + 1.2, 52, Math.max(y0, y1), MO.z, METAL, toneI, .5); };
+  const can = cylX(MO.x0, MO.x1, MO.y, MO.z, MO.r, METAL, tone, 1.8, 36);
+  let face = '';
+  if (fx){ for (const a of [30, 150, 270]){ const t = a*Math.PI/180, [y, z] = [MO.y + 11*Math.cos(t), MO.z + 11*Math.sin(t)];
+    face += shape(on(PX(MO.x1 + .05), aRect(y, z, 1.4, 3.2, a)), '#2a2724', .4); } }
+  const ecap = cylX(MO.ec, MO.x0, MO.y, MO.z, MO.r - 1, ENDC, toneI, 1.2, 32);
+  const band = cylX(48, 52, MO.y, MO.z, MO.r + .5, METAL, toneI, .8, 36);
+  return (fy ? leg(-1) : leg(1)) + (fx ? ecap + can + face : can + ecap) + band + (fy ? leg(1) : leg(-1));
+}
+function motorFront(st, m){
+  const a = st.ang*Math.PI/180, fx = vis([1, 0, 0]);
+  const boss = cylX(MO.x1, MO.x1 + 2, MO.y, MO.z, 5.5, ALU, toneI, .7, 20);
+  const shaft = rod([MO.x1 + 2, MO.y, MO.z], [90, MO.y, MO.z], 1.6, ALU, toneI, .5);
+  const hub = cylX(82.5, DISC.x0, MO.y, MO.z, 3.6, ALU, toneI, .6, 16);
+  let disc = cylX(DISC.x0, DISC.x1, MO.y, MO.z, DISC.r, m, toneI, 1.1, 40);
+  const fxp = fx ? DISC.x1 + .05 : DISC.x0 - .05;
+  if (fx || vis([-1, 0, 0])){
+    const w = [[MO.y, MO.z], ...[-.22, -.11, 0, .11, .22].map(d => [MO.y + 13.4*Math.cos(a + d), MO.z + 13.4*Math.sin(a + d)])].map(([y, z]) => [fxp, y, z]);
+    disc += shape(w, '#fff4d6', .5) + shape(on(PX(fxp), aCirc(MO.y, MO.z, 2.4, 12)), ALU.m, .5);
+    if (Math.abs(st.w) > 2500) disc += ink(pd(on(PX(fxp), aCirc(MO.y, MO.z, 9.5, 30))), .35);   // a blur ring at speed
+  }
+  const seq = [boss, shaft, hub, disc];
+  return fx ? seq.join('') : seq.reverse().join('');
+}
+function motorItems(st, m, k){
+  const it = [];
+  // saddles under the can
+  for (const x of [28, 65]) it.push(aBoxI(x, MO.y - 6, BH, x + 6, MO.y + 6, BH + 4, matOf('#bfb7a8'), .6));
+  // strap feet on the desk, each with a screw
+  for (const sgn of [1, -1]){ const y0 = MO.y + sgn*18.4, y1 = MO.y + sgn*24;
+    it.push(aItem([[47, Math.min(y0, y1), BH], [53, Math.max(y0, y1), BH + 1.6]], box(47, Math.min(y0, y1), BH, 53, Math.max(y0, y1), BH + 1.2, METAL, toneI, .5)
+      + cyl(50, MO.y + sgn*21.6, BH + 1.2, BH + 1.6, 1.3, ALU, toneI, .4, 10))); }
+  let body = motorBody(st, m), front = motorFront(st, m);
+  if (k > 0){ const mi = motorInside(st); body = `<g opacity="${f(.6*k)}">${mi.far}</g><g opacity="${f(k)}">${mi.mech}</g><g opacity="${f(1 - .8*k)}">${body}</g>`; }
+  const fx = vis([1, 0, 0]);
+  it.push(aItem([[MO.ec, MO.y - 19.2, BH + 4], [DISC.x1, MO.y + 19.2, MO.z + MO.r + .5]], fx ? body + front : front + body));
+  // rear bushing boss and the two solder tabs
+  const back = cylX(18, MO.ec, MO.y, MO.z, 4, ENDC, toneI, .7, 18)
+    + (vis([-1, 0, 0]) ? aDiscX(17.95, MO.y, MO.z, 1.9, BRASS.l) : '');
+  const tabs = [1, -1].map(sgn => box(15.5, Math.min(MO.y + sgn*8.7, MO.y + sgn*9.3), MO.z - 2, MO.ec, Math.max(MO.y + sgn*8.7, MO.y + sgn*9.3), MO.z + 2, BRASS, toneI, .45)
+    + (vis([0, sgn, 0]) ? shape(on(PY(MO.y + sgn*9.35), aCirc(16.8, MO.z, .7, 8)), '#2a2724', .3) : ''));
+  it.push(aItem([[15.5, MO.y - 9.3, MO.z - 4], [MO.ec, MO.y + 9.3, MO.z + 4]], vis([0, 1, 0]) ? tabs[1] + back + tabs[0] : tabs[0] + back + tabs[1]));
+  return it;
+}
+const aDiscX = (x, y, z, r, col) => { const d = pd(on(PX(x), aCirc(y, z, r, 14))); return fill(d, col) + ink(d, .35); };
+
+/* ---------- battery pack ---------- */
+function coil(x, y0, y1, r, n){ const pts = []; for (let i = 0; i <= n*12; i++){ const t = i/(n*12), th = t*n*2*Math.PI; pts.push([x + r*Math.cos(th), y0 + (y1 - y0)*t, CELLZ + r*Math.sin(th)]); }
+  const d = pd(pts, false); return `<path d="${d}" fill="none" stroke="${INK}" style="stroke-width:1"/><path d="${d}" fill="none" stroke="#dfe3e4" style="stroke-width:.45"/>`; }
+function batteryItems(st, k){
+  const it = [], z0 = BH, fl = BAT.fl, g = 1 - .7*k;
+  it.push(aBoxI(BAT.x0, BAT.y0, z0, BAT.x1, BAT.y1, fl, BLK, .8));
+  const walls = [aBoxI(BAT.x0, BAT.y0, fl, BAT.x1, BAT.y0 + 2, BAT.z1, BLK, .8), aBoxI(BAT.x0, BAT.y1 - 2, fl, BAT.x1, BAT.y1, BAT.z1, BLK, .8),
+    aBoxI(BAT.x0, BAT.y0 + 2, fl, BAT.x0 + 1.8, BAT.y1 - 2, 19, BLK, .7), aBoxI(BAT.x1 - 1.8, BAT.y0 + 2, fl, BAT.x1, BAT.y1 - 2, 19, BLK, .7)];
+  for (const w of walls) it.push(aItem(w.box, `<g opacity="${f(g)}">${w.svg}</g>`));
+  // cells: A and C have + toward the low-y end, B the other way (series 11.1 V)
+  CELLX.forEach((x, i) => { const plusLow = i !== 1, yb0 = plusLow ? 132.3 : 135.7, yb1 = yb0 + 65;
+    const nub = plusLow ? [130.8, yb0] : [yb1, yb1 + 1.5];
+    let s = rod([x, yb0, CELLZ], [x, yb1, CELLZ], CELLR, CELLM, toneI, 1);
+    const ringY = plusLow ? yb0 + 4 : yb1 - 4;
+    s += rod([x, ringY - .6, CELLZ], [x, ringY + .6, CELLZ], CELLR + .05, matOf('#e8e2d0'), toneI, .4);
+    const nb = rod([x, nub[0], CELLZ], [x, nub[1], CELLZ], 3.4, ALU, toneI, .6);
+    const nubNear = plusLow ? !vis([0, 1, 0]) : vis([0, 1, 0]);
+    it.push(aItem([[x - CELLR, Math.min(yb0, nub[0]), CELLZ - CELLR], [x + CELLR, Math.max(yb1, nub[1]), CELLZ + CELLR]], nubNear ? s + nb : nb + s)); });
+  // contacts: + plates and springs on the end walls, series straps
+  const plate = (x, y) => aBoxI(x - 4, y, CELLZ - 5, x + 4, y + .8, CELLZ + 5, ALU, .45);
+  it.push(plate(CELLX[0], 130), plate(CELLX[2], 130), plate(CELLX[1], 202.2));
+  it.push(aItem([[CELLX[1] - 5, 130, CELLZ - 5], [CELLX[1] + 5, 135.7, CELLZ + 5]], coil(CELLX[1], 130.4, 135.7, 4.6, 5)));
+  for (const x of [CELLX[0], CELLX[2]]) it.push(aItem([[x - 5, 197.3, CELLZ - 5], [x + 5, 202.6, CELLZ + 5]], coil(x, 202.6, 197.3, 4.6, 5)));
+  it.push(aBoxI(CELLX[0] - 3, 202.6, 7, CELLX[1] + 3, 203, 10, ALU, .4));       // strap A- to B+
+  it.push(aBoxI(CELLX[1] - 3, 130, 7, CELLX[2] + 3, 130.4, 10, ALU, .4));       // strap B- to C+
+  // black return wire from C- along the floor gap between B and C, out through the end wall
+  it.push(...aWire([[CELLX[2], 202.6, 9], [CELLX[2], 202, fl + .7], [138.25, 200.5, fl + .7], [138.25, 131.2, fl + .7], [106, 131.2, fl + .7], [106, 129, 6.5], [106, BAT.y0 - .4, 6.5]], WBLK, .7, fl));
+  // red from A+ plate out through the wall
+  it.push(...aWire([[CELLX[0] - 3, 130.6, 9], [102, 130.6, 8], [102, BAT.y0 - .4, 8]], WRED, .7, fl));
+  return it;
+}
+
+/* ---------- breadboard + Nano ---------- */
+function bbTop(){
+  const z = BT + .02, sq = (x, y, h = .5) => pd([[x - h, y - h, z], [x + h, y - h, z], [x + h, y + h, z], [x - h, y + h, z]]);
+  let s = fill(pd([[115.9, BB.y0 + 2, z], [119.1, BB.y0 + 2, z], [119.1, BB.y1 - 2, z], [115.9, BB.y1 - 2, z]]), mix(BBM.m, '#000000', .14));
+  let holes = ''; for (let c = 1; c <= 17; c++) for (const x of Object.values(RX)) holes += sq(x, CY(c));
+  return s + fill(holes, '#3a3632');
+}
+function bbItem(st, k){
+  let body = box(BB.x0, BB.y0, BH, BB.x1, BB.y1, BT, BBM, tone, .9) + (vis([0,0,1]) ? bbTop() : '');
+  body += hullInk([[BB.x0, BB.y0, BH], [BB.x1, BB.y0, BH], [BB.x1, BB.y1, BH], [BB.x0, BB.y1, BH], [BB.x0, BB.y0, BT], [BB.x1, BB.y0, BT], [BB.x1, BB.y1, BT], [BB.x0, BB.y1, BT]], 2.2);
+  if (k > 0){ const parts = [];
+    for (let c = 1; c <= 17; c++) for (const [x0, x1] of [[RX.a - 1.1, RX.e + 1.1], [RX.f - 1.1, RX.j + 1.1]]) parts.push(aBoxI(x0, CY(c) - .65, BH + 2.5, x1, CY(c) + .65, BT - 1, METAL, .35));
+    body = `<g opacity="${f(k)}">${byDepth(parts)}</g><g opacity="${f(1 - .8*k)}">${body}</g>`; }
+  return aItem([[BB.x0, BB.y0, BH], [BB.x1, BB.y1, BT]], body);
+}
+function nanoItems(st){
+  const it = [], x0 = NC[0] - 9, x1 = NC[0] + 9, y0 = NC[1] - 21.6, y1 = NC[1] + 21.6;
+  for (const x of [RX.c, RX.g]) it.push(aBoxI(x - 1.27, CY(2) - 1.27, BT, x + 1.27, CY(16) + 1.27, AZ, BLK, .5));
+  let top = '';
+  for (let c = 2; c <= 16; c++) for (const x of [RX.c, RX.g]) top += aDisc(x, CY(c), AZT + .02, .85, '#e3e6e3', .3, 12) + aDisc(x, CY(c), AZT + .04, .38, '#9aa2a4', 0, 8);
+  const pwm = st.en ? hiC('#f2c230') : '#8d877a', leds = ['#e2483d', pwm, '#8d877a', '#8d877a'];
+  [19, 17, 15, 13].forEach((dy, i) => { const y = NC[1] + dy, q = [[NC[0] - 5.6, y - .6, AZT + .3], [NC[0] - 4.4, y - .6, AZT + .3], [NC[0] - 4.4, y + .6, AZT + .3], [NC[0] - 5.6, y + .6, AZT + .3]];
+    top += fill(pd(q), leds[i]) + ink(pd(q), .3); });
+  top += aTxZ(NC[0] - 7.2, NC[1] + 2, AZT + .02, 'NANO V3', .95, '#e8eef6');
+  it.push(aItem([[x0, y0, AZ], [x1, y1, AZT]], box(x0, y0, AZ, x1, y1, AZT, PCBB, toneI, .6) + (vis([0,0,1]) ? top : '')));
+  { const c = [NC[0], NC[1] - 1.8];
+    it.push(aItem([[c[0] - 6.3, c[1] - 6.3, AZT], [c[0] + 6.3, c[1] + 6.3, AZT + 1.2]], aPrism(aRect(c[0], c[1], 4.4, 4.4, 45), AZT, AZT + .3, ALU, .4)
+      + aPrism(aRect(c[0], c[1], 3.5, 3.5, 45), AZT + .3, AZT + 1.2, BLK, .5, toneI, aTxZ(c[0], c[1], AZT + 1.21, 'ATMEGA', .9, '#d9d4c7') + aTxZ(c[0] - 1.1, c[1], AZT + 1.21, '328P', .9, '#d9d4c7')))); }
+  // USB mini-B at the high-y end, opening toward +y
+  { const ux0 = NC[0] - 3.8, ux1 = NC[0] + 3.8, uy0 = y1 - 7.5, uy1 = y1 + 1.5;
+    it.push(aItem([[ux0, uy0, AZT], [ux1, uy1, AZT + 3.9]], box(ux0, uy0, AZT, ux1, uy1, AZT + 3.9, ALU, toneI, .5) + (vis([0, 1, 0]) ? shape(on(PY(uy1 + .05), rectUV(ux0 + 1.2, AZT + .9, ux1 - 1.2, AZT + 3)), '#2a2724', .4) : ''))); }
+  it.push(aItem([[NC[0] - 1.75, NC[1] + 5.2, AZT], [NC[0] + 1.75, NC[1] + 11.2, AZT + 2.4]], box(NC[0] - 1.75, NC[1] + 5.2, AZT, NC[0] + 1.75, NC[1] + 11.2, AZT + 1.5, WHT, toneI, .45)
+    + cyl(NC[0], NC[1] + 8.2, AZT + 1.5, AZT + 2.4, 1.0, BLK, toneI, .45, 14)));
+  it.push(aBoxI(NC[0] + 3.6, NC[1] - 13, AZT, NC[0] + 6.2, NC[1] - 10, AZT + 1.1, ALU, .45));
+  it.push(aItem([[NC[0] - 5.5, NC[1] - 19.6, AZT], [NC[0] - 1, NC[1] - 12, AZT + 1.6]], byDepth([aBoxI(NC[0] - 5.5, NC[1] - 18.4, AZT, NC[0] - 1, NC[1] - 12, AZT + 1.6, BLK, .45),
+    aBoxI(NC[0] - 4.6, NC[1] - 19.6, AZT, NC[0] - 1.9, NC[1] - 18.4, AZT + .4, ALU, .35)])));
+  return [aStack(it, AZT)];
+}
+
+/* ---------- wires ---------- */
+function wireDefs(st){
+  const { in1, in2 } = lvl(st), I = st.I, fl = st.flow;
+  const dW = (col, yH, j) => { const y = CY(col), xd = 84 + j*1.6;
+    return [[RX.a, y, BT + 11], [RX.a, y, BT + 13.5], [RX.a - 2.6, y, BT + 12.5], [BB.x0 - 1.2, y, BT + 4], [BB.x0 - 3, y, BH + .7],
+      [xd, yH - 3, BH + .7], [80.5, yH, BH + 3], [78.2, yH, PT + 14], [76, yH, PT + 19.6], [HDR.x, yH, PT + 19.6], [HDR.x, yH, PT + 16.5]]; };
+  const pW = (row, col, yT, xo, yt) => { const y = CY(col);
+    return [[row, y, BT + 11], [row, y, BT + 13.5], [row + 2.4, y, BT + 12.5], [BB.x1 + 1.2, y, BT + 3], [xo, y, BH + .7], [xo, yt, BH + .7],
+      [xo - 37, yt + 12 + (yT - TP.v5)*.6, BH + .7], [80, yT, BH + .7], [78, yT, PT + 3.5], [TP.x1 - .4, yT, PT + 3.5]]; };
+  const battRun = Math.abs(I) > .02 && driven(st);
+  return [
+    { col: st.en ? hiC(WORG) : WORG, pts: dW(NPIN.D9, HDR.enA, 2), r: .6 },
+    { col: in1 ? hiC(WGRN) : WGRN, pts: dW(NPIN.D8, HDR.in1, 1), r: .6 },
+    { col: in2 ? hiC(WBLU) : WBLU, pts: dW(NPIN.D7, HDR.in2, 0), r: .6 },
+    { col: WRED, pts: pW(RX.i, NPIN.V5, TP.v5, 137, 80), r: .6 },
+    { col: WBLK, pts: pW(RX.j, NPIN.GND, TP.gnd - .5, 139, 82.5), r: .6 },
+    // battery leads into +12V and GND
+    { col: WRED, pts: [[102, BAT.y0 - .4, 8], [102, BAT.y0 - 2.4, 7], [99, 124.5, BH + .9], [84, TP.v12, BH + .9], [78.5, TP.v12, PT + 3.5], [TP.x1 - .4, TP.v12, PT + 3.5]], r: .8, flow: battRun ? -fl : null },
+    { col: WBLK, pts: [[106, BAT.y0 - .4, 6.5], [106, BAT.y0 - 2.4, 5.8], [102, 124, BH + .9], [86, TP.gnd + 1, BH + .9], [78.5, TP.gnd + .5, PT + 3.5], [TP.x1 - .4, TP.gnd + .5, PT + 3.5]], r: .8, flow: battRun ? fl : null },
+    // motor leads: OUT1 to the -y tab, OUT2 to the +y tab
+    { col: WRED, pts: [[15.5, MO.y - 9, MO.z], [13.5, MO.y - 9, MO.z - 2], [13.5, MO.y - 9, BH + .8], [13.5, 128, BH + .8], [TA.out1, 128, BH + .8], [TA.out1, TA.y1 + 2.5, PT + 3.5], [TA.out1, TA.y1 - .4, PT + 3.5]], r: .7, flow: Math.abs(I) > .02 ? fl*Math.sign(I) : null, rev: true },
+    { col: WBLK, pts: [[15.5, MO.y + 9, MO.z], [11, MO.y + 9, MO.z - 2], [11, MO.y + 9, BH + .8], [11, 126, BH + .8], [TA.out2, 126, BH + .8], [TA.out2, TA.y1 + 2.5, PT + 3.5], [TA.out2, TA.y1 - .4, PT + 3.5]], r: .7, flow: Math.abs(I) > .02 ? -fl*Math.sign(I) : null },
+  ];
+}
+function malePlugs(){
+  // male ends of the jumpers, standing in the breadboard holes
+  return [[RX.a, NPIN.D9], [RX.a, NPIN.D8], [RX.a, NPIN.D7], [RX.i, NPIN.V5], [RX.j, NPIN.GND]].map(([x, c]) => aBoxI(x - 1.24, CY(c) - 1.24, BT, x + 1.24, CY(c) + 1.24, BT + 11, BLK, .5, aDisc(x, CY(c), BT + 11.02, .45, '#1a1816', 0, 8)));
+}
+
+/* ---------- labels ---------- */
+// label frame: a box round the middle of the desk, slid sideways on screen so half the labels go each way
+function lbFor(items){
+  const B = [45, 125, 75, 160, BH, 30], o = P(0, 0, 0)[0], ex = P(1, 0, 0)[0] - o, ey = P(0, 1, 0)[0] - o;
+  const cs = []; for (const x of [B[0], B[1]]) for (const y of [B[2], B[3]]) for (const z of [B[4], B[5]]) cs.push(P(x, y, z)[0]);
+  const xs = items.map(i => P(...i.at)[0]).sort((a, b) => a - b), d = xs[xs.length >> 1] - (Math.min(...cs) + Math.max(...cs))/2;
+  const k = d/(ex*ex + ey*ey);
+  return [B[0] + k*ex, B[1] + k*ex, B[2] + k*ey, B[3] + k*ey, B[4], B[5]];
+}
+function insideLabels(st){
+  const run = Math.abs(st.I) > .02, br = bridgeA(st), vh = norm([CAM_V[1], CAM_V[2], 0]);
+  const nearM = (r, x) => [x, MO.y + r*vh[0], MO.z + r*vh[1]];
+  return [
+    { at:[CHP.b1, 104, PT + 15], text:'L298N CHIP', on: st.en },
+    { at:[HS.x0 + 2, 88, HS.z1 - 2], text:'HEAT SINK', on: run },
+    { at:[46.2, SCR[0], SCR[1] + 2.8], text:'TAB SCREW', on: false },
+    { at:[54.9, 104.3, PT + 12.5], text:'BRIDGE A Q1-Q4', on: run },
+    { at:[54.9, 95.7, PT + 12.5], text:'BRIDGE B Q5-Q8', on: false },
+    { at:[55.1, 104, PT + 9], text:'LOGIC GATES', on: st.en },
+    { at:[55.7, 92, PT + 8.2], text:'BOND WIRES', on: false },
+    { at:[61.8, 91.5, PT + 2.1], text:'FLYBACK DIODES', on: st.dir === 'brake' && run },
+    { at:[63.6, 108.3, PT + 2.3], text:'78M05 REGULATOR', on: st.pwr },
+    { at:[62.7, 115.6, PT + 8.3], text:'5V-EN JUMPER', on: false },
+    { at:[C1[0], C1[1], PT + 12], text:'220UF CAP', on: run },
+    { at:[69.2, 81.8, PT + .7], text:'POWER LED', on: st.pwr },
+    { at:[TA.x0 + 2, TA.y1, PT + 8], text:'OUT1 OUT2', on: run },
+    { at:[TP.x1, TP.v12, PT + 8], text:'POWER TERMINAL', on: run },
+    { at:[HDR.x, HDR.enA, PT + 16.5], text:'ENA PIN', on: st.en },
+    { at:[HDR.x, HDR.in1, PT + 16.5], text:'IN1 PIN', on: lvl(st).in1 },
+    { at:[HDR.x, HDR.in2, PT + 16.5], text:'IN2 PIN', on: lvl(st).in2 },
+    { at:[73, HDR.enB, PT + 8.3], text:'ENB JUMPER', on: false },
+    { at:[61.2, 110, PT], text:'VS TRACE', on: run },
+    { at:[73.7, 81.3, BH + 2], text:'HEX STANDOFF', on: false },
+    { at:[40, MO.y + (vh[0] > 0 ? 16 : -16), MO.z], text: (vh[0] > 0 ? 'MAGNET N' : 'MAGNET S'), on: false },
+    { at: nearM(10, 46), text:'ARMATURE COIL', on: run },
+    { at: nearM(3.2, 25.8), text:'COMMUTATOR', on: Math.abs(st.w) > 50 },
+    { at:[25.8, MO.y + (vh[0] > 0 ? 6 : -6), MO.z + 1.6], text:'CARBON BRUSH', on: run },
+    { at:[88, MO.y, MO.z + 1.6], text:'SHAFT', on: Math.abs(st.w) > 50 },
+    { at:[15.5, MO.y + 9.3, MO.z + 2], text:'SOLDER TABS', on: run },
+    { at:[DISC.x1, MO.y, MO.z + DISC.r], text:'FLYWHEEL', on: Math.abs(st.w) > 50 },
+    { at:[CELLX[1], 168, CELLZ + CELLR], text:'18650 CELL', on: run },
+    { at:[138.25, 165, BAT.fl + .7], text:'RETURN WIRE', on: run },
+    { at:[NC[0], NC[1] - 1.8, AZT + 1.2], text:'ATMEGA328P', on: st.en },
+    { at:[RX.a, CY(NPIN.D9), BT + 11], text:'D9 PWM WIRE', on: st.en },
+    { at:[RX.f, CY(8), BT - 1], text:'SPRING CLIPS', on: false },
+  ];
+}
+function surfaceLabels(st){
+  const run = Math.abs(st.I) > .02;
+  return [
+    { at:[HS.x0, 100, HS.z1], text:'L298N MODULE', on: st.en },
+    { at:[TP.x1, TP.gnd, PT + 10], text:'POWER TERMINAL', on: run },
+    { at:[TA.x0 + 3, TA.y1, PT + 10], text:'MOTOR TERMINAL', on: run },
+    { at:[HDR.x, HDR.in1, PT + 16.5], text:'ENA IN1 IN2', on: st.en },
+    { at:[50, MO.y + 10, MO.z + MO.r], text:'DC MOTOR', on: Math.abs(st.w) > 50 },
+    { at:[CELLX[0], 175, CELLZ + CELLR], text:'3S 18650 PACK', on: run },
+    { at:[NC[0], NC[1] - 12, AZT + 1], text:'ARDUINO NANO', on: st.en },
+    { at:[BB.x1, 36, BT], text:'BREADBOARD', on: false },
+  ];
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0);
+  let s = board(DESK[0], DESK[1], DESK[2], DESK[3], BH, 6, WOOD);
+  const top = boardTop(DESK[0], DESK[1], DESK[2], DESK[3], BH, 6);
+  const corners = (x0, y0, z0, x1, y1, z1) => { const o = []; for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) o.push([x, y, z]); return o; };
+  const mo = []; for (const x of [MO.x0, DISC.x1]) for (let a = 0; a < 360; a += 30) mo.push([x, MO.y + MO.r*Math.cos(a*Math.PI/180), MO.z + MO.r*Math.sin(a*Math.PI/180)]);
+  s += castShadow([...corners(MX0, MY0, BH, MX1, MY1, PT), ...corners(HS.x0, HS.y0, PT, CHP.b1, HS.y1, HS.z1)], BH, top)
+    + castShadow([...mo, [MO.x0, MO.y - 22, BH], [MO.x0, MO.y + 22, BH]], BH, top)
+    + castShadow(corners(BAT.x0, BAT.y0, BH, BAT.x1, BAT.y1, BAT.z1), BH, top)
+    + castShadow(corners(BB.x0, BB.y0, BH, BB.x1, BB.y1, AZT + 2), BH, top);
+  const items = [...moduleItems(st, k), ...motorItems(st, m, k), ...batteryItems(st, k), bbItem(st, k), ...nanoItems(st), ...malePlugs()];
+  const show = k > .3;
+  for (const w of wireDefs(st)) items.push(...aWire(w.pts, w.col, w.r, BH, 4, show && w.flow != null ? w.flow : null));
+  s += byDepth(items);
+  const labs = k > .6 ? insideLabels(st) : surfaceLabels(st);
+  return s + xrCallouts(labs, lbFor(labs));
+}
+
+/* ---------- behaviour (one state object, one loop) ---------- */
+let ui, looping = false;
+function tick(dt){
+  const st = ui.st, V = vOut(st), drv = driven(st), brk = st.en && st.dir === 'brake';
+  const tau = drv ? .45 : brk ? .12 : 1.4, target = drv ? V*KV : 0;
+  st.w += (target - st.w)*(1 - Math.exp(-dt/tau));
+  if (Math.abs(st.w) < 3 && !drv) st.w = 0;
+  // armature current: applied volts minus back-EMF over the winding resistance (shorted through the upper pair when braking)
+  st.I = drv ? Math.max(-2, Math.min(2, (V - st.w/KV)/RM + .12*Math.sign(V))) : brk ? Math.max(-2, Math.min(2, -(st.w/KV)/RM)) : 0;
+  if (Math.abs(st.I) < .02) st.I = 0;
+  st.ang = (st.ang + (st.w/((VBAT - VDROP)*KV))*3*360*dt) % 360;          // drawn at 3 turns a second at full speed
+  st.flow += dt*22*Math.abs(st.I);
+  return drv || st.w !== 0;
+}
+function kick(){ if (looping) return; looping = true; ui.animate(dt => { const b = tick(dt); if (!b) looping = false; return b; }); }
+function setDir(st, d){
+  st.dir = d;
+  if (!st.en) ui.flash(d === 'fwd' ? 'IN1 HIGH, IN2 LOW: forward is set, ENA is still LOW' : 'IN1 LOW, IN2 HIGH: reverse is set, ENA is still LOW', 1800);
+  kick();
+}
+function enable(st){
+  if (st.en){ st.en = false; ui.flash('ENA LOW: all four transistors off, the motor coasts', 1600); kick(); return; }
+  if (st.dir === 'none') return ui.flash('IN1 and IN2 are both LOW: set a direction first');
+  st.en = true; kick();
+}
+function reverse(st){
+  st.dir = st.dir === 'fwd' ? 'rev' : 'fwd';
+  if (!st.en) ui.flash(st.dir === 'fwd' ? 'Forward set: IN1 HIGH, IN2 LOW' : 'Reverse set: IN1 LOW, IN2 HIGH', 1400);
+  kick();
+}
+function brake(st){
+  if (!st.en) return ui.flash('ENA is LOW: the bridge is off, so the motor just coasts');
+  st.dir = 'brake'; kick();
+}
+
+ui = mountFigure({
+  fig:'L2', title:'L298N motor driver', turn:'full',
+  size:[DESK[2], DESK[3], 46], center:[84, 115], palette:'tomato',
+  state:{ dir:'none', en:false, duty:1, w:0, ang:20, I:0, flow:0, pwr:true },
+  scene,
+  stats: st => { const v = termV(st), rpm = Math.round(Math.abs(st.w)/10)*10, { in1, in2 } = lvl(st);
+    return [
+      { label:'OUT1 - OUT2', value: (v > .05 ? '+' : v < -.05 ? '-' : '') + Math.abs(v).toFixed(1) + ' V' },
+      { label:'Motor', value: (st.w < -5 ? '-' : '') + rpm.toLocaleString('en-US') + ' rpm', small:true },
+      { label:'ENA', value: st.en ? 'PWM ' + Math.round(st.duty*100) + '%' : 'LOW', small:true },
+      { label:'IN1 / IN2', value: (in1 ? 'H' : 'L') + ' / ' + (in2 ? 'H' : 'L'), small:true },
+    ]; },
+  buttons:[
+    { label:'Set direction', choices: st => [
+        { label:'Forward', current: st.dir === 'fwd', onClick: st => setDir(st, 'fwd') },
+        { label:'Reverse', current: st.dir === 'rev', onClick: st => setDir(st, 'rev') } ] },
+    { label:'Enable ENA', onClick: st => enable(st) },
+    { label:'PWM duty', choices: st => DUTIES.map(d => ({ label: Math.round(d*100) + '%', current: st.duty === d, onClick: st => { st.duty = d; kick(); } })) },
+    { label:'Reverse', onClick: st => reverse(st) },
+    { label:'Brake', onClick: st => brake(st) },
+  ],
+  params:(st, q) => {
+    if (['fwd', 'rev', 'brake'].includes(q.get('dir'))) st.dir = q.get('dir');
+    if (q.get('en') === '1') st.en = true;
+    if (q.has('duty')) st.duty = +q.get('duty');
+    if (q.has('w')) st.w = +q.get('w');
+    if (q.has('ang')) st.ang = +q.get('ang');
+    if (q.has('flow')) st.flow = +q.get('flow');
+    if (q.has('w') || q.has('en')){ const V = vOut(st), drv = driven(st);
+      st.I = drv ? Math.max(-2, Math.min(2, (V - st.w/KV)/RM + .12*Math.sign(V))) : (st.en && st.dir === 'brake') ? -(st.w/KV)/RM : 0; }
+  },
+});
+xrMount(() => ui, () => '');
+if (driven(ui.st) || ui.st.w) kick();
+</script></body></html>
