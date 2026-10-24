@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Heat pump</title>
+<style>@media(min-width:561px){#stats{display:grid;grid-template-columns:repeat(2,max-content);gap:10px 18px}html .zchip{right:calc(50% - 48px)}}</style>
+</head><body>
+<script src="core.js"></script>
+<script>
+/* Heat pump: an air-to-air split heat pump. An outdoor unit stands on a concrete pad beside the house; an indoor wall unit
+   hangs high on the inside of the same wall; the line set (two copper pipes, a drain hose and a cable) runs through a
+   sleeve in the wall and down a trunking to the outdoor unit's service valves. The house is cut open (a dollhouse view):
+   the front wall is left off so the room shows. 1 unit = 1 cm.
+   x = depth (the room's open front at x = 120, the outdoor unit faces +x), y = width (outside at low y, the room at high y),
+   z = up. The wall is y 100..122; the outdoor unit y 10..90 beside it, just past the corner; the room floor y 122..210.
+
+   HOW IT REALLY WORKS (vapour compression, one refrigerant loop, R32)
+   HEAT  1. The inverter compressor squeezes cool low-pressure gas into hot high-pressure gas (about 70 C).
+         2. Discharge pipe -> 4-way reversing valve; in the heating position its slide joins the discharge to the gas line.
+         3. Gas line -> service valve -> trunking -> through the wall -> the indoor coil. The cross-flow fan blows room air
+            through the coil: the hot gas gives up its heat, the room warms and the gas condenses to a warm liquid.
+         4. Liquid line -> back through the wall -> liquid service valve -> electronic expansion valve (EEV): the pressure
+            drops and the liquid flashes to a cold mist (about -8 C), colder than the outside air.
+         5. Strainer -> distributor -> outdoor coil: outside air (even at 4 C) is warmer than the refrigerant, so it boils
+            it to gas; the propeller fan pulls that air through the coil and blows it out of the front grille colder.
+         6. Coil header -> reversing valve (outdoor coil port to the suction port) -> accumulator -> compressor. Round again.
+   COOL  The pilot solenoid lets go, discharge pressure shoves the slide to the other end, and flow through the coils
+         and line set reverses, while compressor suction and discharge stay fixed: the outdoor coil gets the hot gas
+         and becomes the condenser (warm air out of the
+         grille), the EEV feeds the cold mist up the liquid line, and the indoor coil becomes the cold evaporator (cool
+         air into the room, its moisture dripping into the drain pan and down the drain hose).
+   The thermostat is the room sensor on the indoor unit: at the set point (22 C heat, 18 C cool) the inverter slows the
+   compressor right down to hold it. Every pipe goes port to port; every part is fixed to the case or to another part.
+
+   PARTS
+   SCENE      board . room floor . house wall (render outside, plaster inside) . skirting . remote in its wall holder .
+              concrete pad . drain gully
+   OUTDOOR    case: front panel, fan grille, top, coil guard (back + left), right panel, valve cover, two feet rails,
+              four rubber pads . base pan . partition plate . outdoor coil (back + side, fins + tubes) . gas header +
+              four stubs . distributor + four feeder tubes . propeller fan (3 blades) . fan hub . fan motor . motor
+              bracket . bell-mouth shroud . compressor + three rubber mounts + terminal cover . accumulator + strap .
+              discharge pipe . suction pipe . 4-way reversing valve + slide + pilot valve + pilot solenoid + capillaries .
+              EEV + stepper coil . strainer . liquid and gas service valves . inverter board box + heat sink + terminal
+              block . compressor wires . fan motor wire . air sensor
+   LINE SET   wall sleeve . gas line . liquid line . drain hose . interconnect cable . trunking (riser + run)
+   INDOOR     case (front panel, top intake grille, end caps) . louvre . mounting plate . indoor coil (three slabs) .
+              coil header . cross-flow fan . fan motor . control board box . drain pan . air filter . vertical vanes .
+              louvre motor . display board . room sensor */
+
+/* ---------- geometry ---------- */
+const BH = 4;                                                   // board
+const WY0 = 100, WY1 = 122, WX1 = 120, WZ = 232;                // the house wall
+const FLZ = BH + 3, FLY1 = 210;                                 // room floor slab top, its far edge
+const OX0 = 112, OX1 = 142, OY0 = 10, OY1 = 90, OZ0 = 16, OZ1 = 76;   // outdoor unit case
+const PADZ = BH + 6;                                            // concrete pad top
+const FC = [36, 46], FAN_R = 19, GR_R = 21.5, FAN_X = 134;      // fan centre (y, z), blade tip radius, grille radius
+const PART_Y = 62;                                              // partition plate
+const IX0 = 20, IX1 = 104, IY0 = 123, IY1 = 145, IZ0 = 186, IZ1 = 214;  // indoor unit case
+const IOUT = rrUV(IY0, IZ0, IY1, IZ1, 5, 6);
+const LV_H = [141, 186.4], LV_L = 6.5, LV_X = [27, 97];         // louvre hinge (y, z), length, span
+const SLEEVE = [98.5, 192], SL_R = 4.2;                         // wall sleeve centre (x, z)
+const TRV = [93, 104, 20, 197], TRH = [104, 141, 22, 34], TRY = [93, 100];   // trunking riser (x0,x1,z0,z1), run, depth
+const SETP = { heat: 22, cool: 18 };
+const OUTS = [-5, 4, 15, 32];
+const COP_H = { '-5': 2.6, '4': 3.4, '15': 4.3, '32': 4.9 }, EER_C = { '-5': 6.0, '4': 5.6, '15': 5.0, '32': 3.3 };
+
+const PLASTER = { l:'#f6f1e6', m:'#e4ddcd', d:'#c4bca9' }, RENDER = { l:'#e9cfa8', m:'#d0b289', d:'#9d8260' };
+const SECT = { l:'#d6cbb8', m:'#bfb39e', d:'#978b76' }, CONC = { l:'#d9d6cf', m:'#bdb9b0', d:'#8f8b83' };
+const PVC = { l:'#f7f6f0', m:'#e3e1d8', d:'#bdbab0' }, FINM = { l:'#d9e0e2', m:'#bcc5c8', d:'#8e999d' };
+const COPM = { l:'#f0b07a', m:'#d08a52', d:'#9a5a2c' }, BRASS = matOf('#d8b25a'), COMPM = matOf('#4f5552');
+const RUB = matOf('#3a3633'), GREYM = matOf('#8c9296'), PCB = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' };
+const BLADE = matOf('#5d6468'), FOAM = matOf('#f2f0e8');
+const HOT = '#e2483d', WARM = '#f39a2c', COLD = '#3f7fd6', COOLV = '#8cc4ec', COPPER = '#c98a52';
+const RECESS = '#2b2523';
+
+/* ---------- helpers ---------- */
+const hpBoxOf = (pts, e = .3) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const hpBend = (pts, r = 1.2) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...sub(a, b)), lc = Math.hypot(...sub(c, b)), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k]) * d/la), q = c.map((v, k) => b[k] + (v - b[k]) * d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+// a pipe or cable cut into short pieces, each sorted on its own box. fl = { ph, dir, c } draws refrigerant dots moving along it.
+function hpPipe(pts, r, col, fl = null, Lp = 4){
+  const q = hpBend(pts, Math.max(1.2, r*2.4)), cum = [0], out = [], g = 5;
+  for (let i = 1; i < q.length; i++) cum.push(cum[i - 1] + Math.hypot(...sub(q[i], q[i - 1])));
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1; while (j < q.length - 1 && cum[j] - cum[i] < Lp) j++;
+    const seg = q.slice(i, j + 1), d = pd(seg, false);
+    let svg = `<path d="${d}" fill="none" stroke="${INK}" style="stroke-width:${f(2*r + .7*INK_K)}" stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" style="stroke-width:${f(2*r)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    if (fl){ const ph = ((fl.ph * fl.dir) % g + g) % g;
+      for (let s = Math.ceil((cum[i] - ph) / g) * g + ph; s < cum[j]; s += g){
+        let kk = i; while (kk < j - 1 && cum[kk + 1] < s) kk++;
+        const t = Math.max(0, Math.min(1, (s - cum[kk]) / ((cum[kk + 1] - cum[kk]) || 1))), [X, Y] = P(...q[kk].map((v, c) => v + (q[kk + 1][c] - v) * t));
+        svg += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(Math.max(.5, r*.85))}" fill="#ffffff" opacity=".85"/>`; } }
+    out.push({ box: hpBoxOf(seg, r), svg }); i = j; }
+  return out;
+}
+// one face of a box (given its 4 corners and outward normal), only when it faces the viewer
+const hpFace = (pts, n, m, sh = tone, w = 1, extra = '') => vis(n) ? shape(pts, sh(n, m), w) + extra : '';
+// a thin slab profile in the (y, z) plane from a to b, thickness t on its left side (for extrude along x)
+const hpSlab = (a, b, t) => { const d = norm([b[0] - a[0], b[1] - a[1], 0]), n = [-d[1] * t, d[0] * t];
+  return [a, b, [b[0] + n[0], b[1] + n[1]], [a[0] + n[0], a[1] + n[1]]]; };
+const hpProfInk = (prof, x0, x1, w) => hullInk([...on(PX(x0), prof), ...on(PX(x1), prof)], w);
+// a dome on a vertical cylinder: rings from radius r at z0 up to a small cap at z0 + h
+const hpDome = (x, y, z0, r, h, m) => { const rs = [1, .92, .72, .4], zs = [0, .4, .78, 1]; let s = '';
+  for (let i = 0; i < 3; i++) s += loft(on(PZ(z0 + h*zs[i]), ellUV(x, y, r*rs[i], r*rs[i], 20)), on(PZ(z0 + h*zs[i+1]), ellUV(x, y, r*rs[i+1], r*rs[i+1], 20)), n => toneI(n, m));
+  const cap = on(PZ(z0 + h), ellUV(x, y, r*rs[3], r*rs[3], 20));
+  return s + fill(pd(cap), toneI([0,0,1], m)) + hullInk([...on(PZ(z0), ellUV(x, y, r, r, 20)), ...cap], 1); };
+const hpTxB = (x, y, z, str, size, col = INK) => `<text transform="${txM(P(x,y,z), Dv(0,1,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em">${str}</text>`;
+const hpTxYb = (x, y, z, str, size, col = INK) => `<text transform="${txM(P(x,y,z), Dv(-1,0,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" letter-spacing=".04em">${str}</text>`;
+
+/* ---------- the refrigerant: colours and directions per pipe, from the valve position and the compressor speed ---------- */
+// a segment is described by its colour in heating and in cooling, and its flow direction (+1 = as drawn) in heating
+function hpSeg(st, heatCol, coolCol, heatDir, reverses = true){
+  const c = mix(coolCol, heatCol, st.valve), col = mix(COPPER, c, Math.min(1, st.run * 1.6));
+  return { col, fl: st.run > .03 ? { ph: st.ph, dir: (!reverses || st.valve >= .5 ? 1 : -1) * heatDir, c } : null };
+}
+const hpTint = (st, heatCol, coolCol, base, k = .5) => mix(base, mix(coolCol, heatCol, st.valve), Math.min(1, st.run * 1.6) * k);
+
+/* ---------- the house: board, floor, wall ---------- */
+function ground(){
+  let s = board(-4, 2, 152, 214, BH, 6, BOARD);
+  // paving joints outside
+  let j = ''; for (const y of [28, 54, 80]) j += pd([[-3, y, BH + .05], [151, y, BH + .05]], false);
+  for (const x of [26, 56, 86]) j += pd([[x, 3, BH + .05], [x, WY0, BH + .05]], false);
+  s += `<path d="${j}" fill="none" stroke="${INK}" stroke-width=".6" opacity=".35"/>`;
+  // room floor: a wooden slab on the board, boards running along x
+  s += box(0, WY1, BH, WX1, FLY1, FLZ, WOOD, toneI, 1);
+  let b = ''; for (let y = WY1 + 11; y < FLY1; y += 11) b += pd([[0, y, FLZ + .05], [WX1, y, FLZ + .05]], false);
+  s += `<path d="${b}" fill="none" stroke="${INK}" stroke-width=".55" opacity=".45"/>`;
+  return s;
+}
+function wallSvg(st, k){
+  const x0 = 0, x1 = WX1, y0 = WY0, y1 = WY1, z0 = BH, z1 = WZ;
+  const hatch = (pts3) => { let h = ''; return h; };
+  let s = '';
+  // exterior render (low y), brick-coloured with course lines
+  if (vis([0,-1,0])){ s += shape([[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1]], tone([0,-1,0], RENDER), 1.2);
+    let c = ''; for (let z = z0 + 30; z < z1; z += 30) c += pd([[x0 + .5, y0 - .05, z], [x1 - .5, y0 - .05, z]], false);
+    s += `<path d="${c}" fill="none" stroke="${INK}" stroke-width=".6" opacity=".3"/>`; }
+  // interior plaster (high y) and the skirting
+  if (vis([0,1,0])){ s += shape([[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]], tone([0,1,0], PLASTER), 1.2);
+    s += shape([[x0,y1+.1,FLZ],[x1,y1+.1,FLZ],[x1,y1+.1,FLZ+8],[x0,y1+.1,FLZ+8]], '#ffffff', .8); }
+  // the cut ends and top: section faces, hatched
+  for (const [n, pts] of [[[1,0,0], [[x1,y0,z0],[x1,y1,z0],[x1,y1,z1],[x1,y0,z1]]], [[-1,0,0], [[x0,y0,z0],[x0,y1,z0],[x0,y1,z1],[x0,y0,z1]]]]){
+    if (!vis(n)) continue; const x = pts[0][0] + n[0]*.05;
+    let h = ''; for (let z = z0 + 4; z < z1 + 22; z += 7) h += pd([[x, y0, Math.min(z1, z)], [x, y1, Math.min(z1, z) - Math.min(22, z - z0)]].map(([a, b, c]) => [a, b, c]), false);
+    s += shape(pts, tone(n, SECT), 1.2) + clipTo(pts, `<path d="${h}" fill="none" stroke="${INK}" stroke-width=".55" opacity=".4"/>`); }
+  const top = [[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]];
+  let th = ''; for (let x = x0 + 4; x < x1 + 22; x += 7) th += pd([[Math.min(x1, x), y0, z1 + .05], [Math.max(x0, x - 22), y1, z1 + .05]], false);
+  s += shape(top, SECT.l, 1.2) + clipTo(top, `<path d="${th}" fill="none" stroke="${INK}" stroke-width=".55" opacity=".4"/>`);
+  s += hullInk([[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0],[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]], 2.6);
+  if (k <= 0) return s;
+  // see-through: the wall fades and the sleeve with the line set inside it shows
+  let m = '';
+  const parts = [];
+  parts.push({ box: [[SLEEVE[0] - SL_R, WY0, SLEEVE[1] - SL_R], [SLEEVE[0] + SL_R, WY1, SLEEVE[1] + SL_R]], svg: `<g opacity=".55">${rod([SLEEVE[0], WY0 - .3, SLEEVE[1]], [SLEEVE[0], WY1 + .3, SLEEVE[1]], SL_R, matOf('#bfc4c2'), toneI, .8)}</g>` });
+  m += byDepth(parts);
+  m += byDepth(lineInWall(st));
+  return `<g opacity="${f(1 - .8*k)}">${s}</g><g opacity="${f(k)}">${m}</g>`;
+}
+
+/* ---------- the line set: pipe routes (in heating flow direction) ---------- */
+// gas line: outdoor gas service valve -> run -> riser -> sleeve -> indoor coil header. Liquid line: indoor -> outdoor.
+const GAS_OUT = [[131, 92.5, 28], [131, 96.5, 28], [95.5, 96.5, 28], [95.5, 96.5, 188], [97, 96.5, 193.5], [97, 100, 193.5]];
+const GAS_WALL = [[97, 100, 193.5], [97, 122, 193.5]];
+const GAS_IN = [[97, 122, 193.5], [97, 126, 193.5], [101.5, 128, 196], [101.5, 130.5, 199]];
+const LIQ_IN = [[101.5, 139, 195], [101.5, 128, 195], [100, 125, 193.5], [100, 122, 193.5]];
+const LIQ_WALL = [[100, 122, 193.5], [100, 100, 193.5]];
+const LIQ_OUT = [[100, 100, 193.5], [100, 96.5, 193.5], [98.5, 96.5, 189], [98.5, 96.5, 31.5], [136, 96.5, 31.5], [136, 92.5, 31.5]];
+const DRAIN = [[100.5, 142, 190.2], [102.6, 142, 190], [102.6, 127, 189.6], [97, 124, 189.6], [97, 100, 189.4], [97, 98.8, 189.2], [101.5, 98.8, 186], [101.5, 98.8, 20], [101.5, 98.8, BH + 1.2]];
+const CABLE = [[24.5, 128, 202], [24.5, 124.2, 197], [24.5, 124.2, 190], [100.8, 124.2, 189.8], [100.8, 100, 189.8], [100.8, 94.6, 189.8], [102.2, 94.6, 186], [102.2, 94.6, 25.5], [139, 94.6, 25.5], [139, 92.5, 25.5]];
+const cut = (pts, pred) => pts;   // routes are split by hand into the in-unit, in-wall and outside pieces above
+function lineInWall(st){
+  const g = hpSeg(st, HOT, COOLV, 1), l = hpSeg(st, WARM, COLD, 1);
+  return [...hpPipe(GAS_WALL, 1, g.col, g.fl), ...hpPipe(LIQ_WALL, .7, l.col, l.fl),
+    ...hpPipe([[97, 100, 189.4], [97, 122, 189.6]], .6, '#dfe3e0'), ...hpPipe([[100.8, 100, 189.8], [100.8, 122, 189.8]], .45, '#3a3632')];
+}
+
+/* ---------- trunking (riser down the outside wall, run along the ground to the valve cover) ---------- */
+function trunkSvg(st, k, which){
+  const [y0, y1] = TRY, [a0, a1, b0, b1] = which === 'V' ? TRV : TRH;
+  const body = box(a0, y0, b0, a1, y1, b1, PVC, tone, 1.1) + (which === 'V' && vis([0,-1,0]) ? line([[a0 + .6, y0 - .05, b1 - 3], [a1 - .6, y0 - .05, b1 - 3]], .6) : '');
+  if (k <= 0) return body;
+  const inside = which === 'V' ? linesV(st) : linesH(st);
+  return `<g opacity="${f(1 - .8*k)}">${body}</g><g opacity="${f(k)}">${byDepth(inside)}</g>`;
+}
+// the outside part of each route, split at the riser's foot (x = 104)
+const splitAt = (pts, xs) => { const a = [], b = []; let into = a;
+  for (let i = 0; i < pts.length; i++){ into.push(pts[i]); if (i < pts.length - 1 && pts[i][0] <= xs && pts[i + 1][0] > xs || i < pts.length - 1 && pts[i][0] > xs && pts[i + 1][0] <= xs){
+      const p = pts[i], q = pts[i + 1], t = (xs - p[0]) / (q[0] - p[0]), c = p.map((v, kk) => v + (q[kk] - v) * t); into.push(c); into = into === a ? b : a; into.push(c); } }
+  return [a, b]; };
+function linesV(st){
+  const g = hpSeg(st, HOT, COOLV, 1), l = hpSeg(st, WARM, COLD, 1);
+  const [gb, ga] = splitAt(GAS_OUT, 104), [la, lb] = splitAt(LIQ_OUT, 104), [ca, cb] = splitAt(CABLE.slice(4), 104);
+  return [...hpPipe(ga.filter(p => p[1] <= 100), 1, g.col, g.fl), ...hpPipe(la, .7, l.col, l.fl),
+    ...hpPipe(DRAIN.slice(4, 8), .6, '#dfe3e0'), ...hpPipe(ca, .45, '#3a3632')];
+}
+function linesH(st){
+  const g = hpSeg(st, HOT, COOLV, 1), l = hpSeg(st, WARM, COLD, 1);
+  const [gb] = splitAt(GAS_OUT, 104), [, lb] = splitAt(LIQ_OUT, 104), [, cb] = splitAt(CABLE.slice(4), 104);
+  return [...hpPipe(gb, 1, g.col, g.fl), ...hpPipe(lb, .7, l.col, l.fl), ...hpPipe(cb, .45, '#3a3632')];
+}
+// the drain hose leaving the riser's foot, and the gully it drips into
+function drainSvg(){
+  return rod([101.5, 98.8, 20], [101.5, 98.8, BH + 1.6], .7, matOf('#dfe3e0'), toneI, .8)
+    + shape(on(PZ(BH + .05), rrUV(98, 95.4, 105, 99.8, 1)), '#6d6a64', .8);
+}
+
+/* ---------- outdoor unit: the closed case ---------- */
+const ringX = (x, cy, cz, r, n = 36) => on(PX(x), ellUV(cy, cz, r, r, n));
+function fanBlades(st, x = FAN_X){
+  let s = '';
+  for (let b = 0; b < 3; b++){ const a0 = st.fanA + b * 2*Math.PI/3, lead = [], trail = [];
+    for (let i = 0; i <= 8; i++){ const t = i/8, r = 4.5 + (FAN_R - 4.5) * t, w = .32 + .5*Math.sin(Math.PI * Math.min(1, t * 1.15)) + .12*t;
+      const al = a0 + .16 + .22*t, at = a0 - w;
+      lead.push([x + 1.2, FC[0] + r*Math.cos(al), FC[1] + r*Math.sin(al)]); trail.push([x - 1.2, FC[0] + r*Math.cos(at), FC[1] + r*Math.sin(at)]); }
+    const pts = [...lead, ...trail.reverse()], nrm = vis([1,0,0]) ? [1,0,0] : [-1,0,0];
+    s += shape(pts, toneI(nrm, BLADE), .8); }
+  return s + cylX(x - 1.5, x + 1.8, FC[0], FC[1], 4, DARK, toneI, .9, 20);
+}
+function ouCase(st, m){
+  const F = vis([1,0,0]), x0 = OX0, x1 = OX1, y0 = OY0, y1 = OY1, z0 = OZ0, z1 = OZ1;
+  let s = '';
+  // back (x0) and left (y0): coil guard over the fins; frame in the body colour
+  const guard = (n, pts, inner, lines) => vis(n) ? shape(pts, tone(n, m), 1.1) + shape(inner, mix(FINM.m, '#6f7a7e', .25), .8)
+    + `<path d="${lines}" fill="none" stroke="${INK}" stroke-width=".45" opacity=".55"/>` : '';
+  { let ln = ''; for (let y = y0 + 4; y < y1 - 30; y += 1.6) ln += pd([[x0 - .05, y, z0 + 3], [x0 - .05, y, z1 - 3]], false);
+    for (let z = z0 + 6; z < z1 - 3; z += 6) ln += pd([[x0 - .1, y0 + 3, z], [x0 - .1, y1 - 29, z]], false);
+    s += guard([-1,0,0], [[x0,y0,z0],[x0,y1,z0],[x0,y1,z1],[x0,y0,z1]], [[x0-.03,y0+3,z0+3],[x0-.03,y1-29,z0+3],[x0-.03,y1-29,z1-3],[x0-.03,y0+3,z1-3]], ln); }
+  { let ln = ''; for (let x = x0 + 3; x < x1 - 4; x += 1.6) ln += pd([[x, y0 - .05, z0 + 3], [x, y0 - .05, z1 - 3]], false);
+    for (let z = z0 + 6; z < z1 - 3; z += 6) ln += pd([[x0 + 3, y0 - .1, z], [x1 - 4, y0 - .1, z]], false);
+    s += guard([0,-1,0], [[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1]], [[x0+3,y0-.03,z0+3],[x1-4,y0-.03,z0+3],[x1-4,y0-.03,z1-3],[x0+3,y0-.03,z1-3]], ln); }
+  // right panel (y1): plain, a carry handle recess and a rating plate
+  if (vis([0,1,0])){ s += shape([[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]], tone([0,1,0], m), 1.1);
+    s += shape(on(PY(y1 + .05), rrUV(x0 + 6, z1 - 12, x0 + 18, z1 - 8, 2)), mix(tone([0,1,0], m), '#000000', .25), .8);
+    s += shape(on(PY(y1 + .05), rectUV(x0 + 4, z0 + 30, x0 + 14, z0 + 40)), '#f3f0e6', .7)
+      + hpTxB(x0 + 9, y1 + .1, z0 + 36.6, 'R32', 2.2) + hpTxB(x0 + 9, y1 + .1, z0 + 33.2, '230V', 1.7); }
+  // top
+  s += shape([[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]], tone([0,0,1], m), 1.1);
+  // front: a panel with the round fan opening; through it, the shroud and the turning fan
+  if (F){ const hole = ringX(x1, FC[0], FC[1], GR_R, 40);
+    const inside = fill(pd(hole), '#2d3236') + fill(pd(ringX(FAN_X - 2, FC[0], FC[1], GR_R - 1, 40)), '#40474b') + fanBlades(st);
+    s += clipTo(hole, inside);
+    const rect = [[x1,y0,z0],[x1,y1,z0],[x1,y1,z1],[x1,y0,z1]];
+    s += `<path d="${pd(rect)}${pd(hole)}" fill="${tone([1,0,0], m)}" fill-rule="evenodd"/>` + ink(pd(rect), 1.2) + ink(pd(hole), 1.4);
+    // grille: rings and spokes standing just proud of the panel
+    let gr = ''; for (const r of [5.5, 10, 14.5, 19]) gr += pd(ringX(x1 + .5, FC[0], FC[1], r, 36));
+    for (let i = 0; i < 8; i++){ const a = i*Math.PI/4 + Math.PI/8; gr += pd([[x1 + .5, FC[0] + 3*Math.cos(a), FC[1] + 3*Math.sin(a)], [x1 + .5, FC[0] + GR_R*Math.cos(a), FC[1] + GR_R*Math.sin(a)]], false); }
+    s += `<path d="${gr}" fill="none" stroke="${INK}" stroke-width=".8"/>` + shape(ringX(x1 + .55, FC[0], FC[1], 2.6, 16), DARK.m, .7);
+    // the compressor side of the front: louvred vent and the badge
+    let v = ''; for (let z = z0 + 6; z < z0 + 22; z += 2.4) v += pd([[x1 + .05, 67, z], [x1 + .05, 85, z]], false);
+    s += `<path d="${v}" fill="none" stroke="${INK}" stroke-width=".7" opacity=".7"/>`;
+    s += shape(on(PX(x1 + .05), rrUV(64, z1 - 14, 88, z1 - 7, 1.5)), mix(tone([1,0,0], m), '#ffffff', .35), .7) + tx(x1 + .1, 76, z1 - 11.6, 'HEAT PUMP', 2.5, INK, 800);
+  }
+  if (vis([-1,0,0]) || vis([0,-1,0])){}   // back faces are drawn above
+  s += hullInk([[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0],[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]], 2.6);
+  return s;
+}
+const COVER = [128, 141, OY1, OY1 + 2.6, 22, 40];
+const coverSvg = m => box(COVER[0], COVER[2], COVER[4], COVER[1], COVER[3], COVER[5], m, tone, 1) + (vis([0,1,0]) ? line([[COVER[0] + 2, COVER[3] + .05, COVER[5] - 3], [COVER[1] - 2, COVER[3] + .05, COVER[5] - 3]], .6) : '');
+function feetSvg(){
+  let p = [];
+  for (const [ya, yb] of [[13, 19], [81, 87]]){
+    p.push({ box: [[OX0 + 2, ya, PADZ + 2.5], [OX1 - 2, yb, OZ0]], svg: box(OX0 + 2, ya, PADZ + 2.5, OX1 - 2, yb, OZ0, GREYM, toneI, .9) });
+    for (const x of [OX0 + 5, OX1 - 9]) p.push({ box: [[x, ya, PADZ], [x + 4, yb, PADZ + 2.5]], svg: box(x, ya, PADZ, x + 4, yb, PADZ + 2.5, RUB, toneI, .8) }); }
+  return p;
+}
+
+/* ---------- outdoor unit: the working parts ---------- */
+function ouMech(st){
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg });
+  const bx = (x0, y0, z0, x1, y1, z1, mm, w = .8, extra = '') => put([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, mm, toneI, w) + extra);
+  const vc = (x, y, z0, z1, r, mm, w = .8, n = 20) => put([[x - r, y - r, z0], [x + r, y + r, z1]], cyl(x, y, z0, z1, r, mm, toneI, w, n));
+  const pipe = (pts, r, sg) => parts.push(...hpPipe(pts, r, sg.col, sg.fl));
+  const wire = (pts, col = '#3a3632') => parts.push(...hpPipe(pts, .35, col));
+  const run = st.run, heatOn = st.valve >= .5;
+  // base pan and the partition plate (faint, so the fan compartment shows through it)
+  bx(OX0 + .3, OY0 + .3, OZ0, OX1 - .3, OY1 - .3, OZ0 + 1.6, GREYM, .8);
+  put([[OX0 + .5, PART_Y - .4, OZ0 + 1.6], [OX1 - .8, PART_Y + .4, OZ1 - .8]], `<g opacity=".3">${box(OX0 + .5, PART_Y - .4, OZ0 + 1.6, OX1 - .8, PART_Y + .4, OZ1 - .8, GREYM, toneI, .7)}</g>`);
+  // outdoor coil: back slab and side slab, aluminium fins with the copper tubes through them
+  const coilC = hpTint(st, COLD, HOT, FINM.l, .55), CM = { l: coilC, m: mix(coilC, '#000000', .14), d: mix(coilC, '#000000', .34) };
+  const tubeC = hpTint(st, COLD, HOT, COPPER, .8);
+  { const xa = OX0 + 1, xb = OX0 + 4, ya = OY0 + 1.5, yb = PART_Y - 1.2, za = OZ0 + 3, zb = OZ1 - 2;
+    let fins = ''; const fx = vis([1,0,0]) ? xb + .05 : xa - .05;
+    for (let y = ya + 1.2; y < yb; y += 1.5) fins += pd([[fx, y, za + .5], [fx, y, zb - .5]], false);
+    let tb = ''; for (let z = za + 4; z < zb; z += 6) tb += pd([[fx + (fx > xa ? .05 : -.05), ya + .4, z], [fx + (fx > xa ? .05 : -.05), yb - .4, z]], false);
+    let bends = ''; if (vis([0,1,0])) for (let z = za + 4; z < zb - 6; z += 12) bends += pd(on(PY(yb + .4), arcUV((xa + xb)/2, z + 3, 3, -90, 90, 8)), false);
+    put([[xa, ya, za], [xb, yb, zb]], box(xa, ya, za, xb, yb, zb, CM, toneI, .9) + `<path d="${fins}" fill="none" stroke="${INK}" stroke-width=".35" opacity=".45"/>`
+      + `<path d="${tb}" fill="none" stroke="${tubeC}" stroke-width="1.1"/><path d="${bends}" fill="none" stroke="${tubeC}" stroke-width="1.2"/>`); }
+  { const xa = OX0 + 4, xb = OX1 - 4, ya = OY0 + 1.5, yb = OY0 + 4.5, za = OZ0 + 3, zb = OZ1 - 2;
+    let fins = ''; const fy = vis([0,1,0]) ? yb + .05 : ya - .05;
+    for (let x = xa + 1.2; x < xb; x += 1.5) fins += pd([[x, fy, za + .5], [x, fy, zb - .5]], false);
+    let tb = ''; for (let z = za + 4; z < zb; z += 6) tb += pd([[xa + .4, fy, z], [xb - .4, fy, z]], false);
+    put([[xa, ya, za], [xb, yb, zb]], box(xa, ya, za, xb, yb, zb, CM, toneI, .9) + `<path d="${fins}" fill="none" stroke="${INK}" stroke-width=".35" opacity=".45"/>`
+      + `<path d="${tb}" fill="none" stroke="${tubeC}" stroke-width="1.1"/>`); }
+  // air sensor clipped to the coil guard
+  bx(OX0 + .2, 40, OZ1 - 8, OX0 + 1, 42, OZ1 - 6, matOf('#3a3632'), .5);
+  // fan: blades, hub, motor on its bracket, the bell-mouth shroud in the front panel
+  put([[FAN_X - 1.6, FC[0] - FAN_R, FC[1] - FAN_R], [FAN_X + 1.9, FC[0] + FAN_R, FC[1] + FAN_R]], fanBlades(st));
+  put([[124, FC[0] - 5.5, FC[1] - 5.5], [FAN_X - 1.6, FC[0] + 5.5, FC[1] + 5.5]], cylX(124, 131, FC[0], FC[1], 5.5, matOf('#7a8084'), toneI, 1, 22) + cylX(131, FAN_X - 1.6, FC[0], FC[1], .9, METAL, toneI, .6, 10));
+  bx(121.5, FC[0] - 2.5, OZ0 + 1.6, 124, FC[0] + 2.5, OZ1 - .8, GREYM, .8);
+  { const A = ringX(137, FC[0], FC[1], GR_R, 36), B = ringX(OX1 - .4, FC[0], FC[1], GR_R + .8, 36);
+    put([[137, FC[0] - GR_R - 1, FC[1] - GR_R - 1], [OX1 - .4, FC[0] + GR_R + 1, FC[1] + GR_R + 1]], openShell(A, B, n => toneI(n, GREYM)) + ink(pd(A), .7) + ink(pd(B), .8)); }
+  // compressor on three rubber mounts, terminal cover on its dome
+  const CP = [130, 75], CR = 8;
+  for (const a of [90, 210, 330]){ const r = a*Math.PI/180; vc(CP[0] + (CR - 1)*Math.cos(r), CP[1] + (CR - 1)*Math.sin(r), OZ0 + 1.6, OZ0 + 3.6, 1.5, RUB, .6, 12); }
+  put([[CP[0] - CR, CP[1] - CR, OZ0 + 3.6], [CP[0] + CR, CP[1] + CR, 56.5]], cyl(CP[0], CP[1], OZ0 + 3.6, 50, CR, run > .03 ? mix(COMPM.l, '#7a4a3a', .3*run) === '' ? COMPM : COMPM : COMPM, toneI, 1.1, 28) + hpDome(CP[0], CP[1], 50, CR, 6.5, COMPM)
+    + (run > .03 ? `<g opacity="${f(.35*run)}">${fill(pd(on(PZ(50.1), ellUV(CP[0], CP[1], CR*.92, CR*.92, 20))), HOT)}</g>` : ''));
+  bx(126.5, 77, 54, 130.5, 81, 57.2, DARK, .7);
+  // accumulator beside it, strapped to the compressor shell
+  put([[113.7, 76.2, 25], [121.3, 83.8, 51.5]], cyl(117.5, 80, 25, 48, 3.8, COMPM, toneI, 1, 22) + hpDome(117.5, 80, 48, 3.8, 3, COMPM));
+  bx(121.3, 79.2, 40, 122.4, 80.8, 41.6, METAL, .5);
+  // reversing valve: brass body, the slide inside it (moves with st.valve), pilot valve, solenoid coil, capillaries
+  const RV = [120, 134, 70, 64], RR = 2.2, slideX = 129 - 4*st.valve;
+  put([[RV[0], RV[2] - RR, RV[3] - RR], [RV[1], RV[2] + RR, RV[3] + RR]], `<g opacity=".6">${rod([RV[0], RV[2], RV[3]], [RV[1], RV[2], RV[3]], RR, BRASS, toneI, .9, RR, 20)}</g>`
+    + box(slideX - 2, RV[2] - 1.3, RV[3] - 1.3, slideX + 2, RV[2] + 1.3, RV[3] + .6, matOf(st.moving ? '#f4b829' : '#6f675a'), toneI, .7)
+    + ink(pd([[RV[0], RV[2], RV[3]], [RV[1], RV[2], RV[3]]].map(p => p), false), 0) );
+  for (const x of [123, 127, 131]) put([[x - .8, RV[2] - .8, RV[3] + RR - .2], [x + .8, RV[2] + .8, RV[3] + RR + 1.2]], rod([x, RV[2], RV[3] + RR - .4], [x, RV[2], RV[3] + RR + 1.2], .8, BRASS, toneI, .6, .8, 10));
+  put([[127 - .8, RV[2] - .8, RV[3] - RR - 1.2], [127 + .8, RV[2] + .8, RV[3] - RR + .2]], rod([127, RV[2], RV[3] - RR + .4], [127, RV[2], RV[3] - RR - 1.2], .8, BRASS, toneI, .6, .8, 10));
+  put([[122, 65.1, 63.6], [131.5, 66.9, 65.4]], rod([122, 66, 64.5], [131.5, 66, 64.5], .9, BRASS, toneI, .6, .9, 12));
+  const solOn = st.mode === 'heat' && run > .03;
+  bx(131.5, 64.2, 62.8, 134.8, 67.8, 66.4, solOn ? matOf('#f4b829') : DARK, .7);
+  for (const [a, b] of [[[123.5, 66, 65.3], [120.6, 69.2, 65.4]], [[126.5, 66, 65.3], [127, 68.4, 66.2]], [[129.5, 66, 65.3], [133.6, 69.2, 65.4]]]) wire([a, [(a[0] + b[0])/2, (a[1] + b[1])/2, 66.4], b], '#d08a52');
+  // EEV with its stepper coil, wired to the inverter box
+  vc(138, 65.5, 28, 38, 1.4, BRASS, .7, 14);
+  vc(138, 65.5, 38, 45, 2.2, st.moving || run > .03 ? matOf('#3f4448') : DARK, .8, 18);
+  wire([[138, 65.5, 45], [138, 65.5, 52], [138, 64, 58]]);
+  // strainer on the liquid run, the distributor and its feeder tubes, the gas header and its stubs
+  const sEv = hpSeg(st, COLD, WARM, 1);
+  put([[126.5, 63.9, 21.7], [131.5, 66.7, 24.5]], rod([131, 65.3, 23.1], [127, 65.3, 23.1], 1.3, COPM, toneI, .7, 1.3, 14));
+  put([[117.6, 63.1, 23], [120.4, 65.9, 27.6]], rod([119, 64.5, 23], [119, 64.5, 27.6], .6, COPM, toneI, .6, 1.4, 14));
+  for (const z of [27, 39, 51, 63]) wire([[119, 64.5, 27.4], [116.5, 63, (27.4 + z)/2], [OX0 + 3, PART_Y - 1.2, z]], sEv.col);
+  const sE = hpSeg(st, COOLV, HOT, 1);
+  pipe([[115.5, 65, 24], [115.5, 65, 70]], 1, sE);
+  for (const z of [30, 42, 54, 66]) pipe([[115.5, 65, z], [OX0 + 2.5, PART_Y - 1.2, z]], .55, sE);
+  // inverter board box, heat sink through the partition, terminal block
+  bx(135.5, 62.5, 58, 141, 89, 74, matOf('#c9cfd2'), .9, vis([0,0,1]) ? shape(on(PZ(74.05), rectUV(136.5, 64, 140, 87)), PCB.m, .5) : '');
+  { let fn = ''; for (let z = 61; z < 72; z += 1.4) fn += pd([[141.05, 58.6, z], [141.05, 61.5, z]], false);
+    bx(136, 58.5, 60, 141, 61.6, 72, matOf('#d4d8da'), .7, vis([1,0,0]) ? `<path d="${fn}" fill="none" stroke="${INK}" stroke-width=".35"/>` : ''); }
+  bx(137, 87.6, 59.5, 141, 89, 63.5, matOf('#e8e4da'), .6);
+  wire([[137.5, 80, 58], [133, 80, 57.8], [130.5, 79, 57.2]]);
+  wire([[136, 83, 58], [132, 82.5, 57.6], [129, 81, 57.2]], '#9a5a2c');
+  wire([[124, FC[0], FC[1] + 5.5], [123.5, FC[0] + 2, OZ1 - 2.5], [123.5, PART_Y - 1, OZ1 - 2.5], [135.5, PART_Y + 1, OZ1 - 3]]);
+  // service valves on the right panel (gas big, liquid small)
+  for (const [x, z, r] of [[131, 28, 1.7], [136, 31.5, 1.3]]) put([[x - r, 86.5, z - r], [x + r, OY1 + 2.4, z + r]], rod([x, 86.5, z], [x, OY1 + 2.3, z], r, BRASS, toneI, .8, r, 14)
+    + rod([x, OY1 - 1, z], [x, OY1 - 1, z + r + 1.4], .7, BRASS, toneI, .5, .7, 8));
+  // ---- the refrigerant circuit in the outdoor unit
+  pipe([[CP[0], CP[1], 56.4], [CP[0], CP[1], 59], [127, 70.8, 59], [127, RV[2], RV[3] - RR - 1.2]], .8, hpSeg(st, HOT, HOT, 1, false));              // discharge
+  pipe([[127, RV[2], RV[3] + RR + 1.2], [127, RV[2], 69], [127, 79.5, 69], [117.5, 80, 69], [117.5, 80, 51.4]], 1, hpSeg(st, COOLV, COOLV, 1, false));   // suction to the accumulator
+  pipe([[117.5, 80, 25], [117.5, 80, 22.5], [120.8, 79.2, 22.5], [122.4, 78.2, 27.5]], .9, hpSeg(st, COOLV, COOLV, 1, false));                      // accumulator to compressor
+  pipe([[115.5, 65, 70], [116, 65.5, 71.4], [123, 70, 71.4], [123, RV[2], RV[3] + RR + 1.2]], 1, sE);                                     // outdoor coil header to E
+  pipe([[131, RV[2], RV[3] + RR + 1.2], [131, RV[2], 68.2], [131, 87.2, 68.2], [131, 87.2, 28], [131, 86.5, 28]], 1, hpSeg(st, HOT, COOLV, 1));   // C to the gas valve
+  pipe([[136, 86.5, 31.5], [140.2, 86.2, 31.5], [140.2, 86, 35], [140.2, 66, 35], [139.4, 65.5, 35]], .7, hpSeg(st, WARM, COLD, 1));      // liquid valve <-> EEV
+  pipe([[138, 65.5, 28], [138, 65.5, 23.1], [131, 65.3, 23.1]], .7, sEv);                                                                 // EEV -> strainer
+  pipe([[127, 65.3, 23.1], [119, 64.5, 23.1], [119, 64.5, 23.2]], .7, sEv);                                                               // strainer -> distributor
+  // the line set's last bit inside the cover (from the run to the valve stems)
+  const g = hpSeg(st, HOT, COOLV, 1), l = hpSeg(st, WARM, COLD, 1);
+  return { parts, extra: [...hpPipe([[131, OY1 + 2.3, 28], [131, 92.5, 28]], 1, g.col, g.fl), ...hpPipe([[136, OY1 + 2.3, 31.5], [136, 92.5, 31.5]], .7, l.col, l.fl),
+    ...hpPipe([[139, 92.5, 25.5], [139, 89.5, 25.5], [139, 88.6, 30], [139, 88.6, 61]], .45, '#3a3632')] };
+}
+
+/* ---------- indoor unit ---------- */
+function louvrePts(st){
+  const closed = 50, open = st.mode === 'cool' ? -2 : -62, a = (closed + (open - closed) * st.louv) * Math.PI/180;
+  const tip = [LV_H[0] + LV_L*Math.cos(a), LV_H[1] + LV_L*Math.sin(a)];
+  return hpSlab(LV_H, tip, .7);
+}
+function louvreSvg(st, m){
+  const prof = louvrePts(st);
+  return extrude(prof, LV_X[0], LV_X[1], m, toneI) + (vis([1,0,0]) ? fill(pd(on(PX(LV_X[1]), prof)), toneI([1,0,0], m)) : vis([-1,0,0]) ? fill(pd(on(PX(LV_X[0]), prof)), toneI([-1,0,0], m)) : '') + hpProfInk(prof, LV_X[0], LV_X[1], 1);
+}
+function iuCase(st, m){
+  const FR = vis([0,1,0]);
+  let s = '';
+  // the end that faces the viewer, then the swept body
+  s += extrude(IOUT, IX0, IX1, m);
+  for (const [x, n] of [[IX1, [1,0,0]], [IX0, [-1,0,0]]]) if (vis(n)) s += shape(on(PX(x), IOUT), tone(n, m), 1.2);
+  // top intake grille
+  let gr = ''; for (let y = IY0 + 4; y < IY1 - 4; y += 2.2) gr += pd([[IX0 + 6, y, IZ1 + .05], [IX1 - 6, y, IZ1 + .05]], false);
+  s += `<path d="${gr}" fill="none" stroke="${INK}" stroke-width=".6" opacity=".6"/>`;
+  if (FR){
+    // front panel seam, the outlet behind the open louvre, display window and lamps, the badge
+    s += line([[IX0 + 2, IY1 + .05, IZ1 - 4], [IX1 - 2, IY1 + .05, IZ1 - 4]], .7);
+    if (st.louv > .05){ const arc = arcUV(IY1 - 6, IZ0 + 6, 6, -90, 0, 8).map(([y, z]) => [y + .05, z]);
+      s += fill(sp(hull([...arc.map(([y, z]) => P(LV_X[0], y, z)), ...arc.map(([y, z]) => P(LV_X[1], y, z))])), RECESS, `opacity="${f(Math.min(1, st.louv*2))}"`); }
+    const on_ = st.mode !== 'off', lamp = st.mode === 'heat' ? '#ff8a2e' : st.mode === 'cool' ? '#5aa9f0' : '#c9c1b2';
+    s += shape(on(PY(IY1 + .1), rrUV(26, IZ0 + 6, 38, IZ0 + 12, 1.2)), '#1d2a26', .7);
+    if (on_) s += txY(32, IY1 + .2, IZ0 + 7.7, String(SETP[st.mode]), 4.4, '#8af0ae', 800);
+    s += shape(on(PY(IY1 + .1), ellUV(41, IZ0 + 9, .9, .9, 10)), lamp, .5);
+    s += txY(70, IY1 + .12, IZ1 - 9.5, 'AIR', 3, mix(tone([0,1,0], m), '#000000', .4), 800);
+  }
+  s += hpProfInk(IOUT, IX0, IX1, 2.4);
+  return s;
+}
+function iuMech(st){
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg });
+  const bx = (x0, y0, z0, x1, y1, z1, mm, w = .7, extra = '') => put([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, mm, toneI, w) + extra);
+  const run = st.run;
+  // mounting plate screwed to the wall
+  bx(26, WY1 + .1, IZ0 + 3, 98, WY1 + .9, IZ1 - 2, METAL, .6);
+  // indoor coil: three slabs over the fan (hot in heating, cold in cooling)
+  const cc = hpTint(st, HOT, COLD, FINM.l, .55), CM = { l: cc, m: mix(cc, '#000000', .14), d: mix(cc, '#000000', .34) };
+  const tubeC = hpTint(st, HOT, COLD, COPPER, .8);
+  const slabs = [hpSlab([144.2, 191.6], [142.2, 207.2], 1.9), hpSlab([142.2, 207.2], [133, 212.6], 1.9), hpSlab([133, 212.6], [125.6, 203.4], 1.9)];
+  for (const sl of slabs){ const ys = sl.map(p => p[0]), zs = sl.map(p => p[1]);
+    let fins = ''; for (let x = 30; x < 100; x += 1.8){ const a = sl[0], b = sl[1]; fins += pd([[x, a[0], a[1]], [x, b[0], b[1]]], false); }
+    let tb = ''; for (const t of [.2, .5, .8]){ const a = sl[0], b = sl[1]; tb += pd([[28.5, a[0] + (b[0] - a[0])*t, a[1] + (b[1] - a[1])*t], [99.5, a[0] + (b[0] - a[0])*t, a[1] + (b[1] - a[1])*t]], false); }
+    put([[28, Math.min(...ys), Math.min(...zs)], [100, Math.max(...ys), Math.max(...zs)]], extrude(sl, 28, 100, CM, toneI) + (vis([1,0,0]) ? shape(on(PX(100), sl), CM.m, .6) : vis([-1,0,0]) ? shape(on(PX(28), sl), CM.m, .6) : '')
+      + `<path d="${fins}" fill="none" stroke="${INK}" stroke-width=".3" opacity=".4"/><path d="${tb}" fill="none" stroke="${tubeC}" stroke-width="1"/>` + hpProfInk(sl, 28, 100, .9)); }
+  // coil header at the left end (gas, vertical) with stubs into the slabs
+  const g = hpSeg(st, HOT, COOLV, 1), l = hpSeg(st, WARM, COLD, 1);
+  parts.push(...hpPipe([[101.5, 130.5, 199], [101.5, 130.5, 211]], .9, g.col, g.fl));
+  for (const [y, z] of [[130.5, 209.5], [130.5, 205], [137, 211.2]]) parts.push(...hpPipe([[101.5, 130.5, z], [100, y + (y === 137 ? 0 : -2.5), z]], .5, g.col));
+  parts.push(...hpPipe([[101.5, 139, 195], [101.5, 140.5, 197], [100, 141.5, 200]], .5, l.col));
+  // cross-flow fan: a long squirrel-cage drum with blade lines that turn, rings along it
+  { const y = 135.5, z = 196, r = 4.5;
+    let bl = ''; for (let i = 0; i < 14; i++){ const a = st.ifA + i*2*Math.PI/14, n = [0, Math.cos(a), Math.sin(a)];
+      if (vis(n)) bl += pd([[29.5, y + r*Math.cos(a), z + r*Math.sin(a)], [95.5, y + r*Math.cos(a), z + r*Math.sin(a)]], false); }
+    let rg = ''; for (let x = 36; x < 95; x += 8) rg += pd(ringX(x, y, z, r + .05, 20).filter(p => vis([0, p[1] - y, p[2] - z])), false);
+    put([[29, y - r, z - r], [96, y + r, z + r]], cylX(29, 96, y, z, r, matOf('#dfe3e0'), toneI, .9, 24) + `<path d="${bl}" fill="none" stroke="${INK}" stroke-width=".35"/><path d="${rg}" fill="none" stroke="${INK}" stroke-width=".5"/>`); }
+  put([[22, 132, 192.5], [29, 139, 199.5]], cylX(22, 29, 135.5, 196, 3.5, matOf('#7a8084'), toneI, .8, 18));
+  // control board box above the fan motor, the display board behind the window, the room sensor
+  bx(21, 125, 202, 27.5, 141, 212.5, matOf('#c9cfd2'), .7, vis([1,0,0]) ? shape(on(PX(27.55), rectUV(126.5, 203.5, 139.5, 211)), PCB.m, .5) : '');
+  bx(26, 143.4, IZ0 + 5.5, 38, 144.4, IZ0 + 12.5, PCB, .5);
+  bx(58, 143.6, 203, 61, 144.6, 205, matOf('#3a3632'), .5);
+  // drain pan under the front slab, vanes in the outlet, louvre motor
+  bx(28, 140, 189.6, 100, 144.6, 191.4, matOf('#e6e2d6'), .7);
+  for (let x = 32; x < 96; x += 8) bx(x, 136.5, 186.4, x + .5, 142.5, 189.2, matOf('#e6e2d6'), .4);
+  bx(100.5, 139, 186.6, 103, 143, 189.4, DARK, .6);
+  // air filter behind the top grille
+  { const fp = hpSlab([127, 213], [143.5, 210], .5);
+    let mesh = ''; for (let x = 30; x < 98; x += 3) mesh += pd([[x, 127.2, 213.6], [x, 143.4, 210.6]], false);
+    put([[28, 127, 210], [100, 143.8, 213.8]], `<g opacity=".7">${extrude(fp, 28, 100, matOf('#cfd8d6'), toneI)}</g><path d="${mesh}" fill="none" stroke="${INK}" stroke-width=".3" opacity=".5"/>` + hpProfInk(fp, 28, 100, .6)); }
+  // the line set from the header back to the wall, the drain hose, the interconnect cable
+  parts.push(...hpPipe(GAS_IN.slice().reverse(), 1, g.col, g.fl ? { ...g.fl, dir: -g.fl.dir } : null));
+  parts.push(...hpPipe(LIQ_IN, .7, l.col, l.fl));
+  parts.push(...hpPipe(DRAIN.slice(0, 4), .6, '#dfe3e0'), ...hpPipe(CABLE.slice(0, 5), .45, '#3a3632'));
+  return parts;
+}
+
+/* ---------- air: warm or cool streams out of the indoor outlet, and out of the outdoor fan ---------- */
+function airSvg(st, where){
+  const k = st.run; if (k < .04) return [];
+  const heat = st.valve >= .5, out = [];
+  const wave = (pts, col, w) => { const d = pd(pts, false);
+    return `<path d="${d}" fill="none" stroke="${col}" style="stroke-width:${f(w)}" stroke-linecap="round" stroke-dasharray="${f(5*INK_K)} ${f(4*INK_K)}" stroke-dashoffset="${f(-st.ph*1.6*INK_K)}" opacity="${f(.85*k)}"/>`; };
+  if (where === 'in'){
+    const col = heat ? '#f07a3a' : '#5aa9f0';
+    for (const x of [34, 48, 62, 76, 90]){ const pts = [];
+      for (let i = 0; i <= 12; i++){ const t = i/12, w = Math.sin(t*Math.PI*2.5 + x)*1.4;
+        pts.push(heat ? [x + w, 146 + 26*t, 185 - 62*t*t - 6*t] : [x + w, 147 + 50*t, 186 - 12*t - 20*t*t]); }
+      out.push({ box: hpBoxOf(pts, 1.5), svg: wave(pts, col, 1.3) }); }
+  } else {
+    const col = heat ? '#5aa9f0' : '#f07a3a';
+    for (let i = 0; i < 5; i++){ const a = i*2*Math.PI/5 + .4, pts = [];
+      for (let j = 0; j <= 10; j++){ const t = j/10, r = 8 + 9*t;
+        pts.push([OX1 + 1.5 + 30*t, FC[0] + r*Math.cos(a) + Math.sin(t*7 + i)*1.2, FC[1] + r*Math.sin(a)*.8]); }
+      out.push({ box: hpBoxOf(pts, 1.5), svg: wave(pts, col, 1.3) }); }
+  }
+  return out;
+}
+
+/* ---------- remote control in its wall holder ---------- */
+function remoteSvg(st){
+  const y = WY1, lamp = st.mode === 'heat' ? '#ff8a2e' : st.mode === 'cool' ? '#5aa9f0' : '#c9c1b2';
+  let s = box(12, y, 116, 19, y + 1.6, 124, PVC, tone, .8) + box(12.6, y + .4, 120, 18.4, y + 2.3, 134, PVC, tone, .9);
+  if (vis([0,1,0])) s += shape(on(PY(y + 2.35), rectUV(13.4, 129, 17.6, 132.6)), '#1d2a26', .5) + shape(on(PY(y + 2.35), ellUV(15.5, 125, 1, 1, 10)), lamp, .5)
+    + shape(on(PY(y + 2.35), ellUV(14, 122.5, .6, .6, 8)), '#c9c1b2', .4) + shape(on(PY(y + 2.35), ellUV(17, 122.5, .6, .6, 8)), '#c9c1b2', .4);
+  return act('remote', s);
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0);
+  let s = ground();
+  // one shadow: the outdoor unit on its pad, onto the paving
+  s += clipTo(on(PZ(BH), rectUV(-4, 2, 152, WY0)), castShadow([[OX0 - 6, OY0 - 6, BH], [OX1 + 6, OY1 + 2, BH], [OX0, OY0, OZ1], [OX1, OY0, OZ1], [OX1, OY1, OZ1], [OX0, OY1, OZ1]], BH));
+  const items = [];
+  items.push({ box: [[0, WY0, BH], [WX1, WY1, WZ]], svg: wallSvg(st, k) });
+  items.push({ box: [[12, WY1, 116], [19, WY1 + 2.4, 134]], svg: remoteSvg(st) });
+  // indoor unit: case, louvre (in front of the case when its front faces the viewer), and in see-through its insides
+  { const cs = iuCase(st, m), lv = louvreSvg(st, m), FR = vis([0,1,0]);
+    let svg = FR ? cs + lv : lv + cs;
+    if (k > 0) svg = `<g opacity="${f(1 - .8*k)}">${svg}</g><g opacity="${f(k)}">${byDepth(iuMech(st))}</g><g opacity="${f(.6*k)}">${hpProfInk(IOUT, IX0, IX1, 2.4)}</g>` + `<g opacity="${f(k)}">${lv}</g>`;
+    items.push({ box: [[IX0, WY1 + .1, IZ0 - 6], [IX1, 152, IZ1]], svg }); }
+  for (const a of airSvg(st, 'in')) items.push(a);
+  // trunking and drain
+  items.push({ box: [[TRV[0], TRY[0], TRV[2]], [TRV[1], TRY[1], TRV[3]]], svg: trunkSvg(st, k, 'V') });
+  items.push({ box: [[TRH[0], TRY[0], TRH[2]], [TRH[1], TRY[1], TRH[3]]], svg: trunkSvg(st, k, 'H') });
+  items.push({ box: [[98, 95.4, BH], [105, 99.8, 20]], svg: drainSvg() });
+  // outdoor unit on its pad
+  items.push({ box: [[106, 4, BH], [148, 92, PADZ]], svg: box(106, 4, BH, 148, 92, PADZ, CONC, toneI, 1.1) });
+  for (const p of feetSvg()) items.push(p);
+  { let svg = ouCase(st, m);
+    if (k > 0){ const mm = ouMech(st);
+      svg = `<g opacity="${f(1 - .8*k)}">${svg}</g><g opacity="${f(k)}">${byDepth(mm.parts)}</g><g opacity="${f(.6*k)}">${hullInk([[OX0,OY0,OZ0],[OX1,OY0,OZ0],[OX1,OY1,OZ0],[OX0,OY1,OZ0],[OX0,OY0,OZ1],[OX1,OY0,OZ1],[OX1,OY1,OZ1],[OX0,OY1,OZ1]], 2.6)}</g>`;
+      items.push({ box: [[COVER[0], OY1, COVER[4]], [COVER[1], 92.6, COVER[5]]], svg: `<g opacity="${f(1 - .8*k)}">${coverSvg(m)}</g><g opacity="${f(k)}">${byDepth(mm.extra)}</g>` }); }
+    else items.push({ box: [[COVER[0], OY1, COVER[4]], [COVER[1], 92.6, COVER[5]]], svg: coverSvg(m) });
+    items.push({ box: [[OX0, OY0, OZ0], [OX1 + .6, OY1, OZ1]], svg }); }
+  for (const a of airSvg(st, 'out')) items.push(a);
+  s += byDepth(items);
+  // labels
+  if (k > .6) s += hpCallouts(insideLabels(st), BOUNDS);
+  else s += xrCallouts(surfaceLabels(st), BOUNDS);
+  return s;
+}
+function hpCallouts(items, bounds){
+  const corners = [];
+  for (const x of [bounds[0], bounds[1]]) for (const y of [bounds[2], bounds[3]]) for (const z of [bounds[4], bounds[5]]) corners.push(P(x, y, z));
+  const xmin = Math.min(...corners.map(p => p[0])), xmax = Math.max(...corners.map(p => p[0]));
+  const k = INK_K, u = window.LBL_U ? LBL_U() : 0, fs = u ? 10*u : 8.6*k;
+  const height = u ? 17*u : fs*1.8, gap = height + (u ? 3*u : 3*k);
+  const svg = document.getElementById('fig'), vb = svg.viewBox.baseVal, matrix = svg.getScreenCTM();
+  const positioned = items.map(it => { const [X,Y] = P(...it.at); return {...it, X, Y}; }).sort((a,b) => a.X - b.X);
+  const split = Math.ceil(positioned.length/2);
+  let result = '';
+  for (const [column, side] of [[positioned.slice(0, split), -1], [positioned.slice(split), 1]]){
+    const controls = side < 0 ? document.getElementById('btns') : document.getElementById('stats');
+    let top = fs;
+    if (controls && matrix){
+      const r = controls.getBoundingClientRect();
+      top = Math.max(top, new DOMPoint(r.right, r.bottom + 16).matrixTransform(matrix.inverse()).y + height);
+    }
+    column.sort((a,b) => a.Y - b.Y);
+    const bottom = vb.y + vb.height - height;
+    const spacing = Math.min(gap, (bottom - top)/(column.length - 1));
+    const start = Math.max(top, Math.min(column[0].Y, bottom - (column.length - 1)*spacing));
+    column.forEach((part, i) => {
+      const py = start + i*spacing;
+      const n = ((window.__ln || (window.__ln = {}))[part.text] || (__ln[part.text] = Object.keys(__ln).length + 1));
+      const width = u ? height*(n > 9 ? 1.3 : 1) : part.text.length*fs*.62 + fs*1.5;
+      const px = Math.max(vb.x + width/2 + 2*k, Math.min(vb.x + vb.width - width/2 - 2*k, side < 0 ? xmin - 10*k - width/2 : xmax + 10*k + width/2));
+      const edge = px - side*width/2;
+      result += `<g class="tag${part.on ? ' on' : ''}" data-n="${n}" data-t="${part.text}"><path d="M${f(part.X)} ${f(part.Y)}L${f(edge - side*4*k)} ${f(py)}L${f(edge)} ${f(py)}" fill="none" stroke="${INK}" stroke-width="1"/>`
+        + `<circle cx="${f(part.X)}" cy="${f(part.Y)}" r="${f(1.4*k)}" fill="${INK}"/>`
+        + `<rect x="${f(px-width/2)}" y="${f(py-height/2)}" width="${f(width)}" height="${f(height)}" rx="${f(height/2)}" fill="${part.on ? 'var(--accent,#f4b829)' : '#fff4d6'}" stroke="${INK}" stroke-width="1.2"/>`
+        + `<text x="${f(px)}" y="${f(py+fs*.36)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">${u ? n : part.text}</text></g>`;
+    });
+  }
+  return result;
+}
+const BOUNDS = [0, 150, 0, FLY1, 0, WZ];
+function surfaceLabels(st){
+  const on_ = st.run > .03, out = [];
+  if (vis([1,0,0])) out.push({ at: [OX1, FC[0] + 10, FC[1] + 12], text: 'FAN GRILLE', on: on_ });
+  out.push({ at: [OX0 + 10, 60, OZ1], text: 'OUTDOOR UNIT', on: on_ });
+  out.push({ at: [120, 96.5, TRH[3]], text: 'TRUNKING', on: false });
+  if (vis([0,1,0])){ out.push({ at: [60, IY1, IZ1 - 6], text: 'INDOOR UNIT', on: on_ });
+    out.push({ at: [62, LV_H[0] + 3, LV_H[1] - 1], text: 'LOUVRE', on: st.louv > .5 });
+    out.push({ at: [32, IY1, IZ0 + 9], text: 'DISPLAY', on: st.mode !== 'off' });
+    out.push({ at: [15.5, WY1 + 2.3, 128], text: 'REMOTE', on: false }); }
+  return out;
+}
+function insideLabels(st){
+  const run = st.run > .03, heat = st.valve >= .5;
+  return [
+    { at: [130, 75 + 8, 40], text: 'COMPRESSOR', on: run },
+    { at: [117.5, 83.8, 40], text: 'ACCUMULATOR', on: run },
+    { at: [124, 70, 66.2], text: 'REVERSING VALVE', on: !!st.moving },
+    { at: [133, 67.8, 64.6], text: 'PILOT SOLENOID', on: st.mode === 'heat' && run },
+    { at: [138, 65.5, 33], text: 'EXPANSION VALVE', on: run },
+    { at: [138, 65.5, 43], text: 'STEPPER COIL', on: run },
+    { at: [129, 65.3, 24.4], text: 'STRAINER', on: run },
+    { at: [119, 64.5, 26.5], text: 'DISTRIBUTOR', on: run },
+    { at: [115.5, 66, 48], text: 'COIL HEADER', on: run },
+    { at: [126, OY0 + 4.5, 60], text: 'OUTDOOR COIL', on: run },
+    { at: [FAN_X, FC[0] + 12, FC[1] - 8], text: 'PROPELLER FAN', on: run },
+    { at: [127, FC[0], FC[1] + 5.5], text: 'FAN MOTOR', on: run },
+    { at: [122.7, FC[0] + 2.5, 66], text: 'MOTOR BRACKET', on: false },
+    { at: [OX1 - 2, FC[0] - 15, FC[1] - 15], text: 'SHROUD', on: false },
+    { at: [127, PART_Y + .4, 30], text: 'PARTITION', on: false },
+    { at: [127, 70.8, 59], text: 'DISCHARGE PIPE', on: run },
+    { at: [122, 79.6, 69], text: 'SUCTION PIPE', on: run },
+    { at: [138, 76, 74], text: 'INVERTER BOARD', on: run },
+    { at: [141, 60, 66], text: 'HEAT SINK', on: run },
+    { at: [131, OY1 + 2.3, 28], text: 'SERVICE VALVES', on: false },
+    { at: [OX0 + 1, 41, OZ1 - 7], text: 'AIR SENSOR', on: run },
+    { at: [127, 70, 18], text: 'RUBBER MOUNTS', on: false },
+    { at: [97, 110, SLEEVE[1] + SL_R], text: 'WALL SLEEVE', on: false },
+    { at: [95.5, 96.5, 120], text: 'GAS LINE', on: run },
+    { at: [98.5, 96.5, 90], text: 'LIQUID LINE', on: run },
+    { at: [101.5, 98.8, 60], text: 'DRAIN HOSE', on: run && !heat },
+    { at: [102.2, 94.6, 150], text: 'CABLE', on: run },
+    { at: [64, 143, 200], text: 'INDOOR COIL', on: run },
+    { at: [62, 135.5 + 4.5, 196], text: 'CROSS-FLOW FAN', on: run },
+    { at: [25.5, 135.5, 199.5], text: 'INDOOR FAN MOTOR', on: run },
+    { at: [24, 141, 207], text: 'CONTROL BOARD', on: run },
+    { at: [70, 144.6, 190.5], text: 'DRAIN PAN', on: run && !heat },
+    { at: [64, 135, 212], text: 'AIR FILTER', on: run },
+    { at: [101.7, 143, 188], text: 'LOUVRE MOTOR', on: !!st.lvMoving },
+    { at: [59.5, 144.6, 204], text: 'ROOM SENSOR', on: st.mode !== 'off' },
+    { at: [60, WY1 + .9, IZ1 - 3], text: 'MOUNTING PLATE', on: false },
+  ];
+}
+
+/* ---------- behaviour: one state object, one loop ---------- */
+let ui, loopOn = false;
+const copOf = st => st.valve >= .5 ? COP_H[st.out] : EER_C[st.out];
+function stepSim(st, dt){
+  // the slide in the reversing valve follows the mode (it only moves when the compressor makes pressure, but here it is
+  // shoved over as the compressor starts)
+  const vt = st.mode === 'heat' ? 1 : st.mode === 'cool' ? 0 : st.valve;
+  st.moving = Math.abs(vt - st.valve) > .001;
+  st.valve += Math.sign(vt - st.valve) * Math.min(Math.abs(vt - st.valve), dt / .7);
+  // shortcut: accelerated room response and illustrative kW, replace with calibrated data for equipment sizing.
+  const leak = .012 * (st.room - st.out);
+  let rt = 0;
+  if (st.mode === 'heat') rt = Math.max(0, Math.min(1, ((SETP.heat - st.room)*.8 + leak) / (COP_H[st.out]*.26)));
+  if (st.mode === 'cool') rt = Math.max(0, Math.min(1, ((st.room - SETP.cool)*.8 - leak) / (EER_C[st.out]*.26)));
+  if (st.moving && st.mode !== 'off') rt = Math.min(rt, .4);
+  st.run += Math.sign(rt - st.run) * Math.min(Math.abs(rt - st.run), dt / 1.4);
+  const lt = st.mode === 'off' ? 0 : 1;
+  st.lvMoving = Math.abs(lt - st.louv) > .001 || (st.lvMode !== st.mode && st.mode !== 'off');
+  st.louv += Math.sign(lt - st.louv) * Math.min(Math.abs(lt - st.louv), dt / .8);
+  st.lvMode = st.mode;
+  st.ph += dt * 9 * st.run;
+  st.fanA += dt * 7 * st.run;
+  st.ifA += dt * 9 * st.run;
+  // the room: heat pumped in (or out) against the leak to the outside
+  const pump = st.run * copOf(st) * (st.valve >= .5 ? 1 : -1) * .26;
+  st.room += dt * (pump - leak);
+  return st.mode !== 'off' || st.run > 0 || st.louv > 0 || st.moving;
+}
+function runLoop(){
+  if (loopOn) return; loopOn = true;
+  let last = performance.now();
+  ui.animate(() => { const now = performance.now(), dt = Math.min(.1, (now - last) / 1000); last = now;
+    const busy = stepSim(ui.st, dt); if (!busy) loopOn = false; return busy; });
+}
+function setMode(st, mode){
+  if (st.mode === mode) return ui.flash(mode === 'off' ? 'It is already off' : `Already ${mode === 'heat' ? 'heating' : 'cooling'}`);
+  st.mode = mode;
+  if (mode === 'heat') ui.flash(st.room >= SETP.heat ? 'Heat: the room is warm already, the inverter just ticks over' : 'Heat: hot gas goes to the indoor coil', 2000);
+  if (mode === 'cool'){ if (st.room <= SETP.cool){ ui.flash(`Cool: the room is below ${SETP.cool} C, so the compressor waits`, 2400); }
+    else ui.flash('Cool: the valve flips and the cycle runs backwards', 2000); }
+  runLoop();
+}
+function setOut(st, t){ st.out = t; if (st.mode !== 'off') runLoop(); }
+
+ui = mountFigure({
+  fig:'31', turn:'full', title:'Heat pump', size:[156, 212, WZ], center:[76, 108], palette:'mint',
+  state:{ mode:'off', valve:0, run:0, louv:0, lvMode:'off', ph:0, fanA:.3, ifA:0, room:15, out:4, moving:false, lvMoving:false },
+  scene,
+  stats: st => { const kw = st.run, cop = copOf(st);
+    return [ { label:'Room', value: st.room.toFixed(1) + ' C' },
+      { label:'Outside', value: st.out + ' C', small:true },
+      { label:'Electricity in', value: kw.toFixed(2) + ' kW', small:true },
+      { label: st.valve >= .5 ? 'Heat into room' : 'Heat out of room', value: (kw*cop).toFixed(1) + ' kW', small:true } ]; },
+  buttons:[
+    { label:'Heat', onClick:(st) => setMode(st, 'heat') },
+    { label:'Cool', onClick:(st) => setMode(st, 'cool') },
+    { label:'Off', onClick:(st) => setMode(st, 'off') },
+    { label:'Outside', choices: st => OUTS.map(t => ({ label: t + ' C', current: st.out === t, onClick:(st) => setOut(st, t) })) },
+  ],
+  acts:{ remote:(st) => setMode(st, st.mode === 'heat' ? 'cool' : st.mode === 'cool' ? 'off' : 'heat') },
+  params:(st, q) => {
+    if (['heat', 'cool'].includes(q.get('mode'))){ st.mode = st.lvMode = q.get('mode'); st.valve = st.mode === 'heat' ? 1 : 0; st.run = 1; st.louv = 1; }
+    if (q.has('room') && Number.isFinite(+q.get('room'))) st.room = +q.get('room');
+    if (q.has('out') && OUTS.includes(+q.get('out'))) st.out = +q.get('out');
+    if (q.has('valve') && Number.isFinite(+q.get('valve'))) st.valve = Math.max(0, Math.min(1, +q.get('valve')));
+    if (q.has('ph') && Number.isFinite(+q.get('ph'))) st.ph = +q.get('ph');
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
