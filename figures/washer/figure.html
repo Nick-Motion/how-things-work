@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Washing machine</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Washing machine: a front loader standing on the floor, its tap, standpipe and socket behind it, a laundry basket in
+   front of its right side and a bottle of detergent on its worktop.
+   x = depth (the front is at x = W), y = width (+y is the viewer's left, seen from the front), z = up; 1 unit = 1 cm.
+
+   TRUTH FIRST: how a front loader runs a cycle, and where everything is after each step
+   1 LOAD       the door swings open on its hinges (left side); the clothes go from the basket, through the door seal,
+                into the drum, and the door is shut.
+   2 DETERGENT  the drawer slides out of the dispenser; detergent from the bottle goes into its main compartment; the
+                drawer slides back in.
+   3 START      the start button tells the control board to run the programme; the door lock bolts the door shut.
+   4 FILL       the board opens the inlet valve: mains water from the tap -> inlet hose -> valve -> fill hoses -> dispenser,
+                where it washes the detergent out of the drawer -> soap hose -> tub. Water pushes air up the air tube
+                from the sump to the pressure switch, which tells the board when the level is right; the valve shuts.
+   5 WASH       the heater in the bottom of the tub warms the water (the temperature sensor beside it reports to the
+                board). The motor turns the drum pulley through the belt: a few turns one way, a pause, a few the other,
+                about 50 rpm. The lifters inside the drum carry the clothes up and drop them through the soapy water.
+   6 DRAIN      the drain pump pulls the water out of the sump, through the sump hose and the pump filter, and pushes it
+                up the drain hose into the standpipe behind the machine.
+   7 SPIN       the motor runs the drum up to 1200 rpm: the clothes are pressed to the drum wall and the water flies out
+                through its holes and is pumped away. The tub hangs from two springs and stands on two shock absorbers,
+                and a concrete counterweight steadies it, so its shaking stays inside the cabinet.
+   8 DONE       the motor stops, the door lock lets go, and the clean, damp clothes go back into the basket.
+
+   PARTS (each is held by another)
+   CASE       cabinet on four feet . worktop . fascia with display, programme dial, start button and its light .
+              detergent drawer . door: frame, glass bowl, handle, two hinges on the cabinet front . filter flap .
+              back panel: service panel, transit bolt caps, rating label
+   TUB        plastic tub hung on two springs from brackets on the side walls, two shock absorbers down to the base
+              frame . concrete counterweight bolted on top . rubber door seal from the tub front to the cabinet front .
+              sump under the tub . heater and temperature sensor through the tub front, under the drum
+   DRUM       stainless drum with three lifters, holes in its back . spider (three arms) on its back . shaft through the
+              bearings in the tub's back hub . drum pulley on the shaft
+   DRIVE      motor bolted under the tub by two brackets . motor pulley . belt . tacho on the motor's back end
+   WATER      tap on the supply pipe . inlet hose . inlet valve (two coils) on the back panel . two fill hoses .
+              dispenser behind the drawer . soap hose to the tub top . air tube to the pressure switch on the side wall .
+              sump hose . drain pump with its filter and motor, on its bracket on the base frame . drain hose along the
+              floor and up the back in a clip, over into the standpipe
+   POWER      socket on the floor . power cord . mains filter on the back panel . control board behind the fascia with
+              the programme switch . door lock . wires from the board to each part */
+const W = 60, D = 60, H = 85, Z0 = 2;
+const OUT = rrUV(0, Z0, D, H, 2.2);                     // cabinet profile in (y, z), swept along x
+const DC = [30, 44];                                    // door and drum axis (y, z)
+const RT = 26.5, TX0 = 6, TX1 = 52;                     // tub radius, back, front
+const RD = 23.5, DX0 = 9, DX1 = 49, RO = 16.5;          // drum radius, back, front; the drum mouth = the door hole
+const DRO = 21, DRG = 15, DTH = 3.4, HINGE = [62, 51.8];// door outer / glass radius, thickness, hinge axis (x, y)
+const DRAWER = [41, 57, 75, 83], PULL = 16;             // drawer front (y0, y1, z0, z1); how far it slides out
+const DISP = [15, 31, 76, 82], DIAL = [36.3, 79, 3.4], STARTB = [9.5, 79.5, 2.1], FLAP = [3, 12, 3.5, 10.5];
+const BASK = { x0:62.5, x1:87.5, y0:-23.5, y1:-2.5, h:22 };
+const CLOTHES = ['#ef6a4c', '#76a0e2', '#f4b829', '#93d3b0', '#f6f1e4', '#f3a6bb', '#8a7fb8'];
+const GR = 4.8;                                         // a garment's size
+const MOT = [34, 11.5, 5.5];                            // motor axis (y, z) and radius, under the tub
+const WM = {
+  tub: matOf('#e2dfd6'), drum: METAL, drumIn: matOf('#b9c1c4'), rub: matOf('#77706a'), frame: matOf('#f5f3ec'),
+  conc: matOf('#bdb6a8'), motor: matOf('#9aa2a6'), alu: matOf('#d6dadc'), white: matOf('#f2efe6'), coil: matOf('#4a7fc1'),
+  pump: matOf('#4b4743'), pcb: { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, copper: matOf('#d08a52'), pvc: matOf('#e6e2d6'),
+  bask: matOf('#7fb0e0'), bottle: matOf('#f39a3c'), knob: matOf('#eeeae0'), heat: matOf('#9d8f84'), red: matOf('#e2483d'),
+};
+const HOSE = '#d4d8d8', WFLOW = '#6fb6ec', WOFF = '#3a3632', LIVE = '#ff9a3a';
+
+/* ---------- helpers ---------- */
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const ringX = (x, r, yc = DC[0], zc = DC[1], n = 36) => on(PX(x), ellUV(yc, zc, r, r, n));
+const annulus = (A, B, col) => `<path d="${pd(A)}${pd(B)}" fill="${col}" fill-rule="evenodd"/>`;
+const boxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const txBack = (x, y, z, str, size, col = INK, weight = 700) => `<text transform="${txM(P(x,y,z), Dv(0,1,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+const dotX = (x, y, z, r, col, w = .4) => { const q = on(PX(x), ellUV(y, z, r, r, 10)); return fill(pd(q), col) + (w ? ink(pd(q), w) : ''); };
+// round each inner corner of a route (a hose bends, it doesn't kink)
+const bend = (pts, r = 1.6) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, k) => v - b[k])), lc = Math.hypot(...c.map((v, k) => v - b[k])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k]) * d/la), q = c.map((v, k) => b[k] + (v - b[k]) * d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+// a hose or wire cut into short pieces, each with its own box, so byDepth puts it behind or in front of what it passes
+const wireParts = (pts, col, w = .45, ends = true, seg = 5) => { const q = bend(pts), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < seg){ len += Math.hypot(...q[j].map((v, k) => v - q[j - 1][k])); j++; }
+    if (len < seg) while (j < q.length - 1) j++;
+    const pc = q.slice(i, j + 1), d = pd(pc, false);
+    let svg = `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w + .9)}" stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    if (ends && i === 0){ const [X, Y] = P(...q[0]); svg += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(w*.9)}" fill="${INK}"/>`; }
+    if (ends && j === q.length - 1){ const [X, Y] = P(...q[j]); svg += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(w*.9)}" fill="${INK}"/>`; }
+    out.push({ box: boxOf(pc, w), svg }); i = j; }
+  return out; };
+// a box in its own frame (a door, a tilted bottle): T maps a local point to the world, NT a local normal
+function tbox(T, NT, x0, y0, z0, x1, y1, z1, m, w = .8){
+  const F = [[[0,1,0],[[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]]], [[1,0,0],[[x1,y0,z0],[x1,y1,z0],[x1,y1,z1],[x1,y0,z1]]],
+    [[0,-1,0],[[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1]]], [[-1,0,0],[[x0,y0,z0],[x0,y1,z0],[x0,y1,z1],[x0,y0,z1]]],
+    [[0,0,1],[[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]]], [[0,0,-1],[[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0]]]];
+  return F.map(([n, q]) => { const nw = NT(n); return vis(nw) ? shape(q.map(T), toneI(nw, m), w) : ''; }).join('');
+}
+
+/* ---------- the clothes ---------- */
+const baskSpot = i => i < 6 ? [68 + (i % 3)*7, -17.5 + Math.floor(i/3)*8.5, 15 + (i % 2)*1.5] : [75, -13, 19.5];
+const REST_A = [-.7, -.2, -.5, .1, -.9, -.35, -.6];          // heaped toward the front right of the drum, where the door looks in
+const drumRest = i => { const r = RD - GR - .5 - [2, 6, 10, 4, 12, 8, 14][i], a = REST_A[i]; return [43 + ((i*2) % 5), r*Math.sin(a), -r*Math.cos(a)]; };   // heaped near the front, seen through the door
+// a crumpled garment: a lumpy blob facing the viewer, a lighter fold, dirt spots before the wash
+function garment(st, g, p, rot){
+  const [X, Y] = P(...p), R = GR*CAM_K, c = CLOTHES[g.i], pts = [], lp = [];
+  for (let k = 0; k < 12; k++){ const a = k/12*2*Math.PI, rr = R*(1 + .15*Math.sin(3*(a - rot) + g.i*1.3) + .07*Math.sin(5*(a - rot) + g.i));
+    pts.push([X + rr*Math.cos(a), Y + rr*.86*Math.sin(a)]); lp.push([X - .22*R + .5*rr*Math.cos(a), Y - .26*R + .42*rr*Math.sin(a)]); }
+  const fx = Math.cos(rot), fy = Math.sin(rot);
+  let s = fill(sp(pts), c) + fill(sp(lp), mix(c, '#ffffff', .3));
+  s += `<path d="M${f(X - .55*R*fx)} ${f(Y - .55*R*fy)}Q${f(X + .2*R*fy)} ${f(Y - .2*R*fx)} ${f(X + .5*R*fx)} ${f(Y + .5*R*fy)}" fill="none" stroke="${mix(c, '#000000', .45)}" stroke-width=".6" stroke-linecap="round"/>`;
+  if (st.dirt > .02) for (const [u, v] of [[.35, .3], [-.3, .4], [.1, -.45]])
+    s += `<circle cx="${f(X + R*(u*fx - v*fy))}" cy="${f(Y + R*(u*fy + v*fx))}" r="${f(.13*R)}" fill="#7a5634" opacity="${f(.85*st.dirt)}"/>`;
+  return s + ink(sp(pts), .9);
+}
+function flyPt(g, t, yc, zc){                           // t: 0 in the basket .. 1 at rest in the drum
+  const b0 = baskSpot(g.i), cp = [82, 8, 66], m0 = [65, DC[0] - 1, DC[1] + 3], dr = drumRest(g.i), d0 = [dr[0], yc + dr[1], zc + dr[2]];
+  if (t < .7){ const u = t/.7; return [0,1,2].map(k => (1-u)*(1-u)*b0[k] + 2*(1-u)*u*cp[k] + u*u*m0[k]); }
+  return lerp3(m0, d0, (t - .7)/.3);
+}
+// where each garment is: [world point, spin of the blob, inside the cabinet?]
+function garmentAt(st, g, yc, zc){
+  if (g.mode === 'basket') return [baskSpot(g.i), g.i*1.7, false];
+  if (g.mode === 'fly' || g.mode === 'flyout'){ const p = flyPt(g, g.ft, yc, zc); return [p, g.i + g.ft*5, p[0] < W]; }
+  return [[g.p[0], yc + g.p[1], zc + g.p[2]], g.rot || 0, true];
+}
+
+/* ---------- the drum (seen through the door, and whole in see-through) ---------- */
+function perfs(x, yc, zc, ang){
+  let s = '';
+  for (const [r, n] of [[6.5, 6], [11.5, 10], [16.5, 14], [20.8, 18]]) for (let i = 0; i < n; i++){ const a = ang + i*2*Math.PI/n + r;
+    s += pd(on(PX(x), ellUV(yc + r*Math.sin(a), zc - r*Math.cos(a), .55, .55, 8))); }
+  return fill(s, '#5d6568');
+}
+function lifterSvgs(yc, zc, ang){
+  const far = [], near = [];
+  for (let k = 0; k < 3; k++){ const th = ang + k*2*Math.PI/3, pt = (r, a) => [yc + r*Math.sin(a), zc - r*Math.cos(a)];
+    const tri = [pt(RD - .15, th - .14), pt(RD - 3.4, th), pt(RD - .15, th + .14)], A = on(PX(DX0 + 1.5), tri), B = on(PX(DX1 - 1.5), tri);
+    let s = loft(A, B, n => toneI(n, WM.drum)); const cap = facing([1,0,0]) ? B : A;
+    s += fill(pd(cap), WM.drum.m) + ink(pd(cap), .5) + hullInk([...A, ...B], .8);
+    (facing([0, Math.sin(th), -Math.cos(th)]) ? near : far).push(s); }
+  return [far.join(''), near.join('')];
+}
+// water lying in a horizontal cylinder of radius r between x0 and x1, up to height lz
+function waterIn(x0, x1, r, yc, zc, lz, op = .38){
+  const h = lz - (zc - r); if (h <= .2) return '';
+  const al = Math.acos(clamp01((zc - lz)/r) * (zc - lz >= 0 ? 1 : -1)), seg = [];
+  for (let i = 0; i <= 14; i++){ const a = -al + 2*al*i/14; seg.push([yc + r*Math.sin(a), zc - r*Math.cos(a)]); }
+  const A = on(PX(x0), seg), B = on(PX(x1), seg), c = r*Math.sin(al);
+  const top = [[x0, yc - c, lz], [x1, yc - c, lz], [x1, yc + c, lz], [x0, yc + c, lz]];
+  return fill(sp(hull([...A, ...B].map(p => P(...p)))), WATER_C, `opacity="${op}"`) + fill(pd(top), '#bfe2f8', `opacity="${f(op*.8)}"`) + `<path d="${pd(top)}" fill="none" stroke="#3a7fc0" stroke-width=".5" opacity=".6"/>`;
+}
+const WATER_C = '#4f9fe0';
+const levelZ = (st, zc) => zc - RT + 15*st.water;       // water level in the tub (the drum dips into it)
+function drumInside(st, yc, zc){
+  const A = ringX(DX0, RD, yc, zc), B = ringX(DX1, RD, yc, zc), mouth = ringX(DX1, RO, yc, zc), fF = facing([1,0,0]);
+  let s = loft(A, B, n => toneI(n, WM.drumIn), true);
+  s += fF ? fill(pd(A), WM.drumIn.m) + perfs(DX0 + .05, yc, zc, st.ang) + cylX(DX0, DX0 + 1, yc, zc, 3, WM.drum, toneI, .6, 16) : annulus(B, mouth, WM.drumIn.m);
+  const [farL, nearL] = lifterSvgs(yc, zc, st.ang);
+  s += farL;
+  const gs = []; for (const g of st.cl){ const [p, rot, inside] = garmentAt(st, g, yc, zc); if (inside) gs.push({ at: p, svg: garment(st, g, p, rot) }); }
+  s += byDepth(gs);
+  const lz = levelZ(st, zc);
+  s += waterIn(DX0 + .3, DX1 - .3, RD - .3, yc, zc, lz, .34);
+  if (st.suds > .05 && lz > zc - RD + 1){ const c = Math.sqrt(Math.max(0, RD*RD - (zc - lz)**2)); let b = '';
+    for (let i = 0; i < 16; i++){ const x = DX0 + 3 + ((i*13) % 34), y = yc - c*.8 + ((i*7) % 16)/16*1.6*c, r = .9 + (i % 3)*.5;
+      if (i/16 < st.suds) b += `<circle cx="${f(P(x, y, lz + r*.4)[0])}" cy="${f(P(x, y, lz + r*.4)[1])}" r="${f(r*CAM_K)}" fill="#ffffff" stroke="${INK}" stroke-width=".35"/>`; }
+    s += b; }
+  return s + nearL;
+}
+function drumFull(st, yc, zc){
+  const A = ringX(DX0, RD, yc, zc), B = ringX(DX1, RD, yc, zc), mouth = ringX(DX1, RO, yc, zc), fF = facing([1,0,0]);
+  const near = loft(A, B, n => toneI(n, WM.drum)) + (fF ? annulus(B, mouth, toneI([1,0,0], WM.drum)) : fill(pd(A), toneI([-1,0,0], WM.drum)) + perfs(DX0 - .05, yc, zc, st.ang));
+  return drumInside(st, yc, zc) + `<g opacity=".42">${near}</g>` + (fF ? ink(pd(mouth), .9) + ink(pd(B), .7) : ink(pd(A), .7)) + hullInk([...A, ...B], 1.3);
+}
+// through the hole in the cabinet front: the far side of the rubber door seal, then (through the drum mouth) the drum
+function portal(st){
+  const yc = DC[0] + st.jy, zc = DC[1] + st.jz;
+  let s = loft(ringX(TX1, RO + 1, yc, zc), ringX(W, RO), n => toneI(n, WM.rub), true);
+  s += clipTo(ringX(DX1, RO, yc, zc), drumInside(st, yc, zc));
+  return clipTo(ringX(W, RO), s);
+}
+
+/* ---------- the cabinet ---------- */
+const PH_NAME = { idle:'COTTON 40', load:'COTTON 40', unload:'END', soap:'COTTON 40', lock:'LOCK', fill:'FILL', wash:'WASH', drain:'DRAIN', spin:'SPIN', unlock:'END' };
+const CYCLE = [['lock', .7], ['fill', 3.2], ['wash', 4.6], ['drain', 2.4], ['spin', 4.2], ['unlock', .8]];
+const CYC = Object.fromEntries(CYCLE), CYC_T = CYCLE.reduce((a, c) => a + c[1], 0);
+function timeLeft(st){
+  let rem = CYC_T;
+  if (CYC[st.phase]){ rem = 0; let past = true; for (const [n, d] of CYCLE){ if (n === st.phase){ rem += Math.max(0, d - st.t); past = false; } else if (!past) rem += d; } }
+  else if (st.washed) rem = 0;
+  const mins = Math.round(88*rem/CYC_T); return `${Math.floor(mins/60)}:${String(mins % 60).padStart(2, '0')}`;
+}
+const running = st => !!CYC[st.phase];
+function caseBody(st, m){
+  const FRONT = facing([1,0,0]), BACK = facing([-1,0,0]), hole = ringX(W, RO);
+  let s = '';
+  if (FRONT){
+    const fr = tone([1,0,0], m), dk = mix(fr, '#000000', .45), F = PX(W + .08);
+    s += annulus(on(PX(W), OUT), hole, fr);
+    s += portal(st);
+    s += annulus(ringX(W + .05, RO + 1.8), hole, mix(fr, '#000000', .12)) + ink(pd(ringX(W + .05, RO + 1.8)), .9);
+    s += line([[W + .05, .6, 73], [W + .05, D - .6, 73]], 1.1);                                       // fascia seam
+    s += shape(on(F, rectUV(DRAWER[0] + .3, DRAWER[2] + .3, DRAWER[1] - .3, DRAWER[3] - .3)), '#2b2523', .8);   // drawer opening
+    s += shape(on(F, rrUV(DISP[0], DISP[2], DISP[1], DISP[3], .8)), '#1d2a26', 1);
+    s += tx(W + .15, (DISP[0] + DISP[1])/2, DISP[2] + 3.7, (PH_NAME[st.phase] || '') + (st.w ? ' ' + rpmOf(st) + ' RPM' : ''), 1.7, '#8af0ae', 700);
+    s += tx(W + .15, (DISP[0] + DISP[1])/2, DISP[2] + .9, timeLeft(st), 2.6, '#8af0ae', 800);
+    for (let i = 0; i < 8; i++){ const a = (-135 + i*270/7)*Math.PI/180; s += dotX(W + .1, DIAL[0] - 4.7*Math.sin(a), DIAL[1] + 4.7*Math.cos(a), .32, i === 0 ? '#e2483d' : dk, 0); }
+    s += dotX(W + .1, 13.2, STARTB[1], .6, running(st) ? '#43c25c' : '#8d877a', .35);
+    s += tx(W + .15, STARTB[0], 75.4, 'START', 1.4, dk, 800);
+    s += tx(W + .15, DC[0], 68.2, 'AQUA 8', 2.6, dk, 800);
+    s += shape(on(F, rrUV(FLAP[0], FLAP[2], FLAP[1], FLAP[3], 1)), mix(fr, '#000000', .06), 1) + shape(on(PX(W + .1), rectUV(6.2, FLAP[3] - 1.4, 8.8, FLAP[3] - .6)), dk, .4);
+    s += shape(on(F, rectUV(7.4, 43, 9.6, 46.2)), '#2b2523', .6);                                    // the door lock's catch slot
+  }
+  if (BACK){
+    const bk = tone([-1,0,0], m), B = PX(-.1);
+    s += fill(pd(on(PX(0), OUT)), bk);
+    s += shape(on(B, rrUV(9, 20, 51, 62, 2)), mix(bk, '#000000', .06), 1.1);                         // service panel
+    for (const [y, z] of [[11, 22], [30, 22], [49, 22], [11, 60], [30, 60], [49, 60]]) s += dotX(-.15, y, z, .45, METAL.l);
+    for (const [y, z] of [[12, 70], [48, 70], [30, 14]]) s += dotX(-.15, y, z, 1.5, '#f2efe6', .6) + dotX(-.2, y, z, .5, '#bdb8a6', 0);   // transit bolt caps
+    s += shape(on(B, rectUV(20, 6, 38, 15)), '#f3f0e6', .7);
+    s += txBack(-.2, 29, 11.4, '230V 2100W', 1.6, INK, 800) + txBack(-.2, 29, 8.6, 'AQUA 8 KG', 1.4, INK, 700);
+  }
+  s += extrude(OUT, 0, W, m);
+  for (const [n, y] of [[[0,1,0], D + .05], [[0,-1,0], -.05]]) if (facing(n)) s += line([[.8, y, H - 2], [W - .8, y, H - 2]], .8);
+  if (BACK) s += line([[-.05, .8, H - 2], [-.05, D - .8, H - 2]], .8) + ink(pd(on(PX(0), OUT)), 2.2);
+  if (FRONT) s += ink(pd(on(PX(W), OUT)), 2.2) + ink(pd(hole), 1.6);
+  return s + hullInk([...on(PX(0), OUT), ...on(PX(W), OUT)], 2.8);
+}
+
+/* ---------- things on the front: door, drawer, dial, start button ---------- */
+const doorT = b => { const c = Math.cos(b), s = Math.sin(b);
+  return { T: ([a, u, v]) => { const dx = 60.4 + a - HINGE[0], dy = DC[0] + u - HINGE[1]; return [HINGE[0] + dx*c - dy*s, HINGE[1] + dx*s + dy*c, DC[1] + v]; },
+           N: ([x, y, z]) => [x*c - y*s, x*s + y*c, z] }; };
+function doorPart(st){
+  const { T, N } = doorT(st.door*100*Math.PI/180), nF = N([1,0,0]), front = vis(nF), fm = WM.frame;
+  const R = (a, r) => ellUV(0, 0, r, r, 40).map(([u, v]) => T([a, u, v]));
+  const oB = R(0, DRO), oF = R(DTH, DRO), iB = R(0, DRG), iF = R(DTH, DRG), bowl = R(-3.5, DRG - 4);
+  const inner = loft(iB, iF, n => toneI(n, fm), true);
+  const glass = fill(pd(R(DTH - .6, DRG)), '#cfe9f0', 'opacity=".16"')
+    + fill(pd([T([DTH - .5, -9, 5]), T([DTH - .5, -6, 8]), T([DTH - .5, 4, -2]), T([DTH - .5, 1, -5])]), '#ffffff', 'opacity=".38"')
+    + fill(pd([T([DTH - .5, -3, 9]), T([DTH - .5, -1.5, 10.5]), T([DTH - .5, 7, 2]), T([DTH - .5, 5.5, .5])]), '#ffffff', 'opacity=".3"');
+  const bowlS = `<g opacity=".14">${loft(iB, bowl, () => '#cfe9f0')}${fill(pd(bowl), '#cfe9f0')}</g>` + ink(pd(bowl), .5);
+  const trim = annulus(R(DTH + .05, DRO - 1.2), R(DTH + .05, DRO - 3.4), METAL.l) + ink(pd(R(DTH + .05, DRO - 1.2)), .6) + ink(pd(R(DTH + .05, DRO - 3.4)), .6);
+  const fFace = annulus(oF, iF, tone(nF, fm)) + trim + ink(pd(iF), 1);
+  const bFace = annulus(oB, iB, tone(N([-1,0,0]), fm)) + ink(pd(iB), 1);
+  const band = loft(oB, oF, n => tone(n, fm));
+  const handle = tbox(T, N, DTH, -DRO + .4, -6, DTH + 1.6, -DRO + 3.2, 6, DARK, .8);
+  let s = front ? inner + bowlS + glass + band + fFace + handle : handle + inner + glass + bowlS + band + bFace;
+  s += hullInk([...oB, ...oF], 2);
+  // hinges: a block on the cabinet front, a pin, and an arm from the door frame round to the pin
+  let hg = '';
+  for (const v of [-13, 13]){ const z = DC[1] + v;
+    hg += box(W, HINGE[1] - 1.4, z - 2.2, HINGE[0] - 1, HINGE[1] + 2, z + 2.2, METAL, toneI, .7)
+      + tbox(T, N, .6, DRO - 2.5, v - 1.2, 2.4, HINGE[1] - DC[0] + .4, v + 1.2, METAL, .7)
+      + cyl(HINGE[0], HINGE[1], z - 2.6, z + 2.6, 1.1, METAL, toneI, .7, 12); }
+  s = vis([0,-1,0]) && st.door > .5 ? hg + s : s + hg;
+  return { box: boxOf([...oB, ...oF, [W, HINGE[1] + 2, DC[1] - 16], [HINGE[0] + 1.2, HINGE[1] + 2, DC[1] + 16]]), svg: act('door', s) };
+}
+function drawerPart(st, m){
+  const p = st.pull*PULL, x1 = W + p, [y0, y1, z0, z1] = DRAWER;
+  let tray = '';
+  if (p > .3){
+    tray = box(W, y0 + .6, z0 + .6, x1, y1 - .6, z1 - .8, WM.white, toneI, .7);
+    if (facing([0,0,1])){ const zt = z1 - .8 + .04;
+      const comp = (v0, v1, liquid) => { const q = on(PZ(zt), rectUV(W + .6, v0, x1 - .6, v1)); return shape(q, '#cfc9ba', .5) + (liquid > .01 ? fill(pd(q), '#2f7fd0', `opacity="${f(.3 + .6*liquid)}"`) : ''); };
+      tray += comp(47, 56, st.soap) + comp(42, 46.2, 0); }
+  }
+  const fp = box(x1, y0, z0, x1 + 1.4, y1, z1, m, tone, 1);
+  const grip = facing([1,0,0]) ? shape(on(PX(x1 + 1.45), rrUV(y0 + 4, z0 + .9, y1 - 4, z0 + 2.4, .7)), mix(m.d, '#000000', .2), .6) : '';
+  const s = facing([1,0,0]) ? tray + fp + grip : fp + tray;
+  return { box: [[W, y0, z0], [x1 + 1.4, y1, z1]], svg: act('drawer', s) };
+}
+function knobParts(st){
+  const out = [], fr = facing([1,0,0]);
+  let dial = cylX(W, W + 2.2, DIAL[0], DIAL[1], DIAL[2], WM.knob, toneI, 1, 24);
+  const a = (-135 + 270*(running(st) ? 0 : 0))*Math.PI/180;
+  if (fr) dial += line([[W + 2.25, DIAL[0], DIAL[1]], [W + 2.25, DIAL[0] - 2.6*Math.sin(a), DIAL[1] + 2.6*Math.cos(a)]], 1.1);
+  out.push({ box: [[W, DIAL[0] - DIAL[2], DIAL[1] - DIAL[2]], [W + 2.2, DIAL[0] + DIAL[2], DIAL[1] + DIAL[2]]], svg: dial });
+  const bz = W + 1.3 - .8*st.press;
+  out.push({ box: [[W, STARTB[0] - STARTB[2], STARTB[1] - STARTB[2]], [bz, STARTB[0] + STARTB[2], STARTB[1] + STARTB[2]]], svg: act('start', cylX(W, bz, STARTB[0], STARTB[1], STARTB[2], WM.knob, toneI, 1, 18)) });
+  return out;
+}
+
+/* ---------- props: basket, detergent bottle, plumbing, cord ---------- */
+function basketSvg(st){
+  const A = on(PZ(.3), rrUV(BASK.x0 + 1.5, BASK.y0 + 1.5, BASK.x1 - 1.5, BASK.y1 - 1.5, 3)), B = on(PZ(BASK.h), rrUV(BASK.x0, BASK.y0, BASK.x1, BASK.y1, 4));
+  const bm = WM.bask;
+  let inside = fill(pd(A), mix(bm.d, '#ffffff', .3));
+  inside += byDepth(st.cl.filter(g => g.mode === 'basket').map(g => { const p = baskSpot(g.i); return { at: p, svg: garment(st, g, p, g.i*1.7) }; }));
+  let s = openShell(A, B, n => toneI(n, bm), inside);
+  // slots in the walls that face the viewer
+  const a0 = BASK.x0 + 1.5, a1 = BASK.x1 - 1.5, b0 = BASK.y0 + 1.5, b1 = BASK.y1 - 1.5, h = BASK.h;
+  const sides = [
+    [[1,0,0], [a1, b0 + 3, .3], [a1, b1 - 3, .3], [BASK.x1, BASK.y0 + 4, h], [BASK.x1, BASK.y1 - 4, h]],
+    [[-1,0,0], [a0, b1 - 3, .3], [a0, b0 + 3, .3], [BASK.x0, BASK.y1 - 4, h], [BASK.x0, BASK.y0 + 4, h]],
+    [[0,1,0], [a1 - 3, b1, .3], [a0 + 3, b1, .3], [BASK.x1 - 4, BASK.y1, h], [BASK.x0 + 4, BASK.y1, h]],
+    [[0,-1,0], [a0 + 3, b0, .3], [a1 - 3, b0, .3], [BASK.x0 + 4, BASK.y0, h], [BASK.x1 - 4, BASK.y0, h]] ];
+  let sl = '';
+  for (const [n, p0, p1, q0, q1] of sides) if (facing(n)){
+    const bil = (u, v) => lerp3(lerp3(p0, p1, u), lerp3(q0, q1, u), v), cnt = n[0] ? 5 : 6;
+    for (let i = 0; i < cnt; i++) for (const v of [.5, .72]){ const u = .1 + .8*i/(cnt - 1);
+      sl += pd([bil(u - .035, v - .07), bil(u + .035, v - .07), bil(u + .035, v + .07), bil(u - .035, v + .07)]); } }
+  s += fill(sl, mix(bm.d, '#000000', .1));
+  return s + ink(pd(B), 1.3) + hullInk([...A, ...B], 2);
+}
+function bottlePose(st){
+  const u = ease(st.bot), home = [15.5, 11, H], pour = [82.2, 48, 99.2], p = lerp3(home, pour, u);
+  p[2] += 9*Math.sin(Math.PI*u);
+  const a = 118*Math.PI/180*ease(clamp01((u - .45)/.55)), ca = Math.cos(a), sa = Math.sin(a);
+  return { T: ([x, y, z]) => [p[0] + x*ca - z*sa, p[1] + y, p[2] + x*sa + z*ca], N: ([x, y, z]) => [x*ca - z*sa, y, x*sa + z*ca] };
+}
+function bottleParts(st){
+  const { T, N } = bottlePose(st), bm = WM.bottle;
+  let s = tbox(T, N, -3.2, -4.8, 0, 3.2, 4.8, 15, bm, .9) + tbox(T, N, -2.2, -3, 15, 2.2, 3.6, 16.8, bm, .8);
+  if (vis(N([1,0,0]))) s += shape([T([3.25, -3.8, 3.5]), T([3.25, 3.8, 3.5]), T([3.25, 3.8, 11.5]), T([3.25, -3.8, 11.5])], '#fff7e6', .6)
+    + shape([T([3.3, -3.8, 6.4]), T([3.3, 3.8, 7.4]), T([3.3, 3.8, 9.2]), T([3.3, -3.8, 8.2])], '#4a7fc1', 0);
+  const cap = rod(T([0, .6, 16.8]), T([0, .6, 19.3]), 1.5, WM.red, toneI, .9, 1.5, 14);
+  s = vis(N([0,0,1])) ? s + cap : cap + s;
+  const out = [{ svg: act('drawer', s) }];
+  if (st.pour){ const c = T([0, .6, 19.6]), e = [c[0] + .6, c[1], H - 1.9];
+    const d = pd([c, [c[0] + .4, c[1], (c[2] + e[2])/2 + 1], e], false);
+    out.push({ box: [[Math.max(W + .01, Math.min(c[0], e[0]) - .6), c[1] - .6, e[2]], [Math.max(c[0], e[0]) + .6, c[1] + .6, c[2]]], svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="1.9" stroke-linecap="round"/><path d="${d}" fill="none" stroke="#2f7fd0" stroke-width="1.1" stroke-linecap="round"/>` }); }
+  return out;
+}
+function plumbing(st){
+  const out = [], put = (b, svg) => out.push({ box: b, svg }), flowIn = st.valve > .5, flowOut = st.pump > .5;
+  // supply pipe up from the floor with its tap, and the inlet hose to the valve's threaded inlet on the back panel
+  put([[-10.4, 46.6, 0], [-7.6, 49.4, 84]], cyl(-9, 48, 0, 84, 1.3, WM.copper, toneI, 1, 14));
+  put([[-10.7, 46.3, 84], [-7.3, 52.6, 90]], box(-10.7, 46.3, 84, -7.3, 49.7, 88, METAL, toneI, .8) + rod([-9, 48, 88], [-9, 52.4, 89.4], .7, matOf('#4a7fc1'), toneI, .8));
+  put([[-7.3, 47.2, 84.2], [-5.6, 48.8, 86]], rod([-7.3, 48, 85.2], [-5.6, 48, 85.2], .8, METAL, toneI, .7));
+  out.push(...wireParts([[-5.6, 48, 85.2], [-4.2, 48.4, 81], [-3.2, 48.8, 77.4], [-1.7, 49, 78]], flowIn ? WFLOW : HOSE, .9));
+  put([[-1.7, 47.8, 76.8], [0, 50.2, 79.2]], cylX(-1.7, 0, 49, 78, 1.2, METAL, toneI, .8, 12));
+  // drain hose from the back, up in a clip, over into the standpipe
+  put([[-11, 12, 0], [-7, 16, 80]], cyl(-9, 14, 0, 80, 2, WM.pvc, toneI, 1.1, 16) + fill(pd(on(PZ(80.05), ellUV(-9, 14, 1.4, 1.4, 14))), '#2b2523'));
+  out.push(...wireParts([[0, 5, 8.5], [-1.4, 5.5, 10], [-1.6, 8, 30], [-1.6, 10, 62], [-2.4, 12, 79], [-4.6, 13.5, 84], [-7.6, 14, 83.4], [-9, 14, 80.6]], flowOut ? WFLOW : HOSE, 1.1, false, 6));
+  put([[-3, 8.8, 60.4], [0, 11.4, 63.4]], box(-3, 8.8, 60.4, 0, 11.4, 63.4, DARK, toneI, .7));
+  // power cord to the socket on the floor
+  put([[-1.5, 36.8, 70.8], [0, 39.2, 73.2]], cylX(-1.5, 0, 38, 72, 1.1, DARK, toneI, .8, 12));
+  out.push(...wireParts([[-1.5, 38, 72], [-2.2, 38, 68], [-2.4, 37.5, 20], [-3, 36, 2], [-6, 34, 1.2], [-9.2, 33, 2.2]], DARK.l, .55, false, 8));
+  put([[-14.5, 30, 0], [-10.5, 36, 4.5]], box(-14.5, 30, 0, -10.5, 36, 4.5, WM.white, toneI, .9));
+  put([[-10.5, 31.6, .9], [-9.2, 34.4, 3.6]], box(-10.5, 31.6, .9, -9.2, 34.4, 3.6, DARK, toneI, .7));
+  return out;
+}
+
+/* ---------- see-through: the inside of a front loader ---------- */
+let MECH_LABELS = [];
+function springSvg(a, b, r = 1.1, turns = 10){
+  const d = sub(b, a), ax = norm(d), e1 = norm(cross(ax, Math.abs(ax[2]) < .9 ? [0,0,1] : [1,0,0])), e2 = cross(ax, e1), pts = [], n = turns*10;
+  for (let i = 0; i <= n; i++){ const t = .12 + .76*i/n, th = i/10*2*Math.PI; pts.push([0,1,2].map(k => a[k] + d[k]*t + r*(Math.cos(th)*e1[k] + Math.sin(th)*e2[k]))); }
+  const dd = pd(pts, false);
+  return `<path d="${dd}" fill="none" stroke="${INK}" stroke-width="1.5" stroke-linejoin="round"/><path d="${dd}" fill="none" stroke="#cfd6d8" stroke-width=".6" stroke-linejoin="round"/>`
+    + line([a, lerp3(a, b, .12)], 1.1) + line([lerp3(a, b, .88), b], 1.1);
+}
+function beltPath(c1, r1, c2, r2, x){
+  const dy = c2[0] - c1[0], dz = c2[1] - c1[1], Ld = Math.hypot(dy, dz), ph = Math.atan2(dz, dy), be = Math.acos((r1 - r2)/Ld), pts = [];
+  const arc = (c, r, a0, a1) => { for (let i = 0; i <= 18; i++){ const a = a0 + (a1 - a0)*i/18; pts.push([x, c[0] + r*Math.cos(a), c[1] + r*Math.sin(a)]); } };
+  arc(c1, r1, ph + be, ph + 2*Math.PI - be);            // round the far side of the drum pulley
+  arc(c2, r2, ph - be, ph + be);                        // round the far side of the motor pulley
+  return pts;
+}
+function washMech(st){
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg }), jy = st.jy, jz = st.jz, yc = DC[0] + jy, zc = DC[1] + jz;
+  const bx = (x0, y0, z0, x1, y1, z1, M, w = .7) => put([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, M, toneI, w));
+  const ph = st.phase, motorOn = Math.abs(st.w) > .3, valve = st.valve > .5, pump = st.pump > .5, spin = ph === 'spin', run = running(st);
+  const lz = levelZ(st, zc);
+  // ---- tub with the drum, its spider and the heater inside
+  const sA = st.ang, spider = { box: [[6.6, yc - RD, zc - RD], [DX0, yc + RD, zc + RD]], svg: [0, 1, 2].map(k => { const a = sA + k*2*Math.PI/3;
+      return rod([7.8, yc, zc], [7.8, yc + 21*Math.sin(a), zc - 21*Math.cos(a)], 1.2, WM.alu, toneI, .7, .8, 10); }).join('') + cylX(6.6, DX0, yc, zc, 3.4, WM.alu, toneI, .8, 16) };
+  const hz = zc - RT + 1.6, heatCol = st.heat > .05 ? matOf(mix('#9d8f84', '#ff6a2a', st.heat)) : WM.heat;
+  const heater = { box: [[19, yc - 4, hz - .8], [TX1, yc + 4, hz + .8]], svg:
+    rod([TX1, yc - 3, hz], [21, yc - 3, hz], .65, heatCol, toneI, .5) + rod([TX1, yc + 3, hz], [21, yc + 3, hz], .65, heatCol, toneI, .5)
+    + rod([21, yc - 3, hz], [19.6, yc - 1.6, hz], .65, heatCol, toneI, .5) + rod([19.6, yc - 1.6, hz], [19.6, yc + 1.6, hz], .65, heatCol, toneI, .5) + rod([19.6, yc + 1.6, hz], [21, yc + 3, hz], .65, heatCol, toneI, .5) };
+  const drum = { box: [[DX0, yc - RD, zc - RD], [DX1, yc + RD, zc + RD]], svg: drumFull(st, yc, zc) };
+  { const A = ringX(TX0, RT, yc, zc), B = ringX(TX1, RT, yc, zc), hole = ringX(TX1, RO + 1, yc, zc), fF = facing([1,0,0]);
+    let s = loft(A, B, n => toneI(n, WM.tub), true) + (fF ? fill(pd(A), mix(WM.tub.m, '#000000', .06)) : annulus(B, hole, WM.tub.m));
+    s += byDepth([spider, drum, heater]) + waterIn(TX0 + .3, TX1 - .3, RT - .3, yc, zc, lz, .26);
+    const near = loft(A, B, n => toneI(n, WM.tub)) + (fF ? annulus(B, hole, toneI([1,0,0], WM.tub)) : fill(pd(A), toneI([-1,0,0], WM.tub)));
+    s += `<g opacity=".34">${near}</g>` + ink(pd(fF ? B : A), .9) + (fF ? ink(pd(hole), .8) : '') + hullInk([...A, ...B], 1.8);
+    put([[TX0, yc - RT, zc - RT], [TX1, yc + RT, zc + RT]], s); }
+  // ---- door seal: rubber boot from the tub front to the cabinet front
+  { const A = ringX(TX1, RO + 1, yc, zc), B = ringX(W - .1, RO), fF = facing([1,0,0]);
+    const s = loft(A, B, n => toneI(n, WM.rub), true) + `<g opacity=".7">${loft(A, B, n => toneI(n, WM.rub))}</g>` + ink(pd(fF ? B : A), .8) + hullInk([...A, ...B], 1);
+    put([[TX1, DC[0] - RO - 1.6, DC[1] - RO - 1.6], [W, DC[0] + RO + 1.6, DC[1] + RO + 1.6]], s); }
+  // heater flange and temperature sensor on the tub front, under the door seal
+  put([[TX1, yc - 4.2, zc - RT + .6], [54.6, yc + 4.2, zc - RT + 5.4]], box(TX1, yc - 4, zc - RT + .8, 53.2, yc + 4, zc - RT + 5, WM.alu, toneI, .7)
+    + cylX(53.2, 54.6, yc - 2.4, hz + .6, .55, METAL, toneI, .5, 8) + cylX(53.2, 54.6, yc + 2.4, hz + .6, .55, METAL, toneI, .5, 8) + cylX(53.2, 54.4, yc, hz + 2.4, .8, DARK, toneI, .5, 10));
+  // ---- counterweight bolted on top of the tub; sump under it
+  put([[30, yc - 10, zc + RT], [50, yc + 10, zc + RT + 6]], box(30, yc - 10, zc + RT, 50, yc + 10, zc + RT + 6, WM.conc, toneI, .9)
+    + (facing([0,0,1]) ? [34, 46].map(x => cyl(x, yc, zc + RT + 6, zc + RT + 6.8, 1.2, METAL, toneI, .6, 10)).join('') : ''));
+  bx(30, yc - 4, zc - RT - 3.7, 40, yc + 4, zc - RT, WM.tub, .8);
+  // ---- drive: bearing hub, shaft, drum pulley, belt, motor pulley; the motor under the tub
+  const mc = [MOT[0] + jy, MOT[1] + jz], rP = 18;
+  { const BK = facing([-1,0,0]), wA = ringX(1.5, rP, yc, zc, 48), wB = ringX(4.3, rP, yc, zc, 48);
+    const hub = cylX(4.3, TX0, yc, zc, 4.6, matOf('#a3a9ac'), toneI, .8, 20);
+    let wheel = loft(wA, wB, n => toneI(n, WM.alu)), capX = BK ? 1.45 : 4.35;
+    wheel += fill(pd(BK ? wA : wB), toneI(BK ? [-1,0,0] : [1,0,0], WM.alu));
+    let win = ''; for (let i = 0; i < 5; i++){ const a0 = st.ang + i*2*Math.PI/5, q = [];
+      for (let j = 0; j <= 6; j++){ const a = a0 + .5*j/6; q.push([capX, yc + 15*Math.sin(a), zc - 15*Math.cos(a)]); }
+      for (let j = 6; j >= 0; j--){ const a = a0 + .08 + .36*j/6; q.push([capX, yc + 6.5*Math.sin(a), zc - 6.5*Math.cos(a)]); }
+      win += pd(q); }
+    wheel += fill(win, mix(WM.tub.m, '#000000', .35)) + ink(win, .5) + ink(pd(BK ? wA : wB), .8) + hullInk([...wA, ...wB], 1.2);
+    if (BK) wheel += cylX(.9, 1.5, yc, zc, 1.4, METAL, toneI, .6, 10);
+    const bp = beltPath([yc, zc], rP + .3, mc, 2.2, 2.9), bd = pd(bp);
+    const belt = `<path d="${bd}" fill="none" stroke="${INK}" stroke-width="2.4" stroke-linejoin="round"/><path d="${bd}" fill="none" stroke="#5a5450" stroke-width="1.3" stroke-linejoin="round"/>`
+      + `<path d="${bd}" fill="none" stroke="#8d857e" stroke-width=".5" stroke-dasharray="1.6 2.4" stroke-dashoffset="${f(-st.ang*rP*1.2)}"/>`;
+    const mp = cylX(1.6, 4.2, mc[0], mc[1], 1.9, METAL, toneI, .7, 14) + cylX(4.2, 6.5, mc[0], mc[1], .6, METAL, toneI, .5, 8);
+    put([[.9, yc - rP - .5, Math.min(zc - rP, mc[1] - 2.2) - .5], [TX0, yc + rP + .5, zc + rP + .5]], BK ? hub + wheel + mp + belt : wheel + mp + belt + hub);
+    const m = WM.motor, sub2 = [
+      { box: [[6.5, mc[0] - MOT[2], mc[1] - MOT[2]], [28, mc[0] + MOT[2], mc[1] + MOT[2]]], svg: cylX(6.5, 28, mc[0], mc[1], MOT[2], m, toneI, 1.1, 22)
+          + (facing([0,0,1]) ? [10, 13, 16, 19, 22, 25].map(x => line([[x, mc[0] - 2.5, mc[1] + MOT[2] - .3], [x, mc[0] + 2.5, mc[1] + MOT[2] - .3]], .5)).join('') : '') },
+      { box: [[28, mc[0] - 3, mc[1] - 3], [30, mc[0] + 3, mc[1] + 3]], svg: cylX(28, 30, mc[0], mc[1], 3, DARK, toneI, .8, 16) },
+      { box: [[14, mc[0] + MOT[2], mc[1] - 1.5], [18, mc[0] + 6.8, mc[1] + 1.5]], svg: box(14, mc[0] + MOT[2] - .3, mc[1] - 1.5, 18, mc[0] + 6.8, mc[1] + 1.5, WM.white, toneI, .6) },
+      ...[11, 22].map(x => ({ box: [[x, mc[0] - 2, mc[1] + MOT[2] - .2], [x + 3, mc[0] + 2, zc - RT]], svg: box(x, mc[0] - 2, mc[1] + MOT[2] - .2, x + 3, mc[0] + 2, zc - RT, METAL, toneI, .6) })) ];
+    put([[6.5, mc[0] - MOT[2], mc[1] - MOT[2]], [30, mc[0] + 6.8, zc - RT]], byDepth(sub2)); }
+  // ---- suspension: springs from brackets on the side walls, shock absorbers down to the base frame
+  for (const sd of [-1, 1]){
+    const yw = sd < 0 ? 0 : D, lug = [20, yc + 11*sd, zc + Math.sqrt(RT*RT - 121)], top = [20, sd < 0 ? 2.4 : D - 2.4, 82.4];
+    put([[17, sd < 0 ? .6 : D - 3, 81], [23, sd < 0 ? 3 : D - .6, 84]], box(17, sd < 0 ? .6 : D - 3, 81, 23, sd < 0 ? 3 : D - .6, 84, METAL, toneI, .7));
+    put(boxOf([lug, top], 1.3), springSvg(lug, top, 1.15, 11) + box(19, lug[1] - 1, lug[2] - .6, 21, lug[1] + 1, lug[2] + .6, WM.tub, toneI, .5));
+    const dl = [22, yc + 12*sd, zc - Math.sqrt(RT*RT - 144)], db = [22, 30 + 20*sd, 4.5], mid = lerp3(db, dl, .58);
+    put(boxOf([dl, db], 1.8), rod(db, mid, 1.7, DARK, toneI, .9, 1.7, 14) + rod(mid, dl, .55, METAL, toneI, .6, .55, 10)
+      + cylX(21, 23, db[1], db[2], 1, METAL, toneI, .5, 10) + cylX(21, 23, dl[1], dl[2], .9, METAL, toneI, .5, 10));
+  }
+  // ---- base frame
+  bx(2, 2, 2, 58, 6, 4.5, DARK); bx(2, 54, 2, 58, 58, 4.5, DARK); bx(18, 6, 2, 26, 54, 4.5, DARK); bx(50, 6, 2, 56, 54, 4, DARK);
+  // ---- water in: valve, fill hoses, dispenser, soap hose
+  bx(.6, 44, 76, 5.6, 54, 80, WM.white, .8);
+  for (const y of [46.5, 51.5]){
+    put([[1.3, y - 1.8, 80], [4.9, y + 1.8, 83]], cyl(3.1, y, 80, 83, 1.8, valve && y < 50 ? matOf('#ff9a3a') : WM.coil, toneI, .8, 14));
+    put([[5.6, y - .8, 77.2], [8, y + .8, 78.8]], cylX(5.6, 8, y, 78, .8, WM.white, toneI, .6, 10));
+    parts.push(...wireParts([[8, y, 78], [20, y, 79.6], [38, y, 79.6]], valve && y < 50 ? WFLOW : HOSE, .75, false, 8)); }
+  bx(38, 40, 72.5, 60, 58, 84, WM.white, .9);
+  parts.push(...wireParts([[44, 50, 72.5], [44, 46.5, 70.6], [44, yc + 13.5, zc + Math.sqrt(RT*RT - 182.25)]], valve ? WFLOW : HOSE, 1.2, false, 4));
+  // pressure switch on the left side wall and its air tube from the sump
+  put([[32, D - 3.4, 73.4], [38, D - .6, 80]], rod([35, D - .7, 77], [35, D - 3.3, 77], 2.8, WM.white, toneI, .8, 2.8, 16) + rod([35, D - 2.6, 74.4], [35, D - 2.6, 73.4], .5, WM.white, toneI, .4, .5, 8));
+  parts.push(...wireParts([[35, yc + 4, zc - RT - 1.5], [35, 52, zc - RT - 1.5], [35, D - 2.6, 19], [35, D - 2.6, 73.4]], '#f2efe3', .4, false, 6));
+  // ---- water out: sump hose, drain pump with filter and motor on its bracket, drain hose along the floor to the back
+  parts.push(...wireParts([[40, yc, zc - RT - 2], [45, 24, 13.5], [45.5, 16, 11], [45.5, 13.4, 10.4]], st.water > .02 || pump ? WFLOW : HOSE, 1.5, false, 4));
+  put([[37, 6, 4], [43, 14, 12]], cylX(37, 43, 10, 8, 2.8, WM.pump, toneI, .8, 16));
+  put([[43, 6, 4], [48, 14, 12]], cylX(43, 48, 10, 8, 4, WM.white, toneI, .9, 20));
+  put([[48, 4.9, 4.4], [59.6, 10.1, 9.6]], cylX(48, 59.6, 7.5, 7, 2.6, WM.white, toneI, .8, 16) + (facing([1,0,0]) ? cylX(59.6, 59.9, 7.5, 7, 1.8, WM.red, toneI, .5, 12) : ''));
+  bx(37, 6, 2, 49, 15, 4, METAL, .6);
+  parts.push(...wireParts([[43, 6.2, 8], [41, 4, 6.4], [3, 4, 6.4], [1.5, 4.6, 8], [0, 5, 8.5]], pump ? WFLOW : HOSE, 1.1, false, 7));
+  // ---- power and control: mains filter, control board with the programme switch, door lock, wires
+  bx(.6, 34, 64, 4.4, 42, 71, matOf('#d8d2c2'), .7);
+  put([[55, 3, 73.5], [59, 33, 84.5]], box(55, 3, 73.5, 59, 33, 84.5, WM.white, toneI, .7) + (facing([1,0,0]) ? box(58.5, DISP[0], DISP[2], 59.1, DISP[1], DISP[3], DARK, toneI, .5) : ''));
+  put([[54, 4, 74.5], [55, 38, 83.5]], box(54, 4, 74.5, 55, 38, 83.5, WM.pcb, toneI, .7));
+  bx(52, 6, 76, 54, 10, 80, matOf('#2f5fa8'), .5); bx(52, 11, 76, 54, 15, 80, matOf('#2f5fa8'), .5); bx(53.3, 18, 77, 54, 25, 81, DARK, .5);
+  put([[51.4, 26.6, 77.6], [54, 29.4, 80.4]], cylX(51.4, 54, 28, 79, 1.4, matOf('#3a5f9a'), toneI, .6, 12));
+  put([[55, DIAL[0] - 2.5, DIAL[1] - 2.5], [60, DIAL[0] + 2.5, DIAL[1] + 2.5]], cylX(55, 59.4, DIAL[0], DIAL[1], 2.5, WM.white, toneI, .7, 16) + cylX(59.4, 60, DIAL[0], DIAL[1], .7, METAL, toneI, .5, 8));
+  put([[54, 5, 41], [59.6, 11.8, 49.5]], box(54, 5, 41, 59.6, 11.8, 48, WM.white, toneI, .8) + box(55.5, 6.5, 48, 58, 10.5, 49.5, st.lock > .5 ? WM.red : DARK, toneI, .5));
+  const wcol = on => on ? LIVE : WOFF;
+  for (const [pts, onW] of [
+    [[[.6, 38, 72.5], [2.5, 38, 71]], run],
+    [[[2.5, 36, 71], [2.5, 35, 83], [30, 35, 83.3], [54, 34, 82.5]], run],
+    [[[3.1, 46.5, 83], [3.1, 39.2, 83.6], [53, 39.2, 83.6], [54, 37.5, 82]], valve],
+    [[[2.5, 36, 71.5], [1.4, 40, 74], [1.4, 57.5, 74], [1.4, 57.5, 7], [16, 52, 6.5], [16, mc[0] + 6.8, mc[1]]], motorOn],
+    [[[56.5, 3.4, 74], [56.5, 3.2, 16], [38, 3.4, 13.5], [37.2, 9, 10.5]], pump],
+    [[[57.8, 4, 74], [57.8, 4, 25], [54.6, yc - 2.4, hz + .6]], st.heat > .1],
+    [[[55.5, 6.5, 74], [56.5, 8.5, 49.5]], st.lock > .5],
+    [[[35, D - 1.4, 80], [35, D - 1.4, 84.4], [36.5, 36, 84.4], [54, 32, 83.5]], ph === 'fill'] ]) parts.push(...wireParts(pts, wcol(onW), .32, true, 6));
+  // ---- labels on the parts (anchored on them, moving with them)
+  const bpm = beltPath([yc, zc], rP + .3, mc, 2.2, 2.9), lifA = st.ang;
+  MECH_LABELS = [
+    { at: [DX1 - 3, yc - RD*.72, zc + RD*.69], text: 'DRUM', on: motorOn },
+    { at: [TX0 + 12, yc + RT*.8, zc + RT*.6], text: 'TUB', on: st.water > .05 },
+    { at: [DX1 - 6, yc + (RD - 2)*Math.sin(lifA), zc - (RD - 2)*Math.cos(lifA)], text: 'LIFTERS', on: motorOn },
+    { at: [56, DC[0], DC[1] + RO + .6], text: 'DOOR SEAL', on: false },
+    { at: [7.8, yc + 12*Math.sin(sA), zc - 12*Math.cos(sA)], text: 'DRUM SPIDER', on: motorOn },
+    { at: [5, yc, zc + 4.6], text: 'BEARINGS', on: motorOn },
+    { at: [2.9, yc - rP*.7, zc + rP*.7], text: 'DRUM PULLEY', on: motorOn },
+    { at: bpm[30], text: 'BELT', on: motorOn },
+    { at: [17, mc[0], mc[1] - MOT[2]], text: 'MOTOR', on: motorOn },
+    { at: [2.9, mc[0], mc[1] - 1.9], text: 'MOTOR PULLEY', on: motorOn },
+    { at: [20, 53, 77.5], text: 'SPRING', on: spin },
+    { at: [22, 47, 10], text: 'SHOCK ABSORBER', on: spin },
+    { at: [40, yc + 10, zc + RT + 6], text: 'COUNTERWEIGHT', on: spin },
+    { at: [3.1, 51.5, 83], text: 'INLET VALVE', on: valve },
+    { at: [24, 51.5, 79.6], text: 'FILL HOSES', on: valve },
+    { at: [49, 58, 84], text: 'DISPENSER', on: valve },
+    { at: [44, 46.5, 70.6], text: 'SOAP HOSE', on: valve },
+    { at: [35, yc - 4, zc - RT - 3], text: 'SUMP', on: st.water > .05 },
+    { at: [45.2, 20, 12.3], text: 'SUMP HOSE', on: pump },
+    { at: [45.5, 10, 12], text: 'DRAIN PUMP', on: pump },
+    { at: [55, 7.5, 9.6], text: 'PUMP FILTER', on: pump },
+    { at: [20, 4, 7.5], text: 'DRAIN HOSE', on: pump },
+    { at: [35, D - 2, 79.8], text: 'PRESSURE SWITCH', on: ph === 'fill' },
+    { at: [35, D - 2.6, 46], text: 'AIR TUBE', on: ph === 'fill' },
+    { at: [24, yc + 3, hz], text: 'HEATER', on: st.heat > .1 },
+    { at: [53.8, yc, hz + 2.4], text: 'TEMP SENSOR', on: ph === 'wash' },
+    { at: [54.5, 20, 83.5], text: 'CONTROL BOARD', on: run },
+    { at: [57, DIAL[0], DIAL[1] + 2.5], text: 'PROGRAM SWITCH', on: false },
+    { at: [57, 8.5, 48.5], text: 'DOOR LOCK', on: st.lock > .5 },
+    { at: [2.5, 38, 71], text: 'MAINS FILTER', on: run },
+    { at: [-3.2, 48.8, 77.4], text: 'INLET HOSE', on: valve },
+    { at: [-9, 14, 62], text: 'STANDPIPE', on: pump } ];
+  return byDepth(parts);
+}
+
+// 32 labels: half in each column whatever the yaw. Each half is laid out by xrCallouts with the bounds stretched far
+// out on the other side, which puts every pill of that half in one column and leaves that column where it was.
+function evenCallouts(items, B){
+  const o = P(0, 0, 0)[0], dx = P(1, 0, 0)[0] - o, dy = P(0, 1, 0)[0] - o, X = it => P(...it.at)[0];
+  const mid = items.map(X).sort((a, b) => a - b)[items.length >> 1];
+  const grow = s => [B[0] - (s*dx < 0 ? 999 : 0), B[1] + (s*dx > 0 ? 999 : 0), B[2] - (s*dy < 0 ? 999 : 0), B[3] + (s*dy > 0 ? 999 : 0), B[4], B[5]];
+  return xrCallouts(items.filter(it => X(it) < mid), grow(1)) + xrCallouts(items.filter(it => X(it) >= mid), grow(-1));
+}
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0), FRONT = facing([1,0,0]), yc = DC[0] + st.jy, zc = DC[1] + st.jz;
+  let s = '';
+  const dp = doorPart(st), bt = bottlePose(st);
+  // shadows first: the machine (with an open door and the bottle on top), the basket, the two pipes
+  s += castShadow([...on(PX(0), OUT), ...on(PX(W), OUT), dp.box[0], dp.box[1], [dp.box[1][0], dp.box[0][1], DC[1] + 20], bt.T([0, 0, 17])]);
+  s += castShadow([...on(PZ(0), rrUV(BASK.x0, BASK.y0, BASK.x1, BASK.y1, 4)), ...on(PZ(BASK.h), rrUV(BASK.x0, BASK.y0, BASK.x1, BASK.y1, 4))]);
+  s += castShadow([...on(PZ(0), ellUV(-9, 14, 2, 2, 10)), ...on(PZ(80), ellUV(-9, 14, 2, 2, 10))]) + castShadow([...on(PZ(0), ellUV(-9, 48, 1.4, 1.4, 10)), ...on(PZ(88), ellUV(-9, 48, 1.4, 1.4, 10))]);
+  const ghost = svg => k > 0 ? `<g opacity="${f(1 - .8*k)}">${svg}</g>` : svg, prop = svg => k > 0 ? `<g opacity="${f(1 - .5*k)}">${svg}</g>` : svg;
+  const parts = [];
+  const body = caseBody(st, m);
+  parts.push({ box: [[0, 0, Z0], [W, D, H]], svg: k > 0 ? xrGhost(body, `<g opacity="${f(k)}">${washMech(st)}</g>`, k, OUT, 0, W, m) : body });
+  parts.push({ box: dp.box, svg: ghost(dp.svg) });
+  const dw = drawerPart(st, m); parts.push({ box: dw.box, svg: ghost(dw.svg) });
+  for (const p of knobParts(st)) parts.push({ box: p.box, svg: ghost(p.svg) });
+  for (const [x, y] of [[5, 5], [5, 55], [55, 5], [55, 55]]) parts.push({ box: [[x - 2, y - 2, 0], [x + 2, y + 2, Z0]], svg: cyl(x, y, 0, Z0, 1.8, DARK, toneI, .8, 12) });
+  parts.push({ box: [[BASK.x0, BASK.y0, 0], [BASK.x1, BASK.y1, BASK.h]], svg: prop(act('basket', basketSvg(st))) });
+  for (const g of st.cl){ const [p, rot, inside] = garmentAt(st, g, yc, zc); if (!inside && g.mode !== 'basket') parts.push({ box: boxOf([p], GR*.8), svg: garment(st, g, p, rot) }); }
+  const [bottle, stream] = bottleParts(st);
+  if (stream) parts.push({ box: stream.box, svg: prop(stream.svg) });
+  for (const p of plumbing(st)) parts.push({ box: p.box, svg: prop(p.svg) });
+  s += byDepth(parts);
+  s += prop(bottle.svg);              // the bottle is always above the worktop, so seen from above nothing on the floor hides it
+  // labels: the working parts in see-through, the things you use otherwise
+  if (k > .6) s += evenCallouts(MECH_LABELS, [-10, W + 4, 0, D, 0, H]);
+  else { const it = [];
+    if (FRONT){ const { T } = doorT(st.door*100*Math.PI/180);
+      it.push({ at: T([DTH, -DRO*.7, DRO*.7]), text: 'DOOR', on: st.phase === 'load' || st.phase === 'unload' },
+        { at: [W + 1.4 + st.pull*PULL, 49, 79], text: 'DETERGENT DRAWER', on: st.phase === 'soap' || st.phase === 'fill' },
+        { at: [W + 2.2, DIAL[0], DIAL[1] + DIAL[2]], text: 'PROGRAM DIAL', on: false },
+        { at: [W, 23, 82], text: 'DISPLAY', on: running(st) },
+        { at: [W + 1.3, STARTB[0], STARTB[1] + STARTB[2]], text: 'START BUTTON', on: st.phase === 'lock' });
+      if (facing([0,1,0])) s += tag([W, 7.5, 5], -20, 34, 'FILTER FLAP', false); }   // (from the other side the basket stands in front of it)
+    if (!FRONT) it.push({ at: [-3.2, 48.8, 77.4], text: 'INLET HOSE', on: st.valve > .5 }, { at: [-9, 14, 60], text: 'STANDPIPE', on: st.pump > .5 },
+      { at: [-2.4, 37.5, 40], text: 'POWER CORD', on: running(st) }, { at: [-9, 48, 87], text: 'TAP', on: st.valve > .5 });
+    // the basket and the bottle stand apart from the machine: their pills go just below and above them
+    s += xrCallouts(it, [-10, W + 4, 0, D, 0, H])
+      + (facing([-1,0,0]) && facing([0,1,0]) ? '' : tag([(BASK.x0 + BASK.x1)/2, (BASK.y0 + BASK.y1)/2, 0], 0, 40, 'LAUNDRY BASKET', st.phase === 'load' || st.phase === 'unload'))
+      + tag(bt.T([0, 0, 17]), 0, -28, 'DETERGENT', st.phase === 'soap'); }
+  return s;
+}
+
+/* ---------- behaviour: one state object, one clock ---------- */
+let ui, wLoop = false;
+function stepClothes(st, dt){
+  const pinned = st.phase === 'spin' && st.w > 8, k = Math.min(1, dt*9);
+  for (const g of st.cl){ if (g.mode !== 'drum') continue;
+    const rest = drumRest(g.i); let tgt = rest, rot = g.i*1.7;
+    if (pinned){ const a = st.ang + g.i*2*Math.PI/7, r = RD - GR + .4; tgt = [rest[0], r*Math.sin(a), -r*Math.cos(a)]; rot = a + g.i; }
+    else if (Math.abs(st.w) > .5){
+      const dir = st.dir || 1, p = (st.tum + g.i/7) % 1, r = RD - GR - .4 - (g.i % 3)*3;
+      if (p < .62){ const a = dir*(-.35 + p/.62*2.1); tgt = [rest[0], r*Math.sin(a), -r*Math.cos(a)]; }
+      else { const q = (p - .62)/.38, a0 = dir*1.75, a1 = dir*-.35, s0 = [r*Math.sin(a0), -r*Math.cos(a0)], s1 = [r*Math.sin(a1), -r*Math.cos(a1)];
+        tgt = [rest[0], s0[0] + (s1[0] - s0[0])*q, s0[1] + (s1[1] - s0[1])*q + 6*q*(1 - q)]; }
+      rot = st.ang*.6 + g.i; }
+    if (pinned) g.p = tgt; else g.p = g.p.map((v, j) => v + (tgt[j] - v)*k);
+    g.rot = rot; }
+}
+function stepSim(st, dt){
+  st.t += dt; const T = st.t, ph = st.phase; let wT = 0;
+  if (ph === 'load' || ph === 'unload'){
+    const t0 = .55, gap = .16, fl = .8, tEnd = t0 + (st.cl.length - 1)*gap + fl;
+    st.door = T < tEnd ? ease(clamp01(T/.5)) : 1 - ease(clamp01((T - tEnd - .1)/.5));
+    st.cl.forEach((g, j) => { const ft = clamp01((T - t0 - j*gap)/fl);
+      if (ph === 'load'){ if (ft > 0 && ft < 1){ g.mode = 'fly'; g.ft = ft; } else if (ft >= 1 && g.mode !== 'drum'){ g.mode = 'drum'; g.p = drumRest(g.i); } }
+      else { if (ft > 0 && ft < 1){ g.mode = 'flyout'; g.ft = 1 - ft; } else if (ft >= 1 && g.mode !== 'basket') g.mode = 'basket'; } });
+    if (T > tEnd + .65){ st.door = 0; st.phase = 'idle'; if (ph === 'unload') st.washed = false; }
+  } else if (ph === 'soap'){
+    st.pull = T < 3.3 ? ease(clamp01(T/.5)) : 1 - ease(clamp01((T - 3.3)/.5));
+    st.bot = T < 2.5 ? clamp01((T - .5)/.8) : 1 - clamp01((T - 2.5)/.8);
+    st.pour = T > 1.3 && T < 2.5 ? 1 : 0;
+    if (st.pour) st.soap = clamp01((T - 1.3)/1.1);
+    if (T > 3.85){ st.pull = 0; st.bot = 0; st.phase = 'idle'; }
+  } else if (CYC[ph]){
+    const dur = CYC[ph];
+    st.valve = 0; st.pump = 0;
+    if (ph === 'lock'){ st.press = T < .25 ? 1 : 0; st.lock = clamp01((T - .2)/.4); }
+    if (ph === 'fill'){ st.valve = T < dur - .2 ? 1 : 0; st.water = .85*ease(clamp01(T/dur)); st.soap = Math.min(st.soap, 1 - clamp01((T - .3)/1.5)); st.suds = .5*clamp01(T/dur); wT = T > 1 ? 3.5 : 0; }
+    if (ph === 'wash'){ st.heat = Math.min(1, st.heat + dt*1.2); st.dirt = Math.max(0, 1 - T/(dur - .4)); st.suds = Math.min(1, st.suds + dt*.3);
+      const c = T % 2.4; wT = c < 1.05 ? 5 : c < 1.2 ? 0 : c < 2.25 ? -5 : 0; }
+    else st.heat = Math.max(0, st.heat - dt*.8);
+    if (ph === 'drain'){ st.pump = 1; st.water = .85*(1 - ease(clamp01(T/1.9))); st.suds = Math.max(0, st.suds - dt*.5); wT = 3; }
+    if (ph === 'spin'){ st.pump = T < dur - .8 ? 1 : 0; st.water = 0; st.suds = 0;
+      wT = T < .4 ? 3 : T < 2.1 ? 3 + 29*ease(clamp01((T - .4)/1.7)) : T < 3.2 ? 32 : 32*(1 - clamp01((T - 3.2)/.9)); }
+    if (ph === 'unlock') st.lock = 1 - clamp01(T/.6);
+    if (T >= dur){ const i = CYCLE.findIndex(c => c[0] === ph);
+      if (i < CYCLE.length - 1){ st.phase = CYCLE[i + 1][0]; st.t = 0; } else { st.phase = 'idle'; st.washed = true; st.lock = 0; st.dirt = 0; } }
+  }
+  if (st.phase === 'spin') st.w = wT; else st.w += (wT - st.w)*Math.min(1, dt*5);
+  if (Math.abs(st.w) < .01 && wT === 0) st.w = 0;
+  st.ang += st.w*dt; st.tum += Math.abs(st.w)*dt*.2;
+  if (Math.abs(st.w) > .3) st.dir = Math.sign(st.w);
+  // the tub swings on its springs when the drum spins: an uneven load goes round with the drum
+  const a = st.phase === 'spin' ? .6*clamp01(st.w/12) : 0;
+  st.jy = a*Math.sin(st.ang); st.jz = a*.6*Math.cos(st.ang);
+  stepClothes(st, dt);
+  if (st.phase !== 'idle') st.settle = .8; else st.settle = Math.max(0, (st.settle || 0) - dt);
+}
+function runLoop(){
+  if (wLoop) return; wLoop = true;
+  ui.animate(dt => { const st = ui.st; stepSim(st, dt); const busy = st.phase !== 'idle' || st.w !== 0 || st.settle > 0; if (!busy) wLoop = false; return busy; });
+}
+const inDrum = st => st.cl.some(g => g.mode === 'drum');
+const busyAnim = st => st.phase === 'load' || st.phase === 'unload' || st.phase === 'soap';
+function loadClothes(st){
+  if (running(st)) return ui.flash('The door is locked while it washes');
+  if (busyAnim(st)) return ui.flash('One moment');
+  if (inDrum(st)) return ui.flash(st.washed ? 'Unload the clean washing first' : 'The clothes are in. Add detergent, then Start');
+  st.phase = 'load'; st.t = 0; runLoop();
+}
+function addSoap(st){
+  if (running(st)) return ui.flash('Add detergent before you start');
+  if (busyAnim(st)) return ui.flash('One moment');
+  if (st.soap > .5) return ui.flash('Detergent is already in the drawer');
+  st.phase = 'soap'; st.t = 0; runLoop();
+}
+function startWash(st){
+  if (running(st)) return ui.flash('Already washing');
+  if (busyAnim(st)) return ui.flash('One moment');
+  if (!inDrum(st)) return ui.flash('Load the clothes first');
+  if (st.washed) return ui.flash('All clean. Unload the washing');
+  if (st.soap < .5) return ui.flash('Add detergent first');
+  st.phase = 'lock'; st.t = 0; runLoop();
+}
+function unload(st){
+  if (running(st)) return ui.flash('The door is locked while it washes');
+  if (busyAnim(st)) return ui.flash('One moment');
+  if (!inDrum(st)) return ui.flash('The drum is empty');
+  st.phase = 'unload'; st.t = 0; runLoop();
+}
+const rpmOf = st => st.phase === 'spin' && st.w > 3 ? Math.round(29 + (1200 - 29)*(st.w - 3)/29) : Math.round(Math.abs(st.w)*9.55);
+
+ui = mountFigure({
+  fig:'07', turn:'full', title:'Washing machine', hint:'',
+  size:[88, 84, 95], center:[W/2, D/2], palette:'mint',
+  state:{ phase:'idle', t:0, ang:0, w:0, dir:1, tum:0, door:0, pull:0, bot:0, pour:0, soap:0, water:0, heat:0, suds:0, dirt:1, washed:false,
+    lock:0, press:0, valve:0, pump:0, jy:0, jz:0, settle:0, cl: CLOTHES.map((c, i) => ({ i, mode:'basket', ft:0, p:null, rot:0 })) },
+  scene,
+  buttons:[
+    { label:'Load clothes', onClick: st => loadClothes(st) },
+    { label:'Add detergent', onClick: st => addSoap(st) },
+    { label:'Start', onClick: st => startWash(st) },
+    { label:'Unload', onClick: st => unload(st) },
+  ],
+  acts:{ door: st => inDrum(st) && st.washed ? unload(st) : loadClothes(st), basket: st => loadClothes(st), drawer: st => addSoap(st), start: st => startWash(st) },
+  params:(st, q) => {
+    const ph = q.get('phase');
+    if (q.get('load') === '1' || CYC[ph]) st.cl.forEach(g => { g.mode = 'drum'; g.p = drumRest(g.i); });
+    if (q.get('soap') === '1' || ph === 'lock' || ph === 'fill') st.soap = 1;
+    for (const key of ['door', 'pull', 'bot', 'water', 'dirt']) if (q.has(key)) st[key] = +q.get(key);
+    if (q.get('washed') === '1'){ st.washed = true; st.dirt = 0; }
+    if (CYC[ph]){ st.phase = ph; st.t = +(q.get('t') || 0); if (ph === 'wash' || ph === 'drain') st.water = .85; if (ph !== 'lock' && ph !== 'fill') st.dirt = ph === 'wash' ? 1 : 0; st.lock = 1; }
+  },
+});
+// the framing box above runs from y = 0; the scene's box starts at y = -24 (the basket), so shift the drawing to match
+OX -= 24*C; OY += 12;
+ui.render();
+if (ui.st.phase !== 'idle') runLoop();
+xrMount(() => ui, () => '');
+</script></body></html>
