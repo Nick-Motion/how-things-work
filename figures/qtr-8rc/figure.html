@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QTR-8RC line sensor</title></head><body>
+<script src="core.js"></script>
+<script>
+/* ============================================================
+   QTR-8RC reflectance sensor bar on a small line-following robot, on a white mat with a black tape loop.
+
+   HOW IT REALLY WORKS
+   1. Power: a 2S LiPo (7.4 V) feeds the slide switch; from the switch one lead goes to the Arduino Nano's VIN and one to
+      the DRV8833 motor driver's VM. The Nano's regulator makes 5 V; a red jumper carries it to the QTR's VCC, a black one
+      joins the grounds. The QTR's LEDON pin (D12) is driven high, so its MOSFET switches the IR emitters on: they sit in
+      four series pairs, each pair with its own current-limiting resistor (about 100 mA for all eight).
+   2. Each of the eight QRE1113 packages holds an IR LED and a phototransistor side by side, 3 mm above the floor,
+      9.525 mm apart (0.375"). The LED lights a spot on the floor; the phototransistor sees what bounces back.
+   3. RC timing (the "RC" in QTR-8RC): every read the Nano drives each sensor line HIGH for 10 us, which charges that
+      channel's 2.2 nF capacitor through its 220 ohm resistor, then turns the pin into an input and times how long the
+      line takes to fall to LOW. The phototransistor drains the capacitor: lots of reflected IR (white) drains it in about
+      100 us, little (black tape) takes so long that the 2500 us timeout ends the read.
+   4. readLine(): each decay time is scaled 0..1000 against the calibrated white/black times and the weighted average of
+      the sensor indexes (x1000) gives the line position 0..7000: 1000 under sensor 2, 3500 in the centre (between 4 and
+      5), 6000 under sensor 7. With no sensor on black it returns 0 or 7000, whichever side it last saw.
+   5. The P controller (uploaded over USB): error = position - 3500; left PWM = 100 + 0.09 x error, right PWM = 100 -
+      0.09 x error (0..255). D10 and D11 send them to AIN1/BIN1 of the DRV8833 (AIN2/BIN2 low), which drives the two N20
+      gear motors. The wheel on the line's side slows, the other speeds up, so the robot turns back onto the line.
+
+   PARTS (each held by another)
+   MAT      white foam board . black electrical tape circle (19 mm wide, 70 mm radius) . tape roll
+   CHASSIS  acrylic plate . two sensor arms screwed on top . four screws . two brass standoffs down to the QTR
+   SENSOR   QTR-8RC PCB with silkscreen . 8 QRE1113 (IR LED + phototransistor) . 8 x 2.2 nF timing capacitors . 8 x 220 ohm
+            resistors . 4 LED resistors . LEDON MOSFET . 3.3 V bypass pads . 11-pin header . 11 jumper housings + wires
+   BRAIN    170-point breadboard and its spring clips . Arduino Nano: PCB on two header strips, ATmega328P, mini USB port,
+            crystal, reset button, PWR/L/TX/RX LEDs
+   DRIVE    DRV8833 board on foam tape: chip, LED, 5-pin input header, two screw terminals . two N20 gear motors: can,
+            end cap, terminals, gearbox, D shaft . two motor clamps under the plate . two wheels (tyre + hub) . ball caster
+   POWER    2S LiPo pack (two pouch cells, strap, label) . slide switch . red/black power leads . motor leads under the plate
+   UPLOAD   USB cable from the mat's front edge to the Nano's port (plugged in only while uploading)
+   ============================================================ */
+
+/* ---------- geometry (x = depth toward the viewer, y = width, z = up; 1 unit = 1 mm) ---------- */
+const MX = 236, MY = 282, MH = 4;                                   // mat
+const MATT = boardTop(0, 0, MX, MY, MH, 6);
+const LC = [115, 166, 166], LR = 70, TW = 19;                       // tape loop: centres (x, y0, y1; equal = a circle), radius, tape width
+const qPITCH = 9.525, qSY = i => (4.5 - i)*qPITCH, qSX = 48.3;      // sensor i (1..8) across the bar, along the bar
+const QX0 = 38.65, QX1 = 51.35, QZ0 = MH + 3 + 1.7, QZ1 = QZ0 + 1.6; // QTR PCB (3 mm sensing gap under the QRE1113s)
+const PZ0 = 26, PZ1 = 29;                                           // chassis plate
+const BBX = [-1, 34], BBY = 23.5, BBZ = 37.5;                        // breadboard
+const bbRow = r => 16.5 + (r < 5 ? -1 : 1)*(3.81 + 2.54*(r < 5 ? 4 - r : r - 5));   // rows a..j (0..9) along x
+const bbCol = c => (8 - c)*2.54;                                     // columns 0..16 along y
+const nanoY = k => -17.78 + 2.54*k;                                  // Nano pin k (0 = next to the USB end)
+const NX0 = 6.23, NX1 = 24.23, NZ0 = 40, NZ1 = 41.6;                 // Nano PCB
+const hdrY = j => (5 - j)*2.54;                                      // QTR header pin j (0..10)
+const DRV = [-42, -26, 12, 34], DZ = 31.4;                           // DRV8833 board (x0 x1 y0 y1), top
+const drvPin = j => 15 + 2.54*j;                                     // its front pins: VM, GND, GND, AIN1, BIN1
+const WHR = 16, WHZ = MH + 16;                                       // wheels
+const START = { x: LC[0] + LR*Math.SQRT1_2 - qSX*Math.SQRT1_2, y: LC[1] - LR*Math.SQRT1_2 - qSX*Math.SQRT1_2, th: Math.PI/4 };   // facing the viewer, the bar square across the tape
+const SPOTS = { s2:{ label:'Sensor 2', dx: 23.8 }, center:{ label:'Center', dx:0 }, s7:{ label:'Sensor 7', dx:-23.8 } };
+const KP = .09, BASE = 100, VMAX = 200, TRACK = 92;                  // P gain, base PWM, mm/s at PWM 255, wheel track
+const VAR = [1, .96, 1.04, .98, 1.02, .97, 1.03, 1];                 // sensor-to-sensor spread
+
+const qM = { mat:{ l:'#f7f5ee', m:'#e3dfd3', d:'#bdb7a6' }, pcb: matOf('#2f8a52'), blk: matOf('#2a2826'), hdr: matOf('#2f2c29'),
+  brass: matOf('#d8b25a'), bb: matOf('#f3f1ea'), clip: matOf('#c9ced2'), nano: matOf('#2f62b0'), chip: matOf('#2b2a2d'),
+  steel: matOf('#c3c8cc'), drv: matOf('#7a4fb0'), term: matOf('#3fa36a'), tyre: matOf('#3a3734'), hub: matOf('#f1ede2'),
+  can: matOf('#cfd4d8'), gear: matOf('#d9b866'), cap: matOf('#c9a77a'), res: matOf('#2d2b29'), lipo: matOf('#9fb7c9'),
+  cell: matOf('#d3d9de'), sw: matOf('#34322f'), bar: matOf('#ff8a3d'), usb: matOf('#3b3936'), foam: matOf('#3d3b39') };
+const WIRE = ['#e2483d', '#f08a2b', '#f2c230', '#43c25c', '#3e86d9', '#8c4bd1', '#9a7a5a', '#f3efe4'];   // sensor 1..8
+const IRC = '#ff4fa3';                                               // drawn colour for the invisible infrared
+
+/* ---------- the robot's own frame: lx forward, ly to its left, z up (absolute); pose (x, y, heading, lift) ---------- */
+let RB = { x:0, y:0, th:0, z:0, c:1, s:0 };
+const setPose = p => { RB = { x:p.x, y:p.y, th:p.th, z:p.z || 0, c:Math.cos(p.th), s:Math.sin(p.th) }; };
+const qT = p => [RB.x + RB.c*p[0] - RB.s*p[1], RB.y + RB.s*p[0] + RB.c*p[1], p[2] + RB.z];
+const qTn = n => [RB.c*n[0] - RB.s*n[1], RB.s*n[0] + RB.c*n[1], n[2]];
+const qTi = p => { const dx = p[0] - RB.x, dy = p[1] - RB.y; return [RB.c*dx + RB.s*dy, -RB.s*dx + RB.c*dy, p[2] - RB.z]; };
+const qpd = (pts, close = true) => pd(pts.map(qT), close);
+const qBoxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+// a box in the robot's frame: its faces turn with the robot
+function qBox(x0, y0, z0, x1, y1, z1, m, shade = toneI, w = .7){
+  const F = [[[0,1,0], [[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]]], [[1,0,0], [[x1,y0,z0],[x1,y1,z0],[x1,y1,z1],[x1,y0,z1]]],
+    [[0,-1,0], [[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1]]], [[-1,0,0], [[x0,y0,z0],[x0,y1,z0],[x0,y1,z1],[x0,y0,z1]]], [[0,0,1], [[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]]]];
+  return F.filter(([n]) => vis(qTn(n))).map(([n, q]) => shape(q.map(qT), shade(qTn(n), m), w)).join('');
+}
+// a slab with a rounded outline (lx, ly) between two heights
+function qSlab(uv, z0, z1, m, shade = tone, w = 1.4){
+  const A = uv.map(([u, v]) => qT([u, v, z0])), B = uv.map(([u, v]) => qT([u, v, z1]));
+  return loft(A, B, n => shade(n, m)) + fill(pd(B), shade([0,0,1], m)) + ink(pd(B), w*.7) + hullInk([...A, ...B], w);
+}
+// a part swept along ly with a convex (lx, z) profile: motor cans, gearboxes
+function qSweepY(uv, y0, y1, m, w = .8){
+  const A = uv.map(([u, v]) => qT([u, y0, v])), B = uv.map(([u, v]) => qT([u, y1, v]));
+  const nB = qTn([0, Math.sign(y1 - y0), 0]), cap = vis(nB) ? B : vis(nB.map(v => -v)) ? A : null, cn = cap === B ? nB : nB.map(v => -v);
+  return loft(A, B, n => toneI(n, m)) + (cap ? fill(pd(cap), toneI(cn, m)) + ink(pd(cap), w*.8) : '') + hullInk([...A, ...B], w);
+}
+// a ring on a plane through c spanned by local axes a, b (unit vectors in the robot frame)
+const qRing = (c, a, b, r, n = 18, a0 = 0) => Array.from({length:n}, (_, i) => { const t = a0 + i/n*2*Math.PI, u = Math.cos(t)*r, v = Math.sin(t)*r;
+  return [c[0] + a[0]*u + b[0]*v, c[1] + a[1]*u + b[1]*v, c[2] + a[2]*u + b[2]*v]; });
+const qCyl = (x, y, z0, z1, r, m, w = .7, n = 16) => { const p = qT([x, y, 0]); return cyl(p[0], p[1], z0 + RB.z, z1 + RB.z, r, m, toneI, w, n); };
+// text lying on a top face of the robot, reading toward the robot's right
+const qTxt = (x, y, z, str, size, col = INK, wt = 700) => { const o = P(...qT([x, y, z]));
+  return `<text transform="${txM(o, Dv(...qTn([0,-1,0])), Dv(...qTn([-1,0,0])))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${wt}">${str}</text>`; };
+// sort parts given in the robot's frame (boxes in robot coordinates) with the camera turned into that frame
+function qSort(items){
+  const V = [RB.c*CAM_V[0] + RB.s*CAM_V[1], -RB.s*CAM_V[0] + RB.c*CAM_V[1], CAM_V[2]];
+  const sep = (p, q) => { for (let k = 0; k < 3; k++){ if (p.b[1][k] <= q.b[0][k] + 1e-6) return V[k] >= 0 ? -1 : 1; if (q.b[1][k] <= p.b[0][k] + 1e-6) return V[k] >= 0 ? 1 : -1; } return 0; };
+  const dep = p => dot(boxMid(p.b), V);
+  return items.filter(Boolean).sort((p, q) => sep(p, q) || dep(p) - dep(q));
+}
+// wires: rounded corners, cut into short pieces so they sort with the solids
+const qBend = (pts, r = 1.6) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i-1], pts[i], pts[i+1]];
+    const la = Math.hypot(...sub(a, b)), lc = Math.hypot(...sub(c, b)), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k])*d/la), q = c.map((v, k) => b[k] + (v - b[k])*d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; };
+function qWire(pts, col, kind, r = .5, L = 5){
+  const q = qBend(pts), out = [], cap = 'fill="none" stroke-linecap="round" stroke-linejoin="round"';
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = Math.hypot(...sub(q[j], q[i])); while (j < q.length - 1 && len < L){ j++; len += Math.hypot(...sub(q[j], q[j-1])); }
+    const seg = q.slice(i, j + 1), d = qpd(seg, false);
+    out.push({ b: qBoxOf(seg, r), kind, svg: `<path d="${d}" ${cap} stroke="${INK}" style="stroke-width:${f(2*r + 1.3*INK_K)}"/><path d="${d}" ${cap} stroke="${col}" style="stroke-width:${f(2*r)}"/>` });
+    i = j; }
+  return out; }
+
+/* ---------- the sensor physics: what each QRE1113 sees, the RC decay time, and readLine() ---------- */
+const segD = (x, y) => Math.hypot(x - LC[0], y - Math.max(LC[1], Math.min(LC[2], y)));
+function qtrRead(p){
+  const c = Math.cos(p.th), s = Math.sin(p.th), t = [], cov = [];
+  for (let i = 1; i <= 8; i++){ const lx = qSX, ly = qSY(i), x = p.x + c*lx - s*ly, y = p.y + s*lx + c*ly;
+    const k = Math.max(0, Math.min(1, (TW/2 + 3 - Math.abs(segD(x, y) - LR)) / 6));   // share of the 6 mm IR spot on the tape
+    cov.push(k); t.push(Math.min(2500, Math.round((100 + 2400*k)*VAR[i - 1]))); }
+  return { t, cov };
+}
+function readLine(t, last){
+  const v = t.map(x => Math.max(0, Math.min(1000, (x - 100)/2400*1000)));
+  let a = 0, b = 0; v.forEach((x, i) => { a += x*1000*i; b += x; });
+  return Math.max(...v) < 200 ? (last < 3500 ? 0 : 7000) : Math.round(a / b);
+}
+const pwmOf = err => [Math.max(0, Math.min(255, Math.round(BASE + KP*err))), Math.max(0, Math.min(255, Math.round(BASE - KP*err)))];
+function followStep(st, dt){
+  const r = qtrRead(st.rb), pos = readLine(r.t, st.last); st.last = pos;
+  const [pl, pr] = pwmOf(pos - 3500), vl = pl/255*VMAX, vr = pr/255*VMAX, v = (vl + vr)/2, w = (vr - vl)/TRACK;
+  st.pwm = [pl, pr]; st.rb.x += v*Math.cos(st.rb.th)*dt; st.rb.y += v*Math.sin(st.rb.th)*dt; st.rb.th += w*dt;
+  st.wl += vl/WHR*dt; st.wr += vr/WHR*dt;
+}
+const placed = key => ({ x: START.x + SPOTS[key].dx*Math.sin(START.th), y: START.y - SPOTS[key].dx*Math.cos(START.th), th: START.th, z: 0 });
+
+/* ---------- the mat: foam board, the black tape loop, the tape roll ---------- */
+const stad = r => [...Array.from({length:25}, (_, i) => { const a = i/24*Math.PI; return [LC[0] + r*Math.cos(a), LC[2] + r*Math.sin(a), MH + .05]; }),
+  ...Array.from({length:25}, (_, i) => { const a = Math.PI + i/24*Math.PI; return [LC[0] + r*Math.cos(a), LC[1] + r*Math.sin(a), MH + .05]; })];
+function matSvg(){
+  const out = stad(LR + TW/2), inn = stad(LR - TW/2);
+  return board(0, 0, MX, MY, MH, 6, qM.mat) + `<path d="${pd(out)}${pd(inn)}" fill="#24211f" fill-rule="evenodd"/>` + ink(pd(out), .8) + ink(pd(inn), .8)
+    + ink(pd([[LC[0] + LR - TW/2, LC[1] - 1, MH + .06], [LC[0] + LR + TW/2, LC[1] + 1, MH + .06]], false), .5);   // the tape's overlap seam
+}
+const ROLL = [213, 22], ROLLB = [[ROLL[0] - 19, ROLL[1] - 19, MH], [ROLL[0] + 19, ROLL[1] + 19, MH + 19]];
+function rollSvg(){
+  const [x, y] = ROLL, z0 = MH, z1 = MH + 19, top = r => on(PZ(z1), ellUV(x, y, r, r, 28));
+  let s = loft(on(PZ(z0), ellUV(x, y, 18, 18, 28)), top(18), n => toneI(n, qM.tyre));
+  s += fill(pd(top(18)), qM.tyre.l) + ink(pd(top(18)), .9);
+  for (const r of [15.5, 17]) s += ink(pd(top(r)), .35);                                   // the tape's turns
+  s += fill(pd(top(14.5)), '#c99a62') + ink(pd(top(14.5)), .7) + fill(pd(top(12.5)), '#7a5a35') + ink(pd(top(12.5)), .7);
+  return s + hullInk([...on(PZ(z0), ellUV(x, y, 18, 18, 28)), ...top(18)], 1.6);
+}
+
+/* ---------- the robot, part by part (items: b = box in the robot frame, kind: 'case' fades in see-through,
+   'in' = inside part drawn again over the ghost, 'xr' = only in see-through) ---------- */
+function robotItems(st, m, k){
+  const it = [], put = (b, svg, kind) => it.push({ b, svg, kind }), bx = (x0, y0, z0, x1, y1, z1, mm, kind, w = .7, extra = '') =>
+    put([[x0, y0, z0], [x1, y1, z1]], qBox(x0, y0, z0, x1, y1, z1, mm, toneI, w) + extra, kind);
+  const wires = (pts, col, kind, r) => it.push(...qWire(pts, col, kind, r));
+  const pwr = st.pwr, rd = qtrRead(st.rb);
+
+  // ---- chassis plate and the two sensor arms screwed on top of it
+  const PLATE = rrUV(-46, -38, 36, 38, 8);
+  let plate = qSlab(PLATE, PZ0, PZ1, m, tone, 1.8);
+  for (const [x, y] of [[-12, -12], [-12, 12], [-44, 15.5], [-44, 18], [-44, 27.5], [-44, 30]]) plate += fill(qpd(qRing([x, y, PZ1 + .02], [1,0,0], [0,1,0], .9, 10)), m.d);   // wire holes
+  put([[-46, -38, PZ0], [36, 38, PZ1]], plate, 'case');
+  for (const sg of [1, -1]){ const y0 = sg > 0 ? 31 : -37.4, y1 = y0 + 6.4;
+    put([[24, y0, PZ1], [44, y1, PZ1 + 3]], qBox(24, y0, PZ1, 44, y1, PZ1 + 3, m, tone, 1) + qCyl(27, sg*34.2, PZ1 + 3, PZ1 + 3.8, 1.5, qM.steel, .5, 10)
+      + qCyl(41.6, sg*34.2, PZ1 + 3, PZ1 + 3.8, 1.5, qM.steel, .5, 10), 'case');
+    put([[39.8, sg*34.2 - 1.8, QZ1], [43.4, sg*34.2 + 1.8, PZ1]], qCyl(41.6, sg*34.2, QZ1, PZ1, 1.7, qM.brass, .7, 6), ''); }   // brass standoffs
+
+  // ---- QTR-8RC: the PCB (top: silkscreen, header), its bottom parts (sensors, RC parts), jumper housings and wires
+  let pcb = qBox(QX0, -37.5, QZ0, QX1, 37.5, QZ1, qM.pcb, toneI, .9), silk = '';
+  for (let i = 1; i <= 8; i++){ const y = qSY(i); silk += qpd([[46.5, y - 1.45, QZ1 + .02], [50.1, y - 1.45, QZ1 + .02], [50.1, y + 1.45, QZ1 + .02], [46.5, y + 1.45, QZ1 + .02]]);
+    pcb += qTxt(44.4, y, QZ1 + .03, String(i), 2.6, '#f4f4ec', 800); }
+  pcb += `<path d="${silk}" fill="none" stroke="#f4f4ec" style="stroke-width:${f(.35*INK_K)}"/>`;
+  pcb += qTxt(40.4, 24, QZ1 + .03, 'QTR-8RC', 2.2, '#f4f4ec', 800) + qTxt(40.2, -27.5, QZ1 + .03, '3V3', 1.9, '#f4f4ec', 700);
+  for (const y of [-20.4, -22.6]) pcb += fill(qpd([[39.6, y - .8, QZ1 + .03], [41.2, y - .8, QZ1 + .03], [41.2, y + .8, QZ1 + .03], [39.6, y + .8, QZ1 + .03]]), '#e2b84c');
+  for (let i = 1; i < 8; i++){ const y = (qSY(i) + qSY(i + 1))/2; pcb += ink(qpd([[46, y, QZ1 + .02], [50.6, y, QZ1 + .02]], false), .3); }   // traces
+  put([[QX0, -37.5, QZ0], [QX1, 37.5, QZ1]], pcb, 'case');
+  bx(39.9, -13.97, QZ1, 42.5, 13.97, QZ1 + 2.5, qM.hdr, '', .6);                                   // header strip
+  for (let i = 1; i <= 8; i++){ const y = qSY(i);
+    // QRE1113: IR LED (front window) and phototransistor (back window) in one package, facing the floor
+    const lens = fill(qpd(qRing([49.2, y, QZ0 + .02], [1,0,0], [0,1,0], .75, 10)), pwr ? IRC : '#a9c3cf') + fill(qpd(qRing([47.4, y, QZ0 + .02], [1,0,0], [0,1,0], .75, 10)), '#2c3640');
+    bx(46.5, y - 1.45, QZ0 - 1.7, 50.1, y + 1.45, QZ0 - .01, qM.blk, 'in', .6, k > 0 ? lens : '');
+    bx(42.2, y - .4, QZ0 - .8, 43.8, y + .4, QZ0 - .01, qM.cap, 'in', .4);                       // 2.2 nF timing capacitor
+    bx(44.2, y - .4, QZ0 - .6, 45.8, y + .4, QZ0 - .01, qM.res, 'in', .4,                         // 220 ohm resistor
+      fill(qpd([[44.6, y - .41, QZ0 - .3], [45.4, y - .41, QZ0 - .3], [45.4, y + .41, QZ0 - .3], [44.6, y + .41, QZ0 - .3]]), '#e8e2d2'));
+  }
+  for (const j of [1, 3, 5, 7]){ const y = (qSY(j) + qSY(j + 1))/2; bx(39.6, y - .4, QZ0 - .6, 41.2, y + .4, QZ0 - .01, qM.res, 'in', .4); }   // LED resistors
+  bx(39.3, -1.45, QZ0 - 1, 41.1, 1.45, QZ0 - .01, qM.chip, 'in', .5);                            // LEDON MOSFET (SOT-23)
+  const hdrN = j => j === 0 ? '#2a2826' : j === 1 ? '#e2483d' : j === 10 ? '#f3efe4' : WIRE[j - 2];
+  for (let j = 0; j <= 10; j++){ const y = hdrY(j);
+    bx(40, y - 1.2, QZ1 + 2.5, 42.4, y + 1.2, 26.8, qM.blk, '', .5);                              // female jumper housings on the pins
+    // where each wire ends on the breadboard: row j (sensors, LEDON, GND) beside the Nano's digital row, or row a (VCC -> 5V)
+    const ty = j === 0 ? nanoY(11) : j === 1 ? nanoY(11) : j === 10 ? nanoY(0) : nanoY(12 - j), tx = j === 1 ? bbRow(0) : bbRow(9);
+    const path = j === 1 ? [[41.2, y, 26.8], [41.2, y, 34], [37, y, 48], [6, ty, 48], [tx, ty, 41.5]]
+      : [[41.2, y, 26.8], [41.2, y, 33], [38, y, 41.5 + .4*j], [33, ty, 41.5 + .4*j], [tx, ty, 41.5]];
+    wires(path, hdrN(j), '', .5);
+    bx(tx - 1, ty - 1, BBZ, tx + 1, ty + 1, 41.5, qM.blk, '', .45); }                            // male ends in the breadboard
+
+  // ---- breadboard (spring clips inside), Arduino Nano on its two header strips
+  let bb = qBox(BBX[0], -BBY, PZ1, BBX[1], BBY, BBZ, qM.bb, toneI, 1), holes = '';
+  for (let r = 0; r < 10; r++) for (let c = 0; c < 17; c++){ const x = bbRow(r), y = bbCol(c); holes += qpd([[x - .45, y - .45, BBZ + .02], [x + .45, y - .45, BBZ + .02], [x + .45, y + .45, BBZ + .02], [x - .45, y + .45, BBZ + .02]]); }
+  bb += `<path d="${holes}" fill="#5d574d"/>` + fill(qpd([[15.3, -BBY + 1, BBZ + .02], [17.7, -BBY + 1, BBZ + .02], [17.7, BBY - 1, BBZ + .02], [15.3, BBY - 1, BBZ + .02]]), qM.bb.d);
+  put([[BBX[0], -BBY, PZ1], [BBX[1], BBY, BBZ]], bb, 'case');
+  if (k > 0) for (const [ra, rb] of [[0, 4], [5, 9]]) for (let c = 0; c < 17; c++){ const y = bbCol(c); bx(bbRow(ra) - .9, y - .45, PZ1 + 1.5, bbRow(rb) + .9, y + .45, BBZ - 1.2, qM.clip, 'xr', .35); }
+  for (const x of [7.61, 22.85]) bx(x - 1.25, -19.05, BBZ, x + 1.25, 19.05, NZ0, qM.hdr, '', .6);
+  let nano = qBox(NX0, -21.6, NZ0, NX1, 21.6, NZ1, qM.nano, toneI, .9), pads = '';
+  for (const x of [7.61, 22.85]) for (let kk = 0; kk < 15; kk++) pads += qpd(qRing([x, nanoY(kk), NZ1 + .02], [1,0,0], [0,1,0], .7, 8));
+  nano += `<path d="${pads}" fill="#e2b84c"/>` + qTxt(22.2, 9, NZ1 + .03, 'NANO', 2, '#f4f4ec', 800);
+  put([[NX0, -21.6, NZ0], [NX1, 21.6, NZ1]], nano, '');
+  bx(11.7, -3.5, NZ1, 18.7, 3.5, NZ1 + 1, qM.chip, '', .6, qTxt(15.2, 0, NZ1 + 1.02, 'MEGA328P', 1.1, '#9a968e', 700));   // ATmega328P
+  bx(18.6, 6, NZ1, 21.6, 11, NZ1 + 1.2, qM.steel, '', .5);                                       // 16 MHz crystal
+  bx(13.2, 7.5, NZ1, 16.8, 11, NZ1 + 1.2, qM.hub, '', .5, fill(qpd(qRing([15, 9.25, NZ1 + 1.6], [1,0,0], [0,1,0], 1, 10)), '#d94f86'));   // reset button
+  const up = st.up != null && st.up < 1, blink = up && Math.floor(performance.now()/90) % 2;
+  const LEDS = [['PWR', pwr || st.usb > .5 ? '#43c25c' : '#cfd6cc'], ['L', st.code === 'p' && pwr ? '#f2a33a' : '#e8d9c0'], ['TX', blink ? '#f2c230' : '#e8e0c0'], ['RX', up && !blink ? '#f2c230' : '#e8e0c0']];
+  LEDS.forEach(([n, c], i) => { const y = -13.5 + 2.4*i; bx(9, y - .5, NZ1, 10.6, y + .5, NZ1 + .6, matOf(c), '', .35); });
+  const port = qBox(11.5, -23.4, NZ1, 19.5, -16.4, NZ1 + 4, qM.steel, toneI, .7) + (vis(qTn([0,-1,0])) ? fill(qpd([[12.6, -23.45, NZ1 + .8], [18.4, -23.45, NZ1 + .8], [18.4, -23.45, NZ1 + 3.2], [12.6, -23.45, NZ1 + 3.2]]), '#2a2826') : '');
+  put([[11.5, -23.4, NZ1], [19.5, -16.4, NZ1 + 4]], port, '');
+
+  // ---- LiPo pack (two pouch cells inside, held by a strap), slide switch, DRV8833 board
+  put([[-44.6, -36.6, PZ1], [-19.4, 6, 40.6]], qBox(-44, -36, PZ1, -20, 6, 40, qM.lipo, toneI, 1)
+    + fill(qpd([[-40, -31, 40.02], [-24, -31, 40.02], [-24, -19, 40.02], [-40, -19, 40.02]]), '#f3efe4') + qTxt(-28, -25, 40.04, '7.4V', 2.6, INK, 800) + qTxt(-33.5, -25, 40.04, '2S 500', 2.2, INK, 700)
+    + qBox(-44.6, -13, PZ1, -19.4, -9, 40.6, qM.foam, toneI, .7), 'case');
+  for (const [z0, z1] of [[PZ1 + .5, 34.6], [34.6, 39.5]]) bx(-43.4, -35.4, z0, -20.6, 3.6, z1, qM.cell, 'in', .5);
+  bx(-43, 3.8, PZ1 + 1, -21, 5.6, 38, qM.pcb, 'in', .4);                                          // protection board
+  const lev = st.pwr ? 2 : 0;
+  bx(-14, 26, PZ1, -6, 34, 33, qM.sw, '', .8, qTxt(-15.5, 30, PZ1 + .02, 'ON', 1.8, INK, 800));
+  bx(-11.2, 27.4 + lev, 33, -8.8, 30.6 + lev, 35.6, qM.hub, '', .6);
+  bx(DRV[0], DRV[2], PZ1, DRV[1], DRV[3], 30.3, qM.foam, '', .5);
+  bx(DRV[0], DRV[2], 30.3, DRV[1], DRV[3], DZ, qM.drv, '', .9, qTxt(-31, 30.5, DZ + .02, 'DRV8833', 1.8, '#f4f4ec', 800));
+  bx(-36.5, 20, DZ, -31.5, 26, DZ + .9, qM.chip, '', .5);
+  bx(-30, 13.5, DZ, -28.6, 14.5, DZ + .6, matOf(pwr ? '#e2483d' : '#d9c2bc'), '', .35);
+  for (const [y0, y1] of [[13.5, 20.5], [25.5, 32.5]]) bx(DRV[0], y0, DZ, DRV[0] + 5, y1, DZ + 6, qM.term, '', .7,
+    [y0 + 1.75, y1 - 1.75].map(y => fill(qpd(qRing([DRV[0] + 2.5, y, DZ + 6.02], [1,0,0], [0,1,0], 1.3, 10)), qM.steel.m) + ink(qpd([[DRV[0] + 1.6, y, DZ + 6.04], [DRV[0] + 3.4, y, DZ + 6.04]], false), .5)).join(''));
+  for (let j = 0; j < 5; j++) bx(-28.5, drvPin(j) - 1.1, DZ, -26.1, drvPin(j) + 1.1, 39, qM.blk, '', .45);   // housings on its input pins
+  // power and control wiring on the plate
+  wires([[-37, 6, 34], [-37, 8.5, 30], [-16, 8.5, 30], [-12, 18, 30], [-12, 25.9, 31]], '#e2483d', '', .55);   // battery + to the switch
+  wires([[-14.1, 31, 31], [-22, 31, 30], [-24, 15, 30], [-24, 15, 36], [-27.3, 15, 39]], '#e2483d', '', .5);    // switch -> VM
+  wires([[-5.9, 31, 31], [-3, 27, 40], [bbRow(0), nanoY(14), 41.5]], '#e2483d', '', .5);                       // switch -> VIN
+  wires([[-33, 6, 34], [-33, 10, 30], [-24.5, 10.5, 30], [-24.5, 17.54, 32], [-27.3, 17.54, 39]], '#2a2826', '', .55);   // battery - -> GND
+  wires([[bbRow(0), nanoY(13), 41.5], [-3, nanoY(13), 43], [-24, 20.08, 41], [-27.3, 20.08, 39]], '#2a2826', '', .5);    // Nano GND -> GND
+  wires([[bbRow(8), nanoY(2), 41.5], [27, nanoY(2), 47.5], [2, nanoY(2), 48], [-8, 6, 46], [-22, 22.62, 42], [-27.3, 22.62, 39]], '#3fb0a0', '', .5);   // D10 -> AIN1
+  wires([[bbRow(8), nanoY(1), 41.5], [27, nanoY(1), 47], [2, nanoY(1), 47], [-9, 8, 45], [-22, 25.16, 41.5], [-27.3, 25.16, 39]], '#d94f86', '', .5); // D11 -> BIN1
+  for (const x of [bbRow(0), bbRow(8)]) for (const y of [nanoY(14), nanoY(13), nanoY(2), nanoY(1)]) if ((x === bbRow(0)) === (y > 0)) bx(x - 1, y - 1, BBZ, x + 1, y + 1, 41.5, qM.blk, '', .45);
+
+  // ---- under the plate: two N20 gear motors in clamps, wheels, ball caster, motor leads
+  const CAN = Array.from({length:24}, (_, i) => { const a = i/24*2*Math.PI; return [6*Math.cos(a), WHZ + Math.max(-5, Math.min(5, 6*Math.sin(a)))]; });
+  for (const sg of [1, -1]){
+    const yy = (a, b) => sg > 0 ? [a, b] : [-b, -a];
+    const [c0, c1] = yy(16, 31), [g0, g1] = yy(31, 40), [e0, e1] = yy(14.5, 16);
+    const [k0, k1] = yy(20, 26);
+    put([[-7, c0, WHZ - 6], [7, c1, PZ0]], qSweepY(CAN, c0, c1, qM.can, .8) + qBox(-7, k0, WHZ - 6, 7, k1, PZ0, qM.blk, toneI, .7), 'in');
+    put([[-6, g0, WHZ - 5], [6, g1, WHZ + 5]], qBox(-6, g0, WHZ - 5, 6, g1, WHZ + 5, qM.gear, toneI, .7)
+      + [g0 + 2, g1 - 2].map(y => ink(qpd([[-6.02, y, WHZ - 5], [-6.02, y, WHZ + 5]], false), .4) + ink(qpd([[6.02, y, WHZ - 5], [6.02, y, WHZ + 5]], false), .4)).join(''), 'in');
+    put([[-5, e0, WHZ - 4.5], [5, e1, WHZ + 4.5]], qBox(-5, e0, WHZ - 4.5, 5, e1, WHZ + 4.5, qM.blk, toneI, .6), 'in');
+    for (const [x, col] of [[2.6, '#e2483d'], [-2.6, '#2a2826']]){
+      const yt = sg > 0 ? (x > 0 ? 27.5 : 30) : (x > 0 ? 15.5 : 18), ye = sg*14.3;
+      wires([[x, ye, WHZ + 2], [x, ye - sg*1.5, PZ0 - 2], [-12, sg*12 + (x > 0 ? 1 : -1), PZ0 - 1.5], [-40, yt, PZ0 - 1.5], [-44, yt, PZ0 - 1], [-44, yt, PZ1 + 2.5], [-42.6, yt, DZ + 2.4]], col, 'in', .45); }
+    // wheel: tyre on the D shaft, white hub with five holes on the outside, turning with the wheel
+    const yi = sg*42.5, yo = sg*49.5, ang = sg > 0 ? st.wl : st.wr, out = vis(qTn([0, sg, 0]));
+    const A = qRing([0, yi, WHZ], [1,0,0], [0,0,1], WHR, 28), B = qRing([0, yo, WHZ], [1,0,0], [0,0,1], WHR, 28), fy = out ? yo : yi, fs = out ? sg : -sg;
+    let wh = loft(A.map(qT), B.map(qT), n => toneI(n, qM.tyre));
+    const face = qRing([0, fy + fs*.02, WHZ], [1,0,0], [0,0,1], WHR, 28);
+    wh += fill(qpd(face), toneI(qTn([0, fs, 0]), qM.tyre)) + ink(qpd(face), .8);
+    const hub = qRing([0, fy + fs*.3, WHZ], [1,0,0], [0,0,1], 10.5, 24);
+    wh += fill(qpd(hub), out ? qM.hub.l : qM.hub.m) + ink(qpd(hub), .8);
+    if (out) for (let h = 0; h < 5; h++){ const a = sg*ang + h*2*Math.PI/5;
+      wh += fill(qpd(qRing([6*Math.cos(a), fy + fs*.35, WHZ + 6*Math.sin(a)], [1,0,0], [0,0,1], 1.7, 10)), qM.hub.d); }
+    wh += fill(qpd(qRing([0, fy + fs*.4, WHZ], [1,0,0], [0,0,1], 2.6, 12)), qM.hub.d) + ink(qpd(qRing([0, fy + fs*.4, WHZ], [1,0,0], [0,0,1], 2.6, 12)), .5);
+    wh += hullInk([...A, ...B].map(qT), 1.6);
+    put([[-WHR, Math.min(yi, yo), MH], [WHR, Math.max(yi, yo), WHZ + WHR]], wh, '');
+    put([[-1.5, Math.min(g1, sg*42.5), WHZ - 1.5], [1.5, Math.max(g1, sg*42.5), WHZ + 1.5]], rod(qT([0, sg > 0 ? g1 : g0, WHZ]), qT([0, sg*42.5, WHZ]), 1.5, qM.steel, toneI, .5), 'in');
+  }
+  put([[20, -6.5, MH + 9], [32, 6.5, PZ0]], qCyl(26, 0, MH + 9, PZ0, 6.5, qM.blk, .8, 18), 'in');                                  // caster housing
+  { const c = qT([26, 0, MH + 5]), [X, Y] = P(...c), r = 5*1.2247;
+    put([[21, -5, MH], [31, 5, MH + 10]], `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r)}" fill="${qM.steel.m}"/><circle cx="${f(X + r*.2)}" cy="${f(Y - r*.25)}" r="${f(r*.55)}" fill="${qM.steel.l}"/><circle cx="${f(X)}" cy="${f(Y)}" r="${f(r)}" fill="none" stroke="${INK}" stroke-width=".8"/>`, 'in'); }
+
+  // ---- see-through overlays: IR beams to the floor and back, and each channel's decay time as a bar
+  if (k > 0 && pwr) for (let i = 1; i <= 8; i++){ const y = qSY(i), refl = 1 - rd.cov[i - 1], spot = qRing([48.3, y, MH + .1], [1,0,0], [0,1,0], 3, 16);
+    put([[45, y - 3, MH], [51.5, y + 3, QZ0 - 1.7]], fill(qpd(spot), IRC, `opacity="${f(.15 + .45*refl)}"`)
+      + `<path d="${qpd([[49.2, y, QZ0 - 1.7], [48.6, y, MH + .1]], false)}" stroke="${IRC}" style="stroke-width:${f(1.1*INK_K)}" opacity=".85"/>`
+      + `<path d="${qpd([[48, y, MH + .1], [47.4, y, QZ0 - 1.7]], false)}" stroke="${IRC}" style="stroke-width:${f((.25 + .9*refl)*INK_K)}" opacity="${f(.25 + .6*refl)}" stroke-dasharray="${f(1.2*INK_K)} ${f(.8*INK_K)}"/>`, 'xr');
+    const h = 2 + 24*rd.t[i - 1]/2500;
+    bx(47.3, y - 1.25, QZ1, 49.3, y + 1.25, QZ1 + h, qM.bar, 'xr', .6); }
+
+  // ---- USB cable, plugged in only while uploading: from the mat's front edge up to the Nano's port
+  if (st.usb > 0){ const lo = qT([34, -52, MH + 1.6]), edge = qTi([MX - 2, lo[1] + 8, MH + 1.6]), down = qTi([MX + 2, lo[1] + 9, 1.6]);
+    const plug = qBox(12.2, -33.4 - 6*(1 - st.usb), NZ1 + .3, 18.8, -23.4 - 6*(1 - st.usb), NZ1 + 3.7, qM.usb, toneI, .8);
+    it.push(...qWire([[15.5, -33.4 - 6*(1 - st.usb), NZ1 + 2], [15.5, -40, NZ1 + 2], [26, -50, 28], [34, -52, MH + 1.6], [edge[0], edge[1], MH + 1.6], [down[0], down[1], 1.6]], '#3b3936', 'usb', 1.3, 8));
+    put([[12.2, -33.4 - 6*(1 - st.usb), NZ1 + .3], [18.8, -23.4 - 6*(1 - st.usb), NZ1 + 3.7]], plug, 'usb'); }
+  return it;
+}
+// draw the robot: closed, or in see-through (case parts as a ghost, the inside parts and overlays again over it)
+function robotSvg(st, m, k){
+  const items = qSort(robotItems(st, m, k)), usbO = st.usb;
+  const g = (o, svg) => o >= .999 ? svg : o <= .001 ? '' : `<g opacity="${f(o)}">${svg}</g>`;
+  const op = p => p.kind === 'case' ? 1 - .8*k : p.kind === 'in' ? 1 - k : p.kind === 'usb' ? usbO : 1;
+  const s = items.filter(p => p.kind !== 'xr').map(p => g(op(p), p.svg)).join('');
+  return k <= 0 ? s : s + items.filter(p => p.kind !== 'case').map(p => g(k*(p.kind === 'usb' ? usbO : 1), p.svg)).join('');
+}
+function robotBox(){
+  const pts = []; for (const x of [-46, 52]) for (const y of [-50, 50]) for (const z of [MH, 48]) pts.push(qT([x, y, z]));
+  return qBoxOf(pts, 0);
+}
+function robotShadowPts(){
+  const pts = [];
+  for (const [x, y] of [[-46, -38], [-46, 38], [36, -38], [36, 38], [51.35, -37.5], [51.35, 37.5]]) pts.push(qT([x, y, PZ1]));
+  for (const sg of [1, -1]) for (const a of [0, 1, 2, 3, 4, 5, 6, 7]) pts.push(qT([WHR*Math.cos(a*Math.PI/4), sg*49.5, WHZ + WHR*Math.sin(a*Math.PI/4)]));
+  pts.push(qT([-44, -36, 40]), qT([-20, 6, 40]), qT([20, 0, 46]));
+  return pts;
+}
+
+/* ---------- labels ---------- */
+function labelItems(st){
+  const rd = qtrRead(st.rb), pwr = st.pwr, run = pwr && st.code === 'p' && !st.move, up = st.up != null && st.up < 1, P3 = p => qT(p);
+  const imax = rd.cov.indexOf(Math.max(...rd.cov)) + 1;
+  const out = [];
+  for (let i = 1; i <= 8; i++) out.push({ at: P3([qSX, qSY(i), QZ0 - 1.7]), text: `IR PAIR ${i}`, on: pwr && rd.cov[i - 1] > .5 });
+  out.push({ at: P3([48.3, qSY(4), QZ1 + 2 + 24*rd.t[3]/2500]), text: 'DECAY TIMES', on: pwr },
+    { at: P3([43, qSY(2), QZ0 - .8]), text: 'TIMING CAPS', on: pwr },
+    { at: P3([45, qSY(7), QZ0 - .6]), text: 'RESISTORS', on: false },
+    { at: P3([40.2, 0, QZ0 - 1]), text: 'LEDON FET', on: pwr },
+    { at: P3([46, -20, QZ1]), text: 'QTR-8RC PCB', on: false },
+    { at: P3([41.2, -6.35, 20]), text: 'JUMPER WIRES', on: pwr },
+    { at: P3([34, -34.2, PZ1 + 3]), text: 'SENSOR ARM', on: false },
+    { at: P3([qSX, qSY(imax), MH]), text: 'BLACK LINE', on: false },
+    { at: P3([15.2, 0, NZ1 + 1]), text: 'ATMEGA328P', on: pwr || up },
+    { at: P3([8, 18, NZ1]), text: 'ARDUINO NANO', on: pwr || up },
+    { at: P3([15.5, -23.4, NZ1 + 2]), text: 'USB PORT', on: up },
+    { at: P3([30, 18, BBZ]), text: 'BREADBOARD', on: false },
+    { at: P3([-34, 23, DZ + .9]), text: 'DRV8833', on: run },
+    { at: P3([-39.5, 29, DZ + 6]), text: 'TERMINALS', on: run },
+    { at: P3([0, 23, WHZ + 6]), text: 'LEFT MOTOR', on: run },
+    { at: P3([0, -23, WHZ + 6]), text: 'RIGHT MOTOR', on: run },
+    { at: P3([0, -35.5, WHZ - 5]), text: 'GEARBOX', on: run },
+    { at: P3([0, 49.5, WHZ + 10]), text: 'LEFT WHEEL', on: run },
+    { at: P3([0, -49.5, WHZ + 10]), text: 'RIGHT WHEEL', on: run },
+    { at: P3([26, 0, MH + 5]), text: 'BALL CASTER', on: run },
+    { at: P3([-32, -30, 39]), text: 'LIPO CELLS', on: pwr },
+    { at: P3([-10, 30, 35.6]), text: 'POWER SWITCH', on: pwr },
+    { at: P3([-30, -38, PZ1]), text: 'CHASSIS', on: false });
+  if (st.usb > .5) out.push({ at: qT([26, -50, 28]), text: 'USB CABLE', on: up });
+  return out;
+}
+function surfaceLabels(st){
+  const P3 = p => qT(p), pwr = st.pwr;
+  return [{ at: P3([46, -20, QZ1]), text: 'QTR-8RC', on: pwr }, { at: P3([8, 18, NZ1]), text: 'ARDUINO NANO', on: pwr },
+    { at: P3([-32, -30, 40]), text: 'LIPO BATTERY', on: pwr }, { at: P3([-10, 30, 35.6]), text: 'POWER SWITCH', on: pwr },
+    { at: P3([-34, 23, DZ + .9]), text: 'DRV8833 DRIVER', on: false }, { at: P3([30, 18, BBZ]), text: 'BREADBOARD', on: false },
+    { at: P3([0, 49.5, WHZ + 10]), text: 'WHEEL', on: false }, { at: [LC[0] - LR, LC[1] + 10, MH], text: 'BLACK TAPE LINE', on: false }];
+}
+
+/* ---------- scene ---------- */
+// The box the label columns sit either side of. Core splits the labels at the box's centre, so the box is centred
+// (along the screen) on the median label anchor, and is just wide enough to hold the turned robot as drawn, with room
+// left for a column on each side.
+function labelBox(items){
+  const X = (x, y) => P(x, y, MH)[0], gx = X(1, 0) - X(0, 0), gy = X(0, 1) - X(0, 0), g2 = gx*gx + gy*gy;
+  const rx = []; for (const x of [-46, 52]) for (const y of [-50, 50]) rx.push(P(...qT([x, y, MH]))[0]);
+  const lo = Math.min(...rx), hi = Math.max(...rx), ax = items.map(it => P(...it.at)[0]).sort((a, b) => a - b);
+  const vb = document.getElementById('fig').viewBox.baseVal, fs = 8.6*INK_K;
+  const room = Math.max(...items.map(it => it.text.length))*fs*.62 + fs*1.5 + 14*INK_K;
+  let mid = ax[ax.length >> 1];
+  let half = Math.max(mid - lo, hi - mid);
+  if (mid - half < vb.x + room || mid + half > vb.x + vb.width - room){ mid = (lo + hi)/2; half = (hi - lo)/2; }   // no room: plain robot width
+  const c = qT([3, 0, MH]), t = (mid - X(c[0], c[1]))/g2, h = half/(Math.abs(gx) + Math.abs(gy));
+  return [c[0] + t*gx - h, c[0] + t*gx + h, c[1] + t*gy - h, c[1] + t*gy + h, MH, 48];
+}
+function scene(st, m){
+  setPose(st.rb);
+  const k = ease(st.xr || 0);
+  let s = matSvg();
+  s += castShadow(robotShadowPts(), MH, MATT) + castShadow([...on(PZ(MH), ellUV(ROLL[0], ROLL[1], 18, 18, 16)), ...on(PZ(MH + 19), ellUV(ROLL[0], ROLL[1], 18, 18, 16))], MH, MATT);
+  s += byDepth([{ box: robotBox(), svg: robotSvg(st, m, k) }, { box: ROLLB, svg: rollSvg() }]);
+  if (k > .6){ const items = labelItems(st); s += xrCallouts(items, labelBox(items)); }
+  else s += xrCallouts(surfaceLabels(st), [0, MX, 0, MY, 0, 48]);
+  return s;
+}
+
+/* ---------- behaviour: one state object, one clock ---------- */
+let ui, loopOn = false;
+const busy = st => !!st.move || (st.up != null && st.up < 1) || st.usbT !== st.usb || (st.code === 'p' && st.pwr);
+function runLoop(){
+  if (loopOn) return; loopOn = true;
+  ui.animate(dt => { const st = ui.st;
+    if (st.move){ const mv = st.move; mv.t = Math.min(1, mv.t + dt/.9); const e = ease(mv.t), a = mv.a, b = mv.b;
+      const dth = ((b.th - a.th + Math.PI*3) % (Math.PI*2)) - Math.PI;
+      st.rb = { x: a.x + (b.x - a.x)*e, y: a.y + (b.y - a.y)*e, th: a.th + dth*e, z: 14*Math.sin(Math.PI*mv.t) };
+      if (mv.t >= 1){ st.rb = { ...b, th: b.th }; st.move = null; st.last = 3500; } }
+    if (st.usb !== st.usbT){ st.usb = st.usbT > st.usb ? Math.min(st.usbT, st.usb + dt/.45) : Math.max(st.usbT, st.usb - dt/.45); }
+    if (st.up != null && st.up < 1 && st.usb >= 1){ st.up = Math.min(1, st.up + dt/2.2);
+      if (st.up >= 1){ st.code = 'p'; st.usbT = 0;
+        if (!st.pwr){ st.pwr = true; ui.flash('Uploaded. Unplugged and switched the battery on', 2200); } else ui.flash('Uploaded: the P controller is driving', 1800); } }
+    if (st.code === 'p' && st.pwr && !st.move && st.usb <= 0) for (let n = 0; n < 4; n++) followStep(st, dt/4);
+    else st.pwm = [0, 0];
+    st.tS = (st.tS || 0) + dt; if (st.tS > .12){ st.tS = 0; sample(st); }
+    const b = busy(st); if (!b){ loopOn = false; sample(st); } return b; });
+}
+function sample(st){ const r = qtrRead(st.rb); st.rd = r.t; st.pos = readLine(r.t, st.last); }
+function power(st){
+  if (st.up != null && st.up < 1) return ui.flash('Uploading: the Nano runs from USB for now');
+  st.pwr = !st.pwr; if (!st.pwr) st.pwm = [0, 0];
+  sample(st); runLoop();
+}
+function placeLine(st, key){
+  if (st.up != null && st.up < 1) return ui.flash('Wait for the upload to finish');
+  if (!st.pwr){ st.pwr = true; ui.flash('Switched on to read the sensors'); }
+  const cur = { ...st.rb, z: 0 }, b = placed(key); st.at = key;
+  st.move = { a: cur, b, t: 0 }; runLoop();
+}
+function upload(st){
+  if (st.up != null && st.up < 1) return ui.flash('Already uploading');
+  if (st.code === 'p') return ui.flash('The P controller is already running: use Line under to set it down again');
+  st.up = 0; st.usbT = 1; runLoop();
+}
+
+ui = mountFigure({
+  fig:'37', title:'QTR-8RC line sensor',
+  size:[MX, MY, 180], center:[MX/2, MY/2], palette:'tomato', turn:'full',
+  state:{ pwr:false, code:'read', at:'center', rb:{ ...placed('center') }, move:null, usb:0, usbT:0, up:null, last:3500, pwm:[0, 0], wl:0, wr:0, rd:null, pos:3500 },
+  scene,
+  buttons:[
+    { label:'Power on / off', onClick:(st) => power(st) },
+    { label:'Line under', choices: st => Object.entries(SPOTS).map(([key, sp]) => ({ label: sp.label, current: st.at === key && !st.move && !(st.code === 'p' && st.pwr),
+        onClick:(st) => placeLine(st, key) })) },
+    { label:'Upload P controller', onClick:(st) => upload(st) },
+  ],
+  stats: st => {
+    if (!st.pwr && !(st.usb > .5)) return [{ label:'Line position', value:'OFF' }];
+    const t = st.rd || qtrRead(st.rb).t, pos = st.rd ? st.pos : readLine(t, st.last), pad = v => String(v).padStart(4, ' ');
+    return [{ label:'Line position / error', value: `${pos}<span class="er"> ${pos - 3500}</span>` },
+      { label:'Decay time us, sensors 1-8', value: `<span class="dt">${t.map(pad).join(' ')}</span>`, small:true },
+      st.up != null && st.up < 1 ? { label:'Upload', value: Math.round(st.up*100) + '%', small:true }
+        : st.code === 'p' && st.pwr ? { label:'PWM left / right', value: `${st.pwm[0]} / ${st.pwm[1]}`, small:true } : null];
+  },
+  params:(st, q) => {
+    if (SPOTS[q.get('at')]){ st.at = q.get('at'); st.rb = placed(st.at); }
+    if (q.get('pwr') === '1') st.pwr = true;
+    if (q.has('up')){ st.up = +q.get('up'); st.usb = st.usbT = 1; }
+    if (q.get('code') === 'p') st.code = 'p';
+    if (q.has('follow')){ st.code = 'p'; st.pwr = true; const T = +q.get('follow'); for (let t = 0; t < T; t += .005) followStep(st, .005); }
+    sample(st);
+  },
+});
+document.head.insertAdjacentHTML('beforeend', '<style>.stat .v.bump{animation:none}.stat.small .v{font-size:17px}.stat .er{font-size:.42em}.stats{flex-wrap:wrap;pointer-events:none}.stat .v{white-space:nowrap}.stat .dt{font-size:12px;white-space:pre}@media (min-width:561px){.stats{flex-direction:row;flex-wrap:wrap;justify-content:flex-end;column-gap:22px;max-width:560px}.stat:first-child{flex-basis:100%}}</style>');
+xrMount(() => ui, () => '');
+</script></body></html>
