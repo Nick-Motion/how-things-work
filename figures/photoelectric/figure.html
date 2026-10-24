@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The photoelectric effect</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. A filtered quartz-halogen lamp shines through a quartz window and an open collector grid onto a sodium
+   photocathode in an evacuated tube. One photon can release one electron when hf exceeds the 2.46 eV work function.
+   The collector lead runs through the microammeter to the negative variable-voltage terminal. The positive terminal
+   returns to the cathode. Electrons cross the gap or turn back in the retarding electric field, then return through
+   the external circuit. Brightness changes the photon rate, never the maximum launch energy. No gas or moving gears.
+   Source https://openstax.org/books/university-physics-volume-3/pages/6-2-photoelectric-effect
+   Teaching adaptations. The four filters are ideal narrow bands. Violet represents invisible UV. Particle size and
+   time are enlarged. Uniform initial forward-energy distribution gives an illustrative, linear current curve.
+   Neglect contact potentials, space charge and dark current. Sodium's work function is the textbook 2.46 eV.
+   Parts and attachment. Bench carries two ceramic saddles and two instrument cases. Saddles hold the glass envelope.
+   Sealed electrode stems hold the sodium-coated plate and collector mesh. Leads attach to their feedthrough terminals.
+   Ammeter case holds a dial, magnet, coil, pivot and hairspring. Voltage case holds a battery, potentiometer and wiper,
+   connected to the output posts and voltmeter. Lamp base holds a post, housing, reflector, quartz bulb and socket.
+   A bracket on the lamp post holds the filter wheel axle. Filter panes sit in four wheel apertures.
+   All separate solids and wire segments have sorting bounds. The light and electron marks are teaching overlays. */
+const peBands = [
+  {name:'Red', nm:650, col:'#e66b58'}, {name:'Green', nm:550, col:'#4ba96b'},
+  {name:'Blue', nm:450, col:'#508ee0'}, {name:'Ultraviolet', nm:365, col:'#a077d1'}
+];
+const peWork = 2.46, peCopper = matOf('#d7a063'), peCeramic = CERAMIC;
+const peEnergy = st => 1239.841984 / peBands[st.band].nm;
+const peKinetic = st => Math.max(0, peEnergy(st) - peWork);
+const peCurrent = st => st.on && peKinetic(st) > 0 ? 4*st.brightness*Math.max(0, 1-st.stop/peKinetic(st)) : 0;
+let peRunning = false;
+function peKick(st, control){
+  if (peRunning) return;
+  peRunning = true;
+  control.animate(dt => { st.time += dt; if (!st.on){ peRunning = false; return false; } return true; });
+}
+function peToggle(st, control){ st.on = !st.on; if (st.on) peKick(st, control); }
+function peCallouts(items){
+  const unlabelled=new Set(['TUBE MOUNT','LEFT SADDLE','RIGHT SADDLE','CATHODE POST','COLLECTOR POST','MICROAMMETER CASE','VOLTAGE CASE','LAMP BASE','LAMP POST','FILTER SUPPORT','WHEEL HUB','LAMP SUPPLY']);
+  items=items.filter(it=>!unlabelled.has(it.text));
+  const svg=document.getElementById('fig'), vb=svg.viewBox.baseVal, mobile=innerWidth<=560;
+  const k=INK_K, fs=mobile?10*LBL_U():6.4*k, h=mobile?17*LBL_U():10.5*k;
+  const gap=mobile?19*LBL_U():12.5*k;
+  const ordered=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  const columns=[ordered.slice(0,Math.ceil(ordered.length/2)),ordered.slice(Math.ceil(ordered.length/2))];
+  const top=mobile?12:Math.max(...['btns','stats'].map(id=>{
+    const r=document.getElementById(id).getBoundingClientRect();
+    return new DOMPoint(r.left,r.bottom+12).matrixTransform(svg.getScreenCTM().inverse()).y;
+  }));
+  return columns.map((col,side)=>col.sort((a,b)=>a.p[1]-b.p[1]).map((it,i)=>{
+    const n=items.indexOf(items.find(x=>x.text===it.text))+1;
+    const w=mobile?h*1.4:it.text.length*fs*.62+fs*1.5;
+    const x=side?vb.width-w/2-2:w/2+2;
+    const y=mobile?20+i*(vb.height-65)/Math.max(1,col.length-1):top+i*Math.min(gap,(vb.height-top-h-20*k)/Math.max(1,col.length-1));
+    const edge=side?x-w/2:x+w/2;
+    return `<g class="tag${it.on?' on':''}" data-n="${n}" data-t="${it.text}"><path d="M${f(it.p[0])} ${f(it.p[1])}L${f(edge)} ${f(y)}" fill="none" stroke="${INK}" stroke-width=".65"/><rect x="${f(x-w/2)}" y="${f(y-h/2)}" width="${f(w)}" height="${f(h)}" rx="${f(h/2)}" fill="${it.on?'var(--accent)':'#fff4d6'}" stroke="${INK}" stroke-width="1"/><text x="${f(x)}" y="${f(y+fs*.35)}" font-size="${f(fs)}" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="800">${mobile?n:it.text}</text></g>`;
+  }).join('')).join('');
+}
+function peScene(st, m){
+  const peParts = [], peTags = [], peXR = ease(st.xr || 0), peE = peKinetic(st), peI = peCurrent(st);
+  const pePut = (name, bounds, svg, active=false) => {
+    peParts.push({box:bounds, svg}); if (name) peTags.push({at:boxMid(bounds), text:name, on:active});
+  };
+  const peBox = (name, b, mat, active=false, extra='') => pePut(name, [b.slice(0,3),b.slice(3)], box(...b,mat,toneI,.8)+extra,active);
+  const peRod = (name, a,b,r,mat,active=false) => pePut(name, [[0,1,2].map(i=>Math.min(a[i],b[i])-r),[0,1,2].map(i=>Math.max(a[i],b[i])+r)], rod(a,b,r,mat,toneI,.8), active);
+  const peWire = (name, pts, col, active=false) => {
+    for (let i=1;i<pts.length;i++) peRod(i===1?name:'',pts[i-1],pts[i],.38,matOf(col),active);
+  };
+  const peCase = (name,b,mat,extra='') => {
+    const svg = box(...b,mat,tone,1.5)+extra;
+    pePut(name,[b.slice(0,3),b.slice(3)],`<g opacity="${1-.86*peXR}">${svg}</g>`);
+  };
+  let peSvg = board(0,0,132,104,3,5,WOOD);
+  peSvg += castShadow([[20,45,3],[87,75,3],[30,75,61],[85,45,61],[124,70,58]],3,boardTop(0,0,132,104,3,5));
+  peBox('TUBE MOUNT',[26,44,3,89,76,6],m);
+  for (const x of [33,81]){
+    peBox(x===33?'LEFT SADDLE':'RIGHT SADDLE',[x-3,46,6,x+3,74,15],peCeramic);
+    peRod('',[x,48,15],[x,48,31],2,peCeramic); peRod('',[x,72,15],[x,72,31],2,peCeramic);
+  }
+  const peTubeA = on(PX(29),ellUV(60,44,16,16,32)), peTubeB = on(PX(85),ellUV(60,44,16,16,32));
+  const peTube = loft(peTubeA,peTubeB,()=> '#cfe9f0') + (facing([1,0,0])?shape(peTubeB,'#cfe9f0',.9):shape(peTubeA,'#cfe9f0',.9));
+  pePut('VACUUM ENVELOPE',[[29,44,28],[85,76,60]],`<g opacity="${.16-.1*peXR}">${peTube}</g>`+hullInk([...peTubeA,...peTubeB],1.5));
+  pePut('QUARTZ WINDOW',[[84.5,51,35],[85.5,69,53]],`<g opacity="${.25-.18*peXR}">${cylX(84.5,85.5,60,44,9,CLEAR,toneI,1)}</g>`);
+  peBox('SODIUM PHOTOCATHODE',[39,50,34,40,70,54],peCopper,st.on&&peE>0);
+  peRod('CATHODE STEM',[39.5,60,34],[39.5,60,22],.75,METAL,st.on&&peE>0);
+  peRod('CATHODE SEAL',[39.5,60,27],[39.5,60,31],1.9,peCeramic);
+  peRod('CATHODE POST',[39.5,60,20],[39.5,60,23],1.4,peCopper);
+  peRod('COLLECTOR STEM',[73,60,33],[73,60,22],.75,METAL,peI>0);
+  peRod('COLLECTOR SEAL',[73,60,27],[73,60,31],1.9,peCeramic);
+  peRod('COLLECTOR POST',[73,60,20],[73,60,23],1.4,peCopper,peI>0);
+  for (const z of [35,53]) peRod(z===35?'COLLECTOR FRAME':'',[73,49,z],[73,71,z],.7,METAL,peI>0);
+  for (const y of [49,71]) peRod('',[73,y,35],[73,y,53],.7,METAL);
+  for (const y of [51,55,59,63,67,69]) peRod(y===51?'COLLECTOR MESH':'',[73,y,35],[73,y,53],.18,METAL,peI>0);
+  peCase('MICROAMMETER CASE',[81,9,3,108,33,29],m);
+  const peMeterFace = shape(on(PX(108.1),rrUV(11,11,31,27,2)),'#fff4d6',1)
+    + tx(108.2,21,23,'uA',3.5)
+    + line([[108.3,21,13],[108.3,21-7*Math.sin((-55+110*peI/4)*Math.PI/180),13+7*Math.cos((-55+110*peI/4)*Math.PI/180)]],1.3);
+  if (facing([1,0,0])) pePut('AMMETER DIAL',[[108.1,11,11],[108.4,31,27]],peMeterFace,peI>0);
+  if (peXR>0){
+    peBox('METER MAGNET',[87,15,12,93,27,22],matOf('#aa6b66'));
+    peRod('METER COIL',[93,21,14],[98,21,14],2.5,peCopper,peI>0);
+    peRod('NEEDLE PIVOT',[98,21,14],[105,21,14],.5,METAL,peI>0);
+    pePut('HAIRSPRING',[[101,18,11],[102,24,17]],ink(pd(on(PX(101),ellUV(21,14,2.4,2.4,20))),.6));
+  }
+  peRod('METER INPUT',[88,9,10],[88,7,10],1.3,peCopper,peI>0);
+  peRod('METER OUTPUT',[101,9,10],[101,7,10],1.3,peCopper,peI>0);
+  peCase('VOLTAGE CASE',[22,8,3,60,33,24],m);
+  if (facing([1,0,0])) pePut('VOLTAGE DISPLAY',[[60.1,11,15],[60.3,30,22]],shape(on(PX(60.1),rectUV(11,15,30,22)),'#1d2a26',.8)+tx(60.2,20.5,17,st.stop.toFixed(2)+' V',3,'#8af0ae'));
+  peRod('VOLTAGE KNOB',[60,20,9],[64,20,9],3,DARK);
+  if (peXR>0){
+    peBox('BATTERY',[26,12,5,36,27,15],matOf('#8ba3b7'));
+    peRod('RESISTIVE TRACK',[42,20,6],[42,20,17],4,matOf('#aa9276'));
+    const peAngle = (-120+st.stop/1.5*240)*Math.PI/180;
+    peRod('POTENTIOMETER WIPER',[42,20,17.4],[42+3.5*Math.cos(peAngle),20+3.5*Math.sin(peAngle),17.4],.45,peCopper);
+    peWire('',[[36,14,12],[42,14,12],[42,16,12]],'#e66b58');
+    peWire('',[[26,25,12],[25,29,5],[42,29,5],[42,24,12]],'#44678d');
+    peWire('',[[42,20,17.4],[54,20,17.4],[54,29,12]],'#e66b58');
+  }
+  peRod('POSITIVE TERMINAL',[30,33,12],[30,36,12],1.5,matOf('#e66b58'));
+  peRod('NEGATIVE TERMINAL',[53,33,12],[53,36,12],1.5,DARK);
+  peWire('CATHODE RETURN',[[39.5,60,20],[39.5,60,8],[25,60,4],[15,60,4],[15,38,4],[30,38,4],[30,36,12]],'#df7863',st.on&&peE>0);
+  peWire('COLLECTOR LEAD',[[73,60,20],[73,60,8],[77,60,4],[115,60,4],[115,5,4],[88,5,4],[88,7,10]],'#457c9c',peI>0);
+  peWire('METER RETURN',[[101,7,10],[101,4,4],[66,4,4],[66,38,4],[53,38,4],[53,36,12]],'#457c9c',peI>0);
+  peBox('LAMP BASE',[108,48,3,128,76,7],m);
+  peRod('LAMP POST',[118,62,7],[118,62,40],2.5,METAL);
+  pePut('LAMP HOUSING',[[106,52,36],[127,68,52]],`<g opacity="${1-.86*peXR}">${cylX(106,127,60,44,8,m,tone,1.8)}</g>`);
+  if (peXR>0 || facing([-1,0,0])){
+    peRod('BULB SOCKET',[120,60,44],[125,60,44],2.7,peCeramic);
+    pePut('QUARTZ BULB',[[112,56,40],[120,64,48]],`<g opacity=".35">${rod([112,60,44],[120,60,44],3,CLEAR,toneI,.9)}</g>`);
+    peRod('FILAMENT',[114,59,44],[118,61,44],.55,matOf(st.on?'#ffe59d':'#8e8275'),st.on);
+    pePut('REFLECTOR',[[119,53,37],[122,67,51]],loft(on(PX(119),ellUV(60,44,7,7)),on(PX(122),ellUV(60,44,3,3)),n=>toneI(n,METAL)),st.on);
+  }
+  peRod('FILTER SUPPORT',[96,78,3],[96,78,52],1.1,METAL);
+  peRod('FILTER AXLE',[96,78,52],[96,60,52],.8,METAL);
+  pePut('COLOUR WHEEL',[[95,46,38],[97,74,66]],cylX(95,97,60,52,14,DARK,toneI,1.2));
+  const peFilterParts=[];
+  for (let i=0;i<4;i++){
+    const a = (i-st.band)*Math.PI/2-Math.PI/2, y=60+8*Math.cos(a),z=52+8*Math.sin(a);
+    peFilterParts.push({box:[[94.8,y-4,z-4],[97.2,y+4,z+4]],svg:cylX(94.8,97.2,y,z,4,matOf(peBands[i].col),toneI,.7)});
+  }
+  pePut('FILTER PANES',[[94.8,48,40],[97.2,72,64]],byDepth(peFilterParts),st.on);
+  peRod('WHEEL HUB',[94.2,60,52],[98,60,52],2,peCopper);
+  peBox('LAMP SUPPLY',[110,81,3,129,99,14],DARK);
+  peRod('BRIGHTNESS DIAL',[120,90,14],[120,90,17],2.5,m);
+  peWire('LAMP CABLE',[[125,60,44],[128,60,44],[128,77,8],[125,81,8]],'#4b4844',st.on);
+  if (st.on){
+    const count=Math.round(12*st.brightness), col=peBands[st.band].col;
+    for (let i=0;i<count;i++){
+      const t=(st.time*.7+i/count)%1, x=94-53*t, y=60+(i%3-1)*2,z=44+(i%2-.5)*3;
+      peRod('',[x,y,z],[x-1.8,y,z],.28,matOf(col));
+    }
+    if (peE>0) for (let i=0;i<count;i++){
+      const energy=peE*(.15+.85*(i+1)/count), speed=25*Math.sqrt(energy), accel=625*st.stop/66;
+      const reaches=energy>st.stop;
+      const life=accel<1e-8?33/speed:reaches?(speed-Math.sqrt(speed*speed-66*accel))/accel:2*speed/accel;
+      const age=(st.time+i*.23)%life, x=40+speed*age-.5*accel*age*age;
+      const y=60+(i%3-1)*3,z=44+(i%4-1.5)*3;
+      peRod('',[x,y,z],[x+.45,y,z],.7,matOf('#e8bd39'));
+    }
+  }
+  peSvg += byDepth(peParts);
+  if (peXR>.6) peSvg += peCallouts(peTags);
+  else peSvg += xrCallouts([{at:[40,60,44],text:'SODIUM PLATE',on:st.on&&peE>0},{at:[96,60,44],text:peBands[st.band].name.toUpperCase()+' FILTER',on:st.on}], [22,129,8,99,3,66]);
+  return peSvg;
+}
+const peUI = mountFigure({
+  fig:'PE',turn:'full',title:'The photoelectric effect',size:[132,104,72],palette:'mint',
+  state:{on:false,band:0,brightness:.5,stop:0,time:0},scene:peScene,
+  stats:st=>[
+    {label:'Photon energy',value:peEnergy(st).toFixed(2)+' eV',small:true},
+    {label:'Work function',value:peWork.toFixed(2)+' eV',small:true},
+    {label:'Max launch KE',value:peKinetic(st).toFixed(2)+' eV',small:true},
+    {label:'Current',value:peCurrent(st).toFixed(2)+' uA',small:true},
+    {label:'Retarding voltage',value:st.stop.toFixed(2)+' V',small:true}
+  ],
+  buttons:[
+    {label:'Lamp on / off',onClick:peToggle},
+    {label:'Light colour',choices:st=>peBands.map((band,i)=>({label:band.name,current:st.band===i,onClick:(st)=>{st.band=i;}}))},
+    {label:'Brightness',choices:st=>[.25,.5,1].map(value=>({label:Math.round(value*100)+'%',current:st.brightness===value,onClick:st=>{st.brightness=value;}}))},
+    {label:'Retarding voltage',choices:st=>[0,.1,.2,.3,.5,.8,1,1.5].map(value=>({label:value.toFixed(2)+' V',current:st.stop===value,onClick:st=>{st.stop=value;}}))},
+    {label:'Reset experiment',onClick:st=>{Object.assign(st,{on:false,band:0,brightness:.5,stop:0,time:0});}}
+  ],
+  params:(st,q)=>{
+    const band=peBands.findIndex(b=>b.name.toLowerCase()===q.get('light'));
+    if (band>=0) st.band=band;
+    for(const key of ['brightness','stop']) if(q.has(key)){
+      const value=Number(q.get(key)); if(Number.isFinite(value)) st[key]=Math.max(0,Math.min(key==='stop'?1.5:1,value));
+    }
+    st.on=q.get('on')==='1';
+  }
+});
+xrMount(()=>peUI,()=> '');
+if(peUI.st.on) peKick(peUI.st,peUI);
+</script></body></html>
