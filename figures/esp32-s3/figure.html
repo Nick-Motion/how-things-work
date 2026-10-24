@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP32-S3 DevKit</title></head><body>
+<script src="core.js"></script>
+<script>
+/* ESP32-S3-DevKitC-1 (N8R8) standing on its pin headers at the back of a desk, a phone lying in front of it. 1 unit = 1 mm.
+   x = depth (front at high x), y = width (+y viewer-left at the default view), z = up.
+   Board picture coords (a, b) are the usual top view of the DevKit with the antenna up: a across from the J1 header
+   (0..25.4), b up from the USB end (0..63). World x = BX0 + a, y = BY0 - b, so the USB ports face +y (viewer-left)
+   and the picture stays unmirrored.
+
+   How it really works (where power, data and radio are after each step):
+   1. Plug into UART: the computer's 5 V comes in on the UART USB-C port's VBUS pins -> Schottky diode D1 (the native
+      port has its own, D2, so either port can power the board) -> the 5 V net -> the 3.3 V LDO -> the 3V3 rail ->
+      the WROOM-1 module, the CP2102N bridge and the WS2812 RGB LED. The red power LED lights. The two 5.1 k CC
+      resistors tell the cable the board is a sink. The CP2102N enumerates as a serial port over D+/D- (through the
+      ESD array). The ESP32-S3's ROM bootloader reads the factory app from the 8 MB SPI flash and runs it.
+   2. Upload a sketch: esptool drives the CP2102N's DTR and RTS lines; the two auto-program transistors turn that into
+      IO0 low while EN (chip reset, RC-delayed) is pulsed: the chip restarts in ROM download mode, the same as holding
+      BOOT and pressing RST. The sketch (WebRGB, ~ 812 KB) comes down the cable as USB packets, leaves the bridge as
+      UART bytes on TX/RX into U0RXD, and the ROM writes it into flash page by page. Then RTS pulses EN alone: a hard
+      reset boots the new sketch.
+   3. Join Wi-Fi: the network name and password go down the serial port; the sketch calls WiFi.begin(). Core 0 runs
+      the Wi-Fi and TCP/IP stack, the 2.4 GHz radio and RF matching network drive the PCB antenna; the board joins
+      HOME-2G, gets 192.168.1.42 by DHCP and saves the network in NVS flash. The sketch turns the RGB LED green.
+   4. Open its web page on the phone: the phone (on the same network) sends GET / over the air; the antenna picks it
+      up, core 0 hands it to the web server on core 1 (the Arduino loop task), which sends the page back. Tapping a
+      colour sends GET /rgb?c=..: core 1 drives GPIO38 with the RMT peripheral and the WS2812's driver IC sets its
+      three dies.
+   5. Deep sleep: the page's SLEEP button (or a serial command) runs esp_deep_sleep_start(): the sketch turns the RGB
+      LED off, Wi-Fi, both cores and SRAM power down; only the RTC domain and its timer stay on (~ 8 uA at the chip; the
+      board's LDO, bridge and power LED still draw from USB). After 20 s the timer wakes the chip: it boots from
+      flash, rejoins HOME-2G from NVS and serves again. RST wakes it at once.
+
+   Parts (each held by another):
+   DESK       wooden desk top
+   BOARD      PCB (FR4, solder mask, silkscreen) . top copper + bottom copper and vias . 2 x 22 male headers (black
+              spacers under the PCB, pins standing on the desk, solder joints on top)
+   USB        UART USB-C receptacle + native USB-C receptacle (shell, tongue, contacts, legs) . 4 CC resistors .
+              D1 / D2 Schottky diodes . 2 ESD arrays
+   POWER      3.3 V LDO (SOT-223: body, tab, leads, die) . input + bulk capacitors . red power LED + resistor
+   BRIDGE     CP2102N USB-UART bridge (QFN, die, bond wires) . 2 decoupling caps . dual transistor (auto-program) .
+              EN RC (resistor + capacitor)
+   CONTROLS   BOOT and RST tact switches (body, steel top, plunger, snap dome, legs) . WS2812 RGB LED (white body, clear
+              top, red / green / blue dies, driver IC)
+   MODULE     ESP32-S3-WROOM-1: module PCB, castellated pads, shield can, PCB antenna (meander), ESP32-S3R8 (QFN-56:
+              CPU die with core 0, core 1, SRAM, radio, RTC; stacked 8 MB PSRAM die; bond wires) . 8 MB flash . 40 MHz
+              crystal . RF matching network . decoupling caps
+   CABLE      USB-C plug (overmold, shell, strain relief) and cable over the desk edge to the computer
+   PHONE      phone lying on the desk, browser showing the board's page */
+
+/* ---------- layout ---------- */
+const BH = 6, DW = 104, DD = 160, DRAD = 6;                       // desk top
+const BX0 = 4, BY0 = 128;                                         // board a = 0 at x = BX0, b = 0 at y = BY0
+const PB = BH + 8.5, PT = PB + 1.6, MZ = PT + .8, CZ = MZ + 2.4;   // PCB bottom (on its pins), PCB top, module PCB top, can top
+const BW = 25.4, BL = 63;
+const W3 = (a, b, z) => [BX0 + a, BY0 - b, z];
+const abBox = (a0, b0, z0, a1, b1, z1) => [[BX0 + Math.min(a0, a1), BY0 - Math.max(b0, b1), z0], [BX0 + Math.max(a0, a1), BY0 - Math.min(b0, b1), z1]];
+const aBox = (a0, b0, z0, a1, b1, z1, m, w = .5, sh = toneI) => { const [p, q] = abBox(a0, b0, z0, a1, b1, z1); return box(...p, ...q, m, sh, w); };
+const aIt = (a0, b0, z0, a1, b1, z1, svg) => ({ box: abBox(a0, b0, z0, a1, b1, z1), svg });
+const aon = (z, uv) => uv.map(([a, b]) => W3(a, b, z));
+const acirc = (a, b, z, r, n = 14) => aon(z, ellUV(a, b, r, r, n));
+const arect = (a0, b0, a1, b1, z) => aon(z, rectUV(a0, b0, a1, b1));
+const mw = w => `style="stroke-width:${(+w).toFixed(2)}"`;      // a stroke in model units (not rescaled by inkScale)
+const ghost = (body, inner, k) => k > 0 ? `<g opacity="${f(1 - .8*k)}">${body}</g><g opacity="${f(k)}">${inner()}</g>` : body;
+const txT = (p, R, Dn, str, size, col, wt = 700, anc = 'middle') => `<text transform="${txM(P(...p), Dv(...R), Dv(...Dn))}" font-size="${size}" fill="${col}" text-anchor="${anc}" font-family="ui-monospace,Menlo,monospace" font-weight="${wt}" letter-spacing=".04em">${str}</text>`;
+const txA = (a, b, z, str, size, col = SILK, wt = 700, anc = 'middle') => txT(W3(a, b, z), [1,0,0], [0,1,0], str, size, col, wt, anc);   // on the board, reading along +a
+const txPh = (x, y, z, str, size, col, wt = 700, anc = 'middle') => txT([x, y, z], [0,-1,0], [1,0,0], str, size, col, wt, anc);        // phone screen, landscape
+const glow = (p, r, col, o = .5) => { const [X, Y] = P(...p); return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r)}" fill="${col}" opacity="${f(o)}"/>`; };
+
+/* ---------- colours ---------- */
+const CHIP = { l:'#4d4a47', m:'#363331', d:'#232120' }, HDR = { l:'#4a4642', m:'#34312e', d:'#211f1d' };
+const GOLD = matOf('#e8c45a'), TIN = METAL, COP = '#d8935a', SILK = '#f4f6f2', HOLE = '#2b2523';
+const CAN = { l:'#f1f3f3', m:'#cdd3d5', d:'#99a2a6' }, MODP = { l:'#3d3c39', m:'#2c2b29', d:'#1d1c1b' };
+const SMDK = matOf('#2f2c2a'), CAPT = matOf('#c8946a'), WHITE = matOf('#f3efe4'), DIODE = matOf('#3b3836');
+const PLUGM = { l:'#5a5651', m:'#3d3935', d:'#262321' }, PHM = { l:'#6a6e75', m:'#4d5056', d:'#303236' };
+const RGBC = [null, '#ff4a3a', '#3fd16a', '#3e86ff'], RGBN = ['OFF', 'RED', 'GREEN', 'BLUE'];
+const BLUE = '#3e86d9', GLOWC = '#8af0ae';
+
+/* ---------- the board's parts, in picture mm ---------- */
+const J1N = ['3V3','3V3','RST','4','5','6','7','15','16','17','18','8','3','46','9','10','11','12','13','14','5V','G'];
+const J3N = ['G','TX','RX','1','2','42','41','40','39','38','37','36','35','0','45','48','47','21','20','19','G','G'];
+const pinB = i => 60.8 - i*2.54, J1A = 1.27, J3A = 24.13;
+const PORTU = 7.4, PORTN = 18.0, BOOT = [4.5, 9.7], RSTB = [20.9, 9.7];
+const BRG = [8.0, 19.5], LDO = [17.7, 19.5], RGBP = [12.7, 32], PLED = [19.8, 31.0];
+const CHIPC = [12.7, 47.0], FLASH = [7.0, 41.4], XTAL = [18.5, 41.0];
+const PADS = Array.from({ length: 11 }, (_, i) => 6.35 + i*1.27);   // module bottom-row pads
+// die regions of the ESP32-S3 (picture coords inside the package)
+const DIE0 = [9.7, 45.2, 13.4, 48.9];
+const REG = {
+  core0: [9.75, 47.15, 11.5, 48.85], core1: [11.6, 47.15, 13.35, 48.85],
+  sram:  [9.75, 45.85, 11.5, 47.05], radio: [11.6, 45.85, 13.35, 47.05], rtc: [9.75, 45.25, 13.35, 45.75] };
+const PSR = [13.9, 45.6, 15.6, 48.4];
+// copper: top-layer runs (solid) and bottom-layer runs (dashed, through vias)
+const TRK = {
+  vbusU: [[9.6,6.75],[9.6,8.0],[11.0,9.5],[11.85,9.5]],
+  vbusN: [[15.8,6.75],[15.8,8.0],[16.15,8.6],[16.15,11.2]],
+  v5a:   [[13.55,9.5],[14.3,10.2],[14.3,14.5],[15.4,15.5],[15.4,16.0]],
+  dmU:   [[7.15,6.75],[6.45,7.6],[6.45,12.9]], dpU: [[7.65,6.75],[8.35,7.6],[8.35,12.9]],
+  dmU2:  [[6.45,15.5],[6.9,17.5]], dpU2: [[8.35,15.5],[7.9,17.5]],
+  dmN:   [[17.75,6.75],[17.05,7.6],[17.05,12.9]], dpN: [[18.25,6.75],[18.95,7.6],[18.95,12.9]],
+  tx:    [[10,20.0],[11.4,21.4],[14.0,21.4],[15.2,22.6],[15.2,35.5],[13.97,36.7],[13.97,37.5]],
+  rx:    [[10,19.0],[11.6,20.6],[14.3,20.6],[15.9,22.2],[15.9,35.7],[15.24,36.4],[15.24,37.5]],
+  dtr:   [[7.0,21.5],[7.0,24.4]], rts: [[9.0,21.5],[9.0,24.4]],
+  io0:   [[7.0,25.6],[7.0,27],[6.35,28],[6.35,37.5]],
+  boot:  [[4.5,11.8],[4.5,27.4],[5.6,28.5],[6.35,28.5]],
+  en:    [[9.0,25.6],[9.0,29.0],[7.62,30.4],[7.62,37.5]],
+  enr:   [[20.6,24.5],[21.4,23.7],[21.4,11.8]],
+  rgb:   [[10.16,37.5],[10.16,36.0],[11.5,34.6],[11.5,33.75]],
+  ledp:  [[17.7,23.0],[17.7,24.2],[18.9,25.4],[18.9,28.9]], ledp2: [[18.9,29.9],[19.0,30.6]],
+};
+const BOT = {
+  v33:  [[17.7,23.4],[12.7,23.4],[4.0,23.4],[3.1,24.3],[3.1,55.3]],
+  v33j: [[3.1,55.3],[3.1,58.26],[1.27,60.8]],
+  v33r: [[3.1,31.0],[10.7,31.0]],
+  v33c: [[8.0,23.4],[8.0,22.0]],
+  v5j:  [[14.3,14.5],[2.6,14.5],[1.27,12.6],[1.27,10.0]],
+  enb:  [[9.0,27.0],[20.6,28.1]],
+  nm:   [[17.05,15.8],[21.6,16.4],[21.6,35.8],[17.78,37.5]],
+  np:   [[18.95,15.8],[22.2,16.0],[22.2,36.2],[19.05,37.5]],
+};
+const VIAS = [[17.7,23.4],[3.1,55.3],[10.7,31.0],[8.0,22.0],[14.3,14.5],[9.0,27.0],[20.6,28.1],[17.05,15.8],[18.95,15.8],[3.1,31.0]];
+// the module's PCB antenna: an inverted-F meander from the feed (RF matching) across the antenna end
+const ANT = (() => { const o = [[17.6, 56.8], [17.6, 62.0]]; let up = true;
+  for (let a = 17.6; a > 5.2; a -= 1.55){ o.push([a - 1.55, up ? 62.0 : 62.0]); o.push([a - 1.55, up ? 58.4 : 62.0]); up = !up; }
+  return o; })();
+const ANTG = [[19.4, 56.8], [19.4, 62.0], [17.6, 62.0]];
+
+/* ---------- phone, plug, cable ---------- */
+const PHN = [36, 14, 100.2, 145.5], PHZ = BH + 7.4;                  // phone (iPhone mini size), screen up, landscape
+const PLUGX = BX0 + PORTU, FACE = BY0 + .6, ZJACK = PT + 1.63, ZREST = BH + 3.25;
+const UP = .6, HANDLE = .25, DOWN = .6;                            // packet legs (s): phone -> board, core 1, board -> phone
+
+/* ---------- small helpers ---------- */
+const add3 = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]], lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const boxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const bez = (p0, p1, p2, p3, n) => Array.from({length: n + 1}, (_, i) => { const t = i/n, a = (1-t)**3, b = 3*(1-t)**2*t, c = 3*(1-t)*t*t, d = t**3;
+  return [0,1,2].map(q => a*p0[q] + b*p1[q] + c*p2[q] + d*p3[q]); });
+const bend = (pts, r = 3) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, q) => v - b[q])), lc = Math.hypot(...c.map((v, q) => v - b[q])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, q) => b[q] + (v - b[q]) * d/la), q2 = c.map((v, q) => b[q] + (v - b[q]) * d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(q => (1-t)*(1-t)*p[q] + 2*(1-t)*t*b[q] + t*t*q2[q])); } }
+  out.push(pts[pts.length - 1]); return out; };
+// a cable cut into short pieces, each with its own box, so byDepth puts it behind or in front of the solids it passes
+const cable = (pts, col, r, Lp = 3) => { const out = [];
+  for (let i = 0; i < pts.length - 1; ){
+    let j = i + 1, len = 0; while (j < pts.length - 1 && len < Lp){ len += Math.hypot(...pts[j].map((v, q) => v - pts[j - 1][q])); j++; }
+    if (len < Lp) while (j < pts.length - 1) j++;
+    const seg = pts.slice(i, j + 1), d = pd(seg, false);
+    out.push({ box: boxOf(seg, r*.7), svg: `<path d="${d}" fill="none" stroke="${INK}" ${mw(2*r + .55)} stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" ${mw(2*r)} stroke-linecap="round" stroke-linejoin="round"/>` });
+    i = j; }
+  return out; };
+const polyAt = (pts, t) => { const seg = []; let tot = 0;
+  for (let i = 0; i < pts.length - 1; i++){ const l = Math.hypot(...pts[i+1].map((v, q) => v - pts[i][q])); seg.push(l); tot += l; }
+  let d = ((t % 1) + 1) % 1 * tot;
+  for (let i = 0; i < seg.length; i++){ if (d <= seg[i]){ const u = seg[i] ? d/seg[i] : 0; return pts[i].map((v, q) => v + (pts[i+1][q] - v)*u); } d -= seg[i]; }
+  return pts[pts.length - 1]; };
+// a horizontal stadium (USB-C shell, plug overmold) along y from y0 to y1, centred (xc, zc)
+function stad(y0, y1, xc, zc, w, h, r, M, wInk = .8){
+  const prof = rrUV(xc - w/2, zc - h/2, xc + w/2, zc + h/2, Math.min(r, w/2, h/2), 5), A = on(PY(y0), prof), B = on(PY(y1), prof);
+  let s = loft(A, B, n => toneI(n, M));
+  if (vis([0, 1, 0])) s += fill(pd(B), toneI([0, 1, 0], M)) + ink(pd(B), wInk*.6);
+  if (vis([0, -1, 0])) s += fill(pd(A), toneI([0, -1, 0], M)) + ink(pd(A), wInk*.6);
+  return s + hullInk([...A, ...B], wInk);
+}
+
+/* ---------- what the board is doing right now (derived from the one state object) ---------- */
+function sig(st){
+  const pow = st.plugged && st.plugK >= 1, el = st.t - st.ph0, p = st.pkt;
+  const o = { pow, run: pow && st.phase === 'run', boot: pow && st.phase === 'boot', dl: pow && st.phase === 'dl', sleep: pow && st.phase === 'sleep' };
+  o.web = o.run && st.sketch === 'web';
+  o.auto = o.dl && el < .35;                                         // DTR / RTS -> IO0 low, EN pulse
+  o.wr = o.dl && el >= .6;                                           // ROM writing flash
+  o.ser = (o.dl && el >= .5) || st.serT > 0;                         // bytes on TX / RX
+  o.usb = (o.boot && st.boot0) || o.dl || st.serT > 0;               // USB packets on D+ / D-
+  o.atBoard = !!(p && p.ok !== false && p.t > UP - .15 && p.t < UP + HANDLE + .15);
+  o.join = o.web && st.wifi === 'join';
+  o.wifi = o.web && st.wifi === 'on';
+  o.radio = o.join || o.atBoard;
+  o.core0 = o.run && (st.wifi !== 'off' || o.atBoard);
+  o.core1 = o.run;
+  o.flash = o.wr || o.boot;
+  o.rtc = o.sleep;
+  o.rgbData = o.run && st.rgbT > 0;
+  o.rgb = !o.run ? 0 : o.join ? ((st.t*4 | 0) % 2 ? 0 : 3) : st.rgb;
+  return o;
+}
+const prog = st => st.phase === 'dl' ? Math.max(0, Math.min(1, (st.t - st.ph0 - .6) / 2.8)) : 0;
+
+/* ---------- the PCB: substrate, mask, silkscreen, copper, pads ---------- */
+function pcbItem(st, m, k, sg){
+  const OUTL = rrUV(0, 0, BW, BL, 1.2, 3), A = aon(PB, OUTL), B = aon(PT, OUTL), zc = PT + .02;
+  let s = loft(A, B, n => toneI(n, { l: m.m, m: m.d, d: mix(m.d, '#000000', .3) })) + fill(pd(B), k > 0 ? mix(m.m, '#f2efe7', .25*k) : m.m);
+  const tp = pts => pd(pts.map(([a, b]) => W3(a, b, zc)), false);
+  const all = Object.values(TRK).map(tp).join(''), bot = Object.values(BOT).map(tp).join('');
+  s += `<path d="${all}" fill="none" stroke="${mix(m.m, '#ffffff', .22)}" ${mw(.4)} stroke-linecap="round" stroke-linejoin="round" opacity="${f(1 - k)}"/>`;
+  if (k > 0){
+    s += `<g opacity="${f(k)}"><path d="${bot}" fill="none" stroke="${mix(COP, '#f2efe7', .35)}" ${mw(.4)} stroke-dasharray="1.1 .7" stroke-linecap="round"/>`
+      + `<path d="${all}" fill="none" stroke="${COP}" ${mw(.42)} stroke-linecap="round" stroke-linejoin="round"/>`
+      + VIAS.map(([a, b]) => shape(acirc(a, b, zc, .42, 10), COP, .2) + fill(pd(acirc(a, b, zc + .01, .18, 8)), HOLE)).join('');
+    const hot = (keys, col, w = .55, src = TRK) => `<path d="${keys.map(q => tp(src[q])).join('')}" fill="none" stroke="${col}" ${mw(w)} stroke-linecap="round" stroke-linejoin="round"${src === BOT ? ' stroke-dasharray="1.1 .7"' : ''}/>`;
+    const dots = (key, n, speed, col, rev = false, src = TRK) => { let d = ''; for (let i = 0; i < n; i++){ const t = (st.t*speed + i/n) % 1, [a, b] = polyAt(src[key], rev ? 1 - t : t);
+      d += fill(pd(acirc(a, b, zc + .03, .38, 8)), col); } return d; };
+    if (sg.pow) s += hot(['vbusU', 'v5a'], '#ff8a3a') + hot(['v33', 'v33j', 'v33r', 'v33c', 'v5j'], '#ff8a3a', .5, BOT) + hot(['ledp', 'ledp2'], '#ff8a3a', .45);
+    if (sg.usb) s += hot(['dmU', 'dpU', 'dmU2', 'dpU2'], BLUE) + dots('dmU', 3, 1.4, '#ffffff') + dots('dpU', 3, 1.4, '#ffffff');
+    if (sg.ser) s += hot(['rx'], '#f2c230') + dots('rx', 6, .7, '#fff4d6') + hot(['tx'], '#f2c230') + dots('tx', 2, .7, '#fff4d6', true);
+    if (sg.auto) s += hot(['dtr', 'rts', 'io0', 'en', 'enr'], '#43c25c') + hot(['enb'], '#43c25c', .5, BOT);
+    if (sg.rgbData) s += hot(['rgb'], '#c77dff') + dots('rgb', 2, 2.5, '#ffffff');
+    s += `</g>`;
+  }
+  // through-hole header pads and the module's solder pads
+  let pads = '';
+  for (const a of [J1A, J3A]) for (let i = 0; i < 22; i++) pads += pd(acirc(a, pinB(i), zc, .85, 10));
+  for (const a of PADS) pads += pd(arect(a - .35, 36.9, a + .35, 37.6, zc));
+  for (let i = 0; i < 14; i++){ const b = 38.6 + i*1.27; pads += pd(arect(3.1, b - .35, 3.8, b + .35, zc)) + pd(arect(21.6, b - .35, 22.3, b + .35, zc)); }
+  s += fill(pads, '#dfe2e2') + `<path d="${pads}" fill="none" stroke="${INK}" ${mw(.12)} opacity=".5"/>`;
+  // silkscreen: pin names beside the lower pins, button and port names
+  for (let i = 10; i < 22; i++){ const b = pinB(i) - .35;
+    s += txA(2.4, b, zc, J1N[i], .9, SILK, 700, 'start') + txA(23.0, b, zc, J3N[i], .9, SILK, 700, 'end'); }
+  s += txA(BOOT[0], 12.3, zc, 'BOOT', .95) + txA(RSTB[0], 12.3, zc, 'RST', .95);
+  s += txA(PORTU, 7.55, zc, 'UART', .9) + txA(PORTN, 7.55, zc, 'USB', .9);
+  s += txA(12.7, 26.3, zc, 'RGB', .8) + txA(PLED[0], 32.4, zc, 'ON', .8);
+  s += `<path d="${pd(aon(zc, rectUV(RGBP[0] - 2.2, RGBP[1] - 2.2, RGBP[0] + 2.2, RGBP[1] + 2.2)))}" fill="none" stroke="${SILK}" ${mw(.18)}/>`;
+  s += ink(pd(B), 1.0) + hullInk([...A, ...B], 2.0);
+  return { box: abBox(0, 0, PB, BW, BL, PT), svg: s };
+}
+
+/* ---------- headers: black spacer under the PCB, pins standing on the desk, solder joints on top ---------- */
+function headerRow(IT, a){
+  const b0 = pinB(21) - 1.27, b1 = pinB(0) + 1.27, zb = PB - 2.5;
+  IT.push(aIt(a - 1.27, b0, zb, a + 1.27, b1, PB, aBox(a - 1.27, b0, zb, a + 1.27, b1, PB, HDR, .7)));
+  for (let i = 0; i < 22; i++){ const b = pinB(i);
+    IT.push(aIt(a - .32, b - .32, BH, a + .32, b + .32, zb, aBox(a - .32, b - .32, BH, a + .32, b + .32, zb, GOLD, .22)));
+    const joint = loft(acirc(a, b, PT + .02, .8, 10), acirc(a, b, PT + .45, .38, 10), n => toneI(n, TIN));
+    IT.push(aIt(a - .8, b - .8, PT, a + .8, b + .8, PT + 1.2, joint + aBox(a - .32, b - .32, PT + .3, a + .32, b + .32, PT + 1.2, GOLD, .22))); }
+}
+// a two-terminal SMD part (resistor / capacitor / diode): body + two metal ends, along a or b
+function smd(IT, a, b, la, lb, h, m, alongA = true, endM = TIN, e = .3){
+  const z1 = PT + h;
+  if (alongA){ IT.push(aIt(a - la/2, b - lb/2, PT, a - la/2 + e, b + lb/2, z1, aBox(a - la/2, b - lb/2, PT, a - la/2 + e, b + lb/2, z1, endM, .22)),
+      aIt(a - la/2 + e, b - lb/2, PT, a + la/2 - e, b + lb/2, z1, aBox(a - la/2 + e, b - lb/2, PT, a + la/2 - e, b + lb/2, z1, m, .22)),
+      aIt(a + la/2 - e, b - lb/2, PT, a + la/2, b + lb/2, z1, aBox(a + la/2 - e, b - lb/2, PT, a + la/2, b + lb/2, z1, endM, .22))); }
+  else { IT.push(aIt(a - la/2, b - lb/2, PT, a + la/2, b - lb/2 + e, z1, aBox(a - la/2, b - lb/2, PT, a + la/2, b - lb/2 + e, z1, endM, .22)),
+      aIt(a - la/2, b - lb/2 + e, PT, a + la/2, b + lb/2 - e, z1, aBox(a - la/2, b - lb/2 + e, PT, a + la/2, b + lb/2 - e, z1, m, .22)),
+      aIt(a - la/2, b + lb/2 - e, PT, a + la/2, b + lb/2, z1, aBox(a - la/2, b + lb/2 - e, PT, a + la/2, b + lb/2, z1, endM, .22))); }
+}
+// gull-wing leads: [a, b, side] with side the outward direction ('a+', 'a-', 'b+', 'b-')
+function leads(IT, list, len = .8, wd = .4){
+  for (const [a, b, sd] of list){
+    const da = sd === 'a+' ? 1 : sd === 'a-' ? -1 : 0, db = sd === 'b+' ? 1 : sd === 'b-' ? -1 : 0, hw = wd/2;
+    const a0 = Math.min(a, a + da*len) - (db ? hw : 0), a1 = Math.max(a, a + da*len) + (db ? hw : 0), b0 = Math.min(b, b + db*len) - (da ? hw : 0), b1 = Math.max(b, b + db*len) + (da ? hw : 0);
+    IT.push(aIt(a0, b0, PT, a1, b1, PT + .22, aBox(a0, b0, PT, a1, b1, PT + .22, TIN, .18))); }
+}
+const chipBody = (IT, a0, b0, a1, b1, z0, z1, k, extra, inner) => IT.push(aIt(a0, b0, z0, a1, b1, z1, ghost(aBox(a0, b0, z0, a1, b1, z1, CHIP, .5) + extra, inner || (() => ''), k)));
+// a die on its paddle with bond wires to the package pads
+function dieArt(a0, b0, a1, b1, z, wires, col = '#4f5577'){
+  let s = shape(aon(z, rectUV(a0 - .3, b0 - .3, a1 + .3, b1 + .3)), TIN.m, .2) + shape(aon(z + .02, rectUV(a0, b0, a1, b1)), col, .25);
+  let w = ''; for (const [pa, pb, qa, qb] of wires){ const p = W3(pa, pb, z + .03), q = W3(qa, qb, z + .02), mid = add3(lerp3(p, q, .5), [0, 0, .45]); w += pd(bez(p, mid, mid, q, 5), false); }
+  return s + `<path d="${w}" fill="none" stroke="#f3cf5a" ${mw(.08)}/>`;
+}
+const ringWires = (a0, b0, a1, b1, n, d) => { const o = [];
+  for (let i = 0; i < n; i++){ const t = (i + .5)/n, a = a0 + (a1 - a0)*t, b = b0 + (b1 - b0)*t;
+    o.push([a, b0, a, b0 - d], [a, b1, a, b1 + d], [a0, b, a0 - d, b], [a1, b, a1 + d, b]); } return o; };
+
+/* ---------- USB-C receptacle: steel shell on the PCB, opening toward +y, a tongue with contacts inside ---------- */
+function usbC(IT, ac, k, live){
+  const x0 = BX0 + ac - 4.47, x1 = BX0 + ac + 4.47, z0 = PT, z1 = PT + 3.26, yF = FACE, yB = BY0 - 6.75;
+  let body = stad(yB, yF, BX0 + ac, (z0 + z1)/2, 8.94, 3.26, 1.6, CAN, .9);
+  if (vis([0, 1, 0])){ body += shape(on(PY(yF + .02), rrUV(x0 + .45, z0 + .42, x1 - .45, z1 - .42, 1.2, 5)), '#1d1a16', .35)
+      + shape(on(PY(yF + .04), rectUV(x0 + 1.4, z0 + 1.3, x1 - 1.4, z0 + 1.96)), '#4a4541', .2);
+    let c = ''; for (let i = 0; i < 12; i++){ const x = x0 + 1.75 + i*.49; c += pd([[x, yF + .05, z0 + 1.96], [x + .25, yF + .05, z0 + 1.96]], false); }
+    body += `<path d="${c}" fill="none" stroke="${GOLD.l}" ${mw(.18)}/>`; }
+  if (vis([0, 0, 1])) body += `<path d="${pd([W3(ac - 3, 1.2, z1 + .01), W3(ac + 3, 1.2, z1 + .01)], false)}" fill="none" stroke="${INK}" ${mw(.14)} opacity=".45"/>`;
+  const inner = () => { let s = aBox(ac - 3.3, -.4, PT + 1.3, ac + 3.3, 5.8, PT + 1.96, matOf('#4a4541'), .25);
+    for (let i = 0; i < 12; i++){ const a = ac - 2.9 + i*.53; s += aBox(a - .12, -.2, PT + 1.96, a + .12, 4.6, PT + 2.02, live ? matOf('#ffd66a') : GOLD, .1); }
+    return s; };
+  IT.push({ box: [[x0, yB, z0], [x1, yF, z1]], svg: ghost(body, inner, k) });
+  for (const sd of [-1, 1]){ const a0 = ac + sd*4.47, a1 = a0 + sd*.45;   // through-hole shell legs
+    IT.push(aIt(a0, 3.0, PT, a1, 4.4, PT + 1.8, aBox(a0, 3.0, PT, a1, 4.4, PT + 1.8, CAN, .25))); }
+}
+
+/* ---------- tact switch: black base, steel top, round plunger, a snap dome inside ---------- */
+function tact(IT, [ac, bc], k, press, name){
+  const z1 = PT + 1.5, pz = .6*(1 - .75*press);
+  for (const [da, db] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]){ const a = ac + da*1.75, b = bc + db*1.25;
+    IT.push(aIt(a - .3, b - .3, PT, a + .3, b + .3, PT + .3, aBox(a - .3, b - .3, PT, a + .3, b + .3, PT + .3, TIN, .18))); }
+  const body = aBox(ac - 1.5, bc - 1.8, PT, ac + 1.5, bc + 1.8, z1 - .3, CHIP, .55) + aBox(ac - 1.45, bc - 1.75, z1 - .3, ac + 1.45, bc + 1.75, z1, TIN, .4);
+  const inner = () => loft(acirc(ac, bc, PT + .35, 1.15, 16), acirc(ac, bc, PT + .95 - .35*press, .55, 16), n => toneI(n, TIN)) + shape(acirc(ac, bc, PT + .95 - .35*press, .55, 16), TIN.l, .2);
+  IT.push(aIt(ac - 1.5, bc - 1.8, PT, ac + 1.5, bc + 1.8, z1, act(name, ghost(body, inner, k))));
+  const [x, y] = W3(ac, bc, 0);
+  IT.push(aIt(ac - .8, bc - .8, z1, ac + .8, bc + .8, z1 + pz, act(name, cyl(x, y, z1, z1 + pz, .8, CHIP, toneI, .5, 16))));
+}
+
+/* ---------- the board's components ---------- */
+function devkit(IT, st, m, k, sg){
+  IT.push(pcbItem(st, m, k, sg));
+  headerRow(IT, J1A); headerRow(IT, J3A);
+  usbC(IT, PORTU, k, sg.pow); usbC(IT, PORTN, k, false);
+  tact(IT, BOOT, k, 0, 'boot'); tact(IT, RSTB, k, st.rstK, 'reset');
+
+  // CC resistors (5.1 k), VBUS Schottky diodes, ESD arrays
+  for (const a of [3.6, 11.2, 14.4, 21.9]) smd(IT, a, 7.65, 1.0, .5, .35, SMDK);
+  for (const [a, b] of [[12.7, 9.5], [15.3, 11.2]]){ smd(IT, a, b, 1.7, 1.25, .9, DIODE, true, TIN, .25);
+    if (vis([0,0,1])) IT.push(aIt(a - .55, b - .62, PT + .9, a - .3, b + .62, PT + .92, fill(pd(arect(a - .55, b - .6, a - .3, b + .6, PT + .92)), '#cfc8b8'))); }
+  for (const a of [PORTU, PORTN]){ const b = 14.2;
+    leads(IT, [-.95, 0, .95].flatMap(d => [[a + d, b - .8, 'b-'], [a + d, b + .8, 'b+']]), .5, .35);
+    chipBody(IT, a - 1.45, b - .8, a + 1.45, b + .8, PT + .05, PT + 1.0, k, ''); }
+
+  // CP2102N USB-UART bridge (QFN-24, 4 x 4): die and bond wires in see-through
+  { const [a, b] = BRG, h = 2, zt = PT + .85, sw = sg.usb || sg.ser;
+    let extra = '';
+    if (vis([0,0,1])) extra = txA(a, b + .3, zt + .02, 'CP2102N', .7, '#c9c4ba', 700) + txA(a, b - .7, zt + .02, 'A02', .6, '#a9a499', 700) + fill(pd(acirc(a - 1.45, b + 1.45, zt + .02, .22, 8)), '#6c6862');
+    let edge = ''; for (let i = 0; i < 6; i++){ const d = -1.25 + i*.5;
+      edge += aBox(a + d - .1, b - h - .02, PT, a + d + .1, b - h + .28, PT + .18, TIN, .1) + aBox(a + d - .1, b + h - .28, PT, a + d + .1, b + h + .02, PT + .18, TIN, .1); }
+    chipBody(IT, a - h, b - h, a + h, b + h, PT, zt, k, extra + edge, () => dieArt(a - .9, b - .9, a + .9, b + .9, PT + .4, ringWires(a - .9, b - .9, a + .9, b + .9, 5, .7), sw ? '#6a74a8' : '#4f5577')
+      + (sw ? glow(W3(a, b, PT + .45), 1.6, '#8fb3ff', .45) : '')); }
+  smd(IT, 11.2, 18.3, 1.0, .5, .35, CAPT); smd(IT, 11.2, 22.4, 1.0, .5, .35, CAPT);
+  // dual NPN (auto-program): SOT-363
+  leads(IT, [-.65, 0, .65].flatMap(d => [[7.0, 25 + d, 'a-'], [9.0, 25 + d, 'a+']]), .45, .3);
+  chipBody(IT, 7.0, 24.4, 9.0, 25.6, PT + .05, PT + .9, k, '', () => dieArt(7.4, 24.65, 7.9, 25.35, PT + .4, []) + dieArt(8.1, 24.65, 8.6, 25.35, PT + .4, []) + (sg.auto ? glow(W3(8, 25, PT + .5), 1.2, '#43c25c', .55) : ''));
+  // EN RC
+  smd(IT, 20.6, 25.0, .5, 1.0, .35, SMDK, false); smd(IT, 20.6, 27.0, .8, 1.6, .7, CAPT, false);
+
+  // 3.3 V LDO (SOT-223): three leads, wide tab, the die on the tab in see-through
+  { const [a, b] = LDO, a0 = a - 3.25, a1 = a + 3.25, b0 = b - 1.75, b1 = b + 1.75, z1 = PT + 1.6;
+    leads(IT, [[a - 2.3, b0, 'b-'], [a, b0, 'b-'], [a + 2.3, b0, 'b-']], 1.75, .7);
+    IT.push(aIt(a - 1.5, b1, PT, a + 1.5, b1 + 1.75, PT + .25, aBox(a - 1.5, b1, PT, a + 1.5, b1 + 1.75, PT + .25, TIN, .25)));
+    const extra = vis([0,0,1]) ? txA(a, b + .4, z1 + .02, 'SGM2212', .85, '#c9c4ba') + txA(a, b - .9, z1 + .02, '3.3', .85, '#c9c4ba') : '';
+    chipBody(IT, a0, b0, a1, b1, PT + .1, z1, k, extra, () => dieArt(a - .7, b - .3, a + .7, b + .9, PT + .9, [[a - .5, b - .3, a - 2.3, b0 + .2], [a + .5, b - .3, a + 2.3, b0 + .2]], sg.pow ? '#7a6a9a' : '#4f5577')
+      + (sg.pow ? glow(W3(a, b + .3, PT + 1), 1.5, '#ff8a3a', .35) : '')); }
+  smd(IT, 13.2, 16.3, 2.0, 1.25, 1.0, CAPT); smd(IT, 20.2, 34.6, 1.25, 2.0, 1.0, CAPT, false); smd(IT, 13.0, 35.6, 1.6, .8, .6, CAPT);
+
+  // power LED (red, 0603) and its resistor
+  smd(IT, 18.9, 29.4, .5, 1.0, .35, SMDK, false);
+  { const [a, b] = PLED, z1 = PT + .7;
+    let s = aBox(a - .8, b - .4, PT, a + .8, b + .4, PT + .35, WHITE, .22) + aBox(a - .55, b - .35, PT + .35, a + .55, b + .35, z1, sg.pow ? matOf('#ff7a6a') : matOf('#b0675e'), .22);
+    if (sg.pow) s += glow(W3(a, b, z1), 2.2, '#ff3b30', .4) + glow(W3(a, b, z1), .9, '#fff0e0', .9);
+    IT.push(aIt(a - .8, b - .4, PT, a + .8, b + .4, z1, s)); }
+
+  // WS2812 RGB LED: white body, clear top; inside the red, green and blue dies and the driver IC
+  { const [a, b] = RGBP, z1 = PT + 1.0, z2 = PT + 1.55, col = RGBC[sg.rgb];
+    leads(IT, [[a - 1.75, b - 1, 'a-'], [a - 1.75, b + 1, 'a-'], [a + 1.75, b - 1, 'a+'], [a + 1.75, b + 1, 'a+']], .35, .55);
+    const dies = (z, bright) => { let s = shape(arect(a - 1.2, b - 1.2, a + 1.2, b + 1.2, z), '#e8e4da', .15);
+      s += shape(arect(a - .9, b - .1, a + .1, b + .9, z + .02), '#6a6e75', .15);   // driver IC
+      [['#ff4a3a', -.75, -.6], ['#3fd16a', -.05, -.6], ['#3e86ff', .65, -.6]].forEach(([c, da, db], i) => {
+        const lit = sg.rgb === i + 1; s += shape(arect(a + da - .25, b + db - .25, a + da + .25, b + db + .25, z + .02), lit ? mix(c, '#ffffff', .4) : mix(c, '#5a544a', .5), .12); });
+      return s; };
+    let body = aBox(a - 1.75, b - 1.75, PT, a + 1.75, b + 1.75, z1, WHITE, .45);
+    if (vis([0,0,1])) body += fill(pd(arect(a - 1.45, b - 1.45, a + 1.45, b + 1.45, z1 + .01)), '#d7e7ea') + dies(z1 + .02);
+    body += aBox(a - 1.45, b - 1.45, z1, a + 1.45, b + 1.45, z2, CLEAR, .3).replace(/fill="(#[0-9a-f]+)"/g, 'fill="$1" fill-opacity=".45"');
+    if (col) body += glow(W3(a, b, z2), 4.5, col, .32) + glow(W3(a, b, z2), 2.0, mix(col, '#ffffff', .55), .75);
+    const inner = () => dies(z1 + .05) + `<path d="${pd(bez(W3(a - .4, b + .4, z1 + .1), W3(a - .4, b + .4, z1 + .5), W3(a + .65, b - .6, z1 + .5), W3(a + .65, b - .6, z1 + .1), 6), false)}" fill="none" stroke="#f3cf5a" ${mw(.07)}/>`
+      + (sg.rgbData ? glow(W3(a - .4, b + .4, z1 + .1), 1, '#c77dff', .6) : '');
+    IT.push(aIt(a - 1.75, b - 1.75, PT, a + 1.75, b + 1.75, z2, ghost(body, inner, k))); }
+
+  module(IT, st, k, sg);
+}
+
+/* ---------- ESP32-S3-WROOM-1: module PCB with castellations and antenna, shield can, insides ---------- */
+function module(IT, st, k, sg){
+  const zc = MZ + .02;
+  { let mp = aBox(3.7, 37.5, PT, 21.7, BL, MZ, MODP, .6);
+    let cs = '';
+    if (vis([-1, 0, 0])) for (let i = 0; i < 14; i++){ const y = BY0 - (38.6 + i*1.27); cs += pd(on(PX(BX0 + 3.68), rectUV(y - .35, PT, y + .35, MZ))); }
+    if (vis([1, 0, 0])) for (let i = 0; i < 14; i++){ const y = BY0 - (38.6 + i*1.27); cs += pd(on(PX(BX0 + 21.72), rectUV(y - .35, PT, y + .35, MZ))); }
+    if (vis([0, 1, 0])) for (const a of PADS) cs += pd(on(PY(BY0 - 37.48), rectUV(BX0 + a - .35, PT, BX0 + a + .35, MZ)));
+    if (cs) mp += fill(cs, GOLD.m);
+    // antenna end: the copper meander under the solder mask, bright in see-through, glowing while it radiates
+    const ap = pd(ANT.map(([a, b]) => W3(a, b, zc)), false) + pd(ANTG.map(([a, b]) => W3(a, b, zc)), false);
+    mp += `<path d="${ap}" fill="none" stroke="${mix(MODP.l, COP, .35 + .65*k)}" ${mw(.45)} stroke-linejoin="round"/>`;
+    if (sg.radio) mp += `<path d="${ap}" fill="none" stroke="#8fd0ff" ${mw(1.2)} opacity=".55" stroke-linejoin="round"/>`;
+    mp += fill(pd(acirc(17.6, 56.8, zc + .01, .35, 8)), COP);
+    IT.push(aIt(3.7, 37.5, PT, 21.7, BL, MZ, mp)); }
+
+  // shield can over the chip, flash, crystal and RF parts
+  const body = aBox(4.2, 38, MZ, 21.2, 56, CZ, CAN, .8) + (vis([0,0,1]) ? txA(12.7, 52.2, CZ + .02, 'ESPRESSIF', 1.5, '#5a5651', 800)
+    + txA(12.7, 48.6, CZ + .02, 'ESP32-S3-WROOM-1', 1.12, '#5a5651', 800) + txA(12.7, 46.6, CZ + .02, 'N8R8', 1.0, '#6d6a64', 700)
+    + txA(12.7, 41.4, CZ + .02, 'FCC ID 2AC7Z-ESPS3WROOM1', .62, '#7d7a74', 700) + shape(acirc(8.0, 51.9, CZ + .02, .8, 14), '#d0d5d7', .2) : '');
+  const inner = () => {
+    // module copper from the pads to the chip
+    let tr = ''; for (const a of PADS) tr += pd([W3(a, 37.6, zc), W3(a + (CHIPC[0] - a)*.45, 43.4, zc)], false);
+    for (let i = 0; i < 14; i++){ const b = 38.6 + i*1.27; if (b > 43 && b < 51){ tr += pd([W3(3.7, b, zc), W3(9.1, CHIPC[1] + (b - CHIPC[1])*.6, zc)], false) + pd([W3(21.7, b, zc), W3(16.3, CHIPC[1] + (b - CHIPC[1])*.6, zc)], false); } }
+    const rf = [[16.2, 49.6], [17.6, 51.6], [17.6, 56.8]];
+    let s = `<path d="${tr}" fill="none" stroke="${COP}" ${mw(.18)} opacity=".8"/>` + `<path d="${pd(rf.map(([a, b]) => W3(a, b, zc)), false)}" fill="none" stroke="${sg.radio ? '#8fd0ff' : COP}" ${mw(.4)}/>`;
+    const PI = [];
+    // ESP32-S3R8 QFN-56: the CPU die with its regions, the PSRAM die beside it, bond wires
+    { const [a, b] = CHIPC, h = 3.5, zt = MZ + .9;
+      let e = ''; for (let i = 0; i < 14; i++){ const d = -3.25 + i*.5;
+        e += aBox(a + d - .1, b - h - .02, MZ, a + d + .1, b - h + .25, MZ + .15, TIN, .08) + aBox(a + d - .1, b + h - .25, MZ, a + d + .1, b + h + .02, MZ + .15, TIN, .08); }
+      const top = vis([0,0,1]) ? txA(a, b + .6, zt + .02, 'ESP32-S3R8', .8, '#c9c4ba', 800) + txA(a, b - .6, zt + .02, '2450', .65, '#a9a499') : '';
+      const dz = MZ + .45, R = (r, col, lit) => shape(arect(r[0], r[1], r[2], r[3], dz + .04), lit ? mix(col, '#ffffff', .35) : col, .1) + (lit ? glow(W3((r[0] + r[2])/2, (r[1] + r[3])/2, dz + .05), 1.3, mix(col, '#ffffff', .5), .45) : '');
+      const dieIn = () => dieArt(...DIE0, dz, ringWires(...DIE0, 6, .9).filter(w => w[0] < 13.5), '#3f4a78')
+        + dieArt(...PSR, dz, ringWires(...PSR, 4, .6).filter(w => w[2] > PSR[0] || w[3] !== w[1]), '#5c4a78')
+        + R(REG.core0, '#5a7ad0', sg.core0) + R(REG.core1, '#d08a3a', sg.core1) + R(REG.sram, '#6a8a6a', sg.run)
+        + R(REG.radio, '#3e86d9', sg.radio) + R(REG.rtc, '#43c25c', sg.rtc) + (sg.run ? glow(W3(14.75, 47, dz + .05), 1, '#c9a0ff', .3) : '');
+      PI.push(aIt(a - h, b - h, MZ, a + h, b + h, zt, ghost(aBox(a - h, b - h, MZ, a + h, b + h, zt, CHIP, .5) + top + e, dieIn, k))); }
+    // 8 MB SPI flash (USON-8), 40 MHz crystal, decoupling caps, RF matching (L, C, C)
+    { const [a, b] = FLASH, zt = MZ + .6;
+      PI.push(aIt(a - 1.9, b - 2.4, MZ, a + 1.9, b + 2.4, zt, aBox(a - 1.9, b - 2.4, MZ, a + 1.9, b + 2.4, zt, CHIP, .4)
+        + (vis([0,0,1]) ? txA(a, b + .2, zt + .02, '8MB', .8, '#c9c4ba', 800) + txA(a, b - .9, zt + .02, 'FLASH', .55, '#a9a499') : '')
+        + (sg.flash ? glow(W3(a, b, zt), 2.4, sg.wr ? '#f2c230' : '#8fb3ff', .5) : ''))); }
+    { const [a, b] = XTAL, zt = MZ + .8;
+      PI.push(aIt(a - 1.25, b - 1.6, MZ, a + 1.25, b + 1.6, zt, aBox(a - 1.25, b - 1.6, MZ, a + 1.25, b + 1.6, MZ + .25, CAPT, .3) + aBox(a - 1.1, b - 1.45, MZ + .25, a + 1.1, b + 1.45, zt, CAN, .35)
+        + (vis([0,0,1]) ? txA(a, b - .3, zt + .02, '40.0', .6, '#5a5651', 800) : '') + (sg.run || sg.dl ? glow(W3(a, b, zt), 1.2, GLOWC, .35) : ''))); }
+    for (const [a, b, al] of [[8.2, 45.6, false], [8.2, 48.4, false], [17.3, 45.8, false], [11.0, 51.9, true], [13.6, 51.9, true], [16.5, 53.2, true], [18.7, 53.2, true]]){
+      const la = al ? 1.0 : .5, lb = al ? .5 : 1.0, mm = a > 16 && b > 52 ? matOf('#3a3632') : CAPT;
+      PI.push(aIt(a - la/2, b - lb/2, MZ, a + la/2, b + lb/2, MZ + .35, aBox(a - la/2, b - lb/2, MZ, a + la/2, b + lb/2, MZ + .35, mm, .15))); }
+    PI.push(aIt(17.1, 54.0, MZ, 18.1, 54.6, MZ + .4, aBox(17.1, 54.0, MZ, 18.1, 54.6, MZ + .4, matOf('#b8b2a6'), .15)));   // RF inductor
+    return s + byDepth(PI); };
+  IT.push(aIt(4.2, 38, MZ, 21.2, 56, CZ, ghost(body, inner, k)));
+}
+
+/* ---------- phone: browser on the board's page ---------- */
+function phoneSvg(st, sg){
+  const [x0, y0, x1, y1] = PHN, z = PHZ + .04, ym = (y0 + y1)/2;
+  const A = on(PZ(BH), rrUV(x0, y0, x1, y1, 8, 5)), B = on(PZ(PHZ), rrUV(x0, y0, x1, y1, 8, 5));
+  let body = loft(A, B, n => toneI(n, PHM)) + fill(pd(B), PHM.l) + ink(pd(B), .9) + hullInk([...A, ...B], 1.8);
+  let btn = ''; for (const [ya, yb] of [[118, 126], [106, 114]]) btn += box(x0 - .7, ya, BH + 2.6, x0 + .5, yb, BH + 4.8, PHM, toneI, .5);
+  btn += box(x1 - .5, 112, BH + 2.6, x1 + .7, 124, BH + 4.8, PHM, toneI, .5);
+  const sideFirst = !vis([-1, 0, 0]) && !vis([1, 0, 0]);
+  let s = (vis([-1, 0, 0]) || vis([1, 0, 0]) ? body + btn : btn + body);
+  if (sideFirst) s = btn + body;
+  // screen
+  const tc = '#e8f0f2', dim = '#8a979c';
+  s += shape(on(PZ(z), rrUV(x0 + 2.2, y0 + 2.2, x1 - 2.2, y1 - 2.2, 6.2, 5)), '#14191b', .6);
+  s += fill(pd(on(PZ(z + .01), rrUV(x0 + 3, y0 + 3, x1 - 3, y1 - 3, 5.4, 5))), '#f4f2ea');
+  s += shape(on(PZ(z + .02), rrUV(x0 + 25, y1 - 6.2, x1 - 25, y1 - 3.6, 1.2, 3)), '#14191b', .2);   // front camera pill
+  // status bar + address bar
+  s += txPh(x0 + 7.4, y1 - 14, z + .03, '9:41', 2.6, '#2b2724', 800);
+  let w = ''; for (const r of [1.0, 1.9, 2.8]) w += pd(on(PZ(z + .03), arcUV(x0 + 8, y0 + 18, r, 135, 225, 6)).map(([x, y, zz]) => [x, y, zz]), false);
+  s += `<path d="${w}" fill="none" stroke="#2b2724" ${mw(.5)} stroke-linecap="round"/>` + txPh(x0 + 7.4, y0 + 32, z + .03, 'HOME-2G', 2.2, '#2b2724', 700);
+  s += shape(on(PZ(z + .03), rrUV(x0 + 10, y0 + 12, x0 + 16, y1 - 12, 3, 4)), '#e2ded2', .3);
+  const url = st.page === 'none' && !st.pkt ? 'SEARCH OR TYPE ADDRESS' : '192.168.1.42' + (st.pkt && st.pkt.kind === 'rgb' ? '/RGB?C=' + RGBN[st.pkt.c] : st.pkt && st.pkt.kind === 'sleep' ? '/SLEEP' : '');
+  s += txPh(x0 + 14.1, ym, z + .04, url, 2.4, st.page === 'none' && !st.pkt ? '#9a958a' : '#2b2724', 700);
+  const loading = st.pkt && (st.pkt.kind === 'get' || st.page !== 'shown');
+  if (st.pkt){ const u = Math.min(1, st.pkt.t / (UP + HANDLE + DOWN)), ya = y1 - 12, yb = ya - (ya - y0 - 12)*u;
+    s += fill(pd(on(PZ(z + .05), rectUV(x0 + 16.2, yb, x0 + 17, ya))), BLUE); }
+  const X0 = x0 + 20;
+  if (st.page === 'shown' && !loading || (st.page === 'shown' && st.pkt && st.pkt.kind !== 'get')){
+    s += txPh(X0 + 7, ym, z + .04, 'ESP32-S3 RGB LED', 4.0, '#231e16', 800);
+    [1, 2, 3].forEach((c, i) => { const yc = ym + 36 - i*24, cur = st.rgb === c, tap = st.pkt && st.pkt.kind === 'rgb' && st.pkt.c === c;
+      s += shape(on(PZ(z + .04), rrUV(X0 + 11, yc - 9, X0 + 21, yc + 9, 2.4, 4)), tap ? mix(RGBC[c], '#ffffff', .35) : RGBC[c], cur ? 1.1 : .5);
+      s += txPh(X0 + 17.2, yc, z + .05, RGBN[c], 2.6, '#ffffff', 800); });
+    const tapS = st.pkt && st.pkt.kind === 'sleep';
+    s += shape(on(PZ(z + .04), rrUV(X0 + 11, ym - 58, X0 + 21, ym - 34, 2.4, 4)), tapS ? '#8a7fb0' : '#5c5470', .5) + txPh(X0 + 17.2, ym - 46, z + .05, 'SLEEP 20 S', 2.4, '#ffffff', 800);
+    s += txPh(X0 + 27.5, ym, z + .04, 'LED ' + RGBN[st.rgb] + '   SERVED BY CORE 1   RSSI -52 DBM', 2.0, '#6d675c', 700);
+  } else if (st.page === 'bye'){
+    s += txPh(X0 + 9, ym, z + .04, 'GOING TO DEEP SLEEP', 3.6, '#231e16', 800) + txPh(X0 + 16, ym, z + .04, 'BACK IN 20 S', 2.6, '#6d675c', 700);
+  } else if (st.page === 'dead' && !st.pkt){
+    s += txPh(X0 + 9, ym, z + .04, 'NO REPLY FROM 192.168.1.42', 3.0, '#231e16', 800) + txPh(X0 + 16, ym, z + .04, 'IS THE BOARD ON THE NETWORK', 2.3, '#6d675c', 700);
+  } else if (loading){
+    s += txPh(X0 + 10, ym, z + .04, 'LOADING', 3.0, '#6d675c', 800);
+  } else {
+    s += txPh(X0 + 10, ym, z + .04, 'NEW TAB', 3.4, '#9a958a', 800);
+  }
+  s += shape(on(PZ(z + .05), rrUV(x1 - 5, ym - 14, x1 - 4.2, ym + 14, .4, 2)), '#2b2724', .2);   // home bar
+  return act('phone', s);
+}
+
+/* ---------- USB-C plug and cable ---------- */
+function plugPose(p){
+  if (p <= .5){ const e = ease(p/.5); return { yb: FACE + .4 + 6.5 + 1.5*e, zc: ZREST + (ZJACK - ZREST)*e + 1.5*Math.sin(Math.PI*e) }; }
+  const e = ease((p - .5)/.5); return { yb: FACE + .4 + 7.2 - 7.2*e, zc: ZJACK };
+}
+let CABLE = [];
+function usbPlug(IT, st, sg){
+  const { yb, zc } = plugPose(st.plugK), xc = PLUGX;
+  IT.push({ box: [[xc - 6.2, yb, zc - 3.25], [xc + 6.2, yb + 15, zc + 3.25]], svg: act('plug', stad(yb, yb + 15, xc, zc, 12.4, 6.5, 3, PLUGM, 1.1)
+    + (vis([0,0,1]) ? txT([xc, yb + 7.5, zc + 3.27], [1,0,0], [0,1,0], 'USB-C', 1.6, '#8d877a', 800) : '')) });
+  const s0 = zc === ZJACK ? Math.max(yb - 6.6, FACE) : yb - 6.6;   // in the port only the part outside shows
+  if (s0 < yb - .05) IT.push({ box: [[xc - 4.15, s0, zc - 1.25], [xc + 4.15, yb, zc + 1.25]], svg: act('plug', stad(s0, yb, xc, zc, 8.3, 2.5, 1.25, CAN, .7)) });
+  IT.push({ box: boxOf([[xc - 2.6, yb + 15, zc - 2.6], [xc + 2.6, yb + 21, zc + 2.6]]), svg: rod([xc, yb + 15, zc], [xc, yb + 21, zc], 2.6, PLUGM, toneI, .8, 2.0, 16) });
+  CABLE = bend([[xc, yb + 21, zc], ...(zc > BH + 2.5 ? [[xc, yb + 25, (zc + BH + 1.9)/2]] : []), [xc, DD - 1.2, BH + 1.9]], 3);
+  IT.push(...cable(CABLE, '#55504a', 1.9, 5));
+  // USB packets on the cable while the computer talks to the bridge
+  if (sg.usb && st.plugK >= 1) for (let i = 0; i < 4; i++){ const p = polyAt(CABLE, 1 - ((st.t*.8 + i/4) % 1)); p[2] += 1.95;
+    IT.push({ box: boxOf([p], .6), svg: glow(p, 1.1, '#ffffff', .95) + glow(p, 2, BLUE, .4) }); }
+}
+const HANG = () => { const xs = PLUGX; return cable(bend([[xs, DD - 1.2, BH + 1.9], [xs, DD + .6, BH + 1.2], [xs, DD + 2.1, BH - 1], [xs, DD + 2.3, -16]], 2.5), '#55504a', 1.9, 50).map(p => p.svg).join(''); };
+
+/* ---------- the air: Wi-Fi rings around the antenna, a packet between phone and board ---------- */
+const ANTC = W3(12.7, 60, MZ + .3), PHC = [(PHN[0] + PHN[2])/2, (PHN[1] + PHN[3])/2, PHZ + .5];
+function airSvg(st, sg){
+  let s = '';
+  if (sg.radio || sg.wifi){ for (let i = 0; i < 3; i++){ const ph = (st.t*.9 + i/3) % 1, r = 5 + 30*ph, o = (sg.radio ? .6 : .28)*(1 - ph);
+    s += `<path d="${pd(on(PZ(ANTC[2]), ellUV(ANTC[0], ANTC[1], r, r, 36)))}" fill="none" stroke="${BLUE}" ${mw(.6)} opacity="${f(o)}"/>`; } }
+  const p = st.pkt;
+  if (p){ let u = null;
+    if (p.t < UP) u = p.t / UP; else if (p.ok && p.t > UP + HANDLE && p.t < UP + HANDLE + DOWN) u = 1 - (p.t - UP - HANDLE) / DOWN;
+    if (u != null){ const e = ease(u), q = lerp3(PHC, ANTC, e); q[2] += 14*Math.sin(Math.PI*e);
+      s += glow(q, 3.2, BLUE, .3) + glow(q, 1.4, '#ffffff', .95); } }
+  return s;
+}
+
+/* ---------- scene ---------- */
+const DTOP = boardTop(0, 0, DW, DD, BH, DRAD);
+let LABELS = [];
+// the board's bounds stretched far out on the side a column must not go, so xrCallouts puts it on the other
+function sideB(side){ const B = [BX0, BX0 + BW, BY0 - BL, FACE, BH, CZ], dx = Dv(1, 0, 0)[0], dy = Dv(0, 1, 0)[0], a = Math.abs(dx) > Math.abs(dy) ? 0 : 1, d = a ? dy : dx;
+  if (d*side > 0) B[2*a] -= 1000; else B[2*a + 1] += 1000; return B; }
+function scene(st, m){
+  const k = ease(st.xr || 0), sg = sig(st);
+  const front = !facing([0, 1, 0]);
+  let s = (front ? HANG() : '') + board(0, 0, DW, DD, BH, DRAD, WOOD) + (front ? '' : HANG());
+  const { yb, zc } = plugPose(st.plugK);
+  const sh = [
+    [...aon(PT, rrUV(0, 0, BW, BL, 1.2, 3)), ...aon(BH, rectUV(0, 6, BW, 62)), W3(4.2, 38, CZ), W3(21.2, 56, CZ)],
+    [...on(PZ(PHZ), rrUV(PHN[0], PHN[1], PHN[2], PHN[3], 8, 4)), ...on(PZ(BH), rrUV(PHN[0], PHN[1], PHN[2], PHN[3], 8, 4))],
+    [[PLUGX - 6, yb + 15, zc + 3], [PLUGX + 6, yb, zc + 3], [PLUGX - 6, yb, BH], [PLUGX + 6, yb + 15, BH], [PLUGX - 6, yb + 15, BH], [PLUGX + 6, yb, zc + 3]],
+  ];
+  s += clipTo(DTOP, sh.map(p => castShadow(p, BH)).join(''));
+  // the board as one part: what hangs under the PCB, the PCB, then what sits on it (the camera always looks down)
+  const BI = []; devkit(BI, st, m, k, sg); const pcb = BI.shift(), low = BI.filter(it => it.box[1][2] <= PB + 1e-6);
+  const IT = [{ box: [[BX0, BY0 - BL, BH], [BX0 + BW, FACE, CZ]], svg: byDepth(low) + pcb.svg + byDepth(BI.filter(it => !low.includes(it))) }];
+  IT.push({ box: [[PHN[0] - .7, PHN[1], BH], [PHN[2] + .7, PHN[3], PHZ]], svg: phoneSvg(st, sg) });
+  usbPlug(IT, st, sg);
+  s += byDepth(IT) + airSvg(st, sg);
+  LABELS = labels(st, sg, k);
+  if (LABELS.length){   // two columns, one each side of the board
+    const all = LABELS.map(it => ({ it, X: P(...it.at)[0] })).sort((p, q) => p.X - q.X).map(p => p.it), h = (all.length + 1) >> 1;
+    s += xrCallouts(all.slice(0, h), sideB(-1)) + xrCallouts(all.slice(h), sideB(1)); }
+  return s;
+}
+function labels(st, sg, k){
+  const { yb, zc } = plugPose(st.plugK), shown = st.page === 'shown';
+  if (k > .6) return [
+    { at: W3(4.2, 53, CZ), text: 'SHIELD CAN', on: false },
+    { at: W3(9.4, 44.0, MZ + .9), text: 'ESP32-S3 CHIP', on: sg.run },
+    { at: W3(10.6, 48.0, MZ + .5), text: 'CORE 0 WI-FI STACK', on: sg.core0 },
+    { at: W3(12.5, 48.0, MZ + .5), text: 'CORE 1 SKETCH', on: sg.core1 },
+    { at: W3(10.6, 46.4, MZ + .5), text: '512 KB SRAM', on: sg.run },
+    { at: W3(12.5, 46.4, MZ + .5), text: 'WI-FI RADIO', on: sg.radio },
+    { at: W3(11.5, 45.5, MZ + .5), text: 'RTC AND ULP', on: sg.rtc },
+    { at: W3(14.75, 47.0, MZ + .5), text: '8 MB PSRAM', on: sg.run },
+    { at: W3(FLASH[0], FLASH[1], MZ + .6), text: '8 MB FLASH', on: sg.flash },
+    { at: W3(XTAL[0], XTAL[1], MZ + .8), text: '40 MHZ CRYSTAL', on: sg.run || sg.dl },
+    { at: W3(17.6, 53.6, MZ + .4), text: 'RF MATCHING', on: sg.radio },
+    { at: W3(10.5, 60.2, MZ), text: 'PCB ANTENNA', on: sg.radio },
+    { at: W3(BRG[0], BRG[1], PT + .45), text: 'USB-UART BRIDGE', on: sg.usb || sg.ser },
+    { at: W3(15.2, 29, PT), text: 'TX RX LINES', on: sg.ser },
+    { at: W3(8, 25, PT + .9), text: 'AUTO-PROGRAM TRANSISTORS', on: sg.auto },
+    { at: W3(20.6, 27, PT + .7), text: 'EN RESET RC', on: sg.auto || st.rstK > .5 },
+    { at: W3(PORTU, 2.6, PT + 1.96), text: 'UART USB-C PORT', on: sg.pow },
+    { at: W3(PORTN, 2.6, PT + 1.96), text: 'NATIVE USB PORT', on: false },
+    { at: W3(3.6, 7.65, PT + .35), text: 'CC RESISTORS', on: sg.pow },
+    { at: W3(12.7, 9.5, PT + .9), text: 'VBUS DIODES', on: sg.pow },
+    { at: W3(PORTU, 14.2, PT + 1), text: 'ESD PROTECTION', on: sg.usb },
+    { at: W3(LDO[0], LDO[1] + .3, PT + .9), text: '3.3V LDO', on: sg.pow },
+    { at: W3(BOOT[0], BOOT[1], PT + 2.1), text: 'BOOT BUTTON', on: sg.auto },
+    { at: W3(RSTB[0], RSTB[1], PT + 1), text: 'RESET SNAP DOME', on: st.rstK > .5 || sg.auto },
+    { at: W3(RGBP[0] - .1, RGBP[1] - .6, PT + 1.1), text: 'RGB LED DIES', on: sg.rgb > 0 },
+    { at: W3(RGBP[0] - .4, RGBP[1] + .4, PT + 1.1), text: 'LED DRIVER IC', on: sg.rgbData },
+    { at: W3(10.6, 35.4, PT), text: 'GPIO38 DATA LINE', on: sg.rgbData },
+    { at: W3(PLED[0], PLED[1], PT + .7), text: 'POWER LED', on: sg.pow },
+    { at: W3(J3A, 30, BH + 4), text: 'HEADER PINS', on: false },
+    { at: [PLUGX + 6.2, yb + 7.5, zc], text: 'USB-C PLUG', on: sg.pow },
+    { at: [PHN[0] + 24, PHN[1] + 30, PHZ], text: 'PHONE', on: shown },
+  ];
+  return [
+    { at: W3(12.7, 47, CZ), text: 'ESP32-S3 MODULE', on: sg.run },
+    { at: W3(10.5, 60.2, MZ), text: 'PCB ANTENNA', on: sg.radio },
+    { at: W3(BRG[0], BRG[1], PT + .85), text: 'USB-UART BRIDGE', on: sg.usb || sg.ser },
+    { at: W3(PORTU, 3, PT + 3.26), text: 'UART PORT', on: sg.pow },
+    { at: W3(PORTN, 3, PT + 3.26), text: 'USB PORT', on: false },
+    { at: W3(LDO[0], LDO[1], PT + 1.6), text: '3.3V LDO', on: sg.pow },
+    { at: W3(RGBP[0], RGBP[1], PT + 1.55), text: 'RGB LED', on: sg.rgb > 0 },
+    { at: W3(PLED[0], PLED[1], PT + .7), text: 'POWER LED', on: sg.pow },
+    { at: W3(BOOT[0], BOOT[1], PT + 2.1), text: 'BOOT BUTTON', on: sg.auto },
+    { at: W3(RSTB[0], RSTB[1], PT + 2.1), text: 'RESET BUTTON', on: st.rstK > .5 || sg.auto },
+    { at: W3(J1A, 30, PT + 1), text: 'PIN HEADERS', on: false },
+    { at: [PHN[0] + 24, PHN[1] + 30, PHZ], text: 'PHONE', on: shown },
+    { at: [PLUGX, yb + 7.5, zc + 3.25], text: 'USB-C CABLE', on: sg.pow },
+  ];
+}
+
+/* ---------- behaviour (one state object, one clock) ---------- */
+let ui, looping = false;
+const busy = st => !st.frz && (st.plugK !== (st.plugged ? 1 : 0) || st.rstT != null || ['boot', 'dl', 'sleep'].includes(st.phase)
+  || st.wifi === 'join' || !!st.pkt || st.serT > 0 || st.rgbT > 0);
+function setPh(st, ph){ st.phase = ph; st.ph0 = st.t; if (ph === 'boot'){ st.rgb = 0; st.rgbSet = false; } }   // a restart forgets the colour (RAM)
+function tick(st, dt){
+  st.t += dt;
+  const goP = st.plugged ? 1 : 0; st.plugK = goP > st.plugK ? Math.min(1, st.plugK + dt/1.1) : goP < st.plugK ? Math.max(0, st.plugK - dt/.8) : goP;
+  const pow = st.plugged && st.plugK >= 1;
+  if (!pow && st.phase !== 'off'){ setPh(st, 'off'); st.wifi = 'off'; st.serT = 0; st.queue = null; }
+  if (pow && st.phase === 'off'){ setPh(st, 'boot'); st.boot0 = true; }
+  const el = st.t - st.ph0;
+  if (st.phase === 'boot' && el > .6){ setPh(st, 'run'); st.boot0 = false;
+    if (st.sketch === 'web' && st.creds){ st.wifi = 'join'; st.wifiT = 0; } }
+  if (st.phase === 'dl' && el >= 3.4){ st.sketch = 'web'; setPh(st, 'boot'); ui.flash('Hard reset: the new sketch boots from flash', 2000); }
+  if (st.phase === 'sleep'){ st.wake = Math.max(0, st.wake - dt);
+    if (st.wake <= 0){ setPh(st, 'boot'); ui.flash('The RTC timer wakes the chip: it boots and rejoins HOME-2G', 2200); } }
+  if (st.wifi === 'join' && st.phase === 'run'){ st.wifiT += dt;
+    if (st.wifiT >= 1.8){ st.wifi = 'on'; st.creds = true; if (!st.rgbSet) st.rgb = 2; st.rgbT = .3;
+      if (st.queue){ const q = st.queue; st.queue = null; sendPkt(st, q); } } }
+  if (st.serT > 0){ st.serT -= dt;
+    if (st.serT <= 0){ st.serT = 0; const w = st.serThen; st.serThen = null;
+      if (w === 'join' && st.phase === 'run'){ st.wifi = 'join'; st.wifiT = 0; }
+      if (w === 'sleep' && st.phase === 'run') goSleep(st); } }
+  if (st.rgbT > 0) st.rgbT = Math.max(0, st.rgbT - dt);
+  if (st.pkt){ const p = st.pkt; p.t += dt;
+    if (!p.hit && p.t >= UP){ p.hit = true; p.ok = sig(st).wifi;
+      if (p.ok && p.kind === 'rgb'){ st.rgb = p.c; st.rgbSet = true; st.rgbT = .35; } }
+    if (p.ok && p.t >= UP + HANDLE + DOWN){ st.pkt = null;
+      if (p.kind === 'sleep'){ st.page = 'bye'; goSleep(st); } else st.page = 'shown'; }
+    else if (p.ok === false && p.t >= UP + 1.4){ st.pkt = null; st.page = 'dead'; ui.flash('No reply: the board is not on the network', 1800); } }
+  if (st.rstT != null){ st.rstT += dt; const r = st.rstT;
+    st.rstK = r < .08 ? r/.08 : r < .38 ? 1 : Math.max(0, 1 - (r - .38)/.08);
+    if (r >= .38 && !st.rstDone){ st.rstDone = true; if (pow){ st.wifi = 'off'; st.serT = 0; setPh(st, 'boot'); } }
+    if (r > .46){ st.rstT = null; st.rstK = 0; } }
+}
+function goSleep(st){ setPh(st, 'sleep'); st.wake = 20; st.wifi = 'off'; st.queue = null;
+  ui.flash('Deep sleep: Wi-Fi and both cores off, only the RTC timer runs', 2400); }
+function sendPkt(st, q){ st.pkt = { kind: q.kind, c: q.c, t: 0, hit: false, ok: null }; if (q.kind === 'get' && st.page !== 'shown') st.page = 'none'; kick(); }
+function kick(){
+  if (looping) return; looping = true;
+  ui.animate(dt => { tick(ui.st, dt); const b = busy(ui.st); if (!b) looping = false; return b; });
+}
+function plug(st){
+  st.frz = false;
+  if (!st.plugged){ st.plugged = true; ui.flash('5 V in on the UART port: the LDO makes 3.3 V, the power LED lights', 2000); }
+  else { st.plugged = false; ui.flash('Unplugged: the sketch stays in flash', 1600); }
+  kick();
+}
+function upload(st){
+  st.frz = false;
+  if (!st.plugged) return ui.flash('Plug the cable into the UART port first');
+  if (st.plugK < 1) return ui.flash('Wait for the plug to seat');
+  if (st.phase === 'dl') return ui.flash('Already uploading');
+  st.wifi = 'off'; st.pkt = null; st.serT = 0; st.queue = null; setPh(st, 'dl');
+  ui.flash('DTR and RTS hold IO0 low and pulse EN: the chip restarts in download mode', 2400); kick();
+}
+function join(st){
+  st.frz = false;
+  if (!st.plugged || st.plugK < 1) return ui.flash('Plug the cable into the UART port first');
+  if (st.phase === 'sleep') return ui.flash(`Asleep: the timer wakes it in ${Math.ceil(st.wake)} s (or press RST)`);
+  if (st.phase !== 'run') return ui.flash('Wait for it to boot');
+  if (st.sketch !== 'web') return ui.flash('Upload the sketch first: the factory app has no Wi-Fi code');
+  if (st.wifi === 'on') return ui.flash('Already on HOME-2G as 192.168.1.42');
+  if (st.wifi === 'join' || st.serT > 0) return;
+  st.serT = .5; st.serThen = 'join'; ui.flash('The network name and password go down the serial port', 1800); kick();
+}
+function openPage(st, kind, c){
+  st.frz = false;
+  if (st.pkt) return ui.flash('The phone is waiting for a reply');
+  const sg = sig(st);
+  if (sg.web && st.wifi === 'off'){ st.queue = { kind, c }; return join(st); }   // join first, then load
+  if (sg.join || st.serT > 0){ st.queue = { kind, c }; return ui.flash('Still joining HOME-2G: the page loads next'); }
+  sendPkt(st, { kind, c });
+}
+function sleepNow(st){
+  st.frz = false;
+  if (!st.plugged || st.plugK < 1) return ui.flash('No power: plug into UART first');
+  if (st.phase === 'sleep') return ui.flash(`Already asleep: wakes in ${Math.ceil(st.wake)} s`);
+  if (st.phase !== 'run') return ui.flash('Wait for it to boot');
+  if (st.sketch !== 'web') return ui.flash('The factory app has no sleep code: upload the sketch first');
+  if (st.pkt) return ui.flash('The phone is waiting for a reply');
+  if (st.wifi === 'on' && st.page === 'shown') return sendPkt(st, { kind: 'sleep' });
+  st.serT = .5; st.serThen = 'sleep'; ui.flash('Sleep command sent over the serial port', 1600); kick();
+}
+function pressReset(st){
+  st.frz = false;
+  if (st.rstT != null) return;
+  if (st.phase === 'dl') return ui.flash('Wait: the upload is writing flash');
+  st.rstT = 0; st.rstDone = false;
+  if (!st.plugged || st.plugK < 1) ui.flash('No power: nothing to reset');
+  else ui.flash(st.phase === 'sleep' ? 'RST wakes it now: the chip boots from flash' : 'EN pulled low: the chip restarts', 1800);
+  kick();
+}
+const curOf = st => { const sg = sig(st);
+  if (!sg.pow) return '0 mA';
+  if (sg.sleep) return '8 µA';
+  const v = sg.boot ? 62 : sg.dl ? 58 : sg.atBoard ? 165 : sg.join ? 128 : sg.wifi ? 76 : 44;
+  return v + ' mA'; };
+const stateOf = st => { const sg = sig(st);
+  if (!sg.pow) return 'off';
+  if (sg.sleep) return `asleep ${Math.ceil(st.wake)} s`;
+  if (sg.dl) return st.t - st.ph0 < .6 ? 'ROM sync' : `flash ${Math.round(prog(st)*100)}%`;
+  if (sg.boot) return 'booting';
+  return st.sketch === 'web' ? 'WebRGB' : 'factory app'; };
+
+ui = mountFigure({
+  fig:'22', title:'ESP32-S3 DevKit', size:[DW, DD, 24], palette:'mint', turn:'full',
+  state:{ t:0, plugged:false, plugK:0, phase:'off', ph0:0, boot0:false, sketch:'factory', creds:false, wifi:'off', wifiT:0,
+    page:'none', rgb:0, rgbSet:false, rgbT:0, pkt:null, queue:null, serT:0, serThen:null, wake:0, rstT:null, rstK:0, rstDone:false, frz:false },
+  scene,
+  stats: st => [
+    { label:'Chip current', value: curOf(st) },
+    { label:'Wi-Fi', value: sig(st).wifi ? '-52 dBm' : sig(st).join ? 'joining' : 'off', small:true },
+    { label:'Chip', value: stateOf(st), small:true } ],
+  buttons:[
+    { label:'Plug into UART', onClick: st => plug(st) },
+    { label:'Upload sketch', onClick: st => upload(st) },
+    { label:'Join Wi-Fi', onClick: st => join(st) },
+    { label:'Open web page', choices: st => [
+      { label:'Load 192.168.1.42', onClick: st => openPage(st, 'get') },
+      ...[1, 2, 3].map(c => ({ label:'Tap ' + RGBN[c], current: st.rgb === c && sig(st).wifi, onClick: st => openPage(st, 'rgb', c) })) ] },
+    { label:'Deep sleep', onClick: st => sleepNow(st) },
+  ],
+  acts:{ plug: st => plug(st), reset: st => pressReset(st), boot: () => ui.flash('BOOT holds IO0 low: the upload does this for you'),
+    phone: st => st.page === 'shown' ? openPage(st, 'rgb', st.rgb % 3 + 1) : openPage(st, 'get') },
+  params:(st, q) => {
+    if (q.get('usb') === '1'){ st.plugged = true; st.plugK = 1; st.phase = 'run'; }
+    if (q.get('sketch') === 'web') st.sketch = 'web';
+    if (q.get('wifi') === '1' && st.phase === 'run'){ st.sketch = 'web'; st.wifi = 'on'; st.creds = true; st.rgb = 2; }
+    if (q.get('page') === '1') st.page = 'shown';
+    if (q.has('rgb')) { st.rgb = +q.get('rgb'); st.rgbSet = true; }
+    if (q.get('sleep') === '1' && st.plugged){ st.phase = 'sleep'; st.wake = 14; st.wifi = 'off'; st.frz = true; if (st.page === 'shown') st.page = 'bye'; }
+    if (q.has('up') && st.plugged){ st.phase = 'dl'; st.t = 10; st.ph0 = 10 - +q.get('up'); st.frz = true; }
+    if (q.has('pkt') && st.plugged){ st.pkt = { kind:'get', t: +q.get('pkt'), hit: +q.get('pkt') >= UP, ok: true }; st.frz = true; }
+    if (q.has('plugk')) st.plugK = +q.get('plugk');
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
