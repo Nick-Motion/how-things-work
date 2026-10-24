@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Newton's three laws</title></head><body>
+<script src="core.js"></script>
+<script>
+/* ---------- Truth first: a school linear air track ----------
+   1. A blower pushes air down a hose into the inlet nozzle on one end cap. The track is a hollow aluminium beam with a
+      triangular (apex-up) section; the air fills it and leaks out of rows of 0.6 mm holes drilled every 3 cm along both
+      sloping faces. Each glider is a bent aluminium V resting over the apex: the jets lift it on a film of air a few
+      tenths of a millimetre thick, so it slides with almost no friction.
+   2. Push: the glider's back plate rests against the spring plunger, pushed in 5 cm until the trigger's pawl drops into
+      the notch on the plunger rod (cocked). Pull the trigger: the compressed spring (k = 65 N/m) pushes the rod and the
+      glider. The push is F = k x: 3.25 N at the start, falling to zero as the spring reaches its length, where the rod
+      stops on its collar and the glider leaves it. During the push a = F / m; after it no force acts along the track,
+      so the glider coasts at a steady speed (first law). The photogate halfway down times the 8 cm flag through its
+      infrared beam and the timer shows v = 8 cm / time blocked.
+   3. Add a mass: brass slotted masses (50 g) come off the rack's pegs and go on the glider's two pegs, one on each so it
+      stays level (+100 g a pair). The same spring at the same compression gives the same force, so the heavier glider
+      gets less acceleration (second law) and leaves slower: v = x root(k / m).
+   4. Collide: the second glider is lifted from its wooden rest onto the middle of the track. Glider A's leaf-spring
+      bumper meets B's back plate: while the spring is squeezed it pushes B forward and A back with forces equal in size
+      and opposite in direction at every instant (third law). Equal masses: A stops and B carries on.
+   5. Friction: switch the blower off. The air film goes, the glider sits on the track and kinetic friction
+      (mu about 0.06, its PTFE-lined faces on the anodised aluminium) slows it to a stop. Air on again: it glides.
+   6. At the far end the glider bounces off a rubber band stretched between two posts; back at the start the soft rubber
+      tip pad takes its energy and it stops there. Contacts are shown in slow motion (one tenth speed) so the forces show.
+   Parts (each is held by another):
+   TRACK    air chamber (triangular aluminium tube) . four rows of air holes . two end caps . inlet nozzle on the far cap .
+            hose clamp . support beam under the chamber . cross bar and two levelling screws at the far end . one
+            levelling screw at the plunger end . lock nuts . foot pads . metre scale on the beam . rubber band bumper on
+            two posts from the far cap's tab
+   AIR      blower box . its rocker switch . vents . outlet spigot . motor . impeller . power cord . flexible air hose
+   PLUNGER  tab on the near end cap . plunger tube through the tab . spring inside . rod . collar . rubber tip pad .
+            trigger lever and pivot pin . latch pawl . notch . back cap
+   GLIDERS  two V-shaped aluminium gliders (200 g) . ridge block . back plate . leaf-spring bumper . flag . two mass pegs
+            on glider A . wooden glider rest for B
+   MASSES   mass rack: base and two pegs . four 50 g brass slotted masses
+   TIMING   photogate stand: foot, rod, boss clamp, arm . gate bridge and two prongs . IR LED . phototransistor . beam-break
+            light . cable down the rod and over the bench to the timer . timer case, LCD, board, chip, battery
+   OVERLAYS force arrows on the gliders, velocity arrow, a free-body diagram card per glider (weight, air lift or normal
+            force, push, friction, force from the other glider), air flow in the chamber and jets from the holes */
+
+/* ---------- geometry (x = depth, y = width, z = up; 1 unit = 1 cm) ---------- */
+const BW = 48, BD = 160, BH = 3;
+const TX = 24, ZB = 14, ZA = 19, HW = 5, TY0 = 20, TY1 = 144, R2 = Math.SQRT1_2;
+const GH = 9, GB = 9.4, GF = 11, BMP = 2, FLAG = 8;           // glider half length, back plate face, front bumper tip, bumper depth, flag length
+const ZP = ZA + 2.4, TIP0 = 133, COCK = 5, PT1 = 156.5;        // plunger axis, tip at rest, cocking stroke, tube back end
+const KP = 65, KC = 120, KE = 60, MU = .06, GRAV = 9.81, DRAG = .012;
+const M0 = .2, MD = .05;
+const YE = 24, YG = 96, A_HOME = TIP0 + COCK - GB, B_MID = 60;
+const REST = [38, 55], RACKX = 38, RACKY = [120.5, 125.5], GX = 38;
+const COL = { push:'#e2483d', fric:'#ef7a3c', grav:'#7b4bd1', lift:'#4f86d8', vel:'#2fa35b', air:'#4f9fe0', beam:'#ff3b2f' };
+const BEAMM = matOf('#5d656e'), BRASSM = matOf('#d8b25a'), GATEM = matOf('#434c57'), HOSEM = matOf('#8a9296'), RESTM = matOf('#c99a5e');
+const PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, PADM = matOf('#3b3632'), BFLAG = matOf('#5a82c6');
+const CH = [[TX - HW, ZB], [TX + HW, ZB], [TX, ZA]];
+const CAP = [[TX - HW - .7, ZB - .7], [TX + HW + .7, ZB - .7], [TX, ZA + 1]];
+
+/* ---------- small helpers ---------- */
+const nwL = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const nwAdd = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], nwScl = (a, s) => a.map(v => v*s);
+const nwCl = (v, a, b) => Math.max(a, Math.min(b, v));
+const nwBoxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const nwBx = (x0, y0, z0, x1, y1, z1, M, w = .8) => box(x0, y0, z0, x1, y1, z1, M, toneI, w);
+const nwStroke = (pts, col, w, close = false) => { const d = pd(pts, close);
+  return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(w + .9)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(w)}" stroke-linecap="round" stroke-linejoin="round"/>`; };
+// a prism: a convex profile in (x, z) swept along y; creases inked thin, outline edges heavier, end caps optional
+function nwPrismY(prof, y0, y1, M, w = .9, capA = true, capB = true){
+  const A = on(PY(y0), prof), B = on(PY(y1), prof), cen = avg(A.concat(B)), n = prof.length, vf = [];
+  let s = '';
+  for (let i = 0; i < n; i++){ const j = (i + 1) % n, q = [A[i], A[j], B[j], B[i]];
+    let nr = norm(cross(sub(q[1], q[0]), sub(q[3], q[0]))); if (dot(nr, sub(avg(q), cen)) < 0) nr = nr.map(v => -v);
+    vf.push(vis(nr)); if (vf[i]) s += face(pd(q), toneI(nr, M)); }
+  for (let i = 0; i < n; i++){ const a = vf[(i + n - 1) % n], b = vf[i]; if (a || b) s += ink(pd([A[i], B[i]], false), a && b ? w*.7 : w*1.25); }
+  if (capA && vis([0,-1,0])) s += shape(A, toneI([0,-1,0], M), w);
+  if (capB && vis([0,1,0])) s += shape(B, toneI([0,1,0], M), w);
+  if (!capA) s += ''; return s; }
+// the same for a profile in (y, z) swept along x (the trigger lever)
+function nwPrismX(prof, x0, x1, M, w = .7){
+  const A = on(PX(x0), prof), B = on(PX(x1), prof), cen = avg(A.concat(B)); let s = '';
+  for (let i = 0; i < prof.length; i++){ const j = (i + 1) % prof.length, q = [A[i], A[j], B[j], B[i]];
+    let nr = norm(cross(sub(q[1], q[0]), sub(q[3], q[0]))); if (dot(nr, sub(avg(q), cen)) < 0) nr = nr.map(v => -v);
+    if (vis(nr)) s += shape(q, toneI(nr, M), w*.8); }
+  if (vis([1,0,0])) s += shape(B, toneI([1,0,0], M), w*.8);
+  if (vis([-1,0,0])) s += shape(A, toneI([-1,0,0], M), w*.8);
+  return s; }
+function nwArrow(a, b, col, wd = 1){
+  const A = P(...a), B = P(...b), dx = B[0] - A[0], dy = B[1] - A[1], len = Math.hypot(dx, dy);
+  if (len < .6) return '';
+  const ux = dx/len, uy = dy/len, hl = Math.min(len*.55, 9*INK_K*wd), hw = hl*.5, E = [B[0] - ux*hl*.85, B[1] - uy*hl*.85];
+  const head = `M${f(B[0])} ${f(B[1])}L${f(B[0] - ux*hl - uy*hw)} ${f(B[1] - uy*hl + ux*hw)}L${f(B[0] - ux*hl + uy*hw)} ${f(B[1] - uy*hl - ux*hw)}Z`;
+  const ln = `M${f(A[0])} ${f(A[1])}L${f(E[0])} ${f(E[1])}`;
+  return `<path d="${ln}" fill="none" stroke="${INK}" stroke-width="${f(4.6*wd)}" stroke-linecap="round"/><path d="${ln}" fill="none" stroke="${col}" stroke-width="${f(2.8*wd)}" stroke-linecap="round"/>`
+    + `<path d="${head}" fill="${col}" stroke="${INK}" stroke-width="1.1" stroke-linejoin="round"/>`; }
+// a 2D arrow in screen units (for the free-body cards)
+function nwArrow2(x0, y0, x1, y1, col){
+  const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy); if (len < .5) return '';
+  const ux = dx/len, uy = dy/len, hl = Math.min(len*.6, 6*INK_K), hw = hl*.55, ex = x1 - ux*hl*.85, ey = y1 - uy*hl*.85;
+  return `<path d="M${f(x0)} ${f(y0)}L${f(ex)} ${f(ey)}" fill="none" stroke="${INK}" stroke-width="3.6" stroke-linecap="round"/><path d="M${f(x0)} ${f(y0)}L${f(ex)} ${f(ey)}" fill="none" stroke="${col}" stroke-width="2.1" stroke-linecap="round"/>`
+    + `<path d="M${f(x1)} ${f(y1)}L${f(x1 - ux*hl - uy*hw)} ${f(y1 - uy*hl + ux*hw)}L${f(x1 - ux*hl + uy*hw)} ${f(y1 - uy*hl - ux*hw)}Z" fill="${col}" stroke="${INK}" stroke-width=".9" stroke-linejoin="round"/>`; }
+// screen offset (dx, dy) from a 3D point, as a 3D point (labels for things drawn flat on the screen)
+const nwUnP = (p, dx, dy) => nwAdd(p, nwAdd(nwScl(CAM_R, dx/CAM_K), nwScl(CAM_D, dy/CAM_K)));
+// a cable or hose cut into short pieces (each with its own box) so it sorts with the solids it passes
+function nwWire(pts, col, w = .7, seg = 3){
+  const q = [pts[0]];
+  for (let i = 1; i < pts.length; i++){ const a = pts[i-1], b = pts[i], n = Math.max(1, Math.ceil(Math.hypot(...sub(b, a)) / seg));
+    for (let j = 1; j <= n; j++) q.push(nwL(a, b, j/n)); }
+  const out = [];
+  for (let i = 0; i < q.length - 1; i++) out.push({ box: nwBoxOf([q[i], q[i+1]]), svg: nwStroke([q[i], q[i+1]], col, w) });
+  return out; }
+// byDepth's pairwise sort is not transitive with this many parts: every separated pair that overlaps on screen is an edge,
+// then the parts go out farthest-first
+function nwSort(items){
+  items = items.filter(Boolean); const n = items.length, out = Array.from({length:n}, () => []), deg = new Array(n).fill(0);
+  const dep = items.map(p => depthOf(p.at || boxMid(p.box))), done = new Array(n).fill(false);
+  // each box's outline on screen (the convex hull of its corners): two parts are only ordered if their outlines overlap
+  const hull = q => { q.sort((a, b) => a[0] - b[0] || a[1] - b[1]); const lo = [], hi = [], cr = (o, a, b) => (a[0] - o[0])*(b[1] - o[1]) - (a[1] - o[1])*(b[0] - o[0]);
+    for (const p of q){ while (lo.length > 1 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+    for (const p of q.slice().reverse()){ while (hi.length > 1 && cr(hi[hi.length - 2], hi[hi.length - 1], p) <= 0) hi.pop(); hi.push(p); }
+    return lo.slice(0, -1).concat(hi.slice(0, -1)); };
+  const H = items.map(p => { if (!p.box) return null; const q = [];
+    for (const x of [0, 1]) for (const y of [0, 1]) for (const z of [0, 1]) q.push(P(p.box[x][0], p.box[y][1], p.box[z][2]));
+    return hull(q); });
+  const R = H.map(h => h && [Math.min(...h.map(p => p[0])), Math.min(...h.map(p => p[1])), Math.max(...h.map(p => p[0])), Math.max(...h.map(p => p[1]))]);
+  const apart = (a, b) => { for (const h of [a, b]) for (let i = 0; i < h.length; i++){ const p = h[i], q = h[(i + 1) % h.length], nx = q[1] - p[1], ny = p[0] - q[0];
+      const pa = a.map(v => v[0]*nx + v[1]*ny), pb = b.map(v => v[0]*nx + v[1]*ny);
+      if (Math.max(...pa) <= Math.min(...pb) + 1e-6 || Math.max(...pb) <= Math.min(...pa) + 1e-6) return true; }
+    return false; };
+  const hit = (i, j) => { const a = R[i], b = R[j]; return a && b && a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3] && !apart(H[i], H[j]); };
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++){ const o = hit(i, j) ? sepOrder(items[i], items[j]) : 0;
+    if (o < 0){ out[i].push(j); deg[j]++; } else if (o > 0){ out[j].push(i); deg[i]++; } }
+  let svg = '';
+  for (let c = 0; c < n; c++){ let best = -1;
+    for (let i = 0; i < n; i++) if (!done[i] && (best < 0 || (deg[i] === 0) > (deg[best] === 0) || ((deg[i] === 0) === (deg[best] === 0) && dep[i] < dep[best]))) best = i;
+    done[best] = true; svg += items[best].svg; for (const j of out[best]) deg[j]--; }
+  return svg; }
+// arrow length (cm) for a force (N): grows as the square root so a 0.1 N rub and a 3 N push both show; equal forces, equal arrows
+const nwLen = F => 8*Math.sqrt(Math.abs(F));
+const nwFmt = (v, d = 2) => (Math.abs(v) < .5*Math.pow(10, -d) ? 0 : v).toFixed(d).replace(/^(?=\d)/, v > .5*Math.pow(10, -d) ? '+' : '');
+
+/* ---------- physics: two gliders on a line, every contact a spring (with a little damping for the losses) ---------- */
+const nwMassA = st => M0 + 2*MD*st.nm;
+const nwDamp = (k, m, e) => { const l = Math.log(e), z = -l/Math.sqrt(Math.PI*Math.PI + l*l); return 2*z*Math.sqrt(k*m); };
+// forces in newtons, + = along the push (toward -y); velocities in m/s along the push; positions y in cm
+function nwForces(st){
+  const mA = nwMassA(st), r = { p:0, c:0, eA:0, eB:0 };
+  const cP = (st.yA + GB - TIP0)/100;
+  if (cP > 0) r.p = Math.max(0, KP*cP + (st.launching ? 0 : 2.4*Math.sqrt(KP*mA)*(-st.vA)));
+  if (st.bOn){ const cC = ((st.yB + GB) - (st.yA - GF))/100;
+    if (cC > 0) r.c = Math.max(0, KC*cC + nwDamp(KC, mA*M0/(mA + M0), .92)*(st.vA - st.vB)); }
+  const band = (y, v, m) => { const c = (YE - (y - GF))/100; return c > 0 ? Math.max(0, KE*c + nwDamp(KE, m, .55)*v) : 0; };
+  r.eA = band(st.yA, st.vA, mA); if (st.bOn) r.eB = band(st.yB, st.vB, M0);
+  return r; }
+function nwRub(st, v, F, m){
+  if (st.air) return Math.abs(v) > 1e-4 ? -Math.sign(v)*DRAG*m : 0;
+  const fs = MU*m*GRAV; if (Math.abs(v) < 1e-3 && Math.abs(F) <= fs) return -F;
+  return -Math.sign(Math.abs(v) < 1e-3 ? F : v)*fs; }
+function nwSim(st, dt){
+  const n = Math.max(1, Math.ceil(dt/.0004)), h = dt/n, mA = nwMassA(st);
+  for (let i = 0; i < n; i++){
+    const F = nwForces(st), cA = F.p - F.c - F.eA, cB = F.c - F.eB;
+    const rA = nwRub(st, st.vA, cA, mA), rB = st.bOn ? nwRub(st, st.vB, cB, M0) : 0;
+    let vA = st.vA + (cA + rA)/mA*h, vB = st.bOn ? st.vB + (cB + rB)/M0*h : 0;
+    if (st.vA && Math.sign(vA) !== Math.sign(st.vA) && Math.abs(cA) < Math.abs(rA)) vA = 0;
+    if (st.vB && Math.sign(vB) !== Math.sign(st.vB) && Math.abs(cB) < Math.abs(rB)) vB = 0;
+    st.vA = vA; st.vB = vB; st.yA -= vA*100*h; if (st.bOn) st.yB -= vB*100*h;
+    st.t += h;
+    if (st.launching && st.yA + GB <= TIP0) st.launching = false;
+    st.F = F; st.rA = rA; st.rB = rB; st.FA = cA + rA; st.FB = cB + rB; st.aA = st.FA/mA; st.aB = st.FB/M0;
+    if (st.launching) st.peak = Math.max(st.peak, st.aA);
+    // photogate: time each flag through the beam
+    for (const [key, y, v] of [['A', st.yA, st.vA], ['B', st.yB, st.vB]]){ if (key === 'B' && !st.bOn) continue;
+      const blk = Math.abs(y - YG) < FLAG/2;
+      if (blk && st.gt[key] == null) st.gt[key] = st.t;
+      else if (!blk && st.gt[key] != null){ const dt2 = st.t - st.gt[key]; st.gt[key] = null; if (dt2 > 1e-4) st.gateV = FLAG/100/dt2; } }
+  }
+  st.tip = nwCl(st.yA + GB, TIP0, TIP0 + COCK + 1);
+}
+// slow motion while a contact is on (or about to start): a push lasts a tenth of a second
+function nwSlow(st){
+  const near = (gap, close) => gap <= 0 || (close > 0 && gap/close < .04);
+  if (near((TIP0 - st.yA - GB)/100, -st.vA) || near(((st.yA - GF) - YE)/100, st.vA)) return true;
+  if (st.bOn && (near(((st.yA - GF) - (st.yB + GB))/100, st.vA - st.vB) || near(((st.yB - GF) - YE)/100, st.vB))) return true;
+  return false; }
+
+/* ---------- actions: a queue of eased tasks, then the run ---------- */
+let ui, nwLoopOn = false;
+function nwRun(){ if (nwLoopOn) return; nwLoopOn = true;
+  ui.animate(dt => { const st = ui.st; nwStep(st, dt);
+    if (st.phase === 'idle'){ nwLoopOn = false; return false; } return true; }); }
+function nwStep(st, dt){
+  if (st.air) st.fan = (st.fan + dt*9) % (2*Math.PI);
+  const T = st.task;
+  if (T){ T.t += dt / T.dur; T.step(st, ease(Math.min(1, T.t))); if (T.t >= 1){ if (T.done) T.done(st); nwNext(st); } return; }
+  if (st.phase === 'run'){
+    const slow = nwSlow(st); st.ts = slow ? .1 : Math.min(1, st.ts + dt*1.6);
+    nwSim(st, dt*st.ts);
+    const still = Math.abs(st.vA) < .002 && (!st.bOn || Math.abs(st.vB) < .002) && !nwSlow(st);
+    if (still){ st.vA = st.vB = 0; st.FA = st.FB = st.aA = st.aB = 0; st.F = { p:0, c:0, eA:0, eB:0 }; st.rA = st.rB = 0; st.phase = 'idle'; }
+  }
+}
+function nwNext(st){
+  const T = st.q.shift(); st.task = T || null;
+  if (!T){ if (st.phase === 'busy') st.phase = 'idle'; return; }
+  T.t = 0; if (T.init) T.init(st);
+  if (!(T.dur > 0)){ st.task = null; if (T.done) T.done(st); nwNext(st); }
+}
+const nwStill = st => { st.vA = st.vB = 0; st.FA = st.FB = st.aA = st.aB = 0; st.F = { p:0, c:0, eA:0, eB:0 }; st.rA = st.rB = 0; st.launching = false; };
+function nwGo(st, list){
+  if (st.task && st.task.lock) return ui.flash('One moment');
+  nwStill(st); st.phase = 'busy'; st.q = list; st.task = null; nwNext(st); nwRun(); }
+const tReset = () => ({ dur:.9, init(st){ this.a0 = st.yA; this.b0 = st.yB; if (Math.abs(st.yA - A_HOME) < .05 && (!st.bOn || Math.abs(st.yB - B_MID) < .05)) this.dur = .01; },
+  step(st, u){ st.yA = this.a0 + (A_HOME - this.a0)*u; if (st.bOn) st.yB = this.b0 + (B_MID - this.b0)*u; st.tip = nwCl(st.yA + GB, TIP0, TIP0 + COCK); st.trig = 0; } });
+const tDisc = (d, toA) => ({ dur:.8, lock:true, step(st, u){ st.mv = { d, toA, u }; }, done(st){ st.on[d] = toA; st.mv = null; } });
+const tPlaceB = on => ({ dur:1.3, lock:true, init(st){ this.y0 = st.yB; if (!on) st.bOn = false; },
+  step(st, u){ st.bt = on ? u : 1 - u; st.bFrom = on ? B_MID : this.y0; }, done(st){ st.bOn = on; st.bt = on ? 1 : 0; if (on) st.yB = B_MID; } });
+const tFire = () => ({ dur:0, done(st){ st.trig = 1; st.launching = true; st.phase = 'run'; st.peak = 0; st.ts = .1; st.gt = { A:null, B:null }; } });
+function nwPush(st){ st.mode = 'solo'; nwGo(st, [...(st.bOn ? [tPlaceB(false)] : []), tReset(), tFire()]); }
+function nwCollide(st){ st.mode = 'collide'; nwGo(st, [tReset(), ...(st.bOn ? [] : [tPlaceB(true)]), tFire()]); }
+function nwSetMass(st, n){
+  if (st.task && st.task.lock) return ui.flash('One moment');
+  const list = [tReset()];
+  // pairs go on top-first: discs 1 and 3 (the rack's top ones) are the first pair, 0 and 2 the second
+  const want = [[], [1, 3], [1, 3, 0, 2]][n], has = [0, 1, 2, 3].filter(d => st.on[d]);
+  for (const d of [0, 2, 1, 3]) if (has.includes(d) && !want.includes(d)) list.push(tDisc(d, false));
+  for (const d of want) if (!has.includes(d)) list.push(tDisc(d, true));
+  list.push({ dur:0, done(s){ s.nm = n; } });
+  if (st.mode === 'collide' && !st.bOn) list.push(tPlaceB(true));
+  if (st.mode !== 'collide' && st.bOn) list.unshift(tPlaceB(false));
+  list.push(tFire());
+  nwGo(st, list); }
+function nwFriction(st){
+  st.air = !st.air;
+  ui.flash(st.air ? 'Blower on: the gliders float on air again' : 'Blower off: the gliders sit on the track and rub', 2000);
+  if (st.phase === 'idle') (st.mode === 'collide' ? nwCollide : nwPush)(st);
+  else nwRun(); }
+
+/* ---------- where things are ---------- */
+const nwPoseA = st => [TX, st.yA, 0];
+function nwPoseB(st){
+  const park = [REST[0], REST[1], -11], track = [TX, st.bt > 0 && st.bt < 1 ? st.bFrom : st.yB, 0];
+  if (st.bt <= 0) return park; if (st.bt >= 1 && st.bOn) return [TX, st.yB, 0];
+  const u = st.bt, hi = 5.5;
+  if (u < .3) return nwL(park, [park[0], park[1], hi], ease(u/.3));
+  if (u < .75) return nwL([park[0], park[1], hi], [track[0], track[1], hi], ease((u - .3)/.45));
+  return nwL([track[0], track[1], hi], track, ease((u - .75)/.25)); }
+const nwPegY = (y, j) => y + (j ? 6 : -6);
+// disc d sits on peg j = d < 2 ? 0 : 1; on the rack at level d % 2, on glider A one level up for the second pair
+function nwDiscAt(st, d, where){
+  const j = d < 2 ? 0 : 1;
+  if (where === 'rack') return [RACKX, RACKY[j], 4.5 + (d % 2)*.6];
+  return [TX, nwPegY(st.yA, j), ZA + 2.2 + (d % 2 ? 0 : .6)]; }
+function nwDiscPos(st, d){
+  if (st.mv && st.mv.d === d){ const a = nwDiscAt(st, d, st.mv.toA ? 'rack' : 'A'), b = nwDiscAt(st, d, st.mv.toA ? 'A' : 'rack'), u = st.mv.u, hi = 26;
+    if (u < .3) return nwL(a, [a[0], a[1], hi], ease(u/.3));
+    if (u < .7) return nwL([a[0], a[1], hi], [b[0], b[1], hi], ease((u - .3)/.4));
+    return nwL([b[0], b[1], hi], b, ease((u - .7)/.3)); }
+  return nwDiscAt(st, d, st.on[d] ? 'A' : 'rack'); }
+
+/* ---------- the parts ---------- */
+// the air chamber between y0 and y1 (cut where a glider sits on it), with its holes; inside: the air flow and the jets
+function nwChamber(st, y0, y1, capA, capB, under, k){
+  let s = nwPrismY(CH, y0, y1, METAL, 1, capA, capB);
+  const holes = (side, y) => { const n = [side*R2, 0, R2], out = [];
+    for (const sv of [2.2, 4.6]){ const b = [TX + side*(HW - sv*R2), y, ZB + sv*R2], q = [];
+      for (const [ds, dy] of [[-.22, -.22], [.22, -.22], [.22, .22], [-.22, .22]]) q.push([b[0] - side*ds*R2 + n[0]*.03, b[1] + dy, b[2] + ds*R2 + n[2]*.03]);
+      out.push(q); }
+    return out; };
+  const ys = []; for (let y = TY0 + 2.5; y < TY1 - 1; y += 3) if (y > y0 && y < y1) ys.push(y);
+  let hd = '';
+  for (const side of [-1, 1]) if (vis([side, 0, 1]) && !under) for (const y of ys) for (const q of holes(side, y)) hd += pd(q);
+  if (hd) s += fill(hd, '#3a3632');
+  let ins = '';
+  if (k > 0){
+    let hk = ''; for (const side of [-1, 1]) for (const y of ys) for (const q of holes(side, y)) hk += pd(q);
+    ins += fill(hk, '#2a2622');
+    if (st.air){
+      const zc = ZB + 1.7; ins += `<path d="${pd([[TX, y0, zc], [TX, y1, zc]], false)}" fill="none" stroke="${COL.air}" stroke-width="1.2" stroke-dasharray="2 1.6"/>`;
+      for (let y = TY0 + 6; y < TY1; y += 12) if (y > y0 + 1 && y < y1 - 1) ins += `<path d="${pd([[TX - .9, y - 1.2, zc], [TX, y, zc], [TX + .9, y - 1.2, zc]], false)}" fill="none" stroke="${COL.air}" stroke-width="1.1"/>`;
+      let jd = '';
+      for (const side of [-1, 1]) for (const y of ys){ const L = under ? .35 : 1.4;
+        for (const sv of [2.2, 4.6]){ const b = [TX + side*(HW - sv*R2), y, ZB + sv*R2]; jd += pd([b, [b[0] + side*R2*L, y, b[2] + R2*L]], false); } }
+      ins += `<path d="${jd}" fill="none" stroke="${COL.air}" stroke-width=".8" stroke-linecap="round"/>`;
+      if (under){ for (const side of [-1, 1]){ const q = [[TX + side*(HW - .8*R2), y0, ZB + .8*R2], [TX, y0, ZA], [TX, y1, ZA], [TX + side*(HW - .8*R2), y1, ZB + .8*R2]].map(p => [p[0] + side*R2*.14, p[1], p[2] + R2*.14]);
+        ins += fill(pd(q), COL.air, 'opacity=".45"'); } }
+    }
+  }
+  return [s, ins]; }
+
+// one glider at pose [xc, yc, dz]; gap = height of the air film; sup = top of what it sits on (for sorting)
+function nwGlider(st, key, pose, flagM, comp, put, k){
+  const [xc, yc, dz] = pose, zb = ZB + dz, za = ZA + dz, onTrack = Math.abs(xc - TX) < .01, onRest = Math.abs(xc - REST[0]) < .01 && Math.abs(dz + 11) < .01;
+  const g = onTrack && dz === 0 && st.air ? .25 : 0, t = .5, sup = onTrack && dz < 6 ? ZA : onRest ? 8 : -99, s0 = 1;
+  const ib = [xc - HW + s0*R2 - g*R2, zb + s0*R2 + g*R2], ob = [ib[0] - t*R2, ib[1] + t*R2], top = za + (g + t)*Math.SQRT2;
+  const L = [ib, [xc, za + g*Math.SQRT2], [xc, top], ob], Rp = L.map(([x, z]) => [2*xc - x, z]);
+  const y0 = yc - GH, y1 = yc + GH, zlo = Math.max(ib[1], sup + .001);
+  put([[xc - HW - 1, y0, zlo], [xc, y1, top]], nwPrismY(L, y0, y1, METAL, 1), '', .55);
+  put([[xc, y0, zlo], [xc + HW + 1, y1, top]], nwPrismY(Rp, y0, y1, METAL, 1), '', .55);
+  // ridge block along the top, the back plate the plunger (or the other glider) pushes on
+  put([[xc - 1, y0, top + .001], [xc + 1, y1, za + 2.2]], nwPrismY([[xc - 1, top - 1], [xc + 1, top - 1], [xc + 1, za + 2.2], [xc - 1, za + 2.2]], y0, y1, METAL, .9), '', .55);
+  put([[xc - 1.6, y1, za - .5], [xc + 1.6, yc + GB, za + 3.2]], nwBx(xc - 1.6, y1, za - .5, xc + 1.6, yc + GB, za + 3.2, METAL, .8));
+  // leaf-spring bumper at the front: a loop of spring steel, squeezed by comp (cm)
+  { const d = Math.max(.5, BMP - comp), pts = [];
+    for (let i = 0; i <= 8; i++){ const a = (-90 + 180*i/8)*Math.PI/180; pts.push([yc - GH - d*Math.cos(a), za + 1.6 + 1.05*Math.sin(a)]); }
+    let sv = '';
+    for (let i = 0; i < 8; i++){ const [ya, za_] = pts[i], [yb, zb_] = pts[i + 1], q = [[xc - .7, ya, za_], [xc + .7, ya, za_], [xc + .7, yb, zb_], [xc - .7, yb, zb_]];
+      const nr = norm([0, -(zb_ - za_), yb - ya].map((v, j) => j ? v : 0)); const n2 = [0, (za_ + zb_)/2 - (za + 1.6) === 0 ? -1 : -(Math.cos(((-90 + 180*(i + .5)/8))*Math.PI/180)), Math.sin(((-90 + 180*(i + .5)/8))*Math.PI/180)];
+      sv += shape(q, toneI(norm(n2), matOf('#c9d0d3')), .5); void nr; }
+    put([[xc - .7, yc - GH - d - .1, za + .5], [xc + .7, y0, za + 2.7]], sv); }
+  // the flag the photogate times, with the glider's letter on both faces
+  { let sv = nwBx(xc - .12, yc - FLAG/2, za + 2.2, xc + .12, yc + FLAG/2, za + 7.4, flagM, .8);
+    if (facing([1,0,0])) sv += tx(xc + .14, yc, za + 3.9, key, 2.6, '#fff8e6', 800);
+    else if (facing([-1,0,0])) sv += `<text transform="${txM(P(xc - .14, yc, za + 3.9), Dv(0,1,0), Dv(0,0,-1))}" font-size="2.6" fill="#fff8e6" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800">${key}</text>`;
+    put([[xc - .12, yc - FLAG/2, za + 2.2], [xc + .12, yc + FLAG/2, za + 7.4]], act(key === 'A' ? 'gA' : 'gB', sv)); }
+  // glider A's two mass pegs (the part above any masses on them)
+  if (key === 'A') for (const j of [0, 1]){ const py = nwPegY(yc, j), nOn = [0, 1].filter(l => st.on[2*j + l] && !(st.mv && st.mv.d === 2*j + l)).length, zb2 = za + 2.2 + nOn*.6;
+    put([[xc - .3, py - .3, zb2], [xc + .3, py + .3, za + 4.2]], rod([xc, py, zb2], [xc, py, za + 4.2], .28, METAL, toneI, .6)); }
+}
+
+function nwDisc(c){ const [x, y, z] = c;
+  let s = cyl(x, y, z, z + .6, 1.6, BRASSM, toneI, .8, 20);
+  if (facing([0,0,1])) s += shape([[x - .25, y, z + .62], [x + .25, y, z + .62], [x + .25, y + 1.62, z + .62], [x - .25, y + 1.62, z + .62]], '#5a4520', .4);
+  return s; }
+
+function nwShadows(st){
+  const bx = (x0, y0, z0, x1, y1, z1) => { const o = []; for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) o.push([x, y, z]); return o; };
+  const ps = [bx(TX - HW - .7, 17, 10.5, TX + HW + .7, 147, ZA + 1), bx(TX - 3, 144, ZA, TX + 2, PT1, ZP + 1.3), bx(2, 2, BH, 16, 16, 15),
+    bx(33, 100, BH, 43, 113, 10), bx(34.5, 117.5, BH, 41.5, 128.5, 8), bx(37.4, 95.4, BH, 38.6, 96.6, 31), bx(TX - 3.4, 95, 27.6, 38, 97, 29.6),
+    bx(REST[0] - 5, 45, BH, REST[0] + 5, 65, 8)];
+  for (const p of [nwPoseA(st), nwPoseB(st)]) ps.push(bx(p[0] - HW - .7, p[1] - GF, ZB + p[2], p[0] + HW + .7, p[1] + GB, ZA + p[2] + 7.4));
+  return clipTo(boardTop(0, 0, BW, BD, BH, 4), ps.map(p => castShadow(p, BH)).join('')); }
+
+function nwTimer(st, m, k){
+  const TP = [[33,3],[43,3],[43,6],[36,10],[33,10]], TY = [100, 113], SL = Math.hypot(7, 4), N = [4/SL, 0, 7/SL];
+  const sl = (y, s, off = .05) => [36 + 7*s/SL + N[0]*off, y, 10 - 4*s/SL + N[2]*off];
+  const txS = (y, s, str, size, col = INK, weight = 700) => `<text transform="${txM(P(...sl(y, s, .08)), Dv(0,-1,0), Dv(7/SL, 0, -4/SL))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+  let s = nwPrismY(TP, TY[0], TY[1], m, 1);
+  if (vis(N)){
+    s += shape([sl(102, 1.2), sl(111, 1.2), sl(111, 5.6), sl(102, 5.6)], '#1d2a26', 1);
+    s += txS(107.9, 3.6, st.gateV ? st.gateV.toFixed(2) : '-.--', 2.4, '#8af0ae', 800) + txS(103.1, 3.6, 'M/S', 1.1, '#8af0ae', 700);
+    s += txS(106.5, 5, 'GATE V', 1, '#8af0ae', 700);
+    s += txS(106.5, 7, 'PHOTOGATE TIMER', 1, mix(m.d, '#000000', .2), 800);
+  }
+  if (!(k > 0)) return [s, ''];
+  let ins = '';
+  for (const [x, y] of [[34.5, 102], [41.5, 102], [34.5, 111], [41.5, 111]]) ins += cyl(x, y, BH, 4, .3, METAL, toneI, .5, 8);
+  ins += nwBx(34, 101.5, 4, 42, 111.5, 4.3, PCBM, .7) + nwBx(37, 104, 4.3, 39.4, 106.4, 4.9, DARK, .6) + rod([40.2, 105, 4.6], [40.2, 107, 4.6], .35, METAL, toneI, .5);
+  ins += nwBx(34.4, 107.5, 4.3, 36.4, 111, 6.8, matOf('#3f4a8a'), .7);
+  ins += nwStroke([[33.2, 104, 6], [35, 104, 5], [37, 104.6, 4.6]], '#d8a24a', .4);
+  return [s, ins]; }
+
+function scene(st, m){
+  const k = ease(st.xr || 0), items = [];
+  const put = (b, svg, inside = null, op = .8) => items.push({ box: b, svg: k > 0 && inside !== null ? `<g opacity="${f(1 - op*k)}">${svg}</g>` + (inside ? `<g opacity="${f(k)}">${inside}</g>` : '') : svg });
+  const pA = nwPoseA(st), pB = nwPoseB(st), F = st.F || { p:0, c:0, eA:0, eB:0 };
+  const compA = st.bOn ? nwCl((st.yB + GB) - (st.yA - GF), 0, 1.5) : 0;
+  const band = y => nwCl(YE - (y - GF), 0, 1.5);
+  let s = castShadow([...on(PZ(0), rectUV(0, 0, BW, BD)), ...on(PZ(BH), rectUV(0, 0, BW, BD))]);
+  s += board(0, 0, BW, BD, BH, 4, WOOD);
+  s += nwShadows(st);
+
+  // ---- air chamber, cut where a glider sits over it
+  const cuts = [[pA[1] - GH, pA[1] + GH]];
+  if (Math.abs(pB[0] - TX) < .01 && pB[2] < 6) cuts.push([pB[1] - GH, pB[1] + GH]);
+  cuts.sort((a, b) => a[0] - b[0]);
+  { let y = TY0, segs = [];
+    for (const [a, b] of cuts){ const a2 = nwCl(a, TY0, TY1), b2 = nwCl(b, TY0, TY1); if (a2 > y) segs.push([y, a2, false]); if (b2 > a2) segs.push([a2, b2, true]); y = Math.max(y, b2); }
+    if (y < TY1) segs.push([y, TY1, false]);
+    segs.forEach(([a, b, under], i) => { const [sv, ins] = nwChamber(st, a, b, i === 0, i === segs.length - 1, under, k);
+      put([[TX - HW, a, ZB], [TX + HW, b, ZA]], sv, ins, .75); }); }
+  // end caps; the far one has a tab for the band posts, the near one a tab the plunger tube passes through
+  put([[TX - HW - .7, 19, ZB - .7], [TX + HW + .7, 20, ZA + 1]], nwPrismY(CAP, 19, 20, BEAMM, 1));
+  put([[TX - 5, 19, ZA + .2], [TX + 5, 20, ZA + 3]], nwBx(TX - 5, 19, ZA + .2, TX + 5, 20, ZA + 3, BEAMM, .9));
+  put([[TX - HW - .7, 144, ZB - .7], [TX + HW + .7, 145, ZA + 1]], nwPrismY(CAP, 144, 145, BEAMM, 1));
+  put([[TX - 2, 144, ZA + .2], [TX + 2, 145, ZP + 2]], nwBx(TX - 2, 144, ZA + .2, TX + 2, 145, ZP + 2, BEAMM, .9));
+  // inlet nozzle and its clamp on the far cap's outer face
+  put([[TX - .9, 15.6, ZB + 1.1], [TX + .9, 19, ZB + 2.9]], rod([TX, 15.6, ZB + 2], [TX, 19, ZB + 2], .9, METAL, toneI, .7));
+  // rubber band bumper: two posts out of the tab, the band between them (pushed into a V by a glider's bumper)
+  for (const sx of [-1, 1]) put([[sx < 0 ? TX - 4.3 : TX, 20, ZA + 1.7], [sx < 0 ? TX : TX + 4.3, 24.6, ZA + 2.3]], rod([TX + sx*4, 20, ZA + 2], [TX + sx*4, 24.6, ZA + 2], .3, METAL, toneI, .6));
+  { const yb = Math.max(...[st.yA, ...(st.bOn ? [st.yB] : [])].map(y => band(y))) , mid = 24 - yb + (yb ? 0 : 0);
+    put([[TX - 4, 23.4 - yb, ZA + 1.8], [TX + 4, 24.4, ZA + 2.2]], nwStroke([[TX - 4, 24, ZA + 2], [TX, mid, ZA + 2], [TX + 4, 24, ZA + 2]], '#b0503a', .6)); }
+
+  // ---- support beam, metre scale, cross bar, levelling feet
+  { let sv = nwBx(21, 18.5, 10.5, 27, 145.5, 14, BEAMM, 1.1);
+    if (facing([1,0,0])){ sv += shape(on(PX(27.03), rectUV(TY0, 11, TY1, 13.6)), '#f6e7a8', .7); let tk = '';
+      for (let c = 0; c <= TY1 - TY0; c += 5){ const y = TY0 + c; tk += pd([[27.05, y, 13.6], [27.05, y, c % 10 ? 12.9 : 12.4]], false); }
+      sv += `<path d="${tk}" fill="none" stroke="${INK}" stroke-width=".55"/>`;
+      for (let c = 0; c <= 120; c += 20) sv += tx(27.07, TY0 + c, 11.35, String(c), 1.1, INK, 800); }
+    put([[21, 18.5, 10.5], [27, 145.5, 14]], sv); }
+  put([[16, 24.5, 9], [32, 27.5, 10.5]], nwBx(16, 24.5, 9, 32, 27.5, 10.5, BEAMM, .9));
+  for (const [x, y, top] of [[17, 26, 9], [31, 26, 9], [TX, 140, 10.5]]){
+    put([[x - 1.4, y - 1.4, BH], [x + 1.4, y + 1.4, 3.8]], cyl(x, y, BH, 3.8, 1.4, PADM, toneI, .8, 16));
+    put([[x - .4, y - .4, 3.8], [x + .4, y + .4, 5.6]], cyl(x, y, 3.8, 5.6, .35, METAL, toneI, .5, 8));
+    put([[x - 1.1, y - 1.1, 5.6], [x + 1.1, y + 1.1, 6.6]], cyl(x, y, 5.6, 6.6, 1.1, METAL, toneI, .7, 6));
+    put([[x - .4, y - .4, 6.6], [x + .4, y + .4, top]], cyl(x, y, 6.6, top, .35, METAL, toneI, .5, 8)); }
+
+  // ---- blower, hose, cord
+  { let sv = nwBx(2, 2, BH, 16, 16, 15, m, 1.2);
+    if (facing([1,0,0])){ let vd = ''; for (let z = 5; z <= 11; z += 1.5) vd += pd([[16.03, 3.5, z], [16.03, 8, z]], false);
+      sv += `<path d="${vd}" fill="none" stroke="${INK}" stroke-width=".8"/>`;
+      sv += act('switch', shape(on(PX(16.05), rectUV(10.5, 10, 13.5, 13)), DARK.m, .8) + shape(on(PX(16.4), rectUV(st.air ? 11 : 12, 10.5, st.air ? 12 : 13, 12.5)), st.air ? '#43c25c' : '#8d4a40', .6));
+      sv += tx(16.06, 12, 7.6, 'AIR', 1.5, INK, 800) + tx(16.06, 12, 6, st.air ? 'ON' : 'OFF', 1.2, INK, 800); }
+    if (facing([0,1,0])) sv += txY(9, 16.05, 9, 'BLOWER', 1.6, mix(m.d, '#000000', .2), 800);
+    let ins = '';
+    if (k > 0){ ins += cyl(9, 9, BH + .2, 9, 2.6, DARK, toneI, .8, 18) + cyl(9, 9, 9, 10, .5, METAL, toneI, .5, 8);
+      const bl = []; for (let i = 0; i < 8; i++){ const a = st.fan + i*Math.PI/4, c = Math.cos(a), sn = Math.sin(a);
+        const q = [[9 + c*1, 9 + sn*1, 10], [9 + c*4.6, 9 + sn*4.6, 10], [9 + c*4.6, 9 + sn*4.6, 12.4], [9 + c*1, 9 + sn*1, 12.4]];
+        bl.push({ at: [9 + c*2.8, 9 + sn*2.8, 11.2], svg: shape(q, toneI(norm([-sn, c, 0]), METAL), .5) }); }
+      ins += cyl(9, 9, 10, 10.4, 4.8, METAL, toneI, .6, 22) + byDepth(bl) + cyl(9, 9, 12.4, 13, 1.2, METAL, toneI, .6, 12);
+      ins += nwStroke([[9, 9, 13], [9, 9, 15]], COL.air, .8); }
+    put([[2, 2, BH], [16, 16, 15]], sv, ins); }
+  put([[7.5, 7.5, 15], [10.5, 10.5, 17.6]], cyl(9, 9, 15, 17.6, 1.5, DARK, toneI, .8, 16));
+  put([[TX - 1.6, 16, ZB + .4], [TX + 1.6, 16.9, ZB + 3.6]], rod([TX, 16, ZB + 2], [TX, 16.9, ZB + 2], 1.6, METAL, toneI, .7));
+  { const hp = [[TX, 16.2, ZB + 2], [TX, 12.5, ZB + 2.3], [22.4, 10, ZB + 3.6], [18, 9, 19], [12.6, 9, 19.2], [9.6, 9, 18.6], [9, 9, 17.4]];
+    for (let i = 0; i < hp.length - 1; i++){ const a = hp[i], b = hp[i + 1]; put(nwBoxOf([a, b], 1.4), rod(a, b, 1.4, HOSEM, toneI, .8)); } }
+  items.push(...nwWire([[2, 9, 5], [.6, 9.4, 3.5], [-1.4, 10, 2.6], [-2.6, 10.6, -5]], '#2e2b28', .8));
+
+  // ---- plunger: tube through the tab, rod, tip pad, trigger; inside: spring, collar, latch
+  { const tip = st.tip, yc = tip + 12, cocked = tip > TIP0 + COCK - .3;
+    let ins = '';
+    if (k > 0){ ins += rod([TX, 145, ZP], [TX, yc, ZP], .45, METAL, toneI, .5) + rod([TX, yc, ZP], [TX, yc + .6, ZP], 1.1, METAL, toneI, .6, 1.1, 14);
+      const sp = [], n = 90, a0 = yc + .6, a1 = PT1 - .3; for (let i = 0; i <= n; i++){ const t = i/n, a = t*9*2*Math.PI; sp.push([TX + .95*Math.cos(a), a0 + (a1 - a0)*t, ZP + .95*Math.sin(a)]); }
+      ins += `<path d="${pd(sp, false)}" fill="none" stroke="${INK}" stroke-width="1.5" stroke-linejoin="round"/><path d="${pd(sp, false)}" fill="none" stroke="#dfe4e6" stroke-width=".6" stroke-linejoin="round"/>`;
+      ins += nwBx(TX - .25, 146.3, ZP + .2, TX + .25, 146.9, ZP + 1.4 + (st.trig ? 1.1 : 0), DARK, .5);
+      ins += nwBx(TX - .5, 151 - (tip - TIP0), ZP + .25, TX + .5, 151.6 - (tip - TIP0), ZP + .45, DARK, .4); }
+    put([[TX - 1.3, 145, ZP - 1.3], [TX + 1.3, PT1, ZP + 1.3]], act('plunger', rod([TX, 145, ZP], [TX, PT1, ZP], 1.3, m, toneI, 1, 1.3, 20) + (facing([0,0,1]) ? '' : '')), ins, .7);
+    put([[TX - 1.3, 143.4, ZP - 1.3], [TX + 1.3, 144, ZP + 1.3]], rod([TX, 143.4, ZP], [TX, 144, ZP], 1.3, m, toneI, .9, 1.3, 20));
+    put([[TX - .5, tip + .6, ZP - .5], [TX + .5, 143.4, ZP + .5]], rod([TX, tip + .6, ZP], [TX, 143.4, ZP], .45, METAL, toneI, .6));
+    put([[TX - 1, tip, ZP - 1], [TX + 1, tip + .6, ZP + 1]], rod([TX, tip, ZP], [TX, tip + .6, ZP], 1, PADM, toneI, .7, 1, 16));
+    // trigger: a lever on a pin at its back end; latched it lies along the tube, pulled it tips up
+    const ang = (st.trig ? 24 : 0)*Math.PI/180, piv = [150.2, ZP + 1.9], rt = ([y, z]) => [piv[0] + (y - piv[0])*Math.cos(ang) + (z - piv[1])*Math.sin(ang), piv[1] - (y - piv[0])*Math.sin(ang) + (z - piv[1])*Math.cos(ang)];
+    const lev = [[145.6, ZP + 1.5], [150.8, ZP + 1.5], [150.8, ZP + 2.3], [145.6, ZP + 2.6]].map(rt);
+    put([[TX - .5, 145.5, ZP + 1.3], [TX + .5, 151, ZP + 4.4]], act('plunger', nwPrismX(lev, TX - .45, TX + .45, matOf('#e2483d'))));
+    put([[TX - .9, 149.6, ZP + 1.2], [TX + .9, 150.8, ZP + 2.6]], nwBx(TX - .9, 149.7, ZP + 1.2, TX + .9, 150.7, ZP + 1.6, DARK, .5) + cylX(TX - .8, TX + .8, 150.2, ZP + 1.9, .35, METAL, toneI, .5, 10));
+    void cocked; }
+
+  // ---- gliders, the masses, the rest and the rack
+  nwGlider(st, 'A', pA, m, compA + 0, put, k);
+  nwGlider(st, 'B', pB, BFLAG, 0, put, k);
+  for (let d = 0; d < 4; d++){ const c = nwDiscPos(st, d); put([[c[0] - 1.6, c[1] - 1.6, c[2]], [c[0] + 1.6, c[1] + 1.6, c[2] + .6]], act('mass', nwDisc(c))); }
+  put([[REST[0] - 5, 46, BH], [REST[0] + 5, 64, 8]], act('gB', nwPrismY([[REST[0] - 5, BH], [REST[0] + 5, BH], [REST[0], 8]], 46, 64, RESTM, 1)));
+  put([[34.5, 117.5, BH], [41.5, 128.5, 4.5]], act('mass', nwBx(34.5, 117.5, BH, 41.5, 128.5, 4.5, RESTM, 1)));
+  for (const j of [0, 1]){ const n = [0, 1].filter(l => !st.on[2*j + l] && !(st.mv && st.mv.d === 2*j + l)).length, z0 = 4.5 + n*.6;
+    put([[RACKX - .3, RACKY[j] - .3, z0], [RACKX + .3, RACKY[j] + .3, 8]], rod([RACKX, RACKY[j], z0], [RACKX, RACKY[j], 8], .28, METAL, toneI, .6)); }
+
+  // ---- photogate on its stand, the timer and the cable between them
+  const blocked = Math.abs(st.yA - YG) < FLAG/2 || (st.bOn && Math.abs(st.yB - YG) < FLAG/2) || (pB[0] === TX && Math.abs(pB[1] - YG) < FLAG/2);
+  put([[GX - 2.2, YG - 2.2, BH], [GX + 2.2, YG + 2.2, 4.4]], cyl(GX, YG, BH, 4.4, 2.2, DARK, toneI, .9, 20));
+  put([[GX - .5, YG - .5, 4.4], [GX + .5, YG + .5, 27.4]], cyl(GX, YG, 4.4, 27.4, .5, METAL, toneI, .7, 10));
+  put([[GX - .5, YG - .5, 29.6], [GX + .5, YG + .5, 31]], cyl(GX, YG, 29.6, 31, .5, METAL, toneI, .7, 10));
+  { const near = facing([0,1,0]), body = nwBx(GX - 1, YG - 1, 27.4, GX + 1, YG + 1, 29.6, GATEM, .9);
+    const scr = rod([GX, YG + 1, 28.5], [GX, YG + 2.4, 28.5], .5, DARK, toneI, .6);
+    put([[GX - 1, YG - 1, 27.4], [GX + 1, YG + 2.4, 29.6]], near ? body + scr : scr + body); }
+  put([[TX + 3.4, YG - .5, 27.9], [GX - 1, YG + .5, 29.1]], nwBx(TX + 3.4, YG - .5, 27.9, GX - 1, YG + .5, 29.1, METAL, .8));
+  { let sv = nwBx(TX - 3.4, YG - 1, 27.6, TX + 3.4, YG + 1, 29.6, GATEM, 1) + cyl(TX, YG, 29.6, 30, .45, blocked ? matOf('#ff5a3a') : matOf('#8d4a40'), toneI, .5, 10);
+    if (facing([0,1,0])) sv += txY(TX, YG + 1.03, 28.3, 'GATE', 1, '#e6e0d1', 800);
+    put([[TX - 3.4, YG - 1, 27.6], [TX + 3.4, YG + 1, 30]], sv, nwBx(TX - 2.8, YG - .6, 28, TX + 2.8, YG + .6, 28.4, PCBM, .5)); }
+  for (const sx of [-1, 1]){ const x0 = sx < 0 ? TX - 3.4 : TX + 2.2, x1 = x0 + 1.2;
+    let sv = nwBx(x0, YG - 1, 22.6, x1, YG + 1, 27.6, GATEM, .9);
+    const inner = sx < 0 ? [1,0,0] : [-1,0,0], xf = sx < 0 ? x1 + .03 : x0 - .03;
+    if (facing(inner)) sv += shape(on(PX(xf), ellUV(YG, 24.4, .4, .4, 10)), '#241f1a', .4);
+    put([[x0, YG - 1, 22.6], [x1, YG + 1, 27.6]], sv, (sx > 0 ? rod([TX + 2.8, YG, 24.4], [TX + 2.15, YG, 24.4], .35, matOf('#cfe2f0'), toneI, .5) : rod([TX - 2.8, YG, 24.4], [TX - 2.15, YG, 24.4], .35, DARK, toneI, .5)) + nwStroke([[TX + sx*2.8, YG, 24.4], [TX + sx*2.8, YG, 27.8]], '#d8a24a', .3)); }
+  { const [sv, ins] = nwTimer(st, m, k); put([[33, 100, BH], [43, 113, 10]], sv, ins); }
+  items.push(...nwWire([[33, 104, 6], [31.6, 104, 3.4], [31.6, 99.4, 3.4], [35.6, 96.6, 3.4], [37.2, 96.6, 4.6], [37.3, 96.6, 27.2], [36.4, 96.7, 29.4], [TX + 3.6, 96.7, 29.4], [TX + 3, 96.6, 29.8]], '#2e2b28', .55));
+
+  s += nwSort(items);
+
+  // ---- overlays: force arrows (always), velocity arrows, the IR beam and the free-body cards (see-through)
+  const fA = [], fB = [];
+  if (F.p > .005) fA.push([F.p, COL.push, 'PUSH']);
+  if (F.c > .005){ fA.push([-F.c, COL.push, 'B ON A']); fB.push([F.c, COL.push, 'A ON B']); }
+  if (F.eA > .005) fA.push([-F.eA, COL.push, 'BAND']);
+  if (F.eB > .005) fB.push([-F.eB, COL.push, 'BAND']);
+  if (!st.air && Math.abs(st.rA || 0) > .005) fA.push([st.rA, COL.fric, 'FRICTION']);
+  if (!st.air && st.bOn && Math.abs(st.rB || 0) > .005) fB.push([st.rB, COL.fric, 'FRICTION']);
+  const lbl = [];
+  const arrows = (pose, list) => { let o = ''; list.forEach(([Fv, col, name], i) => { const z = ZA + pose[2] + 9.5 + i*2.6, a = [pose[0], pose[1], z], b = [pose[0], pose[1] - Math.sign(Fv)*nwLen(Fv), z];
+      o += nwArrow(a, b, col); lbl.push({ at: nwL(a, b, .85), text: `${name} ${Math.abs(Fv).toFixed(2)} N`, on: true }); }); return o; };
+  s += arrows(pA, fA) + arrows(pB, fB);
+  if (k > 0){
+    let ov = '';
+    ov += `<path d="${pd([[TX + 2.2, YG, 24.4], [TX - 2.2, YG, 24.4]], false)}" fill="none" stroke="${COL.beam}" stroke-width="1.2" stroke-dasharray="1.4 .9" stroke-linecap="round"/>`;
+    for (const [pose, v, key] of [[pA, st.vA, 'A'], ...(st.bOn ? [[pB, st.vB, 'B']] : [])]) if (Math.abs(v) > .01){
+      const z = ZA + 11.8 + 2.6*Math.max(0, (key === 'A' ? fA : fB).length - 1), a = [pose[0], pose[1], z], b = [pose[0], pose[1] - v*12, z];
+      ov += nwArrow(a, b, COL.vel, .8); lbl.push({ at: nwL(a, b, .85), text: `V${key} ${Math.abs(v).toFixed(2)} M/S`, on: true }); }
+    ov += nwCards(st, fA, fB, lbl);
+    s += `<g opacity="${f(k)}">${ov}</g>`;
+  }
+
+  // ---- labels
+  const yA = st.yA, zA2 = ZA + 2.2, running = st.phase === 'run', pushing = F.p > .005;
+  if (k > .6){
+    lbl.push(
+      { at: [TX - HW*.5, 70, ZB + 2.5], text: 'AIR CHAMBER', on: st.air },
+      { at: [TX + HW - 2.2*R2, 40, ZB + 2.2*R2], text: 'AIR HOLES', on: st.air },
+      { at: [TX - 3.5, yA - 6, ZB + 3.3], text: 'AIR CUSHION', on: st.air && running },
+      { at: [TX, 15.6, ZB + 2], text: 'AIR INLET', on: st.air },
+      { at: [TX + HW, 19.5, ZB], text: 'END CAP', on: false },
+      { at: [21, 120, 10.5], text: 'SUPPORT BEAM', on: false },
+      { at: [17, 26, 6], text: 'LEVELLING SCREW', on: false },
+      { at: [27, 126, 13], text: 'METRE SCALE', on: false },
+      { at: [TX + 4, 24, ZA + 2], text: 'RUBBER BAND', on: F.eA + F.eB > .005 },
+      { at: [9, 9, 11.2], text: 'IMPELLER', on: st.air },
+      { at: [9, 9, 6], text: 'BLOWER MOTOR', on: st.air },
+      { at: [16, 12, 11.5], text: 'BLOWER SWITCH', on: false },
+      { at: [18, 9, 19], text: 'AIR HOSE', on: st.air },
+      { at: [TX, 16.4, ZB + 3.6], text: 'HOSE CLAMP', on: false },
+      { at: [-1.4, 10, 2.6], text: 'POWER CORD', on: st.air },
+      { at: [TX, 154, ZP + 1.3], text: 'PLUNGER TUBE', on: pushing },
+      { at: [TX, (st.tip + 12.6 + PT1)/2, ZP - .95], text: 'PLUNGER SPRING', on: pushing },
+      { at: [TX, (st.tip + 143.4)/2, ZP], text: 'PLUNGER ROD', on: pushing },
+      { at: [TX, 147, ZP + 2.6], text: 'TRIGGER', on: st.trig === 1 && pushing },
+      { at: [TX + 3, yA + 4, ZB + 3], text: 'GLIDER A', on: running },
+      { at: [TX, yA + 2, ZA + 6.5], text: 'FLAG', on: Math.abs(yA - YG) < FLAG/2 },
+      { at: [TX, yA - GH - 1.2, ZA + 2.4], text: 'SPRING BUMPER', on: F.c + F.eA > .005 },
+      ...(st.nm ? [{ at: [TX + 1.6, nwPegY(yA, 1), zA2 + .6], text: `MASSES +${st.nm*100} G`, on: running }] : [{ at: [TX, nwPegY(yA, 1), ZA + 4.2], text: 'MASS PEGS', on: false }]),
+      { at: [pB[0] + 3, pB[1] + 4, ZB + pB[2] + 3], text: 'GLIDER B', on: st.bOn && running },
+      { at: [REST[0] + 5, 50, BH], text: 'GLIDER REST', on: false },
+      { at: [41.5, 126, 4.5], text: 'MASS RACK', on: !!st.mv },
+      { at: [TX + 3.4, YG, 28.6], text: 'PHOTOGATE', on: blocked },
+      { at: [TX + 2.8, YG, 24.4], text: 'IR LED', on: true },
+      { at: [TX - 2.8, YG, 24.4], text: 'PHOTOTRANSISTOR', on: blocked },
+      { at: [43, 106, 6], text: 'TIMER', on: !!st.gateV },
+      );
+    s += xrCallouts(lbl, [0, BW, 0, BD, 0, 32]);
+  } else if (k === 0){
+    lbl.push(
+      { at: [TX + HW - 2.2*R2, 40, ZB + 2.2*R2], text: 'AIR HOLES', on: st.air },
+      { at: [TX + HW, 70, ZB + 1], text: 'AIR TRACK', on: false },
+      { at: [16, 4, 12], text: 'BLOWER', on: st.air },
+      { at: [18, 9, 19], text: 'AIR HOSE', on: st.air },
+      { at: [TX, 152, ZP + 1.3], text: 'SPRING PLUNGER', on: pushing },
+      { at: [TX, 147, ZP + 2.6], text: 'TRIGGER', on: false },
+      { at: [TX, yA + 2, ZA + 6.5], text: 'GLIDER A', on: running },
+      { at: [pB[0], pB[1] + 2, ZA + pB[2] + 6.5], text: 'GLIDER B', on: st.bOn && running },
+      { at: [41.5, 126, 4.5], text: 'MASS RACK', on: !!st.mv },
+      { at: [TX + 3.4, YG, 28.6], text: 'PHOTOGATE', on: blocked },
+      { at: [43, 106, 6], text: 'TIMER', on: !!st.gateV },
+      { at: [27, 126, 13], text: 'METRE SCALE', on: false },
+      { at: [TX + 4, 24, ZA + 2], text: 'RUBBER BAND', on: false },
+      { at: [31, 26, 6], text: 'LEVELLING SCREW', on: false });
+    s += xrCallouts(lbl, [0, BW, 0, BD, 0, 32]);
+  }
+  return s;
+}
+
+// free-body cards, drawn flat beside the bench's front corner: the glider as a block, every force on it to scale
+function nwCards(st, fA, fB, lbl){
+  const K = INK_K, vb = document.getElementById('fig').viewBox.baseVal, push = Dv(0, -1, 0)[0] >= 0 ? 1 : -1, cw = 74*K, chh = 78*K;
+  const cards = [['A', nwMassA(st), fA, st.air ? null : st.rA], ...(st.bOn ? [['B', M0, fB, null]] : [])];
+  let o = '';
+  cards.forEach(([key, mass, list], i) => {
+    const x0 = vb.width*.6 - cw*cards.length/2 + cw*i, y0 = vb.height - chh - 4*K, cx = x0 + cw/2, cy = y0 + chh/2 + 2*K, b = 7*K, W = mass*GRAV;
+    o += `<rect x="${f(x0)}" y="${f(y0)}" width="${f(cw - 4*K)}" height="${f(chh)}" rx="${f(3*K)}" fill="#fff8e6" stroke="${INK}" stroke-width="1.3"/>`;
+    o += `<text x="${f(x0 + 4*K)}" y="${f(y0 + 7*K)}" font-size="${f(4.6*K)}" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">FORCES ON ${key}</text>`;
+    o += `<rect x="${f(cx - b)}" y="${f(cy - b*.7)}" width="${f(2*b)}" height="${f(1.4*b)}" fill="${key === 'A' ? 'var(--accent,#f4b829)' : '#76a0e2'}" stroke="${INK}" stroke-width="1.1"/>`;
+    o += `<text x="${f(cx)}" y="${f(cy + 1.8*K)}" font-size="${f(5*K)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">${key}</text>`;
+    const tipW = [cx, cy + b*.7 + nwLen(W)*1.15*K], tipN = [cx, cy - b*.7 - nwLen(W)*1.15*K];
+    o += nwArrow2(cx, cy + b*.7, ...tipW, COL.grav) + nwArrow2(cx, cy - b*.7, ...tipN, COL.lift);
+    const sm = (x, y, str, col) => `<text x="${f(x)}" y="${f(y)}" font-size="${f(3.4*K)}" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${col}">${str}</text>`;
+    o += sm(cx + 2.5*K, tipN[1] + 3*K, `${st.air ? 'LIFT' : 'NORMAL'} ${W.toFixed(2)}`, '#2f5fae') + sm(cx + 2.5*K, tipW[1], `WEIGHT ${W.toFixed(2)}`, COL.grav);
+    list.forEach(([Fv, col], j) => { const dir = Math.sign(Fv)*push, x1 = cx + dir*b, y = cy + (j - (list.length - 1)/2)*3.2*K, len = nwLen(Fv)*1.15*K;
+      o += nwArrow2(x1, y, x1 + dir*len, y, col); });
+    const net = list.reduce((a, [Fv]) => a + Fv, 0);
+    o += `<text x="${f(cx)}" y="${f(y0 + chh - 3*K)}" font-size="${f(3.8*K)}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="800" fill="${INK}">NET ${nwFmt(net)} N</text>`;
+  });
+  return o; }
+
+ui = mountFigure({
+  fig:'N1', turn:'full', title:"Newton's three laws",
+  size:[90, BD, 68], center:[TX, BD/2], palette:'mustard',
+  state:{ phase:'idle', mode:'solo', yA:A_HOME, vA:0, yB:B_MID, vB:0, bOn:false, bt:0, bFrom:B_MID, nm:0, on:[false, false, false, false], mv:null,
+    air:true, tip:TIP0 + COCK, trig:0, launching:false, q:[], task:null, ts:1, t:0, F:{ p:0, c:0, eA:0, eB:0 }, rA:0, rB:0,
+    FA:0, FB:0, aA:0, aB:0, peak:0, gateV:0, gt:{ A:null, B:null }, fan:0 },
+  scene,
+  readout: st => st.peak ? `Push gave A a peak of ${st.peak.toFixed(1)} m/s²` + (st.gateV ? ` · gate ${st.gateV.toFixed(2)} m/s` : '') : 'Cocked plunger: 5 cm, 65 N/m',
+  // a phone has room for the three big readouts only
+  stats: st => { const ph = innerWidth < 560; return [
+    { label:'Force on A', value: nwFmt(st.FA, ph ? 1 : 2) + ' N' },
+    { label:'Acceleration', value: nwFmt(st.aA, ph && Math.abs(st.aA) >= 9.95 ? 0 : 1) + ' m/s²' },
+    { label:'Velocity', value: nwFmt(st.vA) + ' m/s' },
+    ph ? null : { label:'Mass of A', value: Math.round(nwMassA(st)*1000) + ' g', small:true },
+    st.bOn && !ph ? { label:'Force on B', value: nwFmt(st.FB) + ' N', small:true } : null ]; },
+  buttons:[
+    { label:'Push', onClick: st => nwPush(st) },
+    { label:'Add a mass', choices: st => [0, 1, 2].map(n => ({ label: n ? `+${n*100} g (${n*2} masses)` : 'No masses', current: st.nm === n && !st.task, onClick: s => nwSetMass(s, n) })) },
+    { label:'Collide', onClick: st => nwCollide(st) },
+    { label:'Friction on / off', onClick: st => nwFriction(st) },
+  ],
+  acts:{ plunger: st => nwPush(st), gA: st => nwPush(st), gB: st => nwCollide(st), mass: st => nwSetMass(st, (st.nm + 1) % 3), switch: st => nwFriction(st) },
+  params:(st, q) => {
+    if (q.has('nm')){ st.nm = nwCl(+q.get('nm') | 0, 0, 2); const want = [[], [1, 3], [1, 3, 0, 2]][st.nm]; for (const d of want) st.on[d] = true; }
+    if (q.get('air') === '0') st.air = false;
+    if (q.get('b') === '1'){ st.bOn = true; st.bt = 1; st.mode = 'collide'; }
+    for (const kk of ['yA', 'yB', 'vA', 'vB']) if (q.has(kk)) st[kk] = +q.get(kk);
+    if (q.has('yA')){ st.tip = nwCl(st.yA + GB, TIP0, TIP0 + COCK); st.trig = st.tip < TIP0 + COCK - .1 ? 1 : 0; st.launching = st.tip > TIP0 && st.vA >= 0; }
+    if (q.has('vA') || q.has('vB') || q.has('yA')){ st.phase = 'run'; nwSim(st, 1e-4); }
+    if (q.has('gate')) st.gateV = +q.get('gate');
+    if (q.has('peak')) st.peak = +q.get('peak');
+  },
+});
+if (new URLSearchParams(location.search).get('go') === '1') nwPush(ui.st);
+addEventListener('keydown', e => { if (/input|textarea|button/i.test(e.target.tagName)) return;
+  const kk = e.key.toLowerCase(), st = ui.st;
+  if (kk === ' ' || kk === 'p') nwPush(st); else if (kk === 'c') nwCollide(st); else if (kk === 'm') nwSetMass(st, (st.nm + 1) % 3); else if (kk === 'f') nwFriction(st); else return;
+  e.preventDefault(); ui.render(); });
+xrMount(() => ui, () => '');
+</script></body></html>
