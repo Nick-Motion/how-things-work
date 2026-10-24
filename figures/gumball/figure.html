@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gumball machine</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Gumball machine (a classic globe machine on a shop counter). How a real one works, and where everything is after each step:
+   1. Insert coin: a quarter from the stack on the counter goes edge-first through the COIN SLOT in the chrome mech plate and
+      slides into the radial slot of the COIN DRUM on the crank shaft. Without a coin, the sprung LOCK PAWL that rests on the
+      drum would drop into the empty slot as soon as the drum turns, and the crank only rattles.
+   2. Turn the crank one full turn clockwise: the shaft turns the coin drum (the coin rides round in its slot and holds the
+      pawl up as it passes), a RATCHET WHEEL with an ANTI-REVERSE PAWL (no turning back) and the PINION at its back end.
+      The pinion drives the CROWN GEAR (1 : 4) on the vertical SPINDLE, which turns the DISPENSING WHEEL a quarter turn.
+      - At the bottom of the turn the coin falls out of its slot onto the COIN CHUTE and slides into the CASH BOX.
+      - The dispensing wheel is the floor of the globe: four ball-sized POCKETS, each holding one gumball, slide over the
+        fixed FLOOR PLATE. Half way round, one pocket passes the EXIT HOLE (the only hole in the floor plate) and its gumball
+        drops into the DROP TUBE, rolls down the BALL CHUTE and stops against the DELIVERY FLAP. The WIPER SPRING over the
+        pocket path brushes off any ball riding on top; the AGITATOR wire on the spindle stirs the pile so a fresh ball
+        falls into the emptied pocket.
+   3. Take gumball: lift the flap and the ball rolls into your hand.
+
+   Parts (x = depth, front at x = 51; y = width; z = up; 1 unit ~ 0.5 cm; machine centred on GX, GY; counter top z = 3)
+   CASE      cast base (foot, body, collar, deck) . chrome mech plate . coin slot . delivery cup . delivery flap on its hinge .
+             cash door + lock on the back . globe seat ring . rubber globe gasket . glass globe . lid . lid lock . side plaques
+   COINS     coin drum on the crank shaft with its slot . lock pawl on its pivot pin . pawl spring to an anchor pin . mech frame
+             (rear plate on four spacer rods from the front wall) . front bearing . coin chute . cash box
+   DRIVE     crank arm + grip . crank hub . crank shaft . ratchet wheel . anti-reverse pawl . shaft bearing . pinion .
+             crown gear . spindle . spindle bearing on the spindle bracket (from the back wall)
+   GUMBALLS  floor plate . dispensing wheel with four pockets . exit hole . wiper spring (on the seat ring) . agitator wire .
+             drop tube (hung from the floor plate) . ball chute on a chute leg . gumball pile
+   Paths, worked out with numbers: crank shaft axis z 28.35; pinion r 1.65 touches the crown gear (r 6.6) underside at
+   x 38.6, z 30. The drop tube (r 2.9) stands at y 42.5, 1 clear of the crown gear's rim (y 38.6). The ball chute runs
+   21.5 -> 9.6 from x 32 to 51 at y 42.5 -> 32, under the coin drum (bottom 21.85) and the coin chute (z >= 15.6), beside the
+   cash box (y 18.5..28.5). The coin chute runs from under the drum (y 33.2, z 20.2) down to y 25.5, z 15.6, over the box. */
+
+const GX = 32, GY = 32, BZ = 3, FX = 51, SZ = 28.35;          // machine centre; counter top; front face; crank shaft height
+const ZS = 43.5, RG = 22, ZC = 59.11, ZN = 78.16;              // globe: seat height, radius, centre, neck height
+const BALL = 2.5, PK_R = 10.5, WHEEL_R = 14.5;                 // gumball radius; pocket circle; dispensing wheel radius
+const TURN_T = 1.9, FLY_T = 1.0;
+const R2D = Math.PI / 180;
+const BRASS = { l:'#f0c870', m:'#d0a24a', d:'#9a7428' }, GEARM = { l:'#7c8389', m:'#5c6369', d:'#3b4146' };
+const COINM = { l:'#eef0f0', m:'#c3c8ca', d:'#8a9295' }, WHEELM = matOf('#8fb3d9'), PAWLM = matOf('#f2c230');
+const CASHM = matOf('#9aa3a8'), GRIPM = { l:'#5a524a', m:'#3d3935', d:'#272421' };
+const RECESS = '#2b2523', GLASS = '#cfe9f0';
+const GBC = ['#e2483d', '#f4b829', '#3e86d9', '#43b05c', '#f08a2b', '#f3a6bb', '#fbf7ea', '#8c4bd1'];
+const STK = [61, 61];                                          // coin stack on the counter
+const BTOP = boardTop(0, 0, 68, 70, BZ, 5);
+// the ball's way out: pocket over the exit hole -> down the drop tube -> ball chute -> against the flap
+const PATH = [[GX, GY + PK_R, 42.5], [GX, GY + PK_R, 21.5], [35, 41.6, 19], [46, 35.5, 13], [FX, GY, 9.6], [52.6, GY, 9.1]];
+const SEGL = PATH.slice(1).map((p, i) => Math.hypot(...p.map((v, k) => v - PATH[i][k]))), PLEN = SEGL.reduce((a, b) => a + b, 0);
+
+/* ---------- small helpers ---------- */
+const RS = (h, r, z) => on(PZ(z), rrUV(GX - h, GY - h, GX + h, GY + h, r, 5));           // rounded-square ring
+const CIR = (r, z, x = GX, y = GY, n = 32) => on(PZ(z), ellUV(x, y, r, r, n));
+const kp = (x, r, a) => [x, GY - r * Math.sin(a * R2D), SZ + r * Math.cos(a * R2D)];      // round the crank axis, deg clockwise from up (seen from the front)
+const lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+const bbox = (pts, pad = .3) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - pad), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + pad)];
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const rotYZ = (p, c, ph) => { const cs = Math.cos(ph), sn = Math.sin(ph), dy = p[0] - c[0], dz = p[1] - c[1]; return [c[0] + dy * cs - dz * sn, c[1] + dy * sn + dz * cs]; };
+// a flat convex part in the y-z plane, x0..x1 thick (pawls, plates)
+const prismX = (poly, x0, x1, mm, w = .6) => { const A = on(PX(x0), poly), B = on(PX(x1), poly), fF = facing([1,0,0]), fB = facing([-1,0,0]);
+  return loft(A, B, n => toneI(n, mm)) + (fF ? shape(B, toneI([1,0,0], mm), w) : fB ? shape(A, toneI([-1,0,0], mm), w) : '') + hullInk([...A, ...B], w + .3); };
+const springLine = (a, b, n, amp, side) => { const pts = [];
+  for (let i = 0; i <= n; i++){ const t = i / n, o = i && i < n ? (i % 2 ? amp : -amp) : 0; pts.push(lerp3(a, b, t).map((v, k) => v + side[k] * o)); }
+  const d = pd(pts, false); return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="1.2" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="#cfd6d8" stroke-width=".5" stroke-linejoin="round"/>`; };
+const txYr = (x, y, z, str, size, col = INK, weight = 700) => `<text transform="${txM(P(x, y, z), Dv(-1,0,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+// the visible front run of a closed horizontal ring (for the ink where two lofts meet)
+function frontArc(ring){
+  const n = ring.length, v = ring.map((p, i) => { const a = ring[(i + n - 1) % n], b = ring[(i + 1) % n]; return vis([b[1] - a[1], -(b[0] - a[0]), 0]); });
+  const s0 = v.indexOf(false); if (s0 < 0) return pd(ring);
+  let out = '', run = [];
+  for (let j = 1; j <= n; j++){ const i = (s0 + j) % n; if (v[i]) run.push(ring[i]); else if (run.length){ if (run.length > 1) out += pd(run, false); run = []; } }
+  if (run.length > 1) out += pd(run, false);
+  return out;
+}
+// clip to a screen-space outline
+const clipS = (pts2, inner) => { const id = 'k' + (++_clipN); return `<clipPath id="${id}"><path d="${sp(pts2)}"/></clipPath><g clip-path="url(#${id})">${inner}</g>`; };
+
+/* ---------- gumballs ---------- */
+function gball(p, col, w = .7){
+  const [X, Y] = P(...p), R = BALL * 1.2247;
+  return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="${mix(col, '#000000', .22)}"/>`
+    + `<circle cx="${f(X - .16*R)}" cy="${f(Y - .18*R)}" r="${f(.8*R)}" fill="${col}"/>`
+    + `<ellipse cx="${f(X - .36*R)}" cy="${f(Y - .42*R)}" rx="${f(.24*R)}" ry="${f(.15*R)}" fill="#ffffff" opacity=".75" transform="rotate(-30 ${f(X - .36*R)} ${f(Y - .42*R)})"/>`
+    + `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R)}" fill="none" stroke="${INK}" stroke-width="${w}"/>`;
+}
+const ballBox = p => [[p[0] - BALL, p[1] - BALL, p[2] - BALL], [p[0] + BALL, p[1] + BALL, p[2] + BALL]];
+// the pile: close-packed layers inside the globe, lowest first (the top one is the next to go)
+const PILE = (() => { let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const out = [], dz = 2 * BALL * Math.sqrt(2/3), sx = 2 * BALL, sy = sx * Math.sqrt(3) / 2;
+  for (let L = 0; ; L++){ const z = 45 + L * dz; if (z > 69) break;
+    const ox = [0, sx / 2, 0][L % 3], oy = [0, sy / 3, 2 * sy / 3][L % 3];
+    for (let j = -6; j <= 6; j++) for (let i = -6; i <= 6; i++){
+      const x = GX + i * sx + (j % 2 ? sx / 2 : 0) + ox, y = GY + j * sy + oy;
+      if (Math.hypot(x - GX, y - GY, z - ZC) > RG - BALL - .4) continue;
+      out.push({ p: [x + (rnd() - .5) * .5, y + (rnd() - .5) * .5, z + (rnd() - .5) * .3], col: GBC[Math.floor(rnd() * GBC.length)] }); } }
+  return out.sort((a, b) => a.p[2] - b.p[2]); })();
+
+/* ---------- state ---------- */
+const pocketAng = (st, k) => 45 + 90 * k + st.w;
+const pocketPos = (st, k) => { const t = pocketAng(st, k) * R2D; return [GX + PK_R * Math.cos(t), GY + PK_R * Math.sin(t), 42.5]; };
+const pocketAt = (w0, ang) => (((Math.round((ang - 45 - w0) / 90)) % 4) + 4) % 4;
+function pathAt(u){ u = Math.max(0, Math.min(PLEN, u));
+  for (let i = 0; i < SEGL.length; i++){ if (u <= SEGL[i] || i === SEGL.length - 1) return lerp3(PATH[i], PATH[i + 1], clamp01(u / SEGL[i])); u -= SEGL[i]; } }
+const restU = i => PLEN - i * (2 * BALL + .1);
+const boxSpot = j => { const c = j % 5, r = Math.floor(j / 5) % 2, l = Math.floor(j / 10);
+  return [45.5 - c * 5.5 - r * 2.2, 21.4 + r * 4.6, 6.3 + .35 * l]; };
+function pawlAng(st){
+  const s = st.a - 180;
+  if (st.turn && !st.turn.ok) return st.a > 216 ? -7 * clamp01((st.a - 216) / 7) : 0;
+  if (st.coin && st.coin.ph === 'in') return 10 * Math.max(0, 1 - Math.abs(s - 44) / 22);
+  return 0;
+}
+// where the coin is: { c: centre, n: face normal } or null
+function coinPose(st){
+  const c = st.coin; if (!c) return null;
+  if (c.ph === 'fly'){
+    const t = c.t;
+    if (t < .6){ const e = ease(t / .6), s0 = [STK[0], STK[1], BZ + .4 * st.stack + .2], ct = [62, 47, 46], s1 = [57, GY, SZ + 5];
+      const q = [0,1,2].map(i => (1-e)*(1-e)*s0[i] + 2*(1-e)*e*ct[i] + e*e*s1[i]);
+      return { c: q, n: norm(lerp3([0, 0, 1], [0, 1, 0], ease(clamp01(t / .5)))) }; }
+    return { c: [57 - (57 - 46.85) * ease(clamp01((t - .6) / .4)), GY, SZ + 5], n: [0, 1, 0] }; }
+  if (c.ph === 'in'){ const s = st.a - 180; return { c: kp(46.85, 5, s), n: [0, -Math.cos(s * R2D), -Math.sin(s * R2D)] }; }
+  // falling: out of the slot, onto the coin chute, down it, into the cash box
+  const t = c.t, way = [kp(46.85, 5, 180), [46.85, GY + .6, 21.6], [46.85, GY - 5.8, 17.2], boxSpot(st.box).map((v, i) => i === 2 ? v + .18 : v)], tt = [0, .15, .55, .85];
+  let i = 0; while (i < 2 && t > tt[i + 1]) i++;
+  const k = clamp01((t - tt[i]) / (tt[i + 1] - tt[i]));
+  return { c: lerp3(way[i], way[i + 1], i === 0 ? k * k : k), n: norm(lerp3([0, 1, 0], [0, -.55, .83], ease(clamp01(t / .3)))).map((v, j) => t > .55 ? lerp3([0, -.55, .83], [0, 0, 1], clamp01((t - .55) / .2))[j] : v) };
+}
+const coinSvg = cp => rod(cp.c.map((v, i) => v - cp.n[i] * .17), cp.c.map((v, i) => v + cp.n[i] * .17), 2.4, COINM, toneI, .7, 2.4, 20);
+// the part of the coin outside the mech plate while it is pushed into the slot (it lies in the plane y = GY)
+function coinOutside(cp, x0){
+  const pts = Array.from({ length: 28 }, (_, i) => { const t = i / 28 * 2 * Math.PI; return [cp.c[0] + 2.4 * Math.cos(t), GY, cp.c[2] + 2.4 * Math.sin(t)]; });
+  const out = [];
+  for (let i = 0; i < pts.length; i++){ const a = pts[i], b = pts[(i + 1) % pts.length], ia = a[0] >= x0, ib = b[0] >= x0;
+    if (ia) out.push(a); if (ia !== ib){ const t = (x0 - a[0]) / (b[0] - a[0]); out.push(lerp3(a, b, t)); } }
+  if (out.length < 3) return '';
+  return shape(out, toneI(facing([0,1,0]) ? [0,1,0] : [0,-1,0], COINM), .7);
+}
+
+/* ---------- the base ---------- */
+const F0 = RS(23, 8, BZ), F1 = RS(23, 8, 6), B0 = RS(19, 6, 6), B1 = RS(19, 6, 37), K1 = RS(21, 7, 40);
+function baseBody(st, m){
+  const FR = facing([1,0,0]), BK = facing([-1,0,0]);
+  let s = loft(F0, F1, n => tone(n, m)) + fill(pd(F1), tone([0,0,1], m)) + ink(pd(F1), 1.2) + hullInk([...F0, ...F1], 2.4);
+  s += loft(B0, B1, n => tone(n, m)) + loft(B1, K1, n => tone(n, m));
+  s += ink(frontArc(B1), 1.1) + fill(pd(K1), m.l) + ink(pd(K1), 1.4);
+  if (BK){ const door = on(PX(GX - 19 - .05), rrUV(19.5, 8, 28.5, 15.5, 1));
+    s += shape(door, mix(tone([-1,0,0], m), '#000000', .12), 1.1) + shape(on(PX(GX - 19 - .1), ellUV(24, 13.4, .9, .9, 12)), METAL.m, .6)
+      + line([[GX - 19.12, 24, 13.1], [GX - 19.12, 24, 12.3]], .7) + ink(pd(on(PX(GX - 19 - .1), rectUV(20.5, 9, 27.5, 10))), .6); }
+  // oval plaques on both sides
+  for (const sg of [1, -1]){ if (!facing([0, sg, 0])) continue;
+    const y = GY + sg * 19.05, sm = tone([0, sg, 0], m), pl = on(PY(y), ellUV(GX, 24, 11, 6.2, 28));
+    s += shape(pl, mix(sm, '#fff4d6', .55), 1.1) + (sg > 0 ? txY(GX, y + .05, 23.1, 'GUMBALLS', 2.9, INK, 800) : txYr(GX, y - .05, 23.1, 'GUMBALLS', 2.9, INK, 800)); }
+  s += hullInk([...B0, ...K1], 2.8);
+  return s;
+}
+// the parts on the front face, as items for byDepth
+const PLATE = rrUV(GY - 8.5, 20, GY + 8.5, 36.6, 2.5);
+function crankItems(st){
+  const a = st.a, e = kp(54.4, 6.2, a), g0 = kp(55.2, 6.2, a), g1 = kp(59, 6.2, a);
+  return [
+    { box: [[52.2, GY - 1.9, SZ - 1.9], [53.6, GY + 1.9, SZ + 1.9]], svg: act('crank', cylX(52.2, 53.6, GY, SZ, 1.9, METAL, toneI, 1, 20)) },
+    { box: bbox([[54.4, GY, SZ], e], .8), svg: act('crank', rod([54.4, GY, SZ], e, .75, METAL, toneI, 1, .75, 12)) },
+    { box: [[55.2, GY - 1.15, SZ - 1.15], [55.7, GY + 1.15, SZ + 1.15]], svg: act('crank', cylX(55.2, 55.7, GY, SZ, 1.1, METAL, toneI, .8, 12)) },
+    { box: bbox([g0, g1], 1.35), svg: act('crank', rod(g0, g1, 1.3, GRIPM, toneI, 1.1, 1.3, 16) + rod(g1, kp(59.6, 6.2, a), 1.3, GRIPM, toneI, 1, .7, 16)) } ];
+}
+function frontItems(st){
+  const FR = facing([1,0,0]), items = crankItems(st);
+  // mech plate with the coin slot and price
+  let pl = extrude(PLATE, FX, FX + 1.2, METAL, toneI);
+  if (FR){ const cap = on(PX(FX + 1.2), PLATE);
+    pl += fill(pd(cap), METAL.l) + ink(pd(cap), 1.1) + shape(on(PX(FX + 1.25), rrUV(GY - .5, 30.9, GY + .5, 36, .4, 3)), RECESS, .8)
+      + tx(FX + 1.27, GY + 4.6, 32.4, '25c', 2.6, INK, 800) + tx(FX + 1.27, GY - 4.6, 32.4, 'PLAY', 2.1, INK, 800)
+      + ['GY - 6.3', 'GY + 6.3'].map((_, i) => shape(on(PX(FX + 1.25), ellUV(GY + (i ? 6.3 : -6.3), 22, .6, .6, 10)), METAL.m, .5)).join(''); }
+  pl += hullInk([...on(PX(FX), PLATE), ...on(PX(FX + 1.2), PLATE)], 1.6);
+  items.push({ box: [[FX, GY - 8.5, 20], [FX + 1.2, GY + 8.5, 36.6]], svg: act('slot', pl) });
+  // delivery cup: a chrome box with an opening; the ball waits behind the flap
+  let cup = box(FX, GY - 5.5, 6, 55, GY + 5.5, 14.5, METAL, toneI, 1);
+  if (FR){ const op = on(PX(55.03), rectUV(GY - 4, 7, GY + 4, 13.6));
+    cup += shape(op, RECESS, .9);
+    const inside = st.drops.filter(d => pathAt(d.u)[0] > FX - 1).map(d => gball(pathAt(d.u), d.col)).join('');
+    if (inside) cup += clipTo(op, inside); }
+  items.push({ box: [[FX, GY - 5.5, 6], [55, GY + 5.5, 14.5]], svg: act('flap', cup) });
+  // the flap, hinged at the top of the opening
+  const ph = 78 * ease(st.flap) * R2D, dn = [Math.sin(ph), 0, -Math.cos(ph)], nn = [Math.cos(ph), 0, Math.sin(ph)];
+  const hz = 14, hx = 55.3, q = (y, t, o) => [hx + dn[0] * t + nn[0] * o, y, hz + dn[2] * t + nn[2] * o];
+  const fo = facing(nn) ? .18 : -.18, fq = [q(GY - 4.4, 0, fo), q(GY + 4.4, 0, fo), q(GY + 4.4, 7.4, fo), q(GY - 4.4, 7.4, fo)];
+  let fl = rod([hx, GY - 4.6, hz], [hx, GY + 4.6, hz], .45, METAL, toneI, .7, .45, 10) + shape(fq, toneI(fo > 0 ? nn : nn.map(v => -v), METAL), 1);
+  fl += rod(q(GY - 3, 7.4, .3), q(GY + 3, 7.4, .3), .45, METAL, toneI, .7, .45, 10);
+  items.push({ box: bbox([q(GY - 4.6, 0, -.2), q(GY + 4.6, 7.6, .5)], .1), svg: act('flap', fl) });
+  return items;
+}
+
+/* ---------- inside the base (see-through) ---------- */
+function openBox(x0, y0, z0, x1, y1, z1, M, contents){
+  const W4 = [[[1,0,0], [[x1,y0,z0],[x1,y1,z0],[x1,y1,z1],[x1,y0,z1]]], [[-1,0,0], [[x0,y0,z0],[x0,y1,z0],[x0,y1,z1],[x0,y0,z1]]],
+    [[0,1,0], [[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]]], [[0,-1,0], [[x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1]]]];
+  let s = shape([[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0]], M.d, .6);
+  for (const [n, q] of W4) if (!vis(n)) s += shape(q, mix(toneI(n.map(v => -v), M), '#000000', .1), .6);
+  s += contents;
+  for (const [n, q] of W4) if (vis(n)) s += shape(q, toneI(n, M), .8);
+  return s + ink(pd([[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]]), 1);
+}
+// a clear tube along a polyline, in short pieces so it sorts with the solids round it
+function tubeParts(pts, r, step = 4){
+  const out = [];
+  for (let i = 0; i < pts.length - 1; i++){ const a = pts[i], b = pts[i + 1], L = Math.hypot(...b.map((v, k) => v - a[k])), n = Math.max(1, Math.ceil(L / step));
+    for (let j = 0; j < n; j++){ const p = lerp3(a, b, j / n), q = lerp3(a, b, (j + 1) / n);
+      out.push({ box: bbox([p, q], r), svg: `<g opacity=".62">${rod(p, q, r, CLEAR, toneI, .7, r, 18)}</g>` }); } }
+  return out;
+}
+function mechBase(st){
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg }), a = st.a, s = a - 180;
+  const bx = (x0, y0, z0, x1, y1, z1, M, w = .7) => put([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, M, toneI, w));
+  const rx = (x0, x1, y, z, r, M, w = .7, n = 16) => put([[x0, y - r, z - r], [x1, y + r, z + r]], cylX(x0, x1, y, z, r, M, toneI, w, n));
+  const vr = (z0, z1, r, M, w = .7, x = GX, y = GY, n = 18) => put([[x - r, y - r, z0], [x + r, y + r, z1]], cyl(x, y, z0, z1, r, M, toneI, w, n));
+  // cash box with the coins in it
+  const coins = []; for (let j = 0; j < st.box; j++){ const p = boxSpot(j); coins.push({ box: [[p[0] - 2.4, p[1] - 2.4, p[2]], [p[0] + 2.4, p[1] + 2.4, p[2] + .35]], svg: cyl(p[0], p[1], p[2], p[2] + .35, 2.4, COINM, toneI, .6, 16) }); }
+  put([[16, 18.5, 6.3], [48, 28.5, 15]], openBox(16, 18.5, 6.3, 48, 28.5, 15, CASHM, byDepth(coins)));
+  // spindle bracket from the back wall, spindle bearing, shaft bearing
+  bx(14, GY - 1.5, 23, 41.2, GY + 1.5, 24.5, GEARM);
+  vr(24.5, 25.8, 1.4, METAL);
+  bx(40, GY - 1.4, 24.5, 41.2, GY + 1.4, 29.8, GEARM);
+  // spindle (in pieces either side of the crown gear) and the crown gear
+  put([[GX - .6, GY - .6, 25.8], [GX + .6, GY + .6, 30]], rod([GX, GY, 25.8], [GX, GY, 30], .6, METAL, toneI, .6));
+  put([[GX - .6, GY - .6, 31.2], [GX + .6, GY + .6, 39]], rod([GX, GY, 31.2], [GX, GY, 39], .6, METAL, toneI, .6));
+  { let cg = cyl(GX, GY, 30, 31.2, 6.6, BRASS, toneI, .9, 36), tk = '';
+    for (let i = 0; i < 32; i++){ const t = (i / 32 * 360 + st.w * 1) * R2D, n = [Math.cos(t), Math.sin(t), 0];
+      if (vis(n)) tk += pd([[GX + 6.6 * n[0], GY + 6.6 * n[1], 30], [GX + 6.6 * n[0], GY + 6.6 * n[1], 30.6]], false); }
+    put([[GX - 6.6, GY - 6.6, 30], [GX + 6.6, GY + 6.6, 31.2]], cg + ink(tk, .5)); }
+  // pinion on the crank shaft's back end
+  { let pn = cylX(37.9, 39.3, GY, SZ, 1.65, GEARM, toneI, .8, 16), tk = '';
+    for (let i = 0; i < 10; i++){ const al = i * 36 + a; const n = [0, -Math.sin(al * R2D), Math.cos(al * R2D)];
+      if (vis(n)) tk += pd([kp(37.9, 1.65, al), kp(39.3, 1.65, al)], false); }
+    put([[37.9, GY - 1.65, SZ - 1.65], [39.3, GY + 1.65, SZ + 1.65]], pn + `<path d="${tk}" fill="none" stroke="${GEARM.l}" stroke-width=".4"/>`); }
+  // crank shaft, in the gaps between the parts it passes through
+  for (const [x0, x1] of [[39.3, 40], [41.2, 41.6], [43.6, 44.2], [50, 52.2]]) rx(x0, x1, GY, SZ, .65, METAL, .5, 12);
+  // ratchet wheel (saw teeth) and the anti-reverse pawl hung from the rear plate
+  { const saw = []; for (let i = 0; i < 12; i++){ const al = i * 30 + a; saw.push(kp(0, 3.2, al).slice(1), kp(0, 2.55, al + 24).slice(1)); }
+    put([[41.6, GY - 3.2, SZ - 3.2], [42.6, GY + 3.2, SZ + 3.2]], prismX(saw.map(([y, z]) => [y, z]), 41.6, 42.6, GEARM, .5)); }
+  { const pv = [GY + 4.6, 31.9], tip = [GY + 2.0, 30.85];
+    const poly = [[pv[0] + .5, pv[1] + .6], [pv[0] - .4, pv[1] + .7], [tip[0] - .2, tip[1] + .2], [tip[0], tip[1] - .3], [pv[0] + .5, pv[1] - .6]];
+    put([[41.9, GY + 1.6, 30.4], [42.8, GY + 5.2, 32.7]], prismX(poly, 41.9, 42.3, PAWLM, .45) + rod([42.3, pv[0], pv[1]], [42.8, pv[0], pv[1]], .3, METAL, toneI, .4)); }
+  // mech frame: rear plate on four spacer rods from the front wall
+  bx(42.8, GY - 8, 20.5, 43.6, GY + 8, 36.6, matOf('#b9c0c3'), .8);
+  for (const [y, z] of [[GY - 7.2, 21.3], [GY + 7.2, 21.3], [GY - 7.2, 35.8], [GY + 7.2, 35.8]]) rx(43.6, 50, y, z, .55, METAL, .5, 10);
+  rx(49.6, 50, GY, SZ, 1.4, METAL, .6, 16);                                                 // front bearing on the front wall
+  // coin drum with its slot; the coin rides in it
+  { let dr = cylX(44.2, 49.5, GY, SZ, 6.5, BRASS, toneI, 1, 36);
+    const n = [0, -Math.sin(s * R2D), Math.cos(s * R2D)], tg = [0, -Math.cos(s * R2D), -Math.sin(s * R2D)];
+    const sl = (x, r0, r1) => [kp(x, r0, s).map((v, i) => v + tg[i] * .35), kp(x, r1, s).map((v, i) => v + tg[i] * .35), kp(x, r1, s).map((v, i) => v - tg[i] * .35), kp(x, r0, s).map((v, i) => v - tg[i] * .35)];
+    if (vis(n)) dr += shape([kp(44.2, 6.5, s).map((v, i) => v + tg[i] * .35), kp(49.5, 6.5, s).map((v, i) => v + tg[i] * .35), kp(49.5, 6.5, s).map((v, i) => v - tg[i] * .35), kp(44.2, 6.5, s).map((v, i) => v - tg[i] * .35)], RECESS, .4);
+    if (facing([1,0,0])) dr += shape(sl(49.52, 2.2, 6.5), RECESS, .4);
+    if (facing([-1,0,0])) dr += shape(sl(44.18, 2.2, 6.5), RECESS, .4);
+    const cp = st.coin && st.coin.ph === 'in' ? coinPose(st) : null;
+    if (cp){ // the coin sits in the slot: the drum hides all but its outer edge
+      const r = [0, n[1], n[2]], t0 = Math.asin(1.5 / 2.4), seg = [];
+      for (let i = 0; i <= 12; i++){ const t = t0 + (Math.PI - 2 * t0) * i / 12; seg.push([cp.c[0] + 2.4 * Math.cos(t), cp.c[1] + 2.4 * Math.sin(t) * r[1], cp.c[2] + 2.4 * Math.sin(t) * r[2]]); }
+      dr += `<g opacity=".3">${coinSvg(cp)}</g>` + shape(seg, toneI(vis(tg) ? tg : tg.map(v => -v), COINM), .7); }
+    put([[44.2, GY - 6.5, SZ - 6.5], [49.5, GY + 6.5, SZ + 6.5]], dr); }
+  // lock pawl on its pivot pin, pulled down by its spring onto the drum
+  { const pv = [GY - 9.5, 34.6], ph = pawlAng(st) * R2D, loc = [[-1, -.9], [5, -1.6], [5.3, -.5], [-1, .9]].map(([u, v]) => rotYZ([pv[0] + u, pv[1] + v], pv, ph));
+    const hook = rotYZ([pv[0] + 1.5, pv[1] - .85], pv, ph);
+    put([[47.8, pv[0] - 1.2, 32.6], [48.6, pv[0] + 5.6, 36]], prismX(loc, 47.8, 48.6, PAWLM, .5) + rod([47.6, pv[0], pv[1]], [48.8, pv[0], pv[1]], .35, METAL, toneI, .4));
+    put([[43.6, pv[0] - .45, pv[1] - .45], [47.6, pv[0] + .45, pv[1] + .45]], rod([43.6, pv[0], pv[1]], [47.6, pv[0], pv[1]], .4, METAL, toneI, .5));
+    put([[48.1, GY - 8.5, 29.8], [48.4, hook[0] + .5, hook[1]]], springLine([48.2, hook[0], hook[1]], [48.2, GY - 8, 30.4], 9, .45, [0, 1, 0]));
+    put([[43.6, GY - 8.35, 30.05], [48.4, GY - 7.65, 30.75]], rod([43.6, GY - 8, 30.4], [48.4, GY - 8, 30.4], .35, METAL, toneI, .4)); }
+  // coin chute: a tilted tray from under the drum to the cash box
+  { const q = (x, t) => [x, GY + 1.2 - 7.7 * t, 20.2 - 4.6 * t], fl = [q(43.8, 0), q(49.8, 0), q(49.8, 1), q(43.8, 1)];
+    const tn = norm(cross(sub(fl[1], fl[0]), sub(fl[3], fl[0]))), up = tn[2] < 0 ? tn.map(v => -v) : tn;
+    let cc = shape(fl, toneI(up, METAL), .7);
+    for (const x of [43.8, 49.8]){ const w = [q(x, 0), q(x, 1), q(x, 1).map((v, i) => i === 2 ? v + 1.4 : v), q(x, 0).map((v, i) => i === 2 ? v + 1.4 : v)];
+      cc = (vis([x > 46 ? 1 : -1, 0, 0]) ? cc + shape(w, toneI([x > 46 ? 1 : -1, 0, 0], METAL), .6) : shape(w, toneI([x > 46 ? -1 : 1, 0, 0], METAL), .6) + cc); }
+    put([[43.8, GY - 6.5, 15.6], [49.8, GY + 1.2, 21.6]], cc); }
+  // drop tube hung from the floor plate, the ball chute, the chute leg
+  parts.push(...tubeParts([[GX, GY + PK_R, 39], [GX, GY + PK_R, 21.5]], 2.9));
+  put([[GX - 3.6, GY + PK_R - 3.6, 38.4], [GX + 3.6, GY + PK_R + 3.6, 39]], cyl(GX, GY + PK_R, 38.4, 39, 3.6, METAL, toneI, .6, 20));
+  parts.push(...tubeParts(PATH.slice(1, 5), 2.9));
+  put([[45.5, 35, 6.3], [46.5, 36, 10.1]], rod([46, 35.5, 10.1], [46, 35.5, 6.3], .5, METAL, toneI, .6) + box(44.8, 34.3, 6.3, 47.2, 36.7, 6.7, METAL, toneI, .5));
+  // balls on their way (inside the base)
+  for (const d of st.drops){ const p = pathAt(d.u); if (p[2] < 41) put(ballBox(p), gball(p, d.col)); }
+  // the coin when it falls out
+  if (st.coin && st.coin.ph === 'fall'){ const cp = coinPose(st); put(bbox([cp.c], 2.4), coinSvg(cp)); }
+  if (st.coin && st.coin.ph === 'fly' && st.coin.t > .6){ const cp = coinPose(st); if (cp.c[0] < 52.2 + 2.4) put(bbox([cp.c], 2.4), coinSvg(cp)); }
+  return byDepth(parts);
+}
+
+/* ---------- the globe ---------- */
+const GRINGS = Array.from({ length: 15 }, (_, i) => { const z = ZS + (ZN - ZS) * i / 14; return CIR(Math.sqrt(RG*RG - (z - ZC)*(z - ZC)), z, GX, GY, 28); });
+const GPTS = GRINGS.flat();
+// seat ring, wheel, pocket balls (inside the seat opening)
+function seatRing(){ const A = CIR(16.5, 40), B = CIR(16.5, ZS);
+  return loft(A, B, n => toneI(n, METAL)) + fill(pd(B), METAL.l) + ink(pd(B), .9) + fill(pd(CIR(15.5, ZS + .02)), METAL.d)
+    + `<path d="${pd(CIR(15.75, ZS + .03))}" fill="none" stroke="${RECESS}" stroke-width="1.1"/>` + hullInk([...A, ...B], 1.6); }
+function wheelTop(st){
+  let s = cyl(GX, GY, 40, 42.5, WHEEL_R, WHEELM, toneI, .9, 40);
+  for (let k = 0; k < 4; k++){ const p = pocketPos(st, k); s += shape(CIR(2.8, 42.52, p[0], p[1], 16), RECESS, .5); }
+  const items = [];
+  for (let k = 0; k < 4; k++) if (st.pockets[k]){ const p = pocketPos(st, k); items.push({ box: ballBox(p), svg: gball(p, st.pockets[k]) }); }
+  for (const d of st.drops){ const p = pathAt(d.u); if (p[2] >= 41) items.push({ box: ballBox(p), svg: gball(p, d.col) }); }
+  return s + byDepth(items);
+}
+function wiper(){ const pts = [[GX + 15.3 * Math.cos(66 * R2D), GY + 15.3 * Math.sin(66 * R2D), 44.6], [GX + 11.5 * Math.cos(74 * R2D), GY + 11.5 * Math.sin(74 * R2D), 45.5], [GX + 8.2 * Math.cos(84 * R2D), GY + 8.2 * Math.sin(84 * R2D), 45.3]];
+  const d = pd(pts, false); return { box: bbox(pts, .4), svg: `<path d="${d}" fill="none" stroke="${INK}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="#e8ecec" stroke-width=".7" stroke-linecap="round" stroke-linejoin="round"/>` }; }
+function agitItems(st){
+  const out = [{ box: [[GX - .55, GY - .55, 42.5], [GX + .55, GY + .55, 47.5]], svg: rod([GX, GY, 42.5], [GX, GY, 47.5], .55, METAL, toneI, .6) }];
+  for (const sg of [0, 180]){ const t = (st.w + sg + 20) * R2D, c = Math.cos(t), sn = Math.sin(t);
+    const pts = [[GX + .6 * c, GY + .6 * sn, 44], [GX + 6 * c, GY + 6 * sn, 44.6], [GX + 7.4 * c, GY + 7.4 * sn, 48.4]];
+    for (let i = 0; i < 2; i++) out.push({ box: bbox([pts[i], pts[i + 1]], .5), svg: rod(pts[i], pts[i + 1], .42, METAL, toneI, .6) }); }
+  return out;
+}
+function pileItems(st){
+  const N = st.n; if (!N) return [];
+  const topZ = PILE[N - 1].p[2], out = [];
+  for (let i = 0; i < N; i++){ const b = PILE[i], p = b.p;
+    if (Math.hypot(p[0] - GX, p[1] - GY, p[2] - ZC) < RG - BALL - 6 && p[2] < topZ - 4.5) continue;     // buried inside the pile
+    out.push({ box: ballBox(p), svg: gball(p, b.col) }); }
+  return out;
+}
+function globeGlass(back){
+  const H2 = hull(GPTS.map(p => P(...p)));
+  if (back) return fill(sp(H2), GLASS, 'opacity=".22"');
+  const [X, Y] = P(GX, GY, ZC), R = RG * 1.2247;
+  const arc = (a0, a1, r0, r1) => { const o = []; for (let i = 0; i <= 10; i++){ const t = (a0 + (a1 - a0) * i / 10) * R2D; o.push([X + r1 * R * Math.cos(t), Y + r1 * R * Math.sin(t)]); }
+    for (let i = 10; i >= 0; i--){ const t = (a0 + (a1 - a0) * i / 10) * R2D; o.push([X + r0 * R * Math.cos(t), Y + r0 * R * Math.sin(t)]); } return o; };
+  return fill(sp(H2), GLASS, 'opacity=".1"') + clipS(H2, fill(sp(arc(196, 236, .74, .86)), '#ffffff', 'opacity=".5"') + fill(sp(arc(242, 252, .78, .84)), '#ffffff', 'opacity=".45"')
+    + fill(sp(arc(20, 60, .84, .9)), '#ffffff', 'opacity=".28"')) + ink(sp(H2), 2);
+}
+function lid(m){
+  const A = CIR(12, 77.4), B = CIR(12, 80.2), r1 = CIR(10.6, 82.3), r2 = CIR(7.6, 83.7), r3 = CIR(4, 84.4);
+  let s = loft(A, B, n => tone(n, m)) + ink(frontArc(B), .9) + loft(B, r1, n => tone(n, m)) + loft(r1, r2, n => tone(n, m)) + loft(r2, r3, n => tone(n, m)) + fill(pd(r3), m.l) + ink(pd(r3), .8);
+  s += hullInk([...A, ...B, ...r1, ...r2], 2.2);
+  s += cyl(GX, GY, 84.4, 86.8, 2.4, METAL, toneI, 1, 20) + shape(CIR(.55, 86.82, GX - .3, GY, 10), RECESS, .4) + line([[GX - .3, GY, 86.83], [GX + .9, GY, 86.83]], .8);
+  return s;
+}
+
+/* ---------- scene ---------- */
+const MBOX = [[9, 9, BZ], [59.6, 55, 87]], SBOX = [[STK[0] - 2.4, STK[1] - 2.4, BZ], [STK[0] + 2.4, STK[1] + 2.4, BZ + 3]];
+function shadows(st){
+  const lidR = CIR(12, 84);
+  let s = castShadow([...F0, ...K1, ...GPTS, ...lidR], BZ, BTOP);
+  if (st.stack) s += castShadow([...CIR(2.4, BZ, STK[0], STK[1], 12), ...CIR(2.4, BZ + .4 * st.stack, STK[0], STK[1], 12)], BZ, BTOP);
+  return s;
+}
+function scene(st, m){
+  const k = ease(st.xr || 0), FR = facing([1,0,0]);
+  let s = board(0, 0, 68, 70, BZ, 5, WOOD) + shadows(st);
+  // ---- the base and everything on its front
+  const fi = frontItems(st), front = byDepth(fi), body = baseBody(st, m);
+  const baseAll = FR ? body + front : front + body;
+  let mach = '';
+  if (k > 0){
+    const far = `<g opacity="${f(.5 * k)}">` + loft(B0, B1, n => mix(toneI(n.map(v => -v), m), '#f2efe7', .55), true) + fill(pd(RS(18.5, 5.5, 6.3)), mix(m.d, '#f2efe7', .5)) + `</g>`;
+    const crank = byDepth(crankItems(st));
+    mach += far + `<g opacity="${f(1 - .8 * k)}">${baseAll}</g>` + `<g opacity="${f(.6 * k)}">${hullInk([...F0, ...K1], 2.8)}</g>`
+      + (FR ? '' : crank) + `<g opacity="${f(k)}">${mechBase(st)}</g>` + (FR ? crank : '');
+  } else mach += baseAll;
+  // ---- the globe seat, the wheel, the pile, the glass, the lid
+  const inner = CIR(15.5, ZS);
+  mach += `<g opacity="${f(1 - .8 * k)}">${seatRing()}</g>`;
+  if (k < 1) mach += `<g opacity="${f(1 - k)}">${clipTo(inner, wheelTop(st))}</g>`;
+  if (k > 0) mach += `<g opacity="${f(k)}">${cyl(GX, GY, 39, 40, 15.5, METAL, toneI, .7, 40)}${wheelTop(st)}`
+    + `<path d="${pd(CIR(2.9, 42.55, GX, GY + PK_R, 16))}" fill="none" stroke="${INK}" stroke-width=".8" stroke-dasharray="1.2 1"/>${wiper().svg}</g>`;
+  mach += globeGlass(true);
+  const pile = pileItems(st), ag = agitItems(st);
+  mach += k > 0 ? `<g opacity="${f(1 - .65 * k)}">${byDepth([...pile, ...ag])}</g><g opacity="${f(k)}">${ag.map(a => a.svg).join('')}</g>` : byDepth([...pile, ...ag]);
+  mach += globeGlass(false) + lid(m);
+  // ---- the coin stack on the counter, and the coin in flight
+  let stack = '';
+  for (let i = 0; i < st.stack; i++) stack += cyl(STK[0], STK[1], BZ + .4 * i, BZ + .4 * (i + 1), 2.4, COINM, toneI, .7, 20);
+  if (st.stack) stack = act('stack', stack);
+  s += byDepth([{ box: MBOX, svg: mach }, { box: SBOX, svg: stack }]);
+  const cp = st.coin && st.coin.ph === 'fly' ? coinPose(st) : null;
+  if (cp){ const near = depthOf(sub(cp.c, [GX, GY, cp.c[2]])) > 0;
+    const cs = cp.c[0] > 52.2 + 2.4 ? coinSvg(cp) : FR ? coinOutside(cp, 52.2) : '';
+    s = near ? s + cs : s.replace(/(<g data-act="stack")|$/, cs + '$1'); }
+  // a gumball on its way to your hand
+  if (st.take){ const t = clamp01((st.take.t - .2) / .7), p = t < .5 ? lerp3(PATH[5], [58, GY, 10.6], t / .5) : lerp3([58, GY, 10.6], [63, GY, 17], (t - .5) / .5);
+    s += `<g opacity="${f(1 - clamp01((t - .7) / .3))}">${gball(p, st.take.col)}</g>`; }
+  // ---- labels
+  const items = k > .6 ? insideLabels(st) : surfaceLabels(st);
+  if (items.length) s += xrCallouts(items, [9, 59.6, 9, 55, BZ, 87]);
+  return s;
+}
+function insideLabels(st){
+  const turning = !!(st.turn && st.turn.ok), dropping = st.drops.some(d => d.u < restU(st.drops.indexOf(d)) - .01), s = st.a - 180;
+  const gp = (dx, dy, dz) => { const n = norm([dx, dy, dz]); return [GX + RG * n[0], GY + RG * n[1], ZC + RG * n[2]]; };
+  const kfree = [0, 1, 2, 3].find(k => Math.abs(((pocketAng(st, k) - 90) % 360 + 360) % 360 - 180) < 100 && st.pockets[k]);
+  const at = (a, r, z) => [GX + r * Math.cos(a * R2D), GY + r * Math.sin(a * R2D), z];
+  const L = [
+    { at: gp(.55, .35, .55), text:'GLASS GLOBE', on: false },
+    { at: st.n ? PILE[st.n - 1].p : [GX, GY, 50], text:'GUMBALLS', on: dropping },
+    { at: [GX, GY + 12, 80], text:'LID', on: false },
+    { at: [GX, GY, 86.8], text:'LID LOCK', on: false },
+    { at: at(160, 15.75, ZS), text:'GLOBE GASKET', on: false },
+    { at: at(200, 16.5, 41.7), text:'GLOBE SEAT', on: false },
+    { at: at(st.w + 20, 7.4, 48.4), text:'AGITATOR', on: turning },
+    { at: at(-35, WHEEL_R, 41.2), text:'DISPENSING WHEEL', on: turning },
+    { at: kfree != null ? pocketPos(st, kfree) : at(225, PK_R, 42.5), text:'BALL POCKET', on: false },
+    { at: at(74, 11.5, 45.5), text:'WIPER SPRING', on: dropping },
+    { at: at(250, 15.5, 40), text:'FLOOR PLATE', on: false },
+    { at: [GX, GY + PK_R, 40], text:'EXIT HOLE', on: dropping },
+    { at: [GX, GY + PK_R + 2.9, 31], text:'DROP TUBE', on: dropping },
+    { at: [40.5, 38.6, 16.2 + 2.9], text:'BALL CHUTE', on: dropping },
+    { at: [46, 35.5, 8], text:'CHUTE LEG', on: false },
+    { at: [55.3, GY - 2, 10], text:'DELIVERY FLAP', on: st.flap > .05 },
+    { at: [55, GY + 5.5, 14.5], text:'DELIVERY CUP', on: false },
+    { at: kp(59.4, 6.2, st.a), text:'CRANK', on: turning },
+    { at: [52.2, GY, 35.6], text:'COIN SLOT', on: !!(st.coin && st.coin.ph === 'fly') },
+    { at: kp(47, 6.5, 130), text:'COIN DRUM', on: turning },
+    { at: [48.6, GY - 5.4, 33.9], text:'LOCK PAWL', on: pawlAng(st) !== 0 },
+    { at: [48.2, GY - 8.3, 31.5], text:'PAWL SPRING', on: pawlAng(st) !== 0 },
+    { at: [43.6, GY + 6, 36.6], text:'MECH FRAME', on: false },
+    { at: [47, GY + 7.2, 21.3], text:'SPACER ROD', on: false },
+    { at: kp(42.6, 3, -60), text:'RATCHET WHEEL', on: turning },
+    { at: [42.3, GY + 3.6, 31.6], text:'ANTI-REVERSE PAWL', on: turning },
+    { at: [39.3, GY, SZ + 1.65], text:'PINION', on: turning },
+    { at: at(140, 6.6, 31.2), text:'CROWN GEAR', on: turning },
+    { at: [GX, GY, 36], text:'SPINDLE', on: turning },
+    { at: [20, GY + 1.5, 24.5], text:'SPINDLE BRACKET', on: false },
+    { at: [40.6, GY + 1.4, 29.8], text:'SHAFT BEARING', on: turning },
+    { at: [44, GY, SZ + .65], text:'CRANK SHAFT', on: turning },
+    { at: [49.8, GY - 1.4, SZ], text:'FRONT BEARING', on: false },
+    { at: [46.8, GY - 3, 18.4], text:'COIN CHUTE', on: !!(st.coin && st.coin.ph === 'fall') },
+    { at: [20, 18.5, 15], text:'CASH BOX', on: !!(st.coin && st.coin.ph === 'fall') },
+    { at: [GX - 19, 24, 15.5], text:'CASH DOOR', on: false } ];
+  if (st.box) L.push({ at: boxSpot(st.box - 1).map((v, i) => i === 2 ? v + .35 : v), text:'COINS', on: false });
+  if (st.coin){ const cp = coinPose(st); L.push({ at: cp.c, text:'QUARTER', on: true }); }
+  return L;
+}
+function surfaceLabels(st){
+  const FR = facing([1,0,0]), BK = facing([-1,0,0]), turning = !!(st.turn && st.turn.ok);
+  const L = [
+    { at: [GX + RG * .55, GY + RG * .45, ZC + RG * .5], text:'GLASS GLOBE', on: false },
+    { at: st.n ? PILE[st.n - 1].p : [GX, GY, 50], text:'GUMBALLS', on: false },
+    { at: [GX, GY, 86.8], text:'LID LOCK', on: false },
+    { at: [GX + 12, GY + 16, 30], text:'BASE', on: false } ];
+  if (FR) L.push({ at: kp(59.4, 6.2, st.a), text:'CRANK', on: turning }, { at: [52.2, GY, 35.6], text:'COIN SLOT', on: !!(st.coin && st.coin.ph === 'fly') },
+    { at: [55.3, GY - 2, 10], text:'DELIVERY FLAP', on: st.flap > .05 });
+  if (BK) L.push({ at: [GX - 19, 24, 15.5], text:'CASH DOOR', on: false });
+  if (st.stack) L.push({ at: [STK[0], STK[1], BZ + .4 * st.stack], text:'QUARTERS', on: false });
+  return L;
+}
+
+/* ---------- behaviour (one state object, one clock) ---------- */
+let ui, loopOn = false;
+function stepSim(st, dt){
+  const c = st.coin;
+  if (c){ c.t += dt;
+    if (c.ph === 'fly' && c.t >= FLY_T) c.ph = 'in';
+    else if (c.ph === 'fall' && c.t >= .85){ st.coin = null; st.box++; } }
+  const tr = st.turn;
+  if (tr){ tr.t += dt;
+    if (tr.ok){ const e = ease(clamp01(tr.t / TURN_T)); st.a = 180 + 360 * e; st.w = tr.w0 + 90 * e;
+      if (st.coin && st.coin.ph === 'in' && st.a - 180 >= 178) st.coin = { ph:'fall', t:0 };
+      const kd = pocketAt(tr.w0, 45);
+      if (!tr.dropped && st.w - tr.w0 >= 45){ tr.dropped = true; const col = st.pockets[kd]; st.pockets[kd] = null; if (col) st.drops.push({ col, u:0, v:6 }); }
+      if (!tr.refilled && st.w - tr.w0 >= 80){ tr.refilled = true; if (!st.pockets[kd] && st.n > 0){ st.n--; st.pockets[kd] = PILE[st.n].col; } }
+      if (tr.t >= TURN_T){ st.a = 180; st.w = (tr.w0 + 90) % 360; st.turn = null; } }
+    else { const t = tr.t; st.a = 180 + 44 * ease(clamp01(t / .18)) * (1 - ease(clamp01((t - .32) / .25)));
+      if (t >= .6){ st.a = 180; st.turn = null; } } }
+  st.drops.forEach((d, i) => { const tg = restU(i); if (d.u < tg){ d.v = Math.min(45, d.v + 70 * dt); d.u = Math.min(tg, d.u + d.v * dt); } else { d.u = tg; d.v = 0; } });
+  if (st.take){ st.take.t += dt; const t = st.take.t;
+    st.flap = t < .25 ? ease(t / .25) : t < .8 ? 1 : Math.max(0, 1 - (t - .8) / .3);
+    if (t >= 1.15){ st.take = null; st.flap = 0; } }
+}
+const busy = st => !!(st.coin && st.coin.ph !== 'in') || !!st.turn || !!st.take || st.drops.some((d, i) => d.u < restU(i));
+function runLoop(){
+  if (loopOn) return; loopOn = true;
+  ui.animate(dt => { const st = ui.st; if (st.hold){ loopOn = false; return false; }
+    stepSim(st, dt); const b = busy(st); if (!b) loopOn = false; return b; });
+}
+const gumCount = st => st.n + st.pockets.filter(Boolean).length;
+function insertCoin(st){
+  if (st.turn) return ui.flash('Wait for the crank to stop');
+  if (st.coin) return ui.flash(st.coin.ph === 'in' ? 'A coin is in. Turn the crank' : 'One coin at a time');
+  if (!st.stack){ st.stack = 5; ui.flash('Out of quarters. Here are 5 more'); }
+  st.stack--; st.coin = { ph:'fly', t:0 }; runLoop();
+}
+function turnCrank(st){
+  if (st.turn) return;
+  if (st.coin && st.coin.ph === 'fly') return ui.flash('The coin is still going in');
+  if (st.drops.length >= 3) return ui.flash('Take your gumballs first');
+  if (!st.coin || st.coin.ph !== 'in'){ st.turn = { t:0, ok:false }; ui.flash('Locked. Insert a coin first'); runLoop(); return; }
+  if (!gumCount(st)) ui.flash('The globe is empty');
+  st.turn = { t:0, ok:true, w0: st.w, dropped:false, refilled:false }; runLoop();
+}
+function takeBall(st){
+  if (st.take) return;
+  const d = st.drops[0];
+  if (!d) return ui.flash(st.coin && st.coin.ph === 'in' ? 'Nothing yet. Turn the crank' : 'Nothing in the cup. Insert a coin first');
+  if (d.u < restU(0) - .01) return ui.flash('Still rolling down');
+  st.drops.shift(); st.take = { t:0, col: d.col }; runLoop();
+}
+
+ui = mountFigure({
+  fig:'21', title:'Gumball machine', turn:'full', size:[68, 70, 87], center:[34, 35], palette:'tomato',
+  // a: crank angle (180 = resting, pointing down), w: wheel angle, n: balls in the pile, pockets: ball colour per pocket
+  state:{ a:180, w:0, n: PILE.length, pockets: [GBC[0], GBC[1], GBC[2], GBC[3]], coin:null, turn:null, drops:[], take:null, flap:0, box:6, stack:5 },
+  scene,
+  stats: st => [{ label:'Credit', value: st.coin && st.coin.ph !== 'fall' ? '25c' : '0c' }, { label:'Gumballs', value: gumCount(st), small:true }],
+  buttons:[
+    { label:'Insert coin', onClick:(st) => insertCoin(st) },
+    { label:'Turn the crank', onClick:(st) => turnCrank(st) },
+    { label:'Take gumball', onClick:(st) => takeBall(st) },
+  ],
+  acts:{ crank:(st) => turnCrank(st), slot:(st) => insertCoin(st), stack:(st) => insertCoin(st), flap:(st) => takeBall(st) },
+  params:(st, q) => {
+    if (q.has('a')) st.a = +q.get('a');
+    if (q.has('w')) st.w = +q.get('w');
+    if (q.has('n')) st.n = Math.max(0, Math.min(PILE.length, +q.get('n') | 0));
+    if (q.get('coin') === '1') st.coin = { ph:'in', t:0 };
+    for (let i = 0; i < (+q.get('ball') || 0); i++) st.drops.push({ col: GBC[(i + 4) % GBC.length], u: restU(i), v:0 });
+    if (q.has('flap')) st.flap = +q.get('flap');
+  },
+});
+xrMount(() => ui, () => '');
+// testing: ?do=coin,1.1,crank,1 runs the buttons with the clock stepped by hand (numbers are seconds), then holds that frame
+{ const q = new URLSearchParams(location.search);
+  if (q.has('do')){ const st = ui.st;
+    for (const tok of q.get('do').split(',')){ const t = parseFloat(tok);
+      if (!isNaN(t)) for (let k = 0; k < Math.round(t / .02); k++) stepSim(st, .02);
+      else ({ coin: insertCoin, crank: turnCrank, take: takeBall })[tok](st); }
+    st.hold = true; ui.render(); } }
+</script></body></html>
