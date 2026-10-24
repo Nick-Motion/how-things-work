@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>A simple circuit</title></head><body>
+<script src="core.js"></script>
+<script>
+/* A simple circuit on a school bench: a half-size breadboard, a 4 x AA battery pack, a knife switch, two 6 V bulbs,
+   a 0-30 ohm resistance dial and two moving-coil meters. 1 unit = 2 mm (breadboard pitch 2.54 mm = 1.27 units).
+   x = depth (front at high x), y = width (+y viewer-left at the default view), z = up. Desk board top at z = DBH.
+
+   How it really works (where the charge goes after each step):
+   1. The pack: four 1.5 V alkaline AA cells in series through the holder's straps, 6.0 V EMF, ~0.15 ohm inside each
+      (0.6 ohm total). Red lead -> back + rail; black lead -> front - rail; a blue jumper links back - rail to front - rail.
+      The voltmeter sits across the back rails (across the battery): switch open, it reads the EMF, 6.0 V. Its current is
+      tiny (a 10 V meter is ~10 kohm: coil plus multiplier resistor), so it is left out of the sums.
+   2. Close the switch: + rail -> red jumper -> column 28 -> switch jaw -> copper blade -> hinge -> column 24 -> ammeter in
+      series (the shunt bar carries almost all of it, the coil a small fixed share) -> column 20 -> the dial's coil end ->
+      resistance wire up to the wiper -> centre ring -> column 20 front half -> orange jumper -> front + rail (the bulbs'
+      supply bus) -> yellow jumper -> bulb 1 -> green jumper -> front - rail -> black lead -> battery -.
+      One 6 V 0.3 A bulb is 20 ohm hot: I = 6.0 / (20 + 0.6) = 0.29 A, V = 5.83 V, P = 1.7 W: full brightness.
+   3. Second bulb in series: the green jumper moves to bulb 2, another green jumper takes bulb 2 to the - rail. One path
+      through both: R = 40 ohm, I = 0.148 A, 2.9 V and 0.44 W each: both dim.
+   4. Parallel: the green jumper goes back to the - rail and a yellow jumper feeds bulb 2 from the + bus. Two paths:
+      R = 10 ohm, I = 0.57 A from the battery, 0.28 A and 5.7 V each: both bright. The voltmeter sags 0.34 V (lost
+      inside the cells).
+   5. The dial (rotary wire-wound rheostat): the wiper picks off a length of nichrome wire in series with the bulbs.
+      +20 ohm with one bulb: I = 0.148 A, dim.
+   Ohm's law for the outside circuit: voltmeter reading = ammeter reading x (dial + bulbs).
+   Electrons drift from the - terminal round the wires to the + terminal, against the conventional current (their real
+   drift is ~0.1 mm/s; the dots show the rate). Water analogy: the battery is a pump, voltage is its pressure push,
+   current the flow, the dial and filaments the narrow pipes.
+   Simplification: a filament is taken as a steady 20 ohm (cold it is ~2 ohm).
+
+   Parts list
+   desk:        wood board
+   breadboard:  ABS body, 30 columns, centre channel, 4 power rails (red/blue stripes), nickel-silver clip strips under
+                every 5-hole row and under each rail
+   power:       holder (floor, 4 walls), 4 AA cells (steel can = +, manganese dioxide, separator, zinc gel = -, brass
+                nail), 2 springs + 2 plates per side, 3 link straps, red and black leads with pin housings
+   switch:      slate base, hinge clip, jaw clip, copper blade, insulated handle, strips down to the pins
+   dial:        phenolic body, scale plate, knob with pointer, ring former with resistance wire, wiper, centre ring, tabs
+   bulbs (x2):  bakelite holder, solder tabs, brass socket, screw base, glass envelope, lead-in wires, filament
+   meters (x2): case, sloped face plate, scale, glass, needle, binding posts (red +, black -), horseshoe magnet, iron
+                core, moving coil, hairspring, spindle; ammeter shunt bar; voltmeter multiplier resistor; leads to the board
+   jumpers:     red, orange, yellow (2), green (2), blue rail link
+*/
+
+/* ---------- layout ---------- */
+const DBH = 2.5, DKX = 54, DKY = 95;
+const BBX0 = 22, BBX1 = 49.5, BBY0 = 14, BBY1 = 55, BBT = DBH + 4.25, ZST = BBT - 1.5;
+const RX = { 'P+':23.6, 'P-':24.87, a:27.4, b:28.67, c:29.94, d:31.21, e:32.48, f:39.02, g:40.29, h:41.56, i:42.83, j:44.1, 'F-':46.63, 'F+':47.9 };
+const CHX = 35.75;
+const colY = c => BBY0 + 2.08 + (c - 1)*1.27;
+const HL = (r, c, z = BBT) => [RX[r], colY(c), z];
+const PK = { x0:18, x1:47, y0:60, y1:91, zw: DBH + 5.4 }, CELLY = [64.63, 71.93, 79.23, 86.53], CZ = DBH + .6 + 3.625, CR = 3.6;
+const MET = { A: { y0:33.25, y1:52.25 }, V: { y0:12, y1:31 } };
+const SWX = 29.7, SWY = 44.7, SWZ = BBT + 2.5;
+const DLY = colY(20), BULB = [colY(12), colY(4)];
+
+/* ---------- materials ---------- */
+const BBM = { l:'#f7f5ee', m:'#e2ddd0', d:'#bdb6a5' }, BRASS = matOf('#dcb65e'), COPPER = matOf('#d0844a'), PHEN = matOf('#8a5a3a');
+const CREAM = matOf('#fbf6e6'), SLATE = matOf('#5c6873'), CELLM = matOf('#3f8f5a'), MAGM = matOf('#c94a3c'), REDM = matOf('#d8463a'), BLKM = matOf('#3a3633');
+
+/* ---------- electrics ---------- */
+const EMF = 6, RIN = .6, RB = 20, PRATED = 1.8;
+const ccRb = md => md === 'one' ? RB : md === 'series' ? 2*RB : RB/2;
+function ccElec(st){
+  const live = st.swK >= 1 && st.wk >= 1, R = st.dialA + ccRb(st.mode), I = live ? EMF/(R + RIN) : 0;
+  const ib = st.mode === 'parallel' ? I/2 : I;
+  return { live, R, I, V: EMF - I*RIN, ib, p: ib*ib*RB };
+}
+
+/* ---------- small helpers ---------- */
+const mw = w => `style="stroke-width:${(+w).toFixed(2)}"`;
+const boxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const add3 = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]], scl3 = (a, s) => a.map(v => v*s);
+const ghost = (body, inner, k) => k > 0 ? `<g opacity="${f(1 - .8*k)}">${body}</g><g opacity="${f(k)}">${inner()}</g>` : body;
+const bend = (pts, r = 3) => { if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const la = Math.hypot(...a.map((v, q) => v - b[q])), lc = Math.hypot(...c.map((v, q) => v - b[q])), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, q) => b[q] + (v - b[q]) * d/la), q2 = c.map((v, q) => b[q] + (v - b[q]) * d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(q => (1-t)*(1-t)*p[q] + 2*(1-t)*t*b[q] + t*t*q2[q])); } }
+  out.push(pts[pts.length - 1]); return out; };
+// a wire cut into short pieces, each with its own box, so byDepth sorts it against the solids it passes
+const cable = (pts, col, r, Lp = 3) => { const out = [];
+  for (let i = 0; i < pts.length - 1; ){
+    let j = i + 1, len = 0; while (j < pts.length - 1 && len < Lp){ len += Math.hypot(...pts[j].map((v, q) => v - pts[j - 1][q])); j++; }
+    if (len < Lp) while (j < pts.length - 1) j++;
+    const seg = pts.slice(i, j + 1), d = pd(seg, false);
+    out.push({ box: boxOf(seg, r*.7), svg: `<path d="${d}" fill="none" stroke="${INK}" ${mw(2*r + .5)} stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="${d}" fill="none" stroke="${col}" ${mw(2*r)} stroke-linecap="round" stroke-linejoin="round"/>` });
+    i = j; }
+  return out; };
+// an oriented box from corner o along edges U, V, W (blades, magnets, coil frames inside a tilted meter)
+function obox(o, U, V, W, m, w = .7){
+  const c = (a, b, d) => [0,1,2].map(i => o[i] + a*U[i] + b*V[i] + d*W[i]);
+  const n = [[U, cross(V, W)], [V, cross(W, U)], [W, cross(U, V)]].map(([d, q]) => { q = norm(q); return dot(q, d) < 0 ? q.map(v => -v) : q; });
+  const F = [[n[0], [c(1,0,0),c(1,1,0),c(1,1,1),c(1,0,1)]], [n[0].map(v => -v), [c(0,0,0),c(0,1,0),c(0,1,1),c(0,0,1)]],
+             [n[1], [c(0,1,0),c(1,1,0),c(1,1,1),c(0,1,1)]], [n[1].map(v => -v), [c(0,0,0),c(1,0,0),c(1,0,1),c(0,0,1)]],
+             [n[2], [c(0,0,1),c(1,0,1),c(1,1,1),c(0,1,1)]], [n[2].map(v => -v), [c(0,0,0),c(1,0,0),c(1,1,0),c(0,1,0)]]];
+  const pts = F.flatMap(q => q[1]);
+  return { box: boxOf(pts), svg: F.filter(([nn]) => vis(nn)).map(([nn, q]) => shape(q, toneI(nn, m), w)).join('') };
+}
+const it = (pts, svg, e = .05) => ({ box: boxOf(pts, e), svg });
+const bx = (x0, y0, z0, x1, y1, z1, m, w = .8) => ({ box: [[x0, y0, z0], [x1, y1, z1]], svg: box(x0, y0, z0, x1, y1, z1, m, toneI, w) });
+const txZ = (x, y, z, str, size, col = INK, wt = 700) => `<text transform="${txM(P(x, y, z), Dv(0,-1,0), Dv(1,0,0))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${wt}">${str}</text>`;
+const dots = (pts, col, r = .32) => pts.map(p => { const q = P(...p); return `<circle cx="${f(q[0])}" cy="${f(q[1])}" r="${f(r*CAM_K)}" fill="${col}" stroke="${INK}" stroke-width=".25"/>`; }).join('');
+
+/* ---------- wire routes (shared by drawing and the electron dots) ---------- */
+// pre-formed jumper: legs down into the holes, body lying just above the board; dz lifts it out
+const jumpPts = (A, B, dz = 0) => { const z = BBT + .6 + dz; return bend([[A[0], A[1], BBT + dz], [A[0], A[1], z], [B[0], B[1], z], [B[0], B[1], BBT + dz]], .55); };
+const JUMPERS = [
+  { id:'J1', col:'#d8463a', ends: () => [['P+', 28], ['a', 28]] },
+  { id:'JW', col:'#e8892f', ends: () => [['j', 20], ['F+', 20]] },
+  { id:'JA', col:'#e9c53a', ends: () => [['F+', 15], ['j', 15]] },
+  { id:'J5', col:'#3f9c5a', ends: md => md === 'series' ? [['j', 9], ['j', 7]] : [['j', 9], ['F-', 9]] },
+  { id:'J6', col:'#3f9c5a', ends: md => md === 'one' ? null : [['j', 1], ['F-', 1]] },
+  { id:'J7', col:'#e9c53a', ends: md => md === 'parallel' ? [['F+', 7], ['j', 7]] : null },
+  { id:'J8', col:'#3b6fc4', ends: () => [['P-', 2], ['F-', 2]] },
+];
+const jEnds = (j, md) => { const e = j.ends(md); return e && e.map(([r, c]) => HL(r, c)); };
+// leads that lie on the desk, climb a breadboard wall and end in a pin housing standing in a hole
+const LEAD_R = () => bend([[46.9, CELLY[0], DBH + 2.2], [48.4, CELLY[0], DBH + .55], [48.4, 57.5, DBH + .55], [23.6, 57.5, DBH + .55], [23.6, 55.6, DBH + .55], [23.6, 55.6, BBT + .6], [23.6, colY(30) + 1.4, BBT + 1.2], [23.6, colY(30), BBT + 2.6]], 1.2);
+const LEAD_B = () => bend([[46.9, CELLY[3], DBH + 2.2], [50.6, CELLY[3], DBH + .55], [50.6, 53.4, DBH + .55], [50.1, 53.4, DBH + .55], [50.1, 53.4, BBT + .6], [48.3, colY(30), BBT + .9], [RX['F-'] + 1.3, colY(30), BBT + 1.2], [RX['F-'], colY(30), BBT + 2.6]], 1.2);
+const POST = (mk, sgn) => [17.5, (MET[mk].y0 + MET[mk].y1)/2 + 3.2*sgn, DBH + 1.8];
+const meterLead = (mk, sgn, hole) => { const p = POST(mk, sgn), [hx, hy] = hole;
+  return bend([p, [18.6, p[1], DBH + .55], [20.8, hy, DBH + .55], [21.45, hy, DBH + .9], [21.45, hy, BBT + .6], [hx - 1.2, hy, BBT + 1.3], [hx, hy, BBT + 2.6]], 1); };
+const MLEADS = [ ['A', 1, HL('a', 24), '#d8463a'], ['A', -1, HL('a', 20), '#3a3633'], ['V', 1, HL('P+', 7), '#d8463a'], ['V', -1, HL('P-', 4), '#3a3633'] ];
+
+/* ---------- desk shadows ---------- */
+function shadowPts(){
+  const mp = mk => { const { y0, y1 } = MET[mk]; return [y0, y1].flatMap(y => [[2, y, DBH], [16, y, DBH], [10.5, y, DBH + 14.5], [2, y, DBH + 14.5]]); };
+  return [
+    [[BBX0, BBY0, BBT], [BBX1, BBY0, BBT], [BBX0, BBY1, BBT], [BBX1, BBY1, BBT], [BBX0, BBY0, DBH], [BBX1, BBY1, DBH]],
+    [[PK.x0, PK.y0, CZ + CR], [PK.x1, PK.y0, CZ + CR], [PK.x0, PK.y1, CZ + CR], [PK.x1, PK.y1, CZ + CR], [PK.x0, PK.y0, DBH], [PK.x1, PK.y1, DBH]],
+    mp('A'), mp('V') ];
+}
+
+/* ---------- breadboard ---------- */
+function breadboard(IT, st, k){
+  const body = () => { let s = box(BBX0, BBY0, DBH, BBX1, BBY1, BBT, BBM, toneI, 1.6);
+    // centre channel, rail stripes, holes (rails in groups of five)
+    s += shape(on(PZ(BBT), rectUV(CHX - .8, BBY0 + .4, CHX + .8, BBY1 - .4)), mix(BBM.m, '#000000', .12), .5);
+    for (const [x, c] of [[22.75, '#d8463a'], [25.72, '#3b6fc4'], [45.78, '#3b6fc4'], [48.75, '#d8463a']]) s += `<path d="${pd([[x, BBY0 + 1.2, BBT], [x, BBY1 - 1.2, BBT]], false)}" stroke="${c}" ${mw(.32)} fill="none"/>`;
+    let d = ''; for (const [r, x] of Object.entries(RX)){ const rail = r.length > 1;
+      for (let c = 1; c <= 30; c++){ if (rail && c % 6 === 0) continue; const y = colY(c);
+        d += pd([[x - .3, y - .3, BBT], [x + .3, y - .3, BBT], [x + .3, y + .3, BBT], [x - .3, y + .3, BBT]]); } }
+    s += fill(d, '#6d675d');
+    // the things standing on the board cast short shadows onto it
+    const sb = bulbShadow(st), top = on(PZ(BBT), rectUV(BBX0, BBY0, BBX1, BBY1));
+    s += clipTo(top, sb.map(p => castShadow(p, BBT)).join(''));
+    return s; };
+  // nickel-silver clip strips: one under each 5-hole row, one under each rail
+  const inner = () => { const P2 = [];
+    for (let c = 1; c <= 30; c++) for (const [r0, r1] of [['a', 'e'], ['f', 'j']]) P2.push(bx(RX[r0] - .45, colY(c) - .36, ZST - .9, RX[r1] + .45, colY(c) + .36, ZST + .5, METAL, .45));
+    for (const r of ['P+', 'P-', 'F-', 'F+']) P2.push(bx(RX[r] - .36, BBY0 + 1.5, ZST - .9, RX[r] + .36, BBY1 - 1.5, ZST + .5, METAL, .45));
+    return byDepth(P2); };
+  IT.push({ box: [[BBX0, BBY0, DBH], [BBX1, BBY1, BBT]], svg: ghost(body(), inner, k) });
+}
+function bulbShadow(st){
+  const out = [];
+  out.push([...on(PZ(BBT + 5), ellUV(CHX, DLY, 5.2, 5.2, 12)), ...on(PZ(BBT), ellUV(CHX, DLY, 5.2, 5.2, 12))]);
+  BULB.forEach((cy, i) => { if (i === 1 && st.mode === 'one' && st.wk >= 1) return; const z = BBT + (i === 1 ? bulb2Dz(st) : 0);
+    if (z > BBT + .5) return;
+    out.push([...on(PZ(BBT + 10.3), ellUV(RX.h, cy, 2.75, 2.75, 10)), [RX.h - 2.15, cy - 2.5, BBT], [RX.h + 2.15, cy + 2.5, BBT], [RX.h - 2.15, cy + 2.5, BBT], [RX.h + 2.15, cy - 2.5, BBT]]); });
+  const a = (1 - st.swK)*65*Math.PI/180, tip = [SWX, SWY + 8.9*Math.cos(a), SWZ + 8.9*Math.sin(a)];
+  out.push([[28.2, 43.6, BBT + 1.3], [31.2, 52.1, BBT + 1.3], [28.2, 52.1, BBT], [31.2, 43.6, BBT], [SWX, SWY, SWZ], tip, [SWX, tip[1], BBT]]);
+  return out;
+}
+
+/* ---------- battery pack ---------- */
+function pack(IT, st, k){
+  const { x0, x1, y0, y1, zw } = PK, t = .8, gh = s => k > 0 ? `<g opacity="${f(1 - .7*k)}">${s}</g>` : s;
+  IT.push({ box: [[x0, y0, DBH], [x1, y1, DBH + .6]], svg: box(x0, y0, DBH, x1, y1, DBH + .6, DARK, toneI, 1.2) });
+  for (const w of [[x0, y0, x0 + t, y1], [x1 - t, y0, x1, y1], [x0 + t, y0, x1 - t, y0 + t], [x0 + t, y1 - t, x1 - t, y1]])
+    IT.push({ box: [[w[0], w[1], DBH + .6], [w[2], w[3], zw]], svg: gh(box(w[0], w[1], DBH + .6, w[2], w[3], zw, DARK, toneI, 1)) });
+  // cells: odd ones + toward the front, even ones + toward the back (series chain through the straps)
+  CELLY.forEach((cy, i) => {
+    const fwd = i % 2 === 0, xa = x0 + t, xb = x1 - t;
+    const [plate0, plate1] = fwd ? [xb - .3, xb] : [xa, xa + .3], [nub0, nub1] = fwd ? [xb - 1, xb - .3] : [xa + .3, xa + 1];
+    const [c0, c1] = fwd ? [xa + 1.8, xb - 1] : [xa + 1, xb - 1.8], [s0, s1] = fwd ? [xa, xa + 1.8] : [xb - 1.8, xb];
+    const parts = [[c0, c0 + .3, CR - .05, METAL], [c0 + .3, c1 - .3, CR, CELLM], [c1 - .3, c1, CR - .05, METAL]];
+    const nub = [nub0, nub1, 1.35, METAL];
+    const seq = fwd ? [...parts, nub] : [nub, ...parts];
+    const order = vis([1,0,0]) ? seq : seq.slice().reverse();
+    const cell = () => order.map(([a, b, r, mm]) => cylX(a, b, cy, CZ, r, mm, toneI, .9, 22)).join('') + (vis([0,0,1]) ? txZ((c0 + c1)/2, cy, CZ + CR + .02, '1.5V', 1.5, '#e8f3ea') : '');
+    const cut = i === 2 ? () => {   // see-through: one cell opened up, its layers one inside the other
+      const lay = [[c0 + .3, c1 - .3, .32, BRASS, 1], [c0 + .6, c1 - .6, 1.7, matOf('#9aa0a2'), .55], [c0 + .5, c1 - .5, 2.05, CREAM, .35], [c0 + .4, c1 - .4, 3.1, DARK, .32]];
+      return lay.map(([a, b, r, mm, o]) => `<g opacity="${o}">${cylX(a, b, cy, CZ, r, mm, toneI, .7, 18)}</g>`).join(''); } : null;
+    IT.push({ box: [[c0 - .1, cy - CR, CZ - CR], [c1 + .1, cy + CR, CZ + CR]], svg: cut ? ghost(cell(), cut, k) : cell() });
+    IT.push(bx(plate0, cy - 2.2, CZ - 2.2, plate1, cy + 2.2, CZ + 2.2, METAL, .6));
+    // spring: a cone-ish helix between the wall and the cell's flat - end
+    const hel = []; for (let q = 0; q <= 60; q++){ const a = q/60*5*2*Math.PI, r = 2.2 - .9*(fwd ? q/60 : 1 - q/60); hel.push([s0 + (s1 - s0)*q/60, cy + r*Math.cos(a), CZ + r*Math.sin(a)]); }
+    IT.push(it(hel, `<path d="${pd(hel, false)}" fill="none" stroke="${INK}" ${mw(.5)}/><path d="${pd(hel, false)}" fill="none" stroke="${METAL.m}" ${mw(.3)}/>`));
+  });
+  // link straps along the inside of the end walls: back 1-2 and 3-4, front 2-3
+  for (const [x, ya, yb] of [[x0 + t, CELLY[0], CELLY[1]], [x0 + t, CELLY[2], CELLY[3]], [x1 - t - .25, CELLY[1], CELLY[2]]])
+    IT.push(bx(x, ya, CZ - 2.6, x + .25, yb, CZ - 1.6, METAL, .5));
+}
+
+/* ---------- meters ---------- */
+const MS = norm([-5.5, 0, 10.9]), MN = norm([10.9, 0, 5.5]), MYv = [0, 1, 0];
+const MF = (yc, u, v, w) => [16 + MS[0]*v + MN[0]*w, yc + u, DBH + 3.6 + MS[2]*v + MN[2]*w];
+const MPROF = [[2, DBH], [16, DBH], [16, DBH + 3.6], [10.5, DBH + 14.5], [2, DBH + 14.5]];
+const tFace = (yc, u, v, str, size, col = INK, wt = 700) => `<text transform="${txM(P(...MF(yc, u, v, .05)), Dv(0,-1,0), Dv(...MS.map(x => -x)))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${wt}">${str}</text>`;
+const needleDir = th => add3(scl3(MS, Math.cos(th)), scl3(MYv, -Math.sin(th)));
+function meter(IT, st, m, k, mk){
+  const { y0, y1 } = MET[mk], yc = (y0 + y1)/2, rd = mk === 'A' ? st.na : st.nv, th = (-48 + 96*Math.max(0, Math.min(1.04, rd)))*Math.PI/180;
+  const PV = 2.6, piv = w => MF(yc, 0, PV, w), arc = (rho, a, w = .05) => MF(yc, -rho*Math.sin(a), PV + rho*Math.cos(a), w);
+  const A = MPROF.map(([x, z]) => [x, y0, z]), B = MPROF.map(([x, z]) => [x, y1, z]);
+  const body = () => {
+    let s = loft(A, B, n => tone(n, m));
+    if (vis([0, -1, 0])) s += fill(pd(A), tone([0, -1, 0], m)); if (vis([0, 1, 0])) s += fill(pd(B), tone([0, 1, 0], m));
+    if (vis([-1, 0, 0])){ const pl = [[2, yc - 5, DBH + 5], [2, yc + 5, DBH + 5], [2, yc + 5, DBH + 10], [2, yc - 5, DBH + 10]];
+      s += shape(pl, '#efe6cf', .7) + `<text transform="${txM(P(2, yc, DBH + 7.9), Dv(0,1,0), Dv(0,0,-1))}" font-size="1.3" fill="${INK}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="700">${mk === 'A' ? 'DC AMMETER 0-1 A' : 'DC VOLTMETER 0-10 V'}</text>`
+        + `<text transform="${txM(P(2, yc, DBH + 6.2), Dv(0,1,0), Dv(0,0,-1))}" font-size="1.1" fill="${INK}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace">MOVING COIL</text>`; }
+    if (vis(MN)){
+      const win = on(([u, v]) => MF(yc, u, v, 0), rrUV(-7.6, .7, 7.6, 11.3, 1.4));
+      s += shape(win, CREAM.l, 1.4);
+      let tk = ''; for (let i = 0; i <= 10; i++){ const a = (-48 + 9.6*i)*Math.PI/180; tk += pd([arc(i % 2 ? 6.4 : 6.0, a), arc(7, a)], false); }
+      s += ink(tk, .5) + ink(pd(Array.from({length: 25}, (_, i) => arc(7, (-48 + 4*i)*Math.PI/180)), false), .5);
+      for (let i = 0; i <= 5; i++){ const a = (-48 + 19.2*i)*Math.PI/180, q = arc(5.2, a);
+        s += `<text transform="${txM(P(...q), Dv(0,-1,0), Dv(...MS.map(x => -x)))}" font-size="1.05" fill="${INK}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="700">${mk === 'A' ? ['0', '.2', '.4', '.6', '.8', '1'][i] : String(2*i)}</text>`; }
+      s += tFace(yc, 0, 4.3, mk, 2.4, mk === 'A' ? '#b8402f' : '#2f5fa8', 800);
+      s += needle() + shape(on(([u, v]) => MF(yc, u, v, .25), ellUV(0, PV, .55, .55, 10)), DARK.m, .5);
+      s += `<g opacity=".28">${fill(pd(win), '#cfe9f0')}</g>` + `<g opacity=".5"><path d="${pd([MF(yc, 4.5, 10.4, .3), MF(yc, 6.6, 6.5, .3)], false)}" stroke="#ffffff" ${mw(.5)} fill="none"/></g>`;
+    }
+    return s + hullInk([...A, ...B], 2.4);
+  };
+  const needle = () => `<path d="${pd([piv(.2), add3(piv(.2), scl3(needleDir(th), 6.8))], false)}" stroke="#b8402f" ${mw(.32)} fill="none" stroke-linecap="round"/>`;
+  // the moving-coil movement behind the face: a horseshoe magnet round an iron core, the coil turning in the gap
+  const inner = () => { const Q = [];
+    const lb = (u0, u1, v0, v1, w0, w1, mm) => obox(MF(yc, u0, PV + v0, w0), scl3(MYv, u1 - u0), scl3(MS, v1 - v0), scl3(MN, w1 - w0), mm, .6);
+    Q.push(lb(-3.8, -2.4, -2, 2, -5, -1, MAGM), lb(2.4, 3.8, -2, 2, -5, -1, MAGM), lb(-3.8, 3.8, -2, 2, -6, -5, MAGM));
+    Q.push(it([piv(-4.6), piv(-1.3)], rod(piv(-4.6), piv(-1.3), 1.3, DARK, toneI, .6, 1.3, 14), 1.3));
+    const cd = add3(scl3(MS, -Math.sin(th)), scl3(MYv, -Math.cos(th))), cc = [-1, 1].flatMap(sg => [-4.9, -.9].map(w => add3(piv(w), scl3(cd, 1.9*sg))));
+    for (const [a, b] of [[0, 1], [2, 3], [0, 2], [1, 3]]) Q.push(it([cc[a], cc[b]], rod(cc[a], cc[b], .3, COPPER, toneI, .45, .3, 8), .3));
+    Q.push(it([piv(-5.4), piv(.2)], rod(piv(-5.4), piv(.2), .13, METAL, toneI, .3, .13, 6), .2));
+    const hs = []; for (let q = 0; q <= 48; q++){ const a = q/48*3*2*Math.PI + th, r = .25 + .95*q/48; hs.push(MF(yc, r*Math.cos(a), PV + r*Math.sin(a), -.45)); }
+    Q.push(it(hs, `<path d="${pd(hs, false)}" fill="none" stroke="${BRASS.d}" ${mw(.22)}/>`));
+    if (mk === 'A') Q.push(bx(14.2, yc - 3.7, DBH + 1.05, 15.4, yc + 3.7, DBH + 2.55, BRASS, .6));
+    else { Q.push(it([[14.6, yc - 2.4, DBH + 1.9], [14.6, yc + 2.4, DBH + 1.9]], rod([14.6, yc - 2.4, DBH + 1.9], [14.6, yc + 2.4, DBH + 1.9], .75, matOf('#d9c49a'), toneI, .6, .75, 12)
+      + [-1.4, -.6, .2, 1.2].map((u, i) => `<path d="${pd([[14.6 + .76*CAM_V[0], yc + u, DBH + 1.15], [14.6 + .76*CAM_V[0], yc + u, DBH + 2.65]], false)}" stroke="${['#7a4a2a', '#222', '#d8463a', '#dcb65e'][i]}" ${mw(.32)}/>`).join(''), .8)); }
+    // fine copper wires from the posts to the hairspring and coil
+    for (const sg of [-1, 1]){ const w = [[15.9, yc + 3.2*sg, DBH + 1.8], [14.9, yc + 3.2*sg, DBH + 3.2], MF(yc, 1.2*sg, PV - 1.6, -1)]; Q.push(it(w, `<path d="${pd(w, false)}" fill="none" stroke="${COPPER.d}" ${mw(.18)}/>`)); }
+    return byDepth(Q) + needle(); };
+  IT.push({ box: [[2, y0, DBH], [16, y1, DBH + 14.5]], svg: ghost(body(), inner, k) });
+  // binding posts on the front strip
+  for (const sg of [1, -1]){ const y = yc + 3.2*sg, mm = sg > 0 ? REDM : BLKM;
+    const seq = [[16, 16.5, 1.15, BRASS], [16.5, 17.6, .8, mm]], ord = vis([1,0,0]) ? seq : seq.slice().reverse();
+    IT.push({ box: [[16, y - 1.15, DBH + .65], [17.6, y + 1.15, DBH + 2.95]], svg: ord.map(([a, b, r, q]) => cylX(a, b, y, DBH + 1.8, r, q, toneI, .8, 14)).join('') }); }
+}
+
+/* ---------- knife switch ---------- */
+function knifeSwitch(IT, st, k){
+  const a = (1 - ease(st.swK))*65*Math.PI/180, d = [0, Math.cos(a), Math.sin(a)], up = [0, -Math.sin(a), Math.cos(a)], pv = [SWX, SWY, SWZ];
+  const baseInner = () => [[29.94, colY(24)], [29.94, colY(28)]].map(([x, y]) => box(x - .3, y - .3, BBT - 1.4, x + .3, y + .3, BBT + 1.2, COPPER, toneI, .4)).join('');
+  IT.push({ box: [[28.2, 43.6, BBT], [31.2, 52.1, BBT + 1.3]], svg: ghost(box(28.2, 43.6, BBT, 31.2, 52.1, BBT + 1.3, SLATE, toneI, 1.1), baseInner, k) });
+  // hinge clip (the blade turns on a pin through it) and jaw clip (the blade presses between its two springy cheeks)
+  for (const [ya, yb, zt] of [[SWY - .55, SWY + .55, SWZ + .7], [colY(28) - .5, colY(28) + .5, SWZ + .5]])
+    for (const [xa, xb] of [[SWX - .62, SWX - .2], [SWX + .2, SWX + .62]]){
+      let s = box(xa, ya, BBT + 1.3, xb, yb, zt, BRASS, toneI, .6);
+      if (ya < SWY){ const xf = xa < SWX ? xa : xb, nx = xa < SWX ? -1 : 1; if (vis([nx, 0, 0])) s += shape(on(PX(xf), ellUV(SWY, SWZ, .26, .26, 10)), METAL.d, .4); }
+      IT.push({ box: [[xa, ya, BBT + 1.3], [xb, yb, zt]], svg: s }); }
+  const o = add3(add3(pv, [-.18, 0, 0]), add3(scl3(d, -.3), scl3(up, -.55)));
+  IT.push(obox(o, [.36, 0, 0], scl3(d, 6.6), scl3(up, 1.1), COPPER, .7));
+  const h0 = add3(pv, scl3(d, 6.3)), h1 = add3(pv, scl3(d, 8.9));
+  IT.push(it([h0, h1], rod(h0, h1, .62, REDM, toneI, .9, .55, 14), .62));
+}
+
+/* ---------- resistance dial ---------- */
+const dialAng = R => (200 + 300*R/30)*Math.PI/180;
+const ringPt = (r, a, z) => [CHX + r*Math.cos(a), DLY + r*Math.sin(a), z];
+function dial(IT, st, k){
+  const a = dialAng(st.dialA), zt = BBT + 2.45;
+  const body = () => { let s = cyl(CHX, DLY, BBT, BBT + 2.2, 5, PHEN, toneI, 1.4, 32) + cyl(CHX, DLY, BBT + 2.2, zt, 5.2, CREAM, toneI, 1, 32);
+    let tk = ''; for (let i = 0; i <= 6; i++){ const t = dialAng(i*5); tk += pd([ringPt(i % 2 ? 4.7 : 4.4, t, zt), ringPt(5.05, t, zt)], false); }
+    s += ink(tk, .5) + [0, 10, 20, 30].map(R => { const q = ringPt(3.75, dialAng(R), zt); return txZ(q[0], q[1] + .0, zt, String(R), 1.15); }).join('');
+    s += txZ(CHX + 4.15, DLY - 0, zt, 'OHM', .75, '#7a6a55');
+    s += cyl(CHX, DLY, zt, zt + 2.6, 2.7, BLKM, toneI, 1.2, 24);
+    let kn = ''; for (let i = 0; i < 18; i++){ const t = i/18*2*Math.PI, n = [Math.cos(t), Math.sin(t), 0]; if (vis(n)) kn += pd([ringPt(2.7, t, zt + .3), ringPt(2.7, t, zt + 2.3)], false); }
+    s += `<path d="${kn}" stroke="#6b6560" ${mw(.18)} fill="none"/>`;
+    s += `<path d="${pd([ringPt(.4, a, zt + 2.6), ringPt(2.4, a, zt + 2.6)], false)}" stroke="#f4f1e8" ${mw(.45)} stroke-linecap="round" fill="none"/>`;
+    return s; };
+  // inside: nichrome wire wound on a ring former; the wiper picks off the part between the coil end and its contact
+  const inner = () => { const zc = BBT + 1.1; let s = '';
+    s += `<path d="${pd(Array.from({length: 41}, (_, i) => ringPt(4, dialAng(i*30/40), zc)), false)}" stroke="#cdbf9e" ${mw(1)} fill="none"/>`;
+    const win = (R0, R1, col, w) => { let d = ''; for (let R = R0; R <= R1 + 1e-6; R += .6){ const t = dialAng(R); d += pd([ringPt(3.45, t, zc - .45), ringPt(4.55, t, zc + .45)], false); } return d ? `<path d="${d}" stroke="${col}" ${mw(w)} fill="none"/>` : ''; };
+    s += win(0, 30, '#9a8f86', .2) + win(0, st.dialA, '#e2483d', .3);
+    s += cyl(CHX, DLY, zc - .4, zc + .8, .9, BRASS, toneI, .5, 14);
+    s += rod([CHX, DLY, zc + .8], ringPt(4, a, zc + .6), .22, METAL, toneI, .4, .22, 6) + shape(on(PZ(zc + .5), ellUV(...ringPt(4, a, 0).slice(0, 2), .45, .45, 8)), METAL.l, .4);
+    for (const [r, t, hx] of [[4, dialAng(0), 'e'], [0, 0, 'f']]){ const p0 = ringPt(r, t, zc), hp = HL(hx, 20, ZST + .5); s += `<path d="${pd([p0, [hp[0], hp[1], zc], hp], false)}" stroke="${BRASS.d}" ${mw(.35)} fill="none"/>`; }
+    return s; };
+  IT.push({ box: [[CHX - 5.2, DLY - 5.2, BBT], [CHX + 5.2, DLY + 5.2, zt + 2.6]], svg: ghost(body(), inner, k) });
+}
+
+/* ---------- bulbs ---------- */
+const bulb2Dz = st => { const was = st.pm !== 'one', now = st.mode !== 'one';
+  if (was && now) return 0; if (!was && !now) return 99; const t = ease(st.wk); return now ? 14*(1 - t) : 14*t; };
+const GLR = [[4.9, 1.42], ...Array.from({length: 9}, (_, i) => { const ph = (-55 + i*(145/8))*Math.PI/180; return [7.6 + 2.75*Math.sin(ph), Math.max(.02, 2.75*Math.cos(ph))]; })];
+function bulb(IT, st, k, i){
+  const cy = BULB[i], cx = RX.h, dz = i ? bulb2Dz(st) : 0; if (dz > 30) return;
+  const z0 = BBT + dz, g = i ? st.g2 : st.g1, op = i && dz > 0 ? Math.max(0, 1 - dz/14) : 1;
+  const wrap = s => op < 1 ? `<g opacity="${f(op)}">${s}</g>` : s;
+  // holder base and solder tabs (bent down into the holes three columns either side)
+  IT.push({ box: [[cx - 2.15, cy - 2.5, z0], [cx + 2.15, cy + 2.5, z0 + 1.6]], svg: wrap(ghost(box(cx - 2.15, cy - 2.5, z0, cx + 2.15, cy + 2.5, z0 + 1.6, DARK, toneI, 1),
+    () => box(cx - .25, cy - 2.4, z0 + .5, cx + .25, cy + 2.4, z0 + .8, COPPER, toneI, .3), k)) });
+  for (const sg of [-1, 1]){ const ya = cy + 2.5*sg, yb = cy + 4.1*sg, yh = cy + 3.81*sg;
+    IT.push({ box: [[cx - .35, Math.min(ya, yb), z0], [cx + .35, Math.max(ya, yb), z0 + .9]], svg: wrap(box(cx - .35, Math.min(ya, yb), z0 + .55, cx + .35, Math.max(ya, yb), z0 + .9, BRASS, toneI, .4)
+      + box(cx - .35, Math.min(yh - .25, yh + .25), z0, cx + .35, Math.max(yh - .25, yh + .25), z0 + .55, BRASS, toneI, .4)) }); }
+  // socket, screw base, glass envelope with the filament on its two lead-in wires
+  const sock = () => cyl(cx, cy, z0 + 1.6, z0 + 4.2, 1.95, BRASS, toneI, 1, 20);
+  const screw = () => cyl(cx, cy, z0 + 2.2, z0 + 4.9, 1.55, matOf('#e4cf8e'), toneI, .7, 18) + [2.9, 3.6, 4.3].map(z => ink(pd(on(PZ(z0 + z), ellUV(cx, cy, 1.56, 1.56, 18)), false), .3)).join('');
+  const rings = GLR.map(([z, r]) => on(PZ(z0 + z), ellUV(cx, cy, r, r, 16)));
+  const glassC = mix('#d8eef2', '#fff1a8', g);
+  let far = '', near = ''; for (let q = 0; q < rings.length - 1; q++){ far += loft(rings[q], rings[q + 1], () => glassC, true); near += loft(rings[q], rings[q + 1], () => glassC); }
+  const zf = z0 + 7.3, fil = []; for (let q = 0; q <= 70; q++){ const t = q/70*7*2*Math.PI; fil.push([cx + .28*Math.cos(t), cy + 1 - 2*q/70, zf + .28*Math.sin(t)]); }
+  const filC = g > .02 ? mix('#c8401a', '#fff6c8', Math.min(1, g*1.1)) : '#6b5a48';
+  const leads = [-1, 1].map(sg => `<path d="${pd([[cx, cy + .7*sg, z0 + 4.9], [cx, cy + 1*sg, z0 + 5.6], [cx, cy + 1*sg, zf]], false)}" stroke="#5a5550" ${mw(.18)} fill="none"/>`).join('')
+    + `<path d="${pd([[cx, cy, z0 + 4.9], [cx, cy, zf - .5]], false)}" stroke="#a9bfc4" ${mw(.4)} fill="none"/>`;
+  const filS = `<path d="${pd(fil, false)}" stroke="${filC}" ${mw(.22 + .12*g)} fill="none"/>`;
+  const halo = g > .02 ? (() => { const q = P(cx, cy, zf); return [[1.4 + 3.4*g, .55*g], [3 + 6.5*g, .2*g]].map(([r, o]) => `<circle cx="${f(q[0])}" cy="${f(q[1])}" r="${f(r*CAM_K)}" fill="#ffdc63" opacity="${o.toFixed(3)}"/>`).join(''); })() : '';
+  const glass = `<g opacity="${f(.32 + .3*g)}">${far}</g>` + leads + filS + `<g opacity="${f(.36 + .3*g)}">${near}</g>` + hullInk(rings.flat(), 1.2)
+    + `<path d="${pd([[cx + 1.9*CAM_V[0], cy + 1.9*CAM_V[1] - .9, z0 + 8.9], [cx + 2.4*CAM_V[0], cy + 2.4*CAM_V[1] - .2, z0 + 7.2]], false)}" stroke="#ffffff" opacity=".45" ${mw(.45)} fill="none"/>` + halo;
+  IT.push({ box: [[cx - 1.95, cy - 1.95, z0 + 1.6], [cx + 1.95, cy + 1.95, z0 + 4.2]], svg: wrap(ghost(sock(), screw, k)) });
+  IT.push({ box: [[cx - 2.75, cy - 2.75, z0 + 4.2], [cx + 2.75, cy + 2.75, z0 + 10.4]], svg: wrap((k > 0 ? '' : screw()) + glass) });
+}
+
+/* ---------- jumpers and leads ---------- */
+function jumpers(IT, st){
+  const t = st.wk;
+  for (const j of JUMPERS){
+    const a = jEnds(j, st.pm), b = jEnds(j, st.mode), same = JSON.stringify(a) === JSON.stringify(b);
+    let ends = b, dz = 0, op = 1;
+    if (t < 1 && !same){
+      if (a && b){ if (t < .5){ ends = a; dz = 7*ease(t*2); } else dz = 7*(1 - ease((t - .5)*2)); }
+      else if (b){ dz = 10*(1 - ease(t)); op = Math.min(1, t*2); }
+      else { ends = a; dz = 10*ease(t); op = Math.max(0, 1 - t*1.6); } }
+    if (!ends || op <= 0) continue;
+    const pts = jumpPts(ends[0], ends[1], dz), pcs = cable(pts, j.col, .42, 3);
+    if (dz > .05) for (const e of ends){ const lg = [[e[0], e[1], BBT + dz], [e[0], e[1], Math.max(BBT, BBT + dz - 2.5)]]; pcs.push(it(lg, `<path d="${pd(lg, false)}" stroke="${METAL.d}" ${mw(.3)} fill="none"/>`, .2)); }
+    for (const p of pcs){ if (op < 1) p.svg = `<g opacity="${f(op)}">${p.svg}</g>`; IT.push(p); }
+  }
+}
+function housing(h, col){ const a = [h[0], h[1], BBT], b = [h[0], h[1], BBT + 2.6]; return it([a, b], rod(a, b, .65, DARK, toneI, .7, .65, 10), .65); }
+function leads(IT){
+  for (const [pts, col] of [[LEAD_R(), '#d8463a'], [LEAD_B(), '#3a3633']]){ IT.push(...cable(pts, col, .55, 3)); IT.push(housing(pts[pts.length - 1])); }
+  for (const [mk, sg, h, col] of MLEADS){ const pts = meterLead(mk, sg, h); IT.push(...cable(pts, col, .55, 3)); IT.push(housing(h)); }
+}
+
+/* ---------- electrons: conventional path pieces (+ to -), each with its share of the battery current ---------- */
+const down = (h, z = ZST) => [h[0], h[1], z];
+const stripP = (r0, r1, c) => [HL(r0, c, ZST), HL(r1, c, ZST)];
+const railP = (r, c0, c1) => [HL(r, c0, ZST), HL(r, c1, ZST)];
+const jumpP = (A, B) => [down(A), ...jumpPts(A, B), down(B)];
+const bulbP = (i, rev) => { const cy = BULB[i], cx = RX.h, a = cy + 3.81, b = cy - 3.81, zf = BBT + 7.3;
+  const p = [[cx, a, ZST], [cx, a, BBT + .7], [cx, cy + 2.5, BBT + .7], [cx, cy + 1, BBT + 4.9], [cx, cy + 1, zf], [cx, cy - 1, zf], [cx, cy - 1, BBT + 4.9], [cx, cy - 2.5, BBT + .7], [cx, b, BBT + .7], [cx, b, ZST]];
+  return rev ? p.reverse() : p; };
+function ccPaths(md){
+  const lr = LEAD_R(), lb = LEAD_B(), al = meterLead('A', 1, HL('a', 24)), am = meterLead('A', -1, HL('a', 20)), yA = (MET.A.y0 + MET.A.y1)/2;
+  const out = [
+    [[[PK.x1 - .8, CELLY[0], CZ], ...lr, down(lr[lr.length - 1])], 1], [railP('P+', 30, 28), 1], [jumpP(HL('P+', 28), HL('a', 28)), 1], [stripP('a', 'c', 28), 1],
+    [[HL('c', 28, ZST), [29.94, colY(28), SWZ], [SWX, colY(28), SWZ], [SWX, SWY, SWZ], [29.94, SWY, SWZ], HL('c', 24, ZST)], 1], [stripP('c', 'a', 24), 1],
+    [[down(HL('a', 24)), ...al.slice().reverse(), [14.8, yA + 3.2, DBH + 1.8], [14.8, yA - 3.2, DBH + 1.8], ...am, down(HL('a', 20))], 1],
+    [[...stripP('a', 'e', 20), [RX.e, colY(20), BBT + 1.1], ringPt(4, dialAng(0), BBT + 1.1)], 1],
+  ];
+  return out;
+}
+function ccRoute(st){
+  const md = st.mode, sh = md === 'parallel' ? .5 : 1, out = ccPaths(md);
+  // the dial: along the resistance wire as far as the wiper, then in to the centre ring and down to the front strip
+  const n = Math.max(1, Math.round(st.dialA/2)), arcP = Array.from({length: n + 1}, (_, i) => ringPt(4, dialAng(st.dialA*i/n), BBT + 1.1));
+  out.push([[...arcP, [CHX, DLY, BBT + 1.1], HL('f', 20, ZST)], 1], [stripP('f', 'j', 20), 1], [jumpP(HL('j', 20), HL('F+', 20)), 1], [railP('F+', 20, 15), 1]);
+  out.push([jumpP(HL('F+', 15), HL('j', 15)), sh], [stripP('j', 'h', 15), sh], [bulbP(0), sh], [stripP('h', 'j', 9), sh]);
+  if (md === 'series') out.push([jumpP(HL('j', 9), HL('j', 7)), 1], [stripP('j', 'h', 7), 1], [bulbP(1), 1], [stripP('h', 'j', 1), 1], [jumpP(HL('j', 1), HL('F-', 1)), 1], [railP('F-', 1, 30), 1]);
+  else { out.push([jumpP(HL('j', 9), HL('F-', 9)), sh], [railP('F-', 9, 30), 1]);
+    if (md === 'parallel') out.push([railP('F+', 15, 7), .5], [jumpP(HL('F+', 7), HL('j', 7)), .5], [stripP('j', 'h', 7), .5], [bulbP(1), .5], [stripP('h', 'j', 1), .5], [jumpP(HL('j', 1), HL('F-', 1)), .5], [railP('F-', 1, 9), .5]); }
+  const lb = LEAD_B(); out.push([[down(lb[lb.length - 1]), ...lb.slice().reverse(), [PK.x1 - .8, CELLY[3], CZ]], 1]);
+  return out;
+}
+const polyLen = pts => { let L2 = 0; for (let i = 1; i < pts.length; i++) L2 += Math.hypot(...pts[i].map((v, q) => v - pts[i - 1][q])); return L2; };
+const polyAt3 = (pts, d) => { for (let i = 1; i < pts.length; i++){ const l = Math.hypot(...pts[i].map((v, q) => v - pts[i - 1][q]));
+  if (d <= l){ const t = l ? d/l : 0; return pts[i - 1].map((v, q) => v + (pts[i][q] - v)*t); } d -= l; } return pts[pts.length - 1]; };
+function electrons(st, el){
+  if (!el.live) return '';
+  const GAP = 1.7, pos = [];
+  for (const [pts, share] of ccRoute(st)){ const len = polyLen(pts); if (len < .05) continue;
+    // electrons run against the conventional direction: their offset grows backward along the piece
+    const off = ((st.eph*share) % GAP + GAP) % GAP;
+    for (let d = GAP - off; d < len; d += GAP) pos.push(polyAt3(pts, d)); }
+  return dots(pos, '#3d8fe6');
+}
+function pressureArrow(st, el){
+  const z = CZ + CR + 1.6, xm = (PK.x0 + PK.x1)/2, y0 = 88.5, y1 = 61.5, yh = y1 + 6.5, w = 1.7, W = 3.8;
+  const pts = [[xm - w, y0, z], [xm + w, y0, z], [xm + w, yh, z], [xm + W, yh, z], [xm, y1, z], [xm - W, yh, z], [xm - w, yh, z]];
+  const v = el.V.toFixed(1);
+  return fill(pd(pts), '#5b9be0', 'opacity=".88"') + ink(pd(pts), 1.3) + txZ(xm + .7, (y0 + yh)/2, z, 'PUSH ' + v + ' V', 1.9, '#ffffff', 800);
+}
+
+/* ---------- labels ---------- */
+function labels(st, el, k){
+  const on1 = el.I > 0, lit = st.g1 > .05, yA = (MET.A.y0 + MET.A.y1)/2, yV = (MET.V.y0 + MET.V.y1)/2, PV = 2.6;
+  const a = dialAng(st.dialA), sa = (1 - ease(st.swK))*65*Math.PI/180;
+  return [
+    { at: [30, CELLY[1], CZ + CR], text: 'AA CELL', on: on1 },
+    { at: [37, CELLY[2], CZ + 3.1], text: 'STEEL CAN +', on: false },
+    { at: [33, CELLY[2], CZ + 2.05], text: 'MNO2 PASTE', on: false },
+    { at: [26, CELLY[2], CZ + 1.6], text: 'ZINC GEL -', on: false },
+    { at: [44, CELLY[2], CZ + .3], text: 'BRASS NAIL', on: false },
+    { at: [19.6, CELLY[0], CZ + 1.8], text: 'SPRING', on: false },
+    { at: [PK.x1 - 1, (CELLY[1] + CELLY[2])/2, CZ - 1.6], text: 'CELL STRAP', on: on1 },
+    { at: [PK.x0 + 14, 75, CZ + CR + 1.6], text: 'PRESSURE', on: true },
+    { at: [36, 57.5, DBH + .9], text: 'RED LEAD +', on: on1 },
+    { at: [50.6, 72, DBH + 1], text: 'BLACK LEAD -', on: on1 },
+    { at: HL('F-', 22, BBT + .4), text: 'ELECTRONS', on: on1 },
+    { at: [SWX, SWY + 3.5*Math.cos(sa), SWZ + 3.5*Math.sin(sa) + .5], text: 'KNIFE BLADE', on: on1 },
+    { at: MF(yA, 1.9, PV, -1), text: 'MOVING COIL', on: on1 },
+    { at: MF(yA, -3.1, PV + 2, -3), text: 'MAGNET', on: false },
+    { at: MF(yA, .6, PV + .6, -.45), text: 'HAIRSPRING', on: on1 },
+    { at: MF(yA, 0, PV + 5, .3), text: 'NEEDLE', on: on1 },
+    { at: [14.8, yA, DBH + 2.55], text: 'SHUNT', on: on1 },
+    { at: MF(yV, 0, PV, -1.3), text: 'IRON CORE', on: false },
+    { at: [14.6, yV - 1, DBH + 2.6], text: 'MULTIPLIER', on: false },
+    { at: ringPt(4, dialAng(15), BBT + 1.3), text: 'NICHROME WIRE', on: st.dialA > 0 && on1 },
+    { at: ringPt(3, a, BBT + 1.7), text: 'WIPER', on: on1 },
+    { at: [CHX, DLY, BBT + 5], text: 'DIAL KNOB', on: false },
+    { at: [RX.h, BULB[0], BBT + 7.5], text: 'FILAMENT', on: lit },
+    { at: [RX.h, BULB[0] + 1.9, BBT + 9.6], text: 'GLASS BULB', on: false },
+    { at: [RX.h, BULB[0] - 1, BBT + 6], text: 'LEAD-INS', on: lit },
+    { at: [RX.h + 1.4, BULB[0], BBT + 3], text: 'SCREW BASE', on: false },
+    { at: [RX.h + 2.1, BULB[0] - 2, BBT + 1.3], text: 'LAMP HOLDER', on: false },
+    { at: HL('i', 26, ZST + .5), text: 'CLIP STRIP', on: false },
+    { at: HL('P+', 16, ZST + .5), text: 'POWER RAILS', on: false },
+    { at: HL('j', 17.5, BBT + .7), text: 'JUMPER', on: on1 },
+  ];
+}
+function side(sd){ const B = [DKX/2 - 26, DKX/2 + 26, DKY/2 - 26, DKY/2 + 26, DBH, DBH + 15], dx = Dv(1, 0, 0)[0], dy = Dv(0, 1, 0)[0], ax = Math.abs(dx) > Math.abs(dy) ? 0 : 1, d = ax ? dy : dx;
+  if (d*sd > 0) B[2*ax] -= 1000; else B[2*ax + 1] += 1000; return B; }
+
+// the stats and the See-through/Labels switches sit top right, where the right label column starts: invisible spacer
+// pills (stripped after layout) push the real ones down below them. Not on a phone, where labels are numbered badges.
+function padR(col){ const fig = document.getElementById('fig'), M = fig && fig.getScreenCTM();
+  if (!M || (window.LBL_U && LBL_U())) return col;
+  const b = Math.max(...['stats', 'xrb'].map(id => { const e = document.getElementById(id); return e ? e.getBoundingClientRect().bottom : 0; }));
+  const n = Math.ceil((new DOMPoint(0, b + 6).matrixTransform(M.inverse()).y - 38.6*INK_K) / (18.48*INK_K));
+  return [...Array(Math.max(0, n)).fill({ at: [DKX/2, DKY/2, 500], text: '~' }), ...col]; }
+
+/* ---------- scene ---------- */
+let ui, ccRun = false;
+function scene(st, m){
+  const k = ease(st.xr || 0), el = ccElec(st);
+  let s = board(0, 0, DKX, DKY, DBH, 3, WOOD);
+  s += clipTo(boardTop(0, 0, DKX, DKY, DBH, 3), shadowPts().map(p => castShadow(p, DBH)).join(''));
+  const IT = [];
+  breadboard(IT, st, k); pack(IT, st, k); meter(IT, st, m, k, 'A'); meter(IT, st, m, k, 'V');
+  knifeSwitch(IT, st, k); dial(IT, st, k); bulb(IT, st, k, 0); bulb(IT, st, k, 1); jumpers(IT, st); leads(IT);
+  s += byDepth(IT);
+  if (k > 0) s += `<g opacity="${f(k)}">${electrons(st, el)}${pressureArrow(st, el)}</g>`;
+  if (k > .6){ const all = labels(st, el, k).map(q => ({ q, X: P(...q.at)[0] })).sort((p, q) => p.X - q.X).map(p => p.q), h = (all.length + 1) >> 1;
+    s += xrCallouts(all.slice(0, h), side(-1)) + xrCallouts(padR(all.slice(h)), side(1)).replace(/<g class="tag[^>]*data-t="~">[\s\S]*?<\/g>/g, ''); }
+  if (st.xr > 0 && el.I > 0 && ui) kick();
+  return s;
+}
+
+/* ---------- behaviour (one state object, one clock) ---------- */
+function ccStep(st, dt){
+  let busy = false;
+  const tS = st.closed ? 1 : 0; if (st.swK !== tS){ st.swK = tS > st.swK ? Math.min(1, st.swK + dt/.5) : Math.max(0, st.swK - dt/.4); busy = true; }
+  if (st.wk < 1){ st.wk = Math.min(1, st.wk + dt/1.5); if (st.wk >= 1) st.pm = st.mode; busy = true; }
+  if (st.dialA !== st.dialR){ const d = st.dialR - st.dialA, s2 = Math.sign(d)*dt*24; st.dialA = Math.abs(s2) >= Math.abs(d) ? st.dialR : st.dialA + s2; busy = true; }
+  const el = ccElec(st), gt = Math.min(1, el.p/PRATED);
+  for (const [key, tgt] of [['g1', gt], ['g2', st.mode === 'one' ? 0 : gt]]){ const d = tgt - st[key]; if (Math.abs(d) > 2e-3){ st[key] += d*Math.min(1, dt*10); busy = true; } else st[key] = tgt; }
+  // meter needles: a coil against a hairspring, lightly damped, so they swing and settle
+  for (const [x, v, tgt] of [['na', 'nav', el.I], ['nv', 'nvv', el.V/10]]){ const acc = 90*(tgt - st[x]) - 11*st[v]; st[v] += acc*dt; st[x] += st[v]*dt;
+    if (Math.abs(tgt - st[x]) > 6e-4 || Math.abs(st[v]) > 6e-4) busy = true; else { st[x] = tgt; st[v] = 0; } }
+  if (st.xr > 0 && el.I > 0){ st.eph += dt*el.I*24; busy = true; }
+  return busy;
+}
+function kick(){ if (ccRun) return; ccRun = true; ui.animate(dt => { const b = ccStep(ui.st, dt); if (!b) ccRun = false; return b; }); }
+function rewire(st, to){
+  const tgt = st.mode === to ? 'one' : to;
+  st.pm = st.wk < 1 ? st.pm : st.mode; st.mode = tgt; st.wk = 0;
+  ui.flash(tgt === 'one' ? 'Bulb 2 taken out: one bulb again'
+    : tgt === 'series' ? 'Series: one path through both bulbs. R doubles, I halves, both dim'
+    : 'Parallel: each bulb has its own path at the full voltage, both bright', 2400);
+  kick();
+}
+
+ui = mountFigure({
+  fig:'31', title:'A simple circuit', size:[DKX, DKY, DBH + 15], palette:'cobalt', turn:'full',
+  state:{ closed:false, swK:0, mode:'one', pm:'one', wk:1, dialR:0, dialA:0, g1:0, g2:0, na:0, nav:0, nv:.6, nvv:0, eph:0 },
+  scene,
+  stats: st => { const e = ccElec(st);
+    return [ { label:'V voltmeter', value: e.V.toFixed(2) + ' V', small:true },
+             { label:'I ammeter', value: e.I.toFixed(3) + ' A', small:true },
+             { label:'R = V / I', value: e.live ? e.R.toFixed(1) + ' Ω' : 'open', small:true } ]; },
+  buttons:[
+    { label:'Close switch', onClick: st => { st.closed = !st.closed;
+      ui.flash(st.closed ? 'Loop closed: current flows, the bulb lights' : 'Switch open: the loop is broken, I = 0', 2000); kick(); } },
+    { label:'Add bulb in series', onClick: st => rewire(st, 'series') },
+    { label:'Rewire in parallel', onClick: st => rewire(st, 'parallel') },
+    { label:'Turn dial', choices: st => [0, 10, 20, 30].map(r => ({ label: r + ' Ω', current: st.dialR === r,
+      onClick: st => { st.dialR = r; ui.flash(r ? `${r} Ω of wire added in series: less current` : 'Dial at 0: wire bypassed', 1800); kick(); } })) },
+  ],
+  params: (st, q) => {
+    if (q.get('sw') === '1'){ st.closed = true; st.swK = 1; }
+    if (['series', 'parallel'].includes(q.get('mode'))) st.mode = st.pm = q.get('mode');
+    if (q.has('dial')){ st.dialR = st.dialA = +q.get('dial'); }
+    if (q.has('wk')){ st.pm = 'one'; st.wk = +q.get('wk'); }
+    if (q.has('swk')){ st.closed = true; st.swK = +q.get('swk'); }
+    const e = ccElec(st), gt = Math.min(1, e.p/PRATED); st.g1 = gt; st.g2 = st.mode === 'one' ? 0 : gt; st.na = e.I; st.nv = e.V/10;
+    if (q.has('eph')) st.eph = +q.get('eph');
+  },
+});
+xrMount(() => ui, () => '');
+requestAnimationFrame(() => ui.render());   // once the stats exist, so the label column can clear them
+</script></body></html>
