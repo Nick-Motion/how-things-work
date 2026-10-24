@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wi-Fi router</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Home Wi-Fi router (AX1800 class: 2x2 2.4 GHz + 2x2 5 GHz, five gigabit ports), on a desk with its fibre modem,
+   its 12 V power adapter and a phone. We look at the router from behind, where the cables go in.
+   x = depth (the back panel is at x = RW, toward the viewer), y = width, z = up. 1 unit = 2 mm.
+
+   How it really works (and where the packet is after each step):
+   1. Plug in the WAN cable: the RJ45 plug from the modem's LAN port clicks into the router's blue WAN jack.
+   2. Power on: 12 V from the adapter -> DC jack -> power switch -> buck regulators make 3.3 V / 1.8 V / 1 V for the
+      chips. The SoC boots from NAND flash into DDR RAM (PWR light blinks), then starts both radios (2.4G, 5G lights).
+      With the WAN link up, it asks the modem's network for an address (DHCP) and the WAN light turns green.
+   3. Connect the phone: the phone and the 5 GHz radio swap association and key-handshake frames over the air;
+      the phone joins HOME-5G at 1201 Mbps (2 streams, 80 MHz, Wi-Fi 6).
+   4. Send a packet: phone -> radio wave -> 5 GHz antenna's sleeve dipole -> coax pigtail -> U.FL jack -> front-end
+      module (low-noise amplifier) -> 5 GHz radio chip -> PCIe lane -> SoC (routing + NAT: swaps the phone's private
+      address for the router's public one) -> RGMII link -> Ethernet switch chip -> WAN magnetics (isolation
+      transformer) -> WAN jack -> cable -> modem -> the internet. With no WAN link the SoC has nowhere to send it.
+
+   Parts (each held by another):
+   CASE      top shell (vents, LED windows, logo) . bottom shell . four rubber feet . four hinge blocks on the back
+   ANTENNAS  four housings on hinges . a coax up each . a brass sleeve and a radiator (a sleeve dipole, quarter-wave
+             for its band) . 2.4 GHz at y 8 / 40, 5 GHz at y 80 / 112
+   BOARD     main board on four screws . SoC . heatsink with five fins . DDR3 RAM . NAND flash . 40 MHz crystal .
+             UART header (4 pins) . PCIe lanes and RGMII link (traces)
+   RADIOS    two RF shield fences (lids off) . a radio chip in each . two front-end modules in each . four U.FL jacks .
+             four coax pigtails up over the jacks to the hinges
+   ETHERNET  switch chip . quad LAN magnetics . WAN magnetics . four LAN jacks . blue WAN jack . port LEDs
+   POWER     DC jack . power switch . buck regulator chip . two inductors . two output capacitors . input capacitor
+   CONTROLS  reset button . WPS button . six status LEDs under six light pipes
+   ON THE DESK  fibre modem (+ fibre off the desk) . WAN cable and its two plugs . 12 V adapter, DC plug, mains cord .
+             phone */
+
+/* ---------- geometry ---------- */
+const RW = 75, RD = 120, BH = 3, ZB = 4.5, ZT = 20.5, RR = 6;     // router depth, width; desk; shell bottom/top; corner
+const PZ0 = 7, PZ1 = 8, PORTZ = 11.5;                              // main board; centre of every back-panel opening
+const BRD = [-6, -6, 116, 178];
+const BTOP = boardTop(...BRD, BH, 8);
+const ANT = [{ y:8, band:2.4 }, { y:40, band:2.4 }, { y:80, band:5 }, { y:112, band:5 }];
+const AX = RW + 2.5, AZ = 18.3, ALEN = 78;                         // antenna pivot (x, z), length above the shell
+const PORTS = { dc:14, pwr:28, rst:42, wps:50, lan:[90, 81, 72, 63], wan:104 };
+const LEDS = [{ k:'pwr', y:86, t:'PWR' }, { k:'w24', y:74, t:'2.4G' }, { k:'w5', y:62, t:'5G' }, { k:'net', y:50, t:'WAN' }, { k:'lan', y:38, t:'LAN' }, { k:'wps', y:26, t:'WPS' }];
+const MOD = [0, 132, 24, 154, 53];                                 // modem x0, y0, x1, y1, top
+const PHN = [36, 136, 110, 172], PHZ = BH + 3.6;                   // phone, lying screen up
+const BRK = [90, 7, 106, 21, 11.5];                                // power adapter
+const UFL = [[32.5, 10], [32.5, 26], [32.5, 94], [32.5, 110]];     // U.FL jack for each antenna
+const SCREWS = [[5.5, 5], [5.5, 115], [64, 5], [64, 115]];
+const TR = {
+  pcie5: [[17, 102], [21, 102], [31, 92], [31, 60], [34.5, 55]],
+  pcie24: [[21, 18], [30, 30], [30, 40], [34.5, 45]],
+  rgmii: [[46, 55], [48, 62], [48, 78], [44, 82]],
+  wan: [[47, 89.5], [50, 104]],
+};
+const GRN = '#43c25c', AMB = '#f2a03a', LOFF = '#8d877a', GLOW = '#ffd34a';
+const PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, CHIP = matOf('#3a3632'), SHLD = matOf('#d4d8da'), BRASS = matOf('#d8b25a');
+const WANC = matOf('#3f7fc0'), LANC = matOf('#f2c230'), MAGM = matOf('#2e2c2a'), CAPM = matOf('#3a5f9f'), INDM = matOf('#55585c');
+const PHM = { l:'#5b5f66', m:'#3d4046', d:'#26282c' }, MODM = CERAMIC;
+
+/* ---------- helpers ---------- */
+const rtDist = (a, b) => Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
+const rtBoxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+function rtAlong(pts, u){
+  let tot = 0; for (let i = 1; i < pts.length; i++) tot += rtDist(pts[i-1], pts[i]);
+  if (tot < 1e-6) return pts[0].slice();
+  let d = Math.max(0, Math.min(1, u)) * tot;
+  for (let i = 1; i < pts.length; i++){ const l = rtDist(pts[i-1], pts[i]);
+    if (d <= l || i === pts.length - 1){ const t = l ? Math.min(1, d/l) : 0; return pts[i-1].map((v, j) => v + (pts[i][j] - v)*t); } d -= l; }
+}
+// round each inside corner of a route (a cable bends, it doesn't kink)
+function rtBend(pts, r = 1.6){ if (pts.length < 3) return pts; const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++){ const [a, b, c] = [pts[i-1], pts[i], pts[i+1]], la = rtDist(a, b), lc = rtDist(c, b), d = Math.min(r, la/2.2, lc/2.2);
+    if (d < 1e-3){ out.push(b); continue; }
+    const p = a.map((v, k) => b[k] + (v - b[k])*d/la), q = c.map((v, k) => b[k] + (v - b[k])*d/lc);
+    for (let j = 0; j <= 4; j++){ const t = j/4; out.push([0,1,2].map(k => (1-t)*(1-t)*p[k] + 2*(1-t)*t*b[k] + t*t*q[k])); } }
+  out.push(pts[pts.length - 1]); return out; }
+// a cable of radius r (model units) cut into short pieces, each with its own box, so it sorts with the solids it passes
+function rtWire(pts, col, r, L = 5){ const q = rtBend(pts), out = [];
+  for (let i = 0; i < q.length - 1; ){
+    let j = i + 1, len = 0; while (j < q.length - 1 && len < L){ len += rtDist(q[j], q[j-1]); j++; }
+    if (j === q.length - 2 && rtDist(q[j], q[j+1]) < L/2) j++;
+    const seg = q.slice(i, j + 1), d = pd(seg, false), cap = 'fill="none" stroke-linecap="round" stroke-linejoin="round"';
+    out.push({ box: rtBoxOf(seg, r*.7), svg: `<path d="${d}" ${cap} stroke="${INK}" style="stroke-width:${f(2.45*r + 1.3*INK_K)}"/><path d="${d}" ${cap} stroke="${col}" style="stroke-width:${f(2.45*r)}"/>` });
+    i = j; }
+  return out; }
+const rtCable = (pts, col, r) => rtWire(pts, col, r, 99).map(p => p.svg).join('');
+// text printed on a top face, read from the default side (the back of the router)
+const txZ = (x, y, z, str, size, col = INK, weight = 700) => `<text transform="${txM(P(x, y, z), Dv(0,-1,0), Dv(1,0,0))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+// a rounded slab between z0 and z1 (modem, phone, adapter)
+function slab(x0, y0, x1, y1, z0, z1, r, M, sh = tone, w = 1.6){
+  const A = on(PZ(z0), rrUV(x0, y0, x1, y1, r, 4)), B = on(PZ(z1), rrUV(x0, y0, x1, y1, r, 4));
+  return loft(A, B, n => sh(n, M)) + fill(pd(B), sh([0,0,1], M)) + ink(pd(B), w*.55) + hullInk([...A, ...B], w); }
+// the near half of a horizontal ring (a seam line)
+function rtNear(ring, w){ const c = avg(ring); let out = '', run = [];
+  for (let i = 0; i < ring.length; i++){ const a = ring[i], b = ring[(i+1) % ring.length];
+    let n = [b[1]-a[1], -(b[0]-a[0]), 0]; if (dot(n, sub(avg([a, b]), c)) < 0) n = n.map(v => -v);
+    if (vis(n)){ if (!run.length) run.push(a); run.push(b); } else if (run.length){ out += line(run, w); run = []; } }
+  return out + (run.length > 1 ? line(run, w) : ''); }
+const glowDot = (p, r, col, o = .55) => { const [X, Y] = P(...p); return `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(r)}" fill="${col}" opacity="${o}"/>`; };
+
+/* ---------- state helpers ---------- */
+const booted = st => st.power && st.boot >= 1;
+const online = st => booted(st) && st.wan >= 1 && st.dhcp >= 1;
+const blinkOn = (st, hz = 8) => Math.floor(st.tm * hz) % 2 === 0;
+function wanPlug(st){ const p = ease(Math.max(0, Math.min(1, st.wan))), lift = Math.min(1, p/.35), slide = Math.max(0, (p - .35)/.65);
+  return { xa: RW + 6 - 15*slide, zc: BH + 2.6 + (PORTZ - BH - 2.6)*lift }; }
+function wanRoute(st){ const { xa, zc } = wanPlug(st), xe = xa + 17, zf = BH + 1.5;
+  return [[xe, PORTS.wan, zc], [xe + 3, PORTS.wan, Math.max(zf, zc - 1)], [xe + 5, 110, zf], [xe + 4, 121.5, zf], [60, 123.5, zf], [26, 123.5, zf], [16, 122, zf], [14, 122.5, 5.5], [14, 125, 8]]; }
+const coaxRoute = i => { const [x, y] = UFL[i], c = ANT[i].y; return [[x, y, PZ1 + 1.1], [x + 1.5, y, PZ1 + 1.6], [x + 3.5, y, 16.5], [RW - 4.5, c, 16.5], [RW - 1.5, c, AZ], [RW + 1, c, AZ]]; };
+const PH_C = [73, 154, PHZ + .3];
+function pktLegs(st){
+  const c = ANT[3].y, z = PZ1 + .6, T = pts => pts.map(([x, y]) => [x, y, z]);
+  return [
+    { k:'air', d:1.0, pts:[PH_C, [AX, c, ZT + 40]] },
+    { k:'ant', d:.5, pts:[[AX, c, ZT + 40], [AX, c, AZ]] },
+    { k:'coax', d:.8, pts: coaxRoute(3).slice().reverse() },
+    { k:'fem', d:.25, pts: T([[32.5, 110], [26, 110]]) },
+    { k:'radio', d:.3, pts: T([[26, 110], [17, 102]]) },
+    { k:'pcie', d:.55, pts: T(TR.pcie5) },
+    { k:'soc', d:.45, pts: T([[40, 50], [40, 50]]) },
+    { k:'rgmii', d:.45, pts: T([[40, 50], ...TR.rgmii]) },
+    { k:'switch', d:.25, pts: T([[44, 82], [42.5, 86.5], [47, 89.5]]) },
+    { k:'mag', d:.3, pts: [...T(TR.wan), [53, 104, 11.9]] },
+    { k:'jack', d:.3, pts: [[53, 104, 11.9], [60, 104, PORTZ], [RW, 104, PORTZ]] },
+    { k:'cable', d:1.2, pts: [[RW, 104, PORTZ], ...wanRoute(st)] },
+  ];
+}
+const PKT_T = () => pktLegs(ui ? ui.st : { wan:1 }).reduce((a, l) => a + l.d, 0);
+const pktStage = st => st.pkt ? pktLegs(st)[st.pkt.leg].k : '';
+// on the cable the packet rides on top of it, not hidden inside it
+const pktPos = st => { const l = pktLegs(st)[st.pkt.leg], p = rtAlong(l.pts, l.k === 'air' || l.k === 'cable' ? ease(st.pkt.u) : st.pkt.u);
+  if (l.k === 'cable') p[2] += 2.6; return p; };
+const INSIDE = ['ant', 'coax', 'fem', 'radio', 'pcie', 'soc', 'rgmii', 'switch', 'mag', 'jack'];
+
+function rtLeds(st){
+  const b = blinkOn(st), stg = pktStage(st), radioAct = ['air', 'ant', 'coax', 'fem', 'radio'].includes(stg) || st.phone === 'join';
+  const wanAct = ['switch', 'mag', 'jack', 'cable'].includes(stg);
+  return {
+    pwr: !st.power ? 0 : st.boot < 1 ? (b ? GRN : 0) : GRN,
+    w24: booted(st) ? GRN : 0,
+    w5: booted(st) ? (radioAct && !b ? 0 : GRN) : 0,
+    net: !booted(st) ? 0 : online(st) ? (wanAct && !b ? 0 : GRN) : st.wan >= 1 ? (b ? AMB : 0) : AMB,
+    lan: 0, wps: 0,
+    link: st.power && st.wan >= 1 ? GRN : 0,
+    act: st.power && st.wan >= 1 && (wanAct || (booted(st) && st.dhcp < 1)) && b ? AMB : 0,
+  };
+}
+
+/* ---------- the router case ---------- */
+const rRing = (z, ins = 0) => on(PZ(z), rrUV(ins, ins, RW - ins, RD - ins, RR - ins, 5));
+const RA = rRing(ZB), RB = rRing(ZT - 1.6), RT = rRing(ZT, 1.3);
+function routerBody(st, m){
+  const top = tone([0,0,1], m), led = rtLeds(st);
+  let s = '';
+  for (const [x, y] of [[9, 9], [9, RD - 9], [RW - 9, 9], [RW - 9, RD - 9]]) s += cyl(x, y, BH, ZB + .3, 3, DARK, toneI, .8, 14);
+  s += loft(RA, RB, n => tone(n, m)) + loft(RB, RT, n => tone(n, m)) + fill(pd(RT), top);
+  // side vents
+  for (const [sy, n] of [[RD + .05, [0,1,0]], [-.05, [0,-1,0]]]) if (facing(n)){ let v = '';
+    for (let i = 0; i < 11; i++) v += pd(on(PY(sy), rectUV(17 + 4*i, 10, 18.3 + 4*i, 15.5)));
+    s += fill(v, mix(tone(n, m), '#000000', .45)); }
+  s += rtNear(rRing(ZB + 4.2), .8) + rtNear(RB, .9);
+  // top: two vent fields, the logo, six LED windows with their names
+  let v = ''; for (const y0 of [14, 80]) for (let i = 0; i < 9; i++){ const y = y0 + 3.2*i; v += pd(on(PZ(ZT + .05), rrUV(31, y, 63, y + 1.3, .6, 2))); }
+  s += fill(v, mix(top, '#000000', .5));
+  s += txZ(48.5, 60, ZT + .06, 'LINKHOME', 4.6, mix(top, '#000000', .55), 800) + txZ(53.5, 60, ZT + .06, 'AX1800', 2.6, mix(top, '#000000', .45), 700);
+  for (const L of LEDS){ const c = led[L.k], w = on(PZ(ZT + .06), rrUV(3.8, L.y - 1.7, 6.4, L.y + 1.7, .8, 3));
+    s += shape(w, c || mix(top, '#000000', .35), .6) + (c ? glowDot([5.1, L.y, ZT], 3.2, c, .35) : '') + txZ(10.4, L.y, ZT + .06, L.t, 2, mix(top, '#000000', .55), 800); }
+  // back panel: ports, buttons, printing
+  if (facing([1,0,0])){
+    const pf = (y0, z0, y1, z1) => on(PX(RW + .05), rectUV(y0, z0, y1, z1)), pc = (y, z, r) => on(PX(RW + .06), ellUV(y, z, r, r, 16));
+    const tb = (y, t) => tx(RW + .1, y, 6.1, t, 1.7, INK, 800);
+    const rj = (c, M, lk, ac) => shape(pf(c - 3.9, 8.4, c + 3.9, 15.4), M.l, .8)
+      + shape(on(PX(RW + .07), [[c - 3.1, 10], [c - 1.5, 10], [c - 1.5, 9], [c + 1.5, 9], [c + 1.5, 10], [c + 3.1, 10], [c + 3.1, 14], [c - 3.1, 14]]), '#1d1a16', .7)
+      + `<path d="${Array.from({ length:8 }, (_, i) => pd([[RW + .08, c - 2.1 + .6*i, 13.9], [RW + .08, c - 2.1 + .6*i, 13.1]], false)).join('')}" stroke="${GOLDC}" stroke-width=".5" fill="none"/>`
+      + shape(pf(c - 3.5, 14.4, c - 2.4, 15.1), lk || LOFF, .4) + shape(pf(c + 2.4, 14.4, c + 3.5, 15.1), ac || LOFF, .4);
+    s += rj(PORTS.wan, WANC, led.link, led.act) + tb(PORTS.wan, 'WAN');
+    PORTS.lan.forEach((c, i) => { s += rj(c, LANC, 0, 0) + tb(c, String(i + 1)); });
+    s += shape(pc(PORTS.dc, PORTZ, 2.9), '#4a4642', .8) + shape(pc(PORTS.dc, PORTZ, 2.1), '#1d1a16', .6) + shape(pc(PORTS.dc, PORTZ, .6), METAL.m, .4) + tb(PORTS.dc, '12V');
+    s += shape(pc(PORTS.pwr, PORTZ, 2.9), mix(tone([1,0,0], m), '#000000', .3), .6) + tb(PORTS.pwr, 'POWER');
+    s += shape(pc(PORTS.rst, PORTZ, .8), '#1d1a16', .5) + tb(PORTS.rst, 'RESET');
+    s += shape(pc(PORTS.wps, PORTZ, 2.2), mix(tone([1,0,0], m), '#000000', .3), .5) + tb(PORTS.wps, 'WPS');
+  }
+  s += ink(pd(RT), 1.3) + hullInk([...RA, ...RT], 2.8);
+  return s;
+}
+const GOLDC = '#d8a24a';
+
+/* ---------- antennas ---------- */
+function antennaSvg(a, st, k){
+  const c = a.y;
+  const hous = box(RW, c - 2.6, ZT - 4.5, RW + 4.6, c + 2.6, ZT, DARK, tone, 1.1) + rod([AX, c, ZT - 1], [AX, c, ZT + ALEN], 2.4, DARK, tone, 1.2, 1.9, 18);
+  if (k <= 0) return hous;
+  // inside the housing: a coax up to the feed, a brass sleeve below it and the radiator above (a quarter wave each)
+  const q = a.band === 5 ? 7.5 : 15.5, zf = ZT + 52, lit = a.band === 5 && ['air', 'ant'].includes(pktStage(st)) || (a.band === 5 && st.phone === 'join');
+  const inside = rod([AX, c, AZ], [AX, c, zf - q], .55, matOf('#3a3632'), toneI, .5, .55, 8) + rod([AX, c, zf - q], [AX, c, zf], 1.1, BRASS, toneI, .6, 1.1, 12)
+    + rod([AX, c, zf], [AX, c, zf + q], .55, lit ? matOf('#ffb347') : matOf('#c9792e'), toneI, .5, .55, 8)
+    + rod([AX, c - 2.4, AZ], [AX, c + 2.4, AZ], .9, METAL, toneI, .6, .9, 10);
+  return `<g opacity="${f(1 - .75*k)}">${hous}</g><g opacity="${f(k)}">${inside}</g>`;
+}
+
+/* ---------- plugs, desk things ---------- */
+function wanPlugSvg(st){
+  const { xa, zc } = wanPlug(st), y = PORTS.wan, x0 = Math.max(RW, xa), x1 = xa + 10, xb = xa + 17, pp = [];
+  if (x1 > x0){ let b = box(x0, y - 3, zc - 2.4, x1, y + 3, zc + 2.4, CLEAR, toneI, .8);
+    if (xa + 3 > x0) b += `<path d="${Array.from({ length:8 }, (_, i) => pd([[Math.max(x0, xa + .4), y - 2.1 + .6*i, zc + 2.45], [xa + 3, y - 2.1 + .6*i, zc + 2.45]], false)).join('')}" stroke="${GOLDC}" stroke-width=".6" fill="none"/>`;
+    pp.push({ box:[[x0, y - 3, zc - 2.4], [x1, y + 3, zc + 2.4]], svg: b });
+    const t0 = Math.max(x0, xa + 2); if (xa + 8 > t0) pp.push({ box:[[t0, y - 1.4, zc - 3.1], [xa + 8, y + 1.4, zc - 2.4]], svg: box(t0, y - 1.4, zc - 3.1, xa + 8, y + 1.4, zc - 2.4, CLEAR, toneI, .6) }); }
+  const b0 = Math.max(RW, x1); pp.push({ box:[[b0, y - 3.3, zc - 2.7], [xb, y + 3.3, zc + 2.7]], svg: box(b0, y - 3.3, zc - 2.7, xb, y + 3.3, zc + 2.7, WANC, toneI, 1) });
+  return act('wan', byDepth(pp));
+}
+function phoneSvg(st){
+  const [x0, y0, x1, y1] = PHN, z = PHZ + .05;
+  let s = slab(x0, y0, x1, y1, BH, PHZ, 5, PHM, toneI, 1.6);
+  s += shape(on(PZ(z), rrUV(x0 + 2, y0 + 2, x1 - 2, y1 - 2, 3.6, 4)), '#1d2a26', .7);
+  const tc = '#8af0ae', name = booted(st) ? 'HOME-5G' : 'NO NETWORKS';
+  const stat = st.phone === 'on' ? 'CONNECTED' : st.phone === 'join' ? 'JOINING' + '...'.slice(0, 1 + Math.floor(st.tm*3) % 3) : booted(st) ? 'TAP TO JOIN' : 'SEARCHING';
+  s += txZ(42.4, 166, z, '9:41', 2.4, tc, 700) + txZ(50, 154, z, 'WI-FI', 3.4, tc, 800);
+  s += txZ(62, 154, z, name, 3.6, '#ffffff', 800) + txZ(68, 154, z, stat, 2.6, tc, 700);
+  if (st.phone === 'on'){ s += txZ(74.5, 154, z, '5 GHZ  1201 MBPS', 2.2, tc, 700);
+    let w = ''; for (const r of [1.2, 2.2, 3.2]) w += pd(on(PZ(z), arcUV(43.6, 142, r, 135, 225, 6)), false);
+    s += `<path d="${w}" fill="none" stroke="${tc}" stroke-width=".7" stroke-linecap="round"/>` + glowDot([43.6, 142, z], .5, tc, 1); }
+  if (st.pkt && st.pkt.leg === 0) s += txZ(90, 154, z, 'SENDING', 2.8, GLOW, 800);
+  s += shape(on(PZ(z + .02), rrUV(x1 - 5.5, 150, x1 - 4.6, 158, .4, 2)), '#55606a', .3);     // home bar
+  return act('phone', s);
+}
+function modemSvg(st){
+  const [x0, y0, x1, y1, zt] = MOD, led = online(st) || (st.power && st.wan >= 1);
+  let s = slab(x0, y0, x1, y1, BH, zt, 3, MODM, tone, 2.2);
+  let v = ''; for (let i = 0; i < 6; i++) v += pd(on(PZ(zt + .05), rrUV(5, 136 + 3*i, 19, 137.2 + 3*i, .5, 2)));
+  s += fill(v, '#9a958a');
+  if (facing([1,0,0])){ const rows = [['PWR', GRN], ['PON', GRN], ['NET', GRN], ['LAN', led ? ((st.arrive > 0 || pktStage(st) === 'cable') && !blinkOn(st) ? LOFF : GRN) : LOFF]];
+    rows.forEach(([t, c], i) => { const z = 45 - 4.5*i; s += shape(on(PX(x1 + .05), rectUV(146.5, z - .7, 149.5, z + .7)), c, .4) + tx(x1 + .1, 140.5, z - .8, t, 2.2, INK, 800); });
+    s += tx(x1 + .1, 143, 16, 'FIBRE', 3, '#7d786c', 800) + tx(x1 + .1, 143, 12.4, 'MODEM', 3, '#7d786c', 800); }
+  return s;
+}
+function brickSvg(){
+  const [x0, y0, x1, y1, zt] = BRK;
+  return slab(x0, y0, x1, y1, BH, zt, 2.4, PHM, tone, 1.6) + txZ(99.4, 14, zt + .05, '12V 1.5A', 2.2, '#9aa0a6', 800) + txZ(102.4, 14, zt + .05, 'ADAPTER', 1.8, '#9aa0a6', 700);
+}
+const DC_CORD = [[RW + 10, PORTS.dc, PORTZ], [RW + 12.5, PORTS.dc, 9], [RW + 14, PORTS.dc, 6.5], [BRK[0], PORTS.dc, 6.5]];
+const AC_CORD = [[BRK[2], 14, 6.5], [108.5, 14, BH + 1.2], [BRD[2] - .4, 14, BH + 1.2]];
+const AC_HANG = [[BRD[2] - .4, 14, BH + 1.2], [BRD[2] + .5, 14, 1.6], [BRD[2] + .8, 14, -14]];
+const FIB = [[MOD[0], 148, 12], [-2.5, 148, 8], [-4, 148, BH + .7], [BRD[0] + .4, 148, BH + .7]];
+const FIB_HANG = [[BRD[0] + .4, 148, BH + .7], [BRD[0] - .5, 148, 1.6], [BRD[0] - .8, 148, -14]];
+
+/* ---------- see-through: the board and everything on it ---------- */
+function rtMech(st){
+  const parts = [], put = (b, svg) => parts.push({ box: b, svg });
+  const bx = (x0, y0, z0, x1, y1, z1, M, w = .7, extra = '') => put([[x0, y0, z0], [x1, y1, z1]], box(x0, y0, z0, x1, y1, z1, M, toneI, w) + extra);
+  const vc = (x, y, z0, z1, r, M, w = .7, n = 16, extra = '') => put([[x - r, y - r, z0], [x + r, y + r, z1]], cyl(x, y, z0, z1, r, M, toneI, w, n) + extra);
+  const stg = pktStage(st), pw = st.power, led = rtLeds(st), z1 = PZ1;
+  const dotZ = (x, y, z, r, c) => fill(pd(on(PZ(z), ellUV(x, y, r, r, 8))), c);
+  // ---- main board with its traces (the camera always looks down, so it goes first)
+  let pcb = box(3, 3, PZ0, 72, 117, PZ1, PCBM, toneI, .9);
+  const trace = (pts, lit, w = .55) => `<path d="${pd(pts.map(([x, y]) => [x, y, z1 + .02]), false)}" fill="none" stroke="${lit ? GLOW : GOLDC}" stroke-width="${lit ? w*2 : w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  pcb += trace(TR.pcie5, stg === 'pcie', .9) + trace(TR.pcie24, false, .9) + trace(TR.rgmii, stg === 'rgmii', 1) + trace(TR.wan, stg === 'mag', .8);
+  for (let i = 0; i < 4; i++) pcb += trace([[47, 83 + 1.5*i], [50, PORTS.lan[i]]], false, .5) + trace([[56, PORTS.lan[i]], [58, PORTS.lan[i]]], false, .5);
+  pcb += trace([[56, 104], [58, 104]], stg === 'jack', .8) + trace([[28, 110], [32.5, 110]], stg === 'fem', .6) + trace([[28, 94], [32.5, 94]], false, .6)
+    + trace([[28, 10], [32.5, 10]], false, .6) + trace([[28, 26], [32.5, 26]], false, .6);
+  for (let i = 0; i < 5; i++) pcb += trace([[46, 46 + 2*i], [50, 45.5 + 2*i]], false, .4);                 // SoC to RAM
+  pcb += trace([[62, 14], [56, 22], [56, 30]], pw, .8) + trace([[52, 32], [48, 20]], pw, .6);             // 12 V in, to the buck stage
+  put([[3, 3, PZ0], [72, 117, PZ1]], pcb);
+  for (const [x, y] of SCREWS) vc(x, y, z1, z1 + .6, 1.3, METAL, .6, 12, line([[x - .8, y, z1 + .62], [x + .8, y, z1 + .62]], .4));
+  // ---- radios: a shield fence (lid off), radio chip, two front-end modules, two U.FL jacks; 2.4 GHz then 5 GHz
+  for (const [cy0, cy1, b5] of [[6, 30, false], [90, 114, true]]){
+    const zz = z1 + 2.6, lit = b5 && (st.phone === 'join' || ['fem', 'radio'].includes(stg));
+    bx(8, cy0, z1, 30, cy0 + .5, zz, SHLD, .5); bx(8, cy1 - .5, z1, 30, cy1, zz, SHLD, .5);
+    bx(8, cy0 + .5, z1, 8.5, cy1 - .5, zz, SHLD, .5); bx(29.5, cy0 + .5, z1, 30, cy1 - .5, zz, SHLD, .5);
+    const ry = (cy0 + cy1)/2 - 4;
+    bx(13, ry, z1, 21, ry + 8, z1 + 1, lit ? matOf('#5a4a3a') : CHIP, .6, dotZ(14, ry + 7, z1 + 1.02, .4, '#bbb'));
+    for (const fy of [cy0 + 2, cy1 - 6]) bx(24, fy, z1, 28, fy + 4, z1 + .9, b5 && stg === 'fem' && fy > 100 ? matOf('#6a5a3a') : CHIP, .5);
+  }
+  for (const [x, y] of UFL) vc(x, y, z1, z1 + 1.2, 1.1, BRASS, .5, 12);
+  // ---- SoC, thermal pad, heatsink with five fins; RAM, flash, crystal, UART header
+  bx(34, 44, z1, 46, 56, z1 + 1.2, stg === 'soc' ? matOf('#5a4a3a') : CHIP, .7, dotZ(35, 55, z1 + 1.22, .45, '#bbb'));
+  bx(35, 45, z1 + 1.2, 45, 55, z1 + 1.6, matOf('#c98a9a'), .4);
+  bx(35, 45, z1 + 1.6, 45, 55, z1 + 2.6, matOf('#cfd6d8'), .6);
+  for (let i = 0; i < 5; i++){ const y = 45.4 + 2.2*i; bx(35, y, z1 + 2.6, 45, y + .8, z1 + 8.5, matOf('#dfe4e6'), .5); }
+  bx(50, 44, z1, 57, 54, z1 + 1, CHIP, .6, dotZ(51, 53, z1 + 1.02, .4, '#bbb'));
+  bx(36, 62, z1, 44, 68, z1 + 1, CHIP, .6, dotZ(37, 67, z1 + 1.02, .4, '#bbb'));
+  bx(33, 38, z1, 36.5, 40, z1 + 1, METAL, .5);
+  bx(34, 71, z1, 36, 79, z1 + 1.2, CHIP, .5);
+  for (let i = 0; i < 4; i++) put([[34.6, 72.1 + 2*i, z1 + 1.2], [35.4, 72.9 + 2*i, z1 + 3.8]], rod([35, 72.5 + 2*i, z1 + 1.2], [35, 72.5 + 2*i, z1 + 3.8], .35, BRASS, toneI, .4, .35, 6));
+  // ---- Ethernet: switch chip, magnetics, the five jacks (port LEDs on their faces)
+  bx(38, 82, z1, 47, 91, z1 + 1.1, stg === 'switch' ? matOf('#5a4a3a') : CHIP, .7, dotZ(39, 90, z1 + 1.12, .45, '#bbb'));
+  bx(50, 100.5, z1, 56, 107.5, z1 + 3.5, stg === 'mag' ? matOf('#5a4a3a') : MAGM, .6);
+  bx(50, 59, z1, 56, 94, z1 + 3.5, MAGM, .6);
+  const jackFace = (c, M, lk, ac) => facing([1,0,0]) ? shape(on(PX(RW + .02), rectUV(c - 3.1, 9, c + 3.1, 14)), '#1d1a16', .5) + shape(on(PX(RW + .03), rectUV(c - 3.5, 14.4, c - 2.4, 15.1)), lk || LOFF, .3) + shape(on(PX(RW + .03), rectUV(c + 2.4, 14.4, c + 3.5, 15.1)), ac || LOFF, .3) + shape(on(PX(RW + .02), rectUV(c - 3.9, 8.4, c + 3.9, 8.9)), M.l, .3) : '';
+  bx(58, 100.2, z1, RW, 107.8, 15.2, stg === 'jack' ? matOf('#f0e0b0') : METAL, .7, jackFace(104, WANC, led.link, led.act));
+  for (const c of PORTS.lan) bx(58, c - 3.8, z1, RW, c + 3.8, 15.2, METAL, .7, jackFace(c, LANC, 0, 0));
+  // ---- power: DC jack, power switch, buck regulator, inductors, capacitors
+  bx(62, 10, z1, RW, 18, 15, CHIP, .7, facing([1,0,0]) ? shape(on(PX(RW + .02), ellUV(PORTS.dc, PORTZ, 2, 2, 14)), '#111', .4) : '');
+  const pz = st.press > 0 ? 1 : 0;
+  bx(66, 25, z1, RW - 1.6 + pz*1.2, 31, 13.6, CHIP, .6);
+  bx(52, 30, z1, 56, 34, z1 + .9, CHIP, .5, dotZ(52.6, 33.4, z1 + .92, .3, '#bbb'));
+  bx(46, 10, z1, 51, 15, z1 + 3.5, INDM, .6); bx(46, 18, z1, 51, 23, z1 + 3.5, INDM, .6);
+  for (const [x, y] of [[40, 14], [40, 24], [59, 22]]) vc(x, y, z1, z1 + 6, 2.1, CAPM, .6, 16, facing([0,0,1]) ? line([[x - 1.2, y, z1 + 6.02], [x + 1.2, y, z1 + 6.02]], .4) + line([[x, y - 1.2, z1 + 6.02], [x, y + 1.2, z1 + 6.02]], .4) : '');
+  // ---- reset and WPS: right-angle tact switches pushing out through the back
+  for (const c of [PORTS.rst, PORTS.wps]){ bx(68, c - 2.5, z1, 73.5, c + 2.5, z1 + 4.6, CHIP, .5);
+    put([[73.5, c - .7, PORTZ - .7], [RW - .2, c + .7, PORTZ + .7]], rod([73.5, c, PORTZ], [RW - .2, c, PORTZ], .6, METAL, toneI, .4, .6, 8)); }
+  // ---- status LEDs on the board edge, each under a light pipe up to its window in the top shell
+  for (const L of LEDS){ const c = led[L.k];
+    bx(4.2, L.y - .8, z1, 5.8, L.y + .8, z1 + .8, c ? matOf(c) : matOf('#e6e0d0'), .4);
+    put([[4.25, L.y - .75, z1 + .8], [5.75, L.y + .75, ZT - .3]], rod([5, L.y, z1 + .8], [5, L.y, ZT - .3], .75, c ? matOf(mix(c, '#ffffff', .5)) : CLEAR, toneI, .4, .75, 10)); }
+  // ---- coax pigtails from each U.FL jack up over the jacks to its antenna hinge
+  ANT.forEach((a, i) => parts.push(...rtWire(coaxRoute(i), i === 3 && stg === 'coax' ? GLOW : '#3a3632', .65, 6)));
+  // the plug's nose inside the WAN jack is hidden by the jack's shield
+  return byDepth(parts);
+}
+
+/* ---------- labels ---------- */
+function xrItems(st){
+  const stg = pktStage(st), pw = st.power, bt = pw && st.boot < 1, lit = s => stg === s;
+  return [
+    { at:[40, 50, z(16.5)], text:'HEATSINK', on: pw },
+    { at:[34.3, 44.3, z(9.2)], text:'SOC', on: lit('soc') || bt },
+    { at:[53.5, 49, 9], text:'DDR3 RAM', on: bt },
+    { at:[40, 65, 9], text:'NAND FLASH', on: pw && st.boot < .5 },
+    { at:[34.7, 39, 9], text:'CRYSTAL', on: pw },
+    { at:[17, 18, 9], text:'2.4G RADIO', on: false },
+    { at:[17, 102, 9], text:'5G RADIO', on: lit('radio') || st.phone === 'join' },
+    { at:[26, 10, 8.9], text:'2.4G FEM', on: false },
+    { at:[26, 110, 8.9], text:'5G FEM', on: lit('fem') },
+    { at:[19, 6.2, 10.6], text:'RF SHIELD', on: false },
+    { at:[32.5, 110, 9.2], text:'U.FL JACK', on: lit('fem') },
+    { at: rtAlong(coaxRoute(3), .55), text:'COAX PIGTAIL', on: lit('coax') },
+    { at:[RW + 4.6, 80, ZT - 2], text:'ANTENNA HINGE', on: false },
+    { at:[AX, 112, ZT + 46], text:'SLEEVE DIPOLE', on: lit('ant') || lit('air') },
+    { at:[42.5, 86.5, 9.1], text:'SWITCH CHIP', on: lit('switch') },
+    { at:[53, 76, 11.5], text:'LAN MAGNETICS', on: false },
+    { at:[53, 104, 11.5], text:'WAN MAGNETICS', on: lit('mag') },
+    { at:[66, 104, 15.2], text:'WAN JACK', on: lit('jack') },
+    { at:[66, 72, 15.2], text:'LAN JACKS', on: false },
+    { at:[68, 14, 15], text:'DC JACK', on: pw },
+    { at:[70, 28, 13.6], text:'POWER SWITCH', on: st.press > 0 },
+    { at:[54, 32, 8.9], text:'BUCK REGULATOR', on: pw },
+    { at:[48.5, 12.5, 11.5], text:'INDUCTOR', on: pw },
+    { at:[40, 24, 14], text:'CAPACITOR', on: pw },
+    { at:[70.7, PORTS.rst, 12.6], text:'RESET BUTTON', on: false },
+    { at:[70.7, PORTS.wps, 12.6], text:'WPS BUTTON', on: false },
+    { at:[5, 50, 8.8], text:'STATUS LEDS', on: pw },
+    { at:[5, 74, 16], text:'LIGHT PIPE', on: pw },
+    { at:[35, 76.5, 11.8], text:'UART HEADER', on: false },
+    { at:[62, 40, 8], text:'MAIN BOARD', on: false },
+    { at:[64, 115, 8.6], text:'BOARD SCREW', on: false },
+    { at:[31, 76, 8], text:'PCIE LANE', on: lit('pcie') },
+    { at:[48, 70, 8], text:'RGMII LINK', on: lit('rgmii') },
+  ];
+}
+const z = v => v;
+function surfItems(st){
+  const back = facing([1,0,0]), stg = pktStage(st);
+  return [
+    { at:[AX, 80, ZT + 62], text:'ANTENNAS', on: st.phone === 'join' || stg === 'air' },
+    { at:[5.1, 62, ZT], text:'STATUS LEDS', on: st.power },
+    ...(back ? [
+      { at:[RW, PORTS.wan, 15.4], text:'WAN PORT', on: st.wan >= 1 },
+      { at:[RW, 76, 15.4], text:'LAN PORTS', on: false },
+      { at:[RW + 1.6, PORTS.pwr, PORTZ], text:'POWER BUTTON', on: st.power },
+      { at:[RW, PORTS.dc, 14.4], text:'DC JACK', on: st.power } ] : []),
+    { at: rtAlong(wanRoute(st), .5), text:'WAN CABLE', on: stg === 'cable' },
+    { at:[MOD[2], 143, 40], text:'MODEM', on: online(st) },
+    { at:[98, 14, BRK[4]], text:'POWER ADAPTER', on: st.power },
+    { at:[96, 160, PHZ], text:'PHONE', on: st.phone === 'on' },
+  ];
+}
+
+/* ---------- radio waves (drawn over the scene: the invisible part) ---------- */
+function waves(st){
+  const stg = pktStage(st), join = st.phone === 'join', out = [];
+  const ring = (c, zc, r, o) => `<path d="${pd(on(PZ(zc), ellUV(c[0], c[1], r, r, 32)))}" fill="none" stroke="#2f6fd0" stroke-width="1.1" stroke-dasharray="3 2.4" opacity="${f(o)}"/>`;
+  if (join || stg === 'air' || stg === 'ant'){
+    for (let i = 0; i < 3; i++){ const t = (st.tm*1.1 + i/3) % 1;
+      if (join) for (const a of ANT.filter(a => a.band === 5)) out.push(ring([AX, a.y], ZT + 40, 4 + 26*t, .75*(1 - t)));
+      out.push(ring(PH_C, PHZ + 1, 10 + 30*t, .6*(1 - t))); } }
+  return out.join('');
+}
+const pktSvg = p => glowDot(p, 7, GLOW, .45) + box(p[0] - 1.2, p[1] - 1.2, p[2] - 1.2, p[0] + 1.2, p[1] + 1.2, p[2] + 1.2, matOf('#ffd34a'), toneI, .7);
+
+/* ---------- scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0), FXp = facing([1,0,0]), FXn = facing([-1,0,0]);
+  const hangAC = rtCable(AC_HANG, PHM.m, 1), hangF = rtCable(FIB_HANG, '#f2c230', .45);
+  let s = (FXp ? '' : hangAC) + (FXn ? '' : hangF) + board(...BRD, BH, 8, WOOD) + (FXp ? hangAC : '') + (FXn ? hangF : '');
+  // one shadow per thing, on the desk
+  let sh = castShadow([...RA, ...RT], BH, null);
+  for (const a of ANT) sh += castShadow([[AX - 2.4, a.y - 2.4, ZT], [AX + 2.4, a.y + 2.4, ZT], [AX, a.y - 2, ZT + ALEN], [AX, a.y + 2, ZT + ALEN]], BH, null);
+  sh += castShadow([...on(PZ(BH), rectUV(MOD[0], MOD[1], MOD[2], MOD[3])), ...on(PZ(MOD[4]), rectUV(MOD[0], MOD[1], MOD[2], MOD[3]))], BH, null);
+  sh += castShadow([...on(PZ(BH), rectUV(BRK[0], BRK[1], BRK[2], BRK[3])), ...on(PZ(BRK[4]), rectUV(BRK[0], BRK[1], BRK[2], BRK[3]))], BH, null);
+  sh += castShadow([...on(PZ(BH), rectUV(PHN[0], PHN[1], PHN[2], PHN[3])), ...on(PZ(PHZ), rectUV(PHN[0], PHN[1], PHN[2], PHN[3]))], BH, null);
+  s += clipTo(BTOP, sh);
+  const parts = [];
+  const router = k > 0 ? xrGhostRings(routerBody(st, m), '', k, RA, RT, m) + `<g opacity="${f(k)}">${rtMech(st)}</g>` : routerBody(st, m);
+  parts.push({ box:[[0, 0, BH], [RW, RD, ZT]], svg: router });
+  for (const a of ANT) parts.push({ box:[[RW, a.y - 2.7, ZT - 4.5], [RW + 4.6, a.y + 2.7, ZT + ALEN]], svg: antennaSvg(a, st, k) });
+  // buttons sticking out of the back panel
+  const pz = st.press > 0 ? .4 : 1.6;
+  parts.push({ box:[[RW, PORTS.pwr - 2.2, PORTZ - 2.2], [RW + pz, PORTS.pwr + 2.2, PORTZ + 2.2]], svg: act('power', cylX(RW, RW + pz, PORTS.pwr, PORTZ, 2.1, st.power ? matOf('#5a5f66') : DARK, toneI, .9, 18)) });
+  parts.push({ box:[[RW, PORTS.wps - 1.5, PORTZ - 1.5], [RW + 1, PORTS.wps + 1.5, PORTZ + 1.5]], svg: cylX(RW, RW + 1, PORTS.wps, PORTZ, 1.4, DARK, toneI, .7, 14) });
+  // WAN plug + cable to the modem; DC plug + cord to the adapter; the adapter's mains cord; the modem's fibre
+  const { zc } = wanPlug(st);
+  parts.push({ box: rtBoxOf([[Math.max(RW, wanPlug(st).xa), PORTS.wan - 3.3, zc - 3.1], [wanPlug(st).xa + 17, PORTS.wan + 3.3, zc + 2.7]]), svg: wanPlugSvg(st) });
+  parts.push(...rtWire(wanRoute(st), WANC.l, 1.3, 7));
+  parts.push({ box:[[11, 125, 5.4], [17, MOD[1], 10.6]], svg: box(11, 125, 5.4, 17, MOD[1], 10.6, WANC, toneI, .9) });
+  parts.push({ box:[[RW, PORTS.dc - 2.3, PORTZ - 2.3], [RW + 10, PORTS.dc + 2.3, PORTZ + 2.3]], svg: byDepth([
+    { box:[[RW, PORTS.dc - 1.6, PORTZ - 1.6], [RW + 3.5, PORTS.dc + 1.6, PORTZ + 1.6]], svg: cylX(RW, RW + 3.5, PORTS.dc, PORTZ, 1.6, METAL, toneI, .7, 14) },
+    { box:[[RW + 3.5, PORTS.dc - 2.3, PORTZ - 2.3], [RW + 10, PORTS.dc + 2.3, PORTZ + 2.3]], svg: cylX(RW + 3.5, RW + 10, PORTS.dc, PORTZ, 2.3, PHM, toneI, .9, 16) } ]) });
+  parts.push(...rtWire(DC_CORD, PHM.m, .9, 6), ...rtWire(AC_CORD, PHM.m, 1, 8), ...rtWire(FIB, '#f2c230', .45, 6));
+  parts.push({ box:[[BRK[0], BRK[1], BH], [BRK[2], BRK[3], BRK[4]]], svg: brickSvg() });
+  parts.push({ box:[[MOD[0], MOD[1], BH], [MOD[2], MOD[3], MOD[4]]], svg: modemSvg(st) });
+  parts.push({ box:[[PHN[0], PHN[1], BH], [PHN[2], PHN[3], PHZ]], svg: phoneSvg(st) });
+  // the packet: in the air and on the cable it is a thing among things; inside the case only see-through shows it
+  let over = '';
+  if (st.pkt){ const p = pktPos(st), stg = pktStage(st), fade = st.pkt.drop != null ? Math.max(0, 1 - st.pkt.drop/.7) : 1;
+    const svg = `<g opacity="${f(fade)}">${pktSvg(p)}</g>`;
+    if (!INSIDE.includes(stg)) parts.push({ box: rtBoxOf([p], 1.2), svg });
+    else if (k > .3) over += `<g opacity="${f(k)}">${svg}</g>`; }
+  s += byDepth(parts) + over + waves(st);
+  s += xrCallouts(k > .6 ? xrItems(st) : surfItems(st), [0, RW + 5, 0, RD, BH, ZT]);
+  return s;
+}
+
+/* ---------- behaviour (one state object, one clock) ---------- */
+let ui, rtLoopOn = false;
+function stepPkt(st, dt){
+  const p = st.pkt;
+  if (p.drop != null){ p.drop += dt; if (p.drop > .7) st.pkt = null; return; }
+  p.t += dt;
+  const legs = pktLegs(st); let t = p.t;
+  for (let i = 0; i < legs.length; i++){
+    if (legs[i].k === 'soc' && t >= legs[i].d && !online(st)){ p.leg = i; p.u = 1; p.drop = 0;
+      if (ui) ui.flash(st.wan < 1 ? 'No internet: plug in the WAN cable' : 'The WAN link is still getting an address', 2200); return; }
+    if (t < legs[i].d){ p.leg = i; p.u = t / legs[i].d; return; }
+    t -= legs[i].d;
+  }
+  st.pkt = null; st.sent++; st.arrive = .9;
+}
+function rtStep(st, dt){
+  st.tm += dt;
+  if (st.wan !== st.wanT) st.wan += Math.sign(st.wanT - st.wan) * Math.min(Math.abs(st.wanT - st.wan), dt/.9);
+  st.press = Math.max(0, st.press - dt);
+  st.arrive = Math.max(0, st.arrive - dt);
+  if (st.power && st.boot < 1) st.boot = Math.min(1, st.boot + dt/2.4);
+  const linkUp = booted(st) && st.wan >= 1;
+  st.dhcp = linkUp ? Math.min(1, st.dhcp + dt/1.1) : 0;
+  if (st.phone === 'join'){ st.join = Math.min(1, st.join + dt/1.6);
+    if (st.join >= 1){ st.phone = 'on'; if (st.queue){ st.queue = false; startPkt(st); } } }
+  if (st.pkt) stepPkt(st, dt);
+  return st.wan !== st.wanT || st.press > 0 || st.arrive > 0 || (st.power && st.boot < 1) || (linkUp && st.dhcp < 1) || st.phone === 'join' || !!st.pkt;
+}
+function rtRun(){ if (rtLoopOn) return; rtLoopOn = true;
+  ui.animate(dt => { const busy = rtStep(ui.st, dt); if (!busy) rtLoopOn = false; return busy; }); }
+function plugWan(st){
+  if (st.pkt && st.pkt.leg >= 9) return ui.flash('Wait: a packet is on its way out of the WAN port');
+  st.wanT = st.wanT ? 0 : 1; rtRun(); }
+function power(st){
+  st.power = !st.power; st.press = .25; st.boot = 0; st.dhcp = 0;
+  if (!st.power){ st.phone = 'off'; st.join = 0; st.pkt = null; st.queue = false; }
+  rtRun(); }
+function connect(st){
+  if (!st.power) return ui.flash('Power the router on first');
+  if (st.boot < 1) return ui.flash('Still booting: wait for the Wi-Fi lights');
+  if (st.phone === 'on') return ui.flash('The phone is already on HOME-5G');
+  if (st.phone === 'join') return;
+  st.phone = 'join'; st.join = 0; rtRun(); }
+function startPkt(st){ st.pkt = { t:0, leg:0, u:0 }; rtRun(); }
+function send(st){
+  if (!st.power) return ui.flash('Power the router on first');
+  if (st.boot < 1) return ui.flash('Still booting: wait for the Wi-Fi lights');
+  if (st.pkt) return ui.flash('One packet at a time');
+  if (st.phone !== 'on'){ st.queue = true; return connect(st); }   // join the network first, then send
+  startPkt(st); }
+
+ui = mountFigure({
+  fig:'31', title:'Wi-Fi router',
+  size:[RW + 41, 178, ZT + ALEN + 2], center:[42, 72], palette:'cobalt', turn:'full',
+  // wan: plug 0 (on the desk) .. 1 (in the jack); boot 0..1; dhcp 0..1; phone 'off' | 'join' | 'on'; pkt { t, leg, u }
+  state:{ tm:0, wan:0, wanT:0, power:false, press:0, boot:0, dhcp:0, phone:'off', join:0, pkt:null, queue:false, sent:0, arrive:0 },
+  scene,
+  stats: st => [
+    { label:'Packets out', value: String(st.sent) },
+    { label:'Wi-Fi link', value: st.phone === 'on' ? '1201 Mbps' : '--', small:true },
+    { label:'Signal', value: st.phone === 'on' ? '-47 dBm' : '--', small:true },
+    { label:'Internet', value: online(st) ? '1 Gbps' : booted(st) ? 'no link' : 'off', small:true } ],
+  buttons:[
+    { label:'Plug in WAN cable', onClick: st => plugWan(st) },
+    { label:'Power on / off', onClick: st => power(st) },
+    { label:'Connect phone', onClick: st => connect(st) },
+    { label:'Send a packet', onClick: st => send(st) },
+  ],
+  acts:{ wan: st => plugWan(st), power: st => power(st), phone: st => st.phone === 'on' ? send(st) : connect(st) },
+  params:(st, q) => {
+    if (q.get('wan') === '1') st.wan = st.wanT = 1;
+    if (q.get('power') === '1'){ st.power = true; st.boot = 1; st.dhcp = st.wan >= 1 ? 1 : 0; }
+    if (q.get('phone') === '1' && st.power) st.phone = 'on';
+    if (q.has('sent')) st.sent = +q.get('sent') || 0;
+    if (q.has('pkt') && st.phone === 'on'){ st.pkt = { t:0, leg:0, u:0 }; stepPkt(st, +q.get('pkt') * pktLegs(st).reduce((a, l) => a + l.d, 0)); }
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
