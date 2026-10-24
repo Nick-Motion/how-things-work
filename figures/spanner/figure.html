@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Spanner</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   The 2016 book page 32 shows a spanner turning a bolt. The 1998 page calls it a wrench.
+   This bench adaptation turns a nut on a restrained bolt. A keyed socket in the bench block holds the bolt head.
+   Turn applies clockwise torque viewed from above. The right-hand nut descends 2 mm per revolution.
+   Reverse raises the nut. The two tool jaws stay against opposite nut flats throughout each 30 degree stroke.
+   Compare lengths exchanges complete tools of equal jaw size, not an extending handle or hidden gearing.
+   A 40 N perpendicular force at 120 or 200 mm gives 4.8 or 8.0 N m. Available torque is not a preload estimate.
+   The narrow travel window retains thread engagement and ends at the washer.
+   Structure. Bench board carries the restraint block; its hexagonal socket captures the bolt head.
+   Tool. One-piece steel handle, neck, head and two jaw contact faces.
+   Fastener. Hexagonal nut, six flats, threaded bore, fixed bolt shank, external thread and captured bolt head.
+   Power. A hand force is represented by an arrow at the tool end. The nut supports the engaged tool at its flats.
+   Teaching fixtures are the bench block, head restraint and washer. Force, axis and effort arm are overlays.
+   Primary scans and accepted adaptation are retained in meta.json. Park Tool Basic Thread Concepts supports
+   the representative thread helix, pitch and direction. Scale is 5 drawing units per cm, with 24 mm across flats.
+   shortcut: ideal rigid contact omits elasticity and friction, use a fastener simulation for preload.
+*/
+const spBolt=[28,84], spPitch=1, spForce=40, spSteel={l:'#c8d7e1',m:'#91a9ba',d:'#50697d'};
+const spLengths=[60,100];
+const spAt=(st,u,v,z)=>{const a=st.angle*Math.PI/180;return [spBolt[0]+u*Math.cos(a)-v*Math.sin(a),spBolt[1]+u*Math.sin(a)+v*Math.cos(a),z];};
+const spHeight=st=>18+(st.angle+30)/360*spPitch;
+const spBounds=pts=>[[0,1,2].map(k=>Math.min(...pts.map(p=>p[k]))),[0,1,2].map(k=>Math.max(...pts.map(p=>p[k])))];
+function spPrism(points,z0,z1,material){
+ const a=points.map(([x,y])=>[x,y,z0]),b=points.map(([x,y])=>[x,y,z1]);
+ return loft(a,b,n=>toneI(n,material))+shape(b,toneI([0,0,1],material),.85)+hullInk([...a,...b],1.6);
+}
+function spThread(z0,z1){
+ let svg='';
+ for(let z=z0;z<z1;z+=.055){
+  const end=Math.min(z1,z+.055),a=z/spPitch*2*Math.PI,b=end/spPitch*2*Math.PI;
+  if(facing([Math.cos((a+b)/2),Math.sin((a+b)/2),0])) svg+=line([[spBolt[0]+4.03*Math.cos(a),spBolt[1]+4.03*Math.sin(a),z],[spBolt[0]+4.03*Math.cos(b),spBolt[1]+4.03*Math.sin(b),end]],.65);
+ }
+ return svg;
+}
+function spArrow(a,b,color){
+ const [x,y]=P(...a),[xx,yy]=P(...b),d=Math.atan2(yy-y,xx-x),r=8*INK_K;
+ return `<path d="M${f(x)} ${f(y)}L${f(xx)} ${f(yy)}" fill="none" stroke="${color}" stroke-width="2.7"/><path d="M${f(xx)} ${f(yy)}L${f(xx-r*Math.cos(d-.5))} ${f(yy-r*Math.sin(d-.5))}L${f(xx-r*Math.cos(d+.5))} ${f(yy-r*Math.sin(d+.5))}Z" fill="${color}"/>`;
+}
+function spOverlayText(at,text,color){const p=P(...at);return `<text x="${f(p[0])}" y="${f(p[1])}" text-anchor="middle" font-family="ui-monospace,monospace" font-size="${f(9*INK_K)}" font-weight="800" fill="${color}" stroke="#f2efe7" stroke-width="${f(3*INK_K)}" paint-order="stroke">${text}</text>`;}
+function spScene(st,m){
+ const k=ease(st.xr||0),z=spHeight(st),len=spLengths[st.length],parts=[];
+ const put=(pts,svg)=>parts.push({box:spBounds(pts),svg});
+ const block=box(15,71,3,41,97,17,m,tone,1.5);
+ let svg=board(7,14,136,154,3,5,WOOD);
+ const outline=[spAt(st,-10,-10,z+1.5),spAt(st,-10,10,z+5.5),spAt(st,len+3,-3.5,z+1.5),spAt(st,len+3,3.5,z+5.5),[15,71,17],[41,97,17]];
+ svg+=castShadow(outline,3,boardTop(7,14,136,154,3,5));
+ put([[15,71,3],[41,97,17]],`<g opacity="${f(1-.86*k)}">${block}</g>`);
+ const hex=ellUV(...spBolt,6.928,6.928,6);
+ if(k>0) put([[21,77,5],[35,91,11]],`<g opacity="${f(k)}">${spPrism(hex,5,11,METAL)}</g>`);
+ for(const [lo,hi,hidden] of [[11,17,true],[17,z,false],[z,z+6.5,true],[z+6.5,31.5,false]]){
+  if(hi<=lo||hidden&&!k)continue;
+  const shaft=cyl(...spBolt,lo,hi,3.8,METAL,toneI,.7,24)+spThread(lo,hi);
+  put([[24,80,lo],[32,88,hi]],hidden?`<g opacity="${f(k)}">${shaft}</g>`:shaft);
+ }
+ const outer=on(PZ(18),ellUV(...spBolt,9,9,40)),inner=on(PZ(18),ellUV(...spBolt,4.15,4.15,40));
+ const lower=on(PZ(17),ellUV(...spBolt,9,9,40)),boreLower=on(PZ(17),ellUV(...spBolt,4.15,4.15,40));
+ const washer=loft(lower,outer,n=>toneI(n,METAL))+loft(boreLower,inner,n=>toneI(n,METAL),true)+`<path d="${pd(outer)}${pd(inner)}" fill="${METAL.l}" fill-rule="evenodd"/>`+ink(pd(outer),1)+ink(pd(inner),.7);
+ put([[19,75,17],[37,93,18]],washer);
+ for(let i=0;i<6;i++){
+  const a=i*Math.PI/3,b=(i+1)*Math.PI/3;
+  const q=[[6.928*Math.cos(a),6.928*Math.sin(a)],[6.928*Math.cos(b),6.928*Math.sin(b)],[4.15*Math.cos(b),4.15*Math.sin(b)],[4.15*Math.cos(a),4.15*Math.sin(a)]].map(([u,v])=>spAt(st,u,v,0));
+  const shape2=q.map(p=>p.slice(0,2));
+  put([...q.map(p=>[p[0],p[1],z]),...q.map(p=>[p[0],p[1],z+6.5])],`<g opacity="${f(1-.78*k)}">${spPrism(shape2,z,z+6.5,matOf('#d6b25c'))}</g>`);
+ }
+ const profiles=[[[8,-10],[13,-10],[13,10],[8,10]],[[13,-10],[18,-3.5],[18,3.5],[13,10]],[[-10,-10],[8,-10],[8,-6],[-8,-6]],[[-8,6],[8,6],[8,10],[-10,10]],[[18,-3.5],...arcUV(len,0,3.5,-90,90,12),[18,3.5]]];
+ for(const profile of profiles){
+  const q=profile.map(([u,v])=>spAt(st,u,v,0)),shape2=q.map(p=>p.slice(0,2));
+  put([...q.map(p=>[p[0],p[1],z+1.5]),...q.map(p=>[p[0],p[1],z+5.5])],`<g opacity="${f(1-.58*k)}">${spPrism(shape2,z+1.5,z+5.5,spSteel)}</g>`);
+ }
+ svg+=byDepth(parts);
+ if(k>0){
+  let contacts='';
+  for(const side of [-1,1])contacts+=shape([spAt(st,-3.464,side*6,z+1.5),spAt(st,3.464,side*6,z+1.5),spAt(st,3.464,side*6,z+5.5),spAt(st,-3.464,side*6,z+5.5)],'#ef6a4c',.7);
+  const bore=[];
+  for(let h=z;h<z+6.5;h+=.055){const a=h/spPitch*2*Math.PI,b=(h+.055)/spPitch*2*Math.PI;bore.push([spBolt[0]+4.03*Math.cos(a),spBolt[1]+4.03*Math.sin(a),h],[spBolt[0]+4.03*Math.cos(b),spBolt[1]+4.03*Math.sin(b),Math.min(h+.055,z+6.5)]);}
+  svg+=`<g opacity="${f(k)}">${contacts}${line(bore,.6).replaceAll(INK,'#aa642c')}</g>`;
+  svg+=`<path d="${pd([[28,84,3],[28,84,35]],false)}" stroke="#466d96" stroke-dasharray="2 2" fill="none" stroke-width="1"/>`;
+ }
+ const effort=[spAt(st,0,0,z+9),spAt(st,len,0,z+9)];
+ svg+=`<path d="${pd(effort,false)}" stroke="#466d96" stroke-dasharray="3 2" fill="none" stroke-width="1.2"/>`;
+ svg+=spOverlayText(spAt(st,len*.57,0,z+12),`${st.length?'200':'120'} mm EFFORT ARM`,'#365b80');
+ const dir=st.direction||-1;
+ svg+=spArrow(spAt(st,len,-dir*16,z+5.6),spAt(st,len,0,z+5.6),'#c84e38');
+ svg+=spOverlayText(spAt(st,len,-dir*21,z+7),'40 N','#b63f2d');
+ if(k>.6){
+  const labels=[
+   {at:spAt(st,len*.7,2,z+5.5),text:'HANDLE'},
+   {at:spAt(st,15,0,z+5.5),text:'NECK'},
+   {at:spAt(st,9,8,z+5.5),text:'OPEN HEAD'},
+   {at:spAt(st,0,6,z+3.5),text:'UPPER JAW FACE',on:st.moving},
+   {at:spAt(st,0,-6,z+3.5),text:'LOWER JAW FACE',on:st.moving},
+   {at:spAt(st,-3.464,6,z+6.5),text:'NUT FLATS',on:st.moving},
+   {at:spAt(st,5,0,z+6.5),text:'HEX NUT',on:st.moving},
+   {at:[28,84,z+3.5],text:'THREAD ENGAGEMENT',on:st.moving},
+   {at:[28,84,30.7],text:'BOLT SHANK'},
+   {at:[31.8,84,28],text:'RIGHT-HAND THREAD'},
+   {at:[28,84,8],text:'CAPTURED BOLT HEAD'},
+   {at:[20,79,17.8],text:'WASHER'},
+   {at:[17,95,12],text:'RESTRAINT BLOCK'},
+   {at:[102,150,3],text:'BENCH BOARD'}
+  ];
+  svg+=xrCallouts(labels,[18,43,74,94,3,34]);
+ }
+ return svg;
+}
+function spTurn(st,ui,direction){
+ const target=Math.max(-30,Math.min(30,st.angle+direction*30));
+ if(st.moving)return ui.flash('Finish this stroke first');
+ if(target===st.angle)return ui.flash(direction<0?'Nut seated against the washer':'End of the teaching stroke');
+ st.direction=direction;st.moving=true;const from=st.angle;let t=0;
+ ui.animate(dt=>{t=Math.min(1,t+dt/1.1);st.angle=from+(target-from)*ease(t);st.moving=t<1;return st.moving;});
+}
+const ui=mountFigure({fig:'32',turn:'full',title:'Spanner',size:[144,168,36],palette:'tomato',
+ state:{angle:30,length:0,moving:false,direction:-1},scene:spScene,
+ stats:st=>[{label:'Available torque',value:(spForce*spLengths[st.length]/500).toFixed(1)+' N m'},
+ {label:'Hand force',value:'40 N',small:true},{label:'Nut clearance',value:((spHeight(st)-18)*2).toFixed(2)+' mm',small:true}],
+ buttons:[{label:'Turn',onClick:(st,u)=>spTurn(st,u,-1)},{label:'Reverse',onClick:(st,u)=>spTurn(st,u,1)},
+ {label:'Compare lengths',onClick:(st,u)=>{if(st.moving)return u.flash('Finish this stroke first');st.length=1-st.length;}}],
+ params:(st,q)=>{if(q.get('long')==='1')st.length=1;const a=Number(q.get('angle'));if(q.has('angle')&&Number.isFinite(a))st.angle=Math.max(-30,Math.min(30,a));}
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
