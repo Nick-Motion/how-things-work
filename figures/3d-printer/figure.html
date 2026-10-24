@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>3D printer</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Desktop FDM 3D printer (an open-frame "bed slinger", Ender-3 style). 1 unit = 1 cm.
+   x = depth (front at x = 41), y = width (+y = the printer's left, viewer-left at the front view), z = up; the desk top is z = 0.
+
+   How it really works (where the material is after each step):
+   1. Load filament: the free end comes off the 1 kg spool on the top bar, into the extruder; the stepper turns the knurled
+      drive gear, which grips the filament against a spring-loaded idler bearing and pushes it down the PTFE Bowden tube to
+      the hot end. Cold, it stops at the heat break.
+   2. Heat: the 24 V supply in the base feeds the mainboard; one MOSFET switches the 40 W heater cartridge in the aluminium
+      heater block (nozzle to 200 C), another the heated bed (to 60 C). Thermistors in the block and the bed report back.
+      Once the nozzle is hot the extruder pushes the filament on through the nozzle: a purge blob comes out.
+   3. Print: home every axis against its endstop (X to the left, Y to the back, Z down), draw a purge line, then layer by
+      layer: the X motor moves the hot end left-right on its belt, the Y motor slides the whole bed front-back on its belt,
+      and the extruder feeds plastic that leaves the 0.4 mm nozzle as a molten bead. After each 0.2 mm layer the Z motor turns
+      the lead screw and the brass nut lifts the gantry one layer. Part fan cools each layer. Heaters turn off at the end, the
+      head parks and the bed slides forward.
+   4. Remove: the part comes off the PEI sheet and goes on the desk; the purge line is scraped off.
+
+   Parts (each held by another):
+   FRAME   sheet-metal base case on four rubber feet . Y rail (40x20 extrusion) on the base . two Z uprights (40x20) bolted
+           to the base . top bar across them . spool holder on the top bar
+   Y AXIS  Y motor on a bracket at the back of the rail . GT2 pulley . Y belt to an idler at the front . belt clamp under the
+           bed carriage . four V-wheels on standoffs riding the rail's sides . Y endstop at the back
+   BED     carriage plate . four levelling springs and knobs . aluminium heated bed with its heater track and thermistor .
+           PEI sheet . bed cable to the base
+   Z AXIS  Z motor on a bracket at the foot of the left upright . flexible coupler . T8 lead screw up to a bearing under
+           the top bar . brass nut on a bracket of the left Z carriage plate . right Z plate . Z endstop
+   X AXIS  X gantry (20x20) between the Z plates . X motor behind the left plate . GT2 pulley . X belt to an idler on the right
+           end . carriage plate on three V-wheels . X endstop on the gantry
+   HOT END shroud with the hot-end fan . finned heatsink . heat break . heater block with heater cartridge and thermistor .
+           brass nozzle . part-cooling blower and duct . Bowden coupler . cable loom up to the left upright and down to the base
+   FEED    spool (two flanges with windows, filament coil) on its axle . extruder motor on a bracket on the top bar . extruder
+           housing with drive gear, idler bearing on a lever, lever spring . outlet coupler . PTFE Bowden tube
+   BASE    24 V power supply . mainboard on standoffs: MCU, four stepper drivers, bed MOSFET, capacitor, screw terminals .
+           power wires, motor cables, LCD ribbon . LCD screen and control knob, SD slot on the front . power inlet and rocker
+           switch on the back . vents */
+
+const FIL = '#f08a2b', FILM = { l:'#f8a656', m:'#e07b22', d:'#a5541a' };
+const EXTM = { l:'#5f636a', m:'#46494f', d:'#2c2e33' }, MOTM = DARK, BELTM = matOf('#2f2a27'), ALU = { l:'#e9ecec', m:'#c9cfd1', d:'#99a2a5' };
+const BRASS = matOf('#e0b456'), PCBM = { l:'#4fa36a', m:'#2f8a4a', d:'#1d5f31' }, REDM = matOf('#d8483a'), KNOBY = matOf('#f2c230');
+const PEIM = { l:'#3b3631', m:'#2f2b27', d:'#1f1c19' }, SPOOLM = matOf('#565c63'), BLUEM = matOf('#3e86d9');
+const DESK = [-1, -3, 50.5, 49.5], DESK_H = 1.6, DTOP = on(PZ(0), rrUV(DESK[0], DESK[1], DESK[2], DESK[3], 3));
+
+/* ---------- frame numbers ---------- */
+const BX0 = 3, BX1 = 41, BY0 = 0, BY1 = 44, BZ0 = .8, BZT = 7;      // base case
+const OUTB = rrUV(BY0, BZ0, BY1, BZT, .9);
+const UPZ1 = 47, TOPZ = 49;                                         // uprights end, top bar top
+const BED_TOP = 13.25, BEDH = 11.75, BEDY = 22;                     // PEI top, half size, bed centre y
+const NZX = 29.5, NZ_OFF = 6.2;                                     // nozzle x; tip is NZ_OFF below the gantry's underside
+const GZ_MIN = BED_TOP + NZ_OFF, GZ_PARK = 27;
+const LSY = 44.5, LSX = 22;                                         // lead screw
+const XMY = 36.1, XIY = 4;                                          // X motor pulley y, X idler y
+const YMX = 5.7, YIX = 39, YBY = 26;                                // Y motor pulley x, Y idler x, Y belt plane y
+const BX_HOME = 20.5, BX_FRONT = 31, CY_HOME = 31.2;
+const SPC = [22, 59], SPX = [23.4, 29.6], SPR = 9.5, RW = 7.8;      // spool centre (y,z), flanges x, radius, coil radius
+const INTAKE = [24.6, 36.25, 53.4], OUTLET = [24.6, 36.25, 48.5];   // extruder in / Bowden out
+const SLOTS = [[46.5, 5], [46.5, 10], [46.5, 15], [46.5, 20]];              // where removed parts stand on the desk
+
+/* ---------- the printed part: a chess pawn, 41 mm tall, 205 layers of 0.2 mm (drawn as 26 bands) ---------- */
+const PAWN = (() => { const t = [[0, 1.45], [.35, 1.45], [.6, 1.2], [2.3, .56], [2.42, .98], [2.62, .98], [2.8, .5]];
+  for (let i = 1; i <= 12; i++){ const h = 2.8 + 1.3*i/12, dz = h - 3.35; t.push([h, Math.max(.06, Math.sqrt(Math.max(0, .5625 - dz*dz)))]); } return t; })();
+const PAWN_H = 4.1, NL = 26, DH = PAWN_H / NL, LAYERS = 205, TL = .34, PRINT_MIN = 41;
+const pawnR = h => { h = Math.max(0, Math.min(PAWN_H, h)); for (let i = 1; i < PAWN.length; i++) if (h <= PAWN[i][0]){ const [h0, r0] = PAWN[i-1], [h1, r1] = PAWN[i]; return r0 + (r1 - r0)*(h - h0)/(h1 - h0); } return .06; };
+
+/* ---------- helpers ---------- */
+const lerp3 = (a, b, t) => a.map((v, i) => v + (b[i] - v)*t);
+const boxOf = (pts, e = .05) => [[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - e), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + e)];
+const bez = (a, b, c, d, n) => Array.from({length: n + 1}, (_, i) => { const t = i/n, u = 1 - t; return [0,1,2].map(k => u*u*u*a[k] + 3*u*u*t*b[k] + 3*u*t*t*c[k] + t*t*t*d[k]); });
+const bxI = (x0, y0, z0, x1, y1, z1, M, w = .8) => box(x0, y0, z0, x1, y1, z1, M, toneI, w);
+const bxB = (x0, y0, z0, x1, y1, z1) => [[x0, y0, z0], [x1, y1, z1]];
+const txB = (x,y,z,str,size,col=INK,weight=700) => `<text transform="${txM(P(x,y,z), Dv(0,1,0), Dv(0,0,-1))}" font-size="${size}" fill="${col}" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-weight="${weight}" letter-spacing=".04em">${str}</text>`;
+const viewA = () => Math.atan2(CAM_V[1], CAM_V[0]);   // plan angle of the side facing the viewer
+const ringZ = (x, y, z, r, n = 20) => on(PZ(z), ellUV(x, y, r, r, n));
+// a strand (wire, belt edge, filament) as one stroke over an ink stroke
+const strand = (pts, col, w = 1, inkW = .9) => { const d = pd(pts, false);
+  return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(w + inkW)}" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(w)}" stroke-linecap="round" stroke-linejoin="round"/>`; };
+// cut a route into short pieces, each with its own box, so it sorts with the solids it passes (draw(seg, i) -> svg)
+function pieces(pts, draw, L = 2.5){ const out = [];
+  for (let i = 0; i < pts.length - 1; ){ let j = i + 1, len = Math.hypot(...sub(pts[j], pts[i]));
+    while (j < pts.length - 1 && len < L){ len += Math.hypot(...sub(pts[j+1], pts[j])); j++; }
+    const seg = pts.slice(i, j + 1); out.push({ box: boxOf(seg, .2), svg: draw(seg, i, j) }); i = j; }
+  return out; }
+const polyLen = pts => { let s = 0; for (let i = 1; i < pts.length; i++) s += Math.hypot(...sub(pts[i], pts[i-1])); return s; };
+// the first t (0..1, by length) of a polyline
+function polyCut(pts, t){ if (t >= 1) return pts; if (t <= 0) return [pts[0]]; const L = polyLen(pts)*t, out = [pts[0]]; let acc = 0;
+  for (let i = 1; i < pts.length; i++){ const d = Math.hypot(...sub(pts[i], pts[i-1]));
+    if (acc + d >= L){ out.push(lerp3(pts[i-1], pts[i], (L - acc)/d)); return out; } acc += d; out.push(pts[i]); } return out; }
+
+// aluminium extrusion: a dark box with its V-slots along the long axis on every face you can see
+function ext(x0, y0, z0, x1, y1, z1){
+  const lo = [x0, y0, z0], hi = [x1, y1, z1], d = [x1 - x0, y1 - y0, z1 - z0], L = d.indexOf(Math.max(...d));
+  let g = '';
+  for (let k = 0; k < 3; k++){ if (k === L) continue;
+    for (const sg of [-1, 1]){ const n = [0,0,0]; n[k] = sg; if (!vis(n)) continue;
+      const o = 3 - L - k, nG = d[o] > 3 ? 2 : 1;
+      for (let i = 0; i < nG; i++){ const t = nG === 1 ? .5 : (i ? .75 : .25), a = [0,0,0], b = [0,0,0];
+        a[k] = b[k] = sg > 0 ? hi[k] + .01 : lo[k] - .01; a[o] = b[o] = lo[o] + d[o]*t; a[L] = lo[L] + .15; b[L] = hi[L] - .15;
+        g += pd([a, b], false); } } }
+  return box(x0, y0, z0, x1, y1, z1, EXTM, toneI, .8) + `<path d="${g}" fill="none" stroke="#17181b" stroke-width="1.3" stroke-linecap="round"/>`;
+}
+// NEMA 17 stepper: black body between two aluminium end caps, axis k (0 x, 1 y, 2 z); returns sortable items
+function stepper(c, k, len = 4, half = 2.1){ const lo = c[k] - len/2, hi = c[k] + len/2, out = [];
+  const mk = (a, b, M, hh) => { const p0 = c.map(v => v - hh), p1 = c.map(v => v + hh); p0[k] = a; p1[k] = b;
+    out.push({ box: [p0, p1], svg: box(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2], M, toneI, .9) }); };
+  mk(lo, lo + .6, ALU, half); mk(lo + .6, hi - .6, MOTM, half - .05); mk(hi - .6, hi, ALU, half);
+  return out; }
+// a toothed pulley (or smooth idler) with the belt wrapped round it, axis along x or y; ang turns the set-screw mark
+function pulley(c, k, a0, a1, ang, idler = false){
+  const at = t => { const p = c.slice(); p[k] = t; return p; }, M = idler ? ALU : METAL;
+  const parts = [rod(at(a0), at(a0 + .12), .9, M, toneI, .6), rod(at(a0 + .12), at(a1 - .12), .76, BELTM, toneI, .6), rod(at(a1 - .12), at(a1), .9, M, toneI, .6)];
+  const n = [0,0,0]; n[k] = 1, fwd = vis(n), end = fwd ? a1 : a0;
+  let mark = ''; { const e = at(end + (fwd ? .02 : -.02)), o = k === 0 ? [0, Math.cos(ang)*.7, Math.sin(ang)*.7] : [Math.cos(ang)*.7, 0, Math.sin(ang)*.7];
+    mark = ink(pd([e, e.map((v, i) => v + o[i])], false), .9) + fill(pd(k === 0 ? on(PX(e[0]), ellUV(e[1], e[2], .22, .22, 10)) : on(PY(e[1]), ellUV(e[0], e[2], .22, .22, 10))), '#8f989b'); }
+  return (fwd ? parts.join('') : parts.reverse().join('')) + mark;
+}
+
+/* ---------- desk + shadows ---------- */
+function desk(){ const A = on(PZ(-DESK_H), rrUV(DESK[0], DESK[1], DESK[2], DESK[3], 3));
+  return loft(A, DTOP, n => toneI(n, WOOD)) + fill(pd(DTOP), WOOD.l) + ink(pd(DTOP), 1) + hullInk([...A, ...DTOP], 1.8); }
+const cube = (x0, y0, z0, x1, y1, z1) => { const o = []; for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) o.push([x, y, z]); return o; };
+function shadows(st){
+  const { bx, gz } = st, sh = [cube(BX0, BY0, 0, BX1, BY1, BZT), cube(20, 2, BZT, 24, 4, UPZ1), cube(20, 40, BZT, 24, 42, UPZ1), cube(21, 1, UPZ1, 23, 46.8, TOPZ),
+    cube(bx - BEDH, BEDY - BEDH, 9, bx + BEDH, BEDY + BEDH, BED_TOP), cube(24.4, 1, gz, 26.4, 43, gz + 2), cube(27.3, st.cy - 2.8, gz - 6.2, 31.7, st.cy + 2.8, gz + 4.4),
+    [...on(PX(26.5), ellUV(SPC[0], SPC[1], SPR, SPR, 20)), [22, 22, TOPZ]], cube(19.8, 33.6, TOPZ, 25.2, 37.8, 53.4)];
+  let s = sh.map(p => castShadow(p, 0)).join('');
+  for (let i = 0; i < Math.min(st.made, SLOTS.length); i++){ const [x, y] = SLOTS[i]; s += castShadow([...ringZ(x, y, 0, 1.45, 12), ...ringZ(x, y, 3.4, .75, 12), [x, y, 4.1]], 0); }
+  return clipTo(DTOP, s);
+}
+
+/* ---------- the pawn, grown to height hp, standing at (px, py, z0) ---------- */
+function pawnSvg(px, py, z0, hp, fresh = 0){
+  if (hp <= .002) return '';
+  const hs = []; for (let i = 0; i*DH < hp - 1e-4; i++) hs.push(i*DH); hs.push(hp);
+  const rings = hs.map(h => ringZ(px, py, z0 + h, pawnR(h), 22)), FM = fresh > 0 ? { l: mix(FILM.l, '#ffd27a', fresh*.5), m: FILM.m, d: FILM.d } : FILM;
+  let s = '';
+  for (let i = 0; i < rings.length - 1; i++) s += loft(rings[i], rings[i+1], n => toneI(n, FM));
+  const top = rings[rings.length - 1];
+  if (pawnR(hp) > .1) s += fill(pd(top), mix(FILM.l, '#ffffff', .2 + .25*fresh)) + ink(pd(top), .6);
+  const yr = viewA(), arc = (h, r) => { const o = []; for (let a = -80; a <= 80; a += 20){ const t = yr + a*Math.PI/180; o.push([px + r*Math.cos(t), py + r*Math.sin(t), z0 + h]); } return o; };
+  let ll = ''; for (let i = 1; i < hs.length - 1; i++) ll += pd(arc(hs[i], pawnR(hs[i]) + .005), false);
+  s += `<path d="${ll}" fill="none" stroke="${FILM.d}" stroke-width=".45" opacity=".6"/>`;
+  const Lp = [], Rp = []; for (const h of hs){ const r = pawnR(h); Lp.push([px - r*CAM_R[0], py - r*CAM_R[1], z0 + h]); Rp.push([px + r*CAM_R[0], py + r*CAM_R[1], z0 + h]); }
+  s += ink(pd(Lp, false), 1.1) + ink(pd(Rp, false), 1.1) + ink(pd(arc(0, 1.45), false), 1.1);
+  return s;
+}
+
+/* ---------- the base case (outside) ---------- */
+function lcdLines(st){
+  const pct = Math.round((st.hp / PAWN_H)*100);
+  const l1 = st.phase === 'print' ? `PRINT ${pct}` : st.phase === 'home' ? 'HOMING' : st.phase === 'heat' || (st.heat && (st.tN < 198 || st.tB < 59)) ? 'HEATING'
+    : st.loading ? 'LOADING' : st.phase === 'done' || st.partOn ? 'DONE' : 'READY';
+  return [l1, `E${Math.round(st.tN)} B${Math.round(st.tB)}`];
+}
+function baseBody(st, m){
+  const FR = facing([1,0,0]), BK = facing([-1,0,0]), LF = facing([0,1,0]), RT = facing([0,-1,0]);
+  let s = '';
+  for (const [x, y] of [[5.5, 3], [38.5, 3], [5.5, 41], [38.5, 41]]) s += cyl(x, y, 0, BZ0 + .1, 1.5, DARK, toneI, 1, 16);
+  if (FR) s += fill(pd(on(PX(BX1), OUTB)), tone([1,0,0], m));
+  if (BK) s += fill(pd(on(PX(BX0), OUTB)), tone([-1,0,0], m));
+  s += extrude(OUTB, BX0, BX1, m);
+  const knob = act('knob', cylX(BX1, BX1 + 1.1, 16.5, 3.9, 1.1, DARK, toneI, 1, 18) + (FR ? ink(pd([[BX1 + 1.12, 16.5, 3.9], [BX1 + 1.12, 16.5 + .8*Math.sin(st.knobA || 0), 3.9 + .8*Math.cos(st.knobA || 0)]], false), .9) : ''));
+  if (FR){ const x = BX1 + .05, [l1, l2] = lcdLines(st);
+    s += shape(on(PX(x), rrUV(3.6, 1.7, 13.6, 6.3, .5)), '#2b2725', 1.1);
+    s += shape(on(PX(x + .02), rrUV(4.3, 2.3, 12.9, 5.7, .25)), '#1d2a26', .8);
+    s += tx(x + .05, 8.6, 4.35, l1, .95, '#8af0ae', 800) + tx(x + .05, 8.6, 2.9, l2, .78, '#8af0ae', 700);
+    s += shape(on(PX(x), rrUV(19.2, 2.2, 21.6, 2.7, .2)), '#1a1715', .6);                                 // SD slot
+    s += tx(x, 34, 3.4, 'COLORPRINT', 1.35, mix(m.d, '#000000', .2), 800);
+    s += ink(pd(on(PX(BX1), OUTB)), 2.2) + knob;
+  }
+  if (BK){ const x = BX0 - .05;
+    s += shape(on(PX(x), rrUV(36, 2, 40, 5.4, .3)), '#2b2725', 1);                                        // power inlet
+    for (const y of [37, 38, 39]) s += fill(pd(on(PX(x - .02), rectUV(y - .15, 3.1, y + .15, 4.1))), '#8f989b');
+    s += shape(on(PX(x), rrUV(31.6, 2.4, 34, 5.2, .3)), '#1a1715', 1) + shape(on(PX(x - .03), rectUV(31.9, 3.8, 33.7, 4.9)), '#d8483a', .6);   // rocker switch
+    let v = ''; for (let y = 8; y <= 26; y += 1.5) v += pd([[x, y, 2.2], [x, y, 5.6]], false);
+    s += `<path d="${v}" fill="none" stroke="${INK}" stroke-width="1" opacity=".55"/>`;
+    s += txB(x - .02, 35, 1.3, '24V 360W', .7, INK, 800) + ink(pd(on(PX(BX0), OUTB)), 2.2);
+  }
+  if (LF){ const y = BY1 + .05, sm = tone([0,1,0], m); let v = '';
+    for (let z = 2.4; z <= 5.4; z += .75) v += pd([[7, y, z], [18, y, z]], false);
+    s += `<path d="${v}" fill="none" stroke="${INK}" stroke-width="1.2" opacity=".6"/>`;
+    s += txY(30, y, 3.4, 'COLORPRINT', 1.5, mix(sm, '#000000', .45), 800); }
+  if (RT){ const y = BY0 - .05; let v = '';
+    for (let z = 2.4; z <= 5.4; z += .75) v += pd([[24, y, z], [36, y, z]], false);
+    s += `<path d="${v}" fill="none" stroke="${INK}" stroke-width="1.2" opacity=".6"/>`;
+    s += shape(on(PY(y), rrUV(37.5, 1.9, 38.6, 2.5, .15)), '#1a1715', .6); }                                // USB port
+  s += hullInk([...on(PX(BX0), OUTB), ...on(PX(BX1), OUTB)], 2.6);
+  if (!FR) s = knob + s;
+  return s;
+}
+
+/* ---------- the base case (inside, see-through): supply, mainboard, wiring ---------- */
+function baseMech(st){
+  const I = [], put = (b, svg) => I.push({ box: b, svg }), top = facing([0,0,1]);
+  const live = st.heat || st.seq || st.loading;
+  put(bxB(5, 29, BZ0, 17, 42.6, 5.6), bxI(5, 29, BZ0, 17, 42.6, 5.6, METAL, .9) + (top ? shape(on(PZ(5.61), rectUV(7, 31, 15, 40)), '#f3f0e6', .6) + `<path d="${pd([[8, 33, 5.62], [14, 33, 5.62]], false) + pd([[8, 35, 5.62], [13, 35, 5.62]], false) + pd([[8, 37, 5.62], [14, 37, 5.62]], false)}" stroke="${INK}" stroke-width=".6" fill="none"/>` : ''));
+  for (const [x, y] of [[24.6, 3.6], [34.4, 3.6], [24.6, 12.4], [34.4, 12.4]]) put(bxB(x - .3, y - .3, BZ0, x + .3, y + .3, 1.6), cyl(x, y, BZ0, 1.6, .28, METAL, toneI, .5, 10));
+  put(bxB(24, 3, 1.6, 35, 13, 1.75), bxI(24, 3, 1.6, 35, 13, 1.75, PCBM, .7));
+  put(bxB(28.4, 6.6, 1.75, 30.6, 8.8, 1.95), bxI(28.4, 6.6, 1.75, 30.6, 8.8, 1.95, DARK, .6));                       // MCU
+  for (let i = 0; i < 4; i++){ const y = 3.8 + 2.1*i; put(bxB(25, y, 1.75, 26.6, y + 1.4, 2.0), bxI(25, y, 1.75, 26.6, y + 1.4, 2.0, DARK, .5)); }   // stepper drivers
+  put(bxB(32.6, 3.6, 1.75, 33.8, 4.8, 2.5), bxI(32.6, 3.6, 1.75, 33.8, 4.8, 2.5, DARK, .5));                         // bed MOSFET
+  put(bxB(31, 10.2, 1.75, 32.2, 11.4, 3.0), cyl(31.6, 10.8, 1.75, 3.0, .6, ALU, toneI, .6, 14));                      // capacitor
+  put(bxB(33.6, 6, 1.75, 34.8, 12, 2.6), bxI(33.6, 6, 1.75, 34.8, 12, 2.6, matOf('#3fae5a'), .6));                  // screw terminals
+  for (const [pts, col, w] of [
+    [[[17, 34, 3.2], [20, 34, 3.2], [33, 15, 2.2], [34.2, 11.5, 2.5]], live ? '#e2483d' : '#a33a30', .9],
+    [[[17, 35.2, 3.2], [21, 35.2, 3.2], [34, 16, 2.4], [34.2, 9.5, 2.5]], '#2b2725', .9],
+    [[[24.2, 12, 1.9], [23, 20, 1.9], [21.5, 32, 3], [21.5, 39.5, 6.9]], '#3a3632', 1.6],
+    [[[24.2, 8, 1.9], [16, 14, 2], [8, 22, 3], [5.8, 26.4, 6.9]], '#3a3632', 1.2],
+    [[[35, 8, 1.8], [38, 8.5, 2.2], [40.5, 8.6, 3.6]], '#cfc8b8', 1.3]]) I.push(...pieces(pts, seg => strand(seg, col, w, .7)));
+  return byDepth(I);
+}
+
+/* ---------- filament route: spool -> extruder -> Bowden -> hot end -> nozzle (st.fil runs 0..4) ---------- */
+const FSEG = [[0, 1], [1, 2], [2, 3], [3, 3.6], [3.6, 4]], FIL_HB = 3.6, FIL_NOZ = 4;
+const FDUR = [.8, .35, 1.6, .45, .45];
+const spoolTangent = (() => { const dy = INTAKE[1] - SPC[0], dz = INTAKE[2] - SPC[1], d = Math.hypot(dy, dz), a = Math.atan2(dz, dy) + Math.acos(RW/d);
+  return [26.5, SPC[0] + RW*Math.cos(a), SPC[1] + RW*Math.sin(a)]; })();
+const FREE_IN = (() => { const tl = Math.hypot(...sub(INTAKE, spoolTangent)), ex = Math.sqrt(SPR*SPR - RW*RW) + .3; return ex/tl; })();   // share of the free strand between the flanges
+const bowdenPts = st => bez(OUTLET, [24.6, 36.25, 42], [NZX, st.cy, st.gz + 2.9 + 9], [NZX, st.cy, st.gz + 2.9], 16);
+const segShare = (st, i) => Math.max(0, Math.min(1, (st.fil - FSEG[i][0]) / (FSEG[i][1] - FSEG[i][0])));
+
+/* ---------- the spool on its holder ---------- */
+function spoolItems(st){
+  const out = [], [cyS, czS] = SPC, FRt = vis([1,0,0]);
+  const flange = (x0, x1, capX) => { let s = cylX(x0, x1, cyS, czS, SPR, SPOOLM, toneI, 1.3, 36);
+    if (capX != null){ for (let w = 0; w < 4; w++){ const a0 = st.spA + w*Math.PI/2, pts = [];
+        for (let i = 0; i <= 6; i++){ const a = a0 - .45 + .9*i/6; pts.push([capX, cyS + 7.4*Math.cos(a), czS + 7.4*Math.sin(a)]); }
+        for (let i = 6; i >= 0; i--){ const a = a0 - .38 + .76*i/6; pts.push([capX, cyS + 4.7*Math.cos(a), czS + 4.7*Math.sin(a)]); }
+        s += shape(pts, FILM.m, .8); }
+      s += shape(on(PX(capX), ellUV(cyS, czS, 1.6, 1.6, 16)), '#3a3f45', .8); }
+    return s; };
+  const freeIn = segShare(st, 0) > 0 || st.fil > 0 ? polyCut([spoolTangent, INTAKE], Math.min(FREE_IN, segShare(st, 0))) : null;
+  const back = flange(SPX[0], SPX[0] + .3, FRt ? null : SPX[0] - .02), front = flange(SPX[1] - .3, SPX[1], FRt ? SPX[1] + .02 : null);
+  const wa = Math.atan2(CAM_V[2], CAM_V[1])*180/Math.PI, coil = cylX(SPX[0] + .3, SPX[1] - .3, cyS, czS, RW, FILM, toneI, 1, 32);
+  let wind = ''; for (let x = SPX[0] + .9; x < SPX[1] - .5; x += .7) wind += pd(on(PX(x), arcUV(cyS, czS, RW + .01, wa - 80, wa + 80, 10)), false);
+  const coilS = coil + `<path d="${wind}" fill="none" stroke="${FILM.d}" stroke-width=".5" opacity=".5"/>` + (freeIn && freeIn.length > 1 ? strand(freeIn, FIL, 1, .8) : '');
+  const axB = rod([22.8, cyS, czS], [SPX[0], cyS, czS], .7, METAL, toneI, .8), axF = rod([SPX[1], cyS, czS], [30.6, cyS, czS], .7, METAL, toneI, .8);
+  const svg = FRt ? axB + back + coilS + front + axF : axF + front + coilS + back + axB;
+  out.push({ box: bxB(22.8, cyS - SPR, czS - SPR, 30.6, cyS + SPR, czS + SPR), svg: act('spool', svg) });
+  out.push({ box: bxB(21.2, 21, TOPZ, 22.8, 23, 59.9), svg: bxI(21.2, 21, TOPZ, 22.8, 23, 59.9, ALU, .9) });   // holder on the top bar
+  // the free strand outside the flanges, down to the extruder's intake
+  if (segShare(st, 0) > FREE_IN){ const a = lerp3(spoolTangent, INTAKE, FREE_IN), b = lerp3(spoolTangent, INTAKE, segShare(st, 0));
+    out.push(...pieces([a, lerp3(a, b, .33), lerp3(a, b, .66), b], seg => strand(seg, FIL, 1, .8), 3)); }
+  return out;
+}
+
+/* ---------- extruder on the top bar: motor, housing; in see-through the drive gear, idler bearing, lever spring ---------- */
+function extruderItems(st, m, k){
+  const out = [...stepper([21.9, 35.7, 51.3], 0, 4.2)];
+  out.push({ box: bxB(19.8, 33.4, TOPZ, 24, 38, TOPZ + .2), svg: bxI(19.8, 33.4, TOPZ, 24, 38, TOPZ + .2, ALU, .7) });       // bracket
+  const FRt = facing([1,0,0]), x1 = 25.2, ys = [33.6, 37.8], zs = [49.2, 53.4];
+  let h = bxI(24, ys[0], zs[0], x1, ys[1], zs[1], m, 1);
+  if (FRt){ h += ink(pd([[x1 + .02, 36.9, 49.6], [x1 + .02, 37.5, 49.6], [x1 + .02, 37.5, 53], [x1 + .02, 36.6, 53]], false), .8)
+    + shape(on(PX(x1 + .02), ellUV(35.7, 51.3, .55, .55, 12)), '#8f989b', .6) + shape(on(PX(x1 + .02), ellUV(37.15, 49.75, .3, .3, 10)), '#8f989b', .5); }
+  let core = '';
+  if (k > 0){ const g = st.eAng, gear = cylX(24.2, 25, 35.7, 51.3, .45, BRASS, toneI, .6, 16);
+    let teeth = ''; if (FRt) for (let i = 0; i < 8; i++){ const a = g + i*Math.PI/4; teeth += pd([[25.02, 35.7 + .2*Math.cos(a), 51.3 + .2*Math.sin(a)], [25.02, 35.7 + .44*Math.cos(a), 51.3 + .44*Math.sin(a)]], false); }
+    core += gear + `<path d="${teeth}" stroke="${INK}" stroke-width=".5" fill="none"/>`;
+    core += cylX(24.2, 25, 36.84, 51.3, .5, METAL, toneI, .6, 16) + cylX(24.2, 25, 37.15, 49.75, .25, METAL, toneI, .5, 10);
+    const coil = []; for (let i = 0; i <= 40; i++){ const t = i/40, th = t*Math.PI*14; coil.push([24.6 + .22*Math.cos(th), 37.35 + .22*Math.sin(th)*.4, 52.1 + 1.2*t]); }
+    core += strand(coil, '#cfd6d8', .5, .6);
+    const sh = segShare(st, 1); if (sh > 0) core += strand(polyCut([INTAKE, [24.6, 36.25, 49.2]], sh), FIL, 1, .8);
+  }
+  out.push({ box: bxB(24, ys[0], zs[0], x1, ys[1], zs[1]), svg: k > 0 ? `<g opacity="${f(1 - .75*k)}">${h}</g><g opacity="${f(k)}">${core}</g>` : h });
+  out.push({ box: bxB(24.1, 35.75, 48.5, 25.1, 36.75, 49.2), svg: cyl(24.6, 36.25, 48.5, 49.2, .5, ALU, toneI, .7, 14) + cyl(24.6, 36.25, 48.35, 48.5, .45, BLUEM, toneI, .5, 14) });
+  return out;
+}
+
+/* ---------- hot end on the X carriage ---------- */
+function hotendItems(st, m, k){
+  const { cy, gz } = st, out = [], put = (b, svg) => out.push({ box: b, svg }), FRt = facing([1,0,0]), hot = Math.max(0, Math.min(1, (st.tN - 40)/160));
+  // carriage: three V-wheels between the gantry and the plate, then the plate
+  for (const [y, z] of [[cy - 1.8, gz + 3.2], [cy + 1.8, gz + 3.2], [cy, gz - 1.2]]) put(bxB(26.55, y - 1.15, z - 1.15, 27.15, y + 1.15, z + 1.15), cylX(26.55, 27.15, y, z, 1.15, DARK, toneI, .8, 18) + (FRt ? fill(pd(on(PX(27.17), ellUV(y, z, .35, .35, 10))), METAL.d) : ''));
+  put(bxB(27.3, cy - 2.8, gz - 4.4, 27.7, cy + 2.8, gz + 4.4), bxI(27.3, cy - 2.8, gz - 4.4, 27.7, cy + 2.8, gz + 4.4, ALU, .9));
+  // shroud with the hot-end fan; inside (see-through): heatsink fins round the heat break, the filament
+  const sx = [27.7, 31.7], sy = [cy - 2.2, cy + 2.2], sz = [gz - 4, gz + 2];
+  let sh = bxI(sx[0], sy[0], sz[0], sx[1], sy[1], sz[1], m, 1.1);
+  if (FRt){ const x = sx[1] + .03, ring = on(PX(x), ellUV(cy, gz - 1, 1.65, 1.65, 22));
+    let bl = ''; for (let i = 0; i < 5; i++){ const a = st.fanA + i*2*Math.PI/5; bl += pd([[x + .01, cy + .35*Math.cos(a), gz - 1 + .35*Math.sin(a)], [x + .01, cy + 1.5*Math.cos(a + .5), gz - 1 + 1.5*Math.sin(a + .5)]], false); }
+    sh += fill(pd(ring), '#2b2725') + `<path d="${bl}" stroke="#77716b" stroke-width="1.6" fill="none" stroke-linecap="round"/>` + fill(pd(on(PX(x + .02), ellUV(cy, gz - 1, .4, .4, 12))), '#55504a')
+      + ink(pd(ring), .9) + ink(pd([[x + .02, cy - 1.65, gz - 1], [x + .02, cy + 1.65, gz - 1]], false) + pd([[x + .02, cy, gz - 2.65], [x + .02, cy, gz + .65]], false), .7); }
+  let core = '';
+  if (k > 0){ core += cyl(NZX, cy, gz - 4, gz + 2, .45, ALU, toneI, .6, 14);
+    for (let z = gz - 3.7; z < gz + 1.6; z += .5) core += cyl(NZX, cy, z, z + .16, 1.35, ALU, toneI, .5, 18);
+    const s3 = segShare(st, 3); if (s3 > 0) core += strand(polyCut([[NZX, cy, gz + 2], [NZX, cy, gz - 4]], s3), FIL, .9, .7); }
+  put(bxB(sx[0], sy[0], sz[0], sx[1] + .1, sy[1], sz[1]), k > 0 ? `<g opacity="${f(1 - .78*k)}">${sh}</g><g opacity="${f(k)}">${core}</g>` : sh);
+  // part-cooling blower on the right side, its duct aimed at the nozzle
+  put(bxB(28, cy - 3.7, gz - 3.6, 31.4, sy[0], gz + 1.4), bxI(28, cy - 3.7, gz - 3.6, 31.4, sy[0], gz + 1.4, DARK, .9) + (facing([0,-1,0]) ? shape(on(PY(cy - 3.72), ellUV(29.7, gz - .8, 1.2, 1.2, 16)), '#2b2725', .7) : ''));
+  put(bxB(29, cy - 3.3, gz - 5.95, 30.2, cy - 1.1, gz - 3.6), rod([29.6, cy - 2.95, gz - 3.6], [29.6, cy - 1.45, gz - 5.7], .38, DARK, toneI, .8, .26, 10));
+  // Bowden coupler on top
+  put(bxB(NZX - .6, cy - .6, sz[1], NZX + .6, cy + .6, gz + 2.9), cyl(NZX, cy, sz[1], gz + 2.7, .55, ALU, toneI, .7, 14) + cyl(NZX, cy, gz + 2.7, gz + 2.9, .5, BLUEM, toneI, .5, 14));
+  // heat break, heater block (cartridge + thermistor ends stick out), nozzle
+  put(bxB(NZX - .35, cy - .35, gz - 4.4, NZX + .35, cy + .35, gz - 4), cyl(NZX, cy, gz - 4.4, gz - 4, .32, METAL, toneI, .6, 12));
+  const blockM = { l: mix(ALU.l, '#ffb070', hot*.35), m: mix(ALU.m, '#f08a50', hot*.3), d: ALU.d };
+  let blk = bxI(28.5, cy - 1.2, gz - 5.4, 30.5, cy + 1.6, gz - 4.4, blockM, .9), blkIn = '';
+  if (k > 0){ blkIn = rod([28.5, cy + .85, gz - 4.9], [30.5, cy + .85, gz - 4.9], .3, matOf(mix('#c6ccce', '#ff5a1f', hot)), toneI, .5) + rod([29.3, cy - .55, gz - 5.05], [30.5, cy - .55, gz - 5.05], .14, matOf('#e8dca0'), toneI, .4);
+    const s4 = segShare(st, 4); if (s4 > 0) blkIn += strand(polyCut([[NZX, cy, gz - 4.4], [NZX, cy, gz - 6.1]], s4), FIL, .8, .6); }
+  put(bxB(28.5, cy - 1.2, gz - 5.4, 30.5, cy + 1.6, gz - 4.4), k > 0 ? `<g opacity="${f(1 - .6*k)}">${blk}</g><g opacity="${f(k)}">${blkIn}</g>` : blk);
+  const cart = matOf(mix('#c6ccce', '#ff5a1f', hot*.8));
+  put(bxB(28.15, cy + .5, gz - 5.25, 28.5, cy + 1.2, gz - 4.55), rod([28.15, cy + .85, gz - 4.9], [28.5, cy + .85, gz - 4.9], .3, cart, toneI, .6));
+  put(bxB(30.5, cy + .5, gz - 5.25, 30.85, cy + 1.2, gz - 4.55), rod([30.5, cy + .85, gz - 4.9], [30.85, cy + .85, gz - 4.9], .3, cart, toneI, .6));
+  put(bxB(30.5, cy - .75, gz - 5.25, 30.75, cy - .35, gz - 4.85), rod([30.5, cy - .55, gz - 5.05], [30.72, cy - .55, gz - 5.05], .16, matOf('#e8dca0'), toneI, .5));
+  out.push(...pieces([[28.15, cy + .85, gz - 4.9], [27.9, cy + .85, gz - 4.6], [27.85, cy + 1.2, gz - 4.05]], seg => strand(seg, '#d84a3a', .5, .5), 3));
+  out.push(...pieces([[30.75, cy - .55, gz - 5.05], [31.1, cy - .7, gz - 4.7], [31.2, cy - 1.0, gz - 4.05]], seg => strand(seg, '#f3f0e6', .4, .5), 3));
+  put(bxB(NZX - .5, cy - .5, gz - 6.2, NZX + .5, cy + .5, gz - 5.4), rod([NZX, cy, gz - 5.8], [NZX, cy, gz - 6.2], .36, BRASS, toneI, .7, .1, 12) + cyl(NZX, cy, gz - 5.8, gz - 5.4, .48, BRASS, toneI, .8, 6));
+  // purge blob / molten bead under the nozzle
+  if (st.blob > 0){ const len = .9*st.blob, pts = []; for (let i = 0; i <= 6; i++){ const t = i/6; pts.push([NZX + .15*Math.sin(t*7), cy + .12*Math.cos(t*5), gz - 6.2 - len*t]); }
+    put(bxB(NZX - .4, cy - .4, gz - 6.3 - len, NZX + .4, cy + .4, gz - 6.2), strand(pts, FIL, 1.1, .7)); }
+  return out;
+}
+
+/* ---------- the whole scene ---------- */
+function scene(st, m){
+  const k = ease(st.xr || 0), I = [], put = (b, svg) => I.push({ box: b, svg });
+  const { bx, cy, gz } = st, FRt = facing([1,0,0]), hotB = Math.max(0, Math.min(1, (st.tB - 25)/35));
+  let s = desk() + shadows(st);
+  const base = baseBody(st, m);
+  put(bxB(BX0, BY0, 0, BX1 + 1.2, BY1, BZT), k > 0 ? xrGhost(base, baseMech(st), k, OUTB, BX0, BX1, m) : base);
+  // desk props: a spatula and the parts already printed
+  put(bxB(43.2, 34, 0, 49.4, 38.5, .5), bxI(43.2, 35.2, 0, 46.4, 37.3, .12, METAL, .8) + rod([46.4, 36.25, .25], [49.4, 36.25, .25], .45, BLUEM, toneI, .9));
+  for (let i = 0; i < Math.min(st.made, SLOTS.length); i++){ const [x, y] = SLOTS[i]; put(bxB(x - 1.5, y - 1.5, 0, x + 1.5, y + 1.5, PAWN_H), pawnSvg(x, y, 0, PAWN_H)); }
+  // ---- Y axis on the base: rail, motor + pulley, idler, belt, endstop
+  put(bxB(3, 20, BZT, 41, 24, 9), ext(3, 20, BZT, 41, 24, 9));
+  I.push(...stepper([YMX, 29.1, 10], 1, 4.2));
+  put(bxB(3.6, 26.6, BZT, 7.8, 27, 12.3), bxI(3.6, 26.6, BZT, 7.8, 27, 12.3, ALU, .8));
+  put(bxB(YMX - .78, 25.55, 9.22, YMX + .78, 26.6, 10.78), rod([YMX, 26.6, 10], [YMX, 26.35, 10], .25, METAL, toneI, .5) + pulley([YMX, 0, 10], 1, 25.55, 26.35, -bx/.62));
+  put(bxB(YIX - .78, 25.55, 9.22, YIX + .78, 26.35, 10.78), pulley([YIX, 0, 10], 1, 25.55, 26.35, -bx/.62, true));
+  put(bxB(38, 26.35, BZT, 40, 26.75, 11.2), bxI(38, 26.35, BZT, 40, 26.75, 11.2, ALU, .8));
+  for (const z of [10.62, 9.24]) put(bxB(YMX + .78, 25.65, z, YIX - .78, 26.25, z + .14), bxI(YMX + .78, 25.65, z, YIX - .78, 26.25, z + .14, BELTM, .5));
+  put(bxB(8.5, 14, BZT, 9.5, 16, 11.2), bxI(8.5, 14, BZT, 9.5, 16, 11.2, REDM, .7));
+  // ---- bed carriage: wheels on standoffs, knobs, belt clamp, plate, springs, heated bed, PEI sheet
+  for (const x of [bx - 7, bx + 7]) for (const y of [18.8, 25.2]) put(bxB(x - 1.2, y - 1.2, 7.6, x + 1.2, y + 1.2, 11), cyl(x, y, 8.4, 11, .35, METAL, toneI, .5, 10) + cyl(x, y, 7.6, 8.4, 1.2, DARK, toneI, .8, 20));
+  for (const x of [bx - 10, bx + 10]) for (const y of [12.3, 31.7]) put(bxB(x - 1.25, y - 1.25, 9.8, x + 1.25, y + 1.25, 11), cyl(x, y, 9.8, 11, 1.25, KNOBY, toneI, .8, 18));
+  put(bxB(bx - 1, 25.45, 10.45, bx + 1, 26.45, 11), bxI(bx - 1, 25.45, 10.45, bx + 1, 26.45, 11, ALU, .6));
+  put(bxB(bx - 11, 11, 11, bx + 11, 33, 11.3), bxI(bx - 11, 11, 11, bx + 11, 33, 11.3, ALU, .9));
+  for (const x of [bx - 10, bx + 10]) for (const y of [12.3, 31.7]){ const coil = []; for (let i = 0; i <= 36; i++){ const t = i/36, a = t*Math.PI*10; coil.push([x + .55*Math.cos(a), y + .55*Math.sin(a), 11.3 + 1.5*t]); }
+    put(bxB(x - .6, y - .6, 11.3, x + .6, y + .6, 12.8), strand(coil, '#f2c230', .9, .6)); }
+  let bedS = bxI(bx - BEDH, BEDY - BEDH, 12.8, bx + BEDH, BEDY + BEDH, 13.1, ALU, 1) + bxI(bx - BEDH, BEDY - BEDH, 13.1, bx + BEDH, BEDY + BEDH, BED_TOP, PEIM, 1);
+  if (k > 0){ const tr = []; for (let i = 0; i <= 10; i++){ const y = BEDY - 10 + 2*i; tr.push(...(i % 2 ? [[bx + 10, y, BED_TOP + .01], [bx - 10, y, BED_TOP + .01]] : [[bx - 10, y, BED_TOP + .01], [bx + 10, y, BED_TOP + .01]])); }
+    bedS += `<g opacity="${f(k*.85)}"><path d="${pd(tr, false)}" fill="none" stroke="${mix('#c9a46a', '#ff5a1f', hotB)}" stroke-width="1.6" stroke-linejoin="round"/>${shape(ringZ(bx, BEDY, BED_TOP + .02, .5, 10), '#e8dca0', .5)}</g>`; }
+  // the purge line, drawn on the PEI sheet
+  if (st.purge > 0){ const a = [bx + 8, 13, BED_TOP + .02], b = [bx + 8 - 6*st.purge, 13, BED_TOP + .02];
+    bedS += strand([a, b], FIL, 1.2, .5); }
+  const bedItem = { box: bxB(bx - BEDH, BEDY - BEDH, 12.8, bx + BEDH, BEDY + BEDH, BED_TOP), svg: bedS };
+  I.push(bedItem);
+  // bed cable: out of the back of the bed, down to the base
+  I.push(...pieces(bez([bx - BEDH - .1, 29.5, 12.95], [bx - BEDH - 4, 29.5, 12.9], [5.2, 34.5, 11], [5.2, 34.5, BZT + .05], 12), seg => strand(seg, '#2b2725', 1.2, .7)));
+  // the part on the bed (or on its way to the desk)
+  if (st.partOn || st.hp > 0){ let p = [bx, BEDY, BED_TOP], fresh = st.phase === 'print' ? 1 : 0;
+    if (st.rem != null){ const t = ease(st.rem), [sx2, sy2] = SLOTS[Math.min(st.made, SLOTS.length - 1)]; p = lerp3([bx, BEDY, BED_TOP], [sx2, sy2, 0], t); p[2] += 6*Math.sin(Math.PI*t); }
+    const part = act('part', pawnSvg(p[0], p[1], p[2], st.hp, fresh));
+    if (st.rem == null){
+      // The supported part must paint above its bed even when other overlapping boxes make the global sort cyclic.
+      bedItem.svg += part; bedItem.box[1][2] = BED_TOP + st.hp;
+    } else put(bxB(p[0] - 1.5, p[1] - 1.5, p[2], p[0] + 1.5, p[1] + 1.5, p[2] + st.hp), part); }
+  // ---- frame: uprights, top bar, Z axis
+  for (const y of [2, 40]) put(bxB(20, y, BZT, 24, y + 2, UPZ1), ext(20, y, BZT, 24, y + 2, UPZ1));
+  put(bxB(21, 1, UPZ1, 23, 46.8, TOPZ), ext(21, 1, UPZ1, 23, 46.8, TOPZ));
+  I.push(...stepper([LSX, LSY, 9.1], 2, 4.2));
+  put(bxB(19.9, 42, BZT, 24.1, 42.4, 11.6), bxI(19.9, 42, BZT, 24.1, 42.4, 11.6, ALU, .7));
+  put(bxB(LSX - 1, LSY - 1, 11.2, LSX + 1, LSY + 1, 13.2), cyl(LSX, LSY, 11.2, 13.2, .95, ALU, toneI, .8, 16) + (() => { let l = ''; for (const z of [11.8, 12.3, 12.8]) l += pd(on(PZ(z), arcUV(LSX, LSY, .96, viewA()*180/Math.PI - 80, viewA()*180/Math.PI + 80, 8)), false); return `<path d="${l}" stroke="${INK}" stroke-width=".6" fill="none"/>`; })());
+  const screw = (z0, z1) => { let s2 = rod([LSX, LSY, z0], [LSX, LSY, z1], .4, METAL, toneI, .8), th = ''; const ph = (st.gz/.8 % 1)*.4, yr = viewA();
+    for (let z = z0 + .1 - ph + .4; z < z1 - .3; z += .4){ const a = [LSX + .4*Math.cos(yr - 1.3), LSY + .4*Math.sin(yr - 1.3), z], b = [LSX + .4*Math.cos(yr + 1.3), LSY + .4*Math.sin(yr + 1.3), z + .22]; th += pd([a, b], false); }
+    return s2 + `<path d="${th}" stroke="#7d8588" stroke-width=".6" fill="none"/>`; };
+  put(bxB(LSX - .4, LSY - .4, 13.2, LSX + .4, LSY + .4, gz - 1), screw(13.2, gz - 1));
+  put(bxB(LSX - .4, LSY - .4, gz + 1.2, LSX + .4, LSY + .4, 45.6), screw(gz + 1.2, 45.6));
+  put(bxB(20.6, 43.2, gz - 1, 24, 45.8, gz + 1.2), cyl(LSX, LSY, gz - 1, gz + .5, .75, BRASS, toneI, .8, 16) + cyl(LSX, LSY, gz + .5, gz + .8, 1.1, BRASS, toneI, .7, 16) + bxI(20.6, 43.2, gz + .8, 24, 45.8, gz + 1.2, ALU, .7));
+  put(bxB(21, 43.3, 45.6, 23, 45.7, UPZ1), bxI(21, 43.3, 45.6, 23, 45.7, UPZ1, ALU, .7));
+  put(bxB(22.4, 38.8, 13.5, 24, 40, 14.5), bxI(22.4, 38.8, 13.5, 24, 40, 14.5, REDM, .7));
+  // Z carriage plates, X gantry, X motor + pulley, idler, belt, endstop
+  const boltsOn = (y0, y1) => FRt ? [gz - 4, gz + 3].map(z => [y0 + 1, y1 - 1].map(y => shape(on(PX(24.42), ellUV(y, z, .3, .3, 8)), METAL.d, .4)).join('')).join('') : '';
+  put(bxB(24, .5, gz - 5, 24.4, 5.5, gz + 4), bxI(24, .5, gz - 5, 24.4, 5.5, gz + 4, ALU, .9) + boltsOn(.5, 5.5));
+  put(bxB(24, 33.5, gz - 5, 24.4, 46.8, gz + 4), bxI(24, 33.5, gz - 5, 24.4, 46.8, gz + 4, ALU, .9) + boltsOn(33.5, 46.8));
+  put(bxB(24.4, 1, gz, 26.4, 43, gz + 2), ext(24.4, 1, gz, 26.4, 43, gz + 2));
+  I.push(...stepper([21.9, XMY, gz - 3.2], 0, 4.2));
+  put(bxB(24.4, XMY - .3, gz - 3.5, 26.5, XMY + .3, gz - 2.9), rod([24.4, XMY, gz - 3.2], [26.5, XMY, gz - 3.2], .25, METAL, toneI, .5));
+  put(bxB(26.5, XMY - .78, gz - 3.98, 27.3, XMY + .78, gz - 2.42), pulley([0, XMY, gz - 3.2], 0, 26.5, 27.3, cy/.62));
+  put(bxB(24.4, 2.5, gz - 1, 26.4, 5.5, gz), bxI(24.4, 2.5, gz - 1, 26.4, 5.5, gz, ALU, .7));
+  put(bxB(26.4, 2.5, gz - 4.2, 26.5, 5.5, gz), bxI(26.4, 2.5, gz - 4.2, 26.5, 5.5, gz, ALU, .6));
+  put(bxB(26.5, XIY - .78, gz - 3.98, 27.3, XIY + .78, gz - 2.42), pulley([0, XIY, gz - 3.2], 0, 26.5, 27.3, cy/.62, true));
+  for (const z of [gz - 2.58, gz - 3.96]) put(bxB(26.6, XIY + .78, z, 27.2, XMY - .78, z + .14), bxI(26.6, XIY + .78, z, 27.2, XMY - .78, z + .14, BELTM, .5));
+  put(bxB(25.2, 34.2, gz + 2, 26.4, 35.4, gz + 3), bxI(25.2, 34.2, gz + 2, 26.4, 35.4, gz + 3, REDM, .7));
+  // hot end, extruder, spool
+  I.push(...hotendItems(st, m, k), ...extruderItems(st, m, k), ...spoolItems(st));
+  // Bowden tube (PTFE, see-through: the filament shows inside it as far as it has gone)
+  { const bp = bowdenPts(st), sh = segShare(st, 2), Ltot = polyLen(bp); let acc = 0;
+    const segL = []; for (let i = 0; i < bp.length; i++){ if (i) acc += Math.hypot(...sub(bp[i], bp[i-1])); segL.push(acc / Ltot); }
+    I.push(...pieces(bp, (seg, i, j) => { const d = pd(seg, false); let s2 = `<path d="${d}" fill="none" stroke="${INK}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="#f4f7f6" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>`;
+      if (sh > segL[i]){ const t = Math.min(1, (sh - segL[i]) / Math.max(1e-6, segL[j] - segL[i])); s2 += `<path d="${pd(polyCut(seg, t), false)}" fill="none" stroke="${FIL}" stroke-width=".8" stroke-linecap="round"/>`; }
+      return s2; }, 2.2)); }
+  // hot-end cable loom: off the shroud, over to the left upright, down to the base
+  I.push(...pieces([...bez([28.2, cy + 2.2, gz + 1.5], [27.6, cy + 5, gz + 9], [22.6, 38, 46], [21.3, 39.6, 44.5], 12), [21.3, 39.6, 30], [21.3, 39.6, BZT + .05]], seg => strand(seg, '#2b2725', 1.5, .8)));
+  s += byDepth(I);
+  // labels
+  if (k > .6) s += printerLabels(insideLabels(st));
+  else s += xrCallouts(surfaceLabels(st), [3, 44, 0, 47, 0, 68.5]);
+  return s;
+}
+
+/* ---------- labels ---------- */
+function printerLabels(items){
+  const svg = document.getElementById('fig'), vb = svg.viewBox.baseVal, inverse = svg.getScreenCTM().inverse();
+  const u = window.LBL_U ? LBL_U() : 0, fs = 8.6*INK_K, height = u ? 17*u : fs*1.8;
+  let top = vb.y + height;
+  for (const id of ['btns', 'stats']){
+    const el = document.getElementById(id);
+    if (el) top = Math.max(top, new DOMPoint(0, el.getBoundingClientRect().bottom + 12).matrixTransform(inverse).y + height/2);
+  }
+  const bottom = vb.y + vb.height - Math.max(height*1.5, 40*inverse.d);
+  const ordered = items.map(it => ({ ...it, point: P(...it.at) })).sort((a, b) => a.point[0] - b.point[0]);
+  const split = Math.ceil(ordered.length/2);
+  return [ordered.slice(0, split), ordered.slice(split)].map((column, side) => {
+    column.sort((a, b) => a.point[1] - b.point[1]);
+    const gap = Math.min(height + (u ? 3*u : 3*INK_K), (bottom - top)/Math.max(1, column.length - 1));
+    return column.map((it, i) => {
+      const width = u ? height*1.3 : it.text.length*fs*.62 + fs*1.5;
+      const x = side ? vb.x + vb.width - width/2 - 2*INK_K : vb.x + width/2 + 2*INK_K;
+      return tag(it.at, (x - it.point[0])/INK_K, (top + i*gap - it.point[1])/INK_K, it.text, it.on);
+    }).join('');
+  }).join('');
+}
+const moving = st => st.seq && (st.phase === 'home' || st.phase === 'print' || st.phase === 'purge' || st.phase === 'done');
+function insideLabels(st){
+  const { bx, cy, gz } = st, feed = st.loading || st.phase === 'print' || st.phase === 'purge', mv = moving(st), pr = st.phase === 'print';
+  const hot = st.heat, it = [
+    { at:[26.5, SPC[0] - 6, SPC[1] + 5], text:'SPOOL', on: feed },
+    { at:[SPX[1], SPC[0] + RW - 1, SPC[1] - 3], text:'PLA FILAMENT', on: feed },
+    { at:[21.9, 33.6, 52.5], text:'EXTRUDER MOTOR', on: feed },
+    { at:[25, 35.7, 51.3], text:'DRIVE GEAR', on: feed },
+    { at:[25, 36.84, 51.6], text:'IDLER BEARING', on: feed },
+    { at: bowdenPts(st)[7], text:'BOWDEN TUBE', on: feed },
+    { at:[31.7, cy + 1.2, gz - .2], text:'HOTEND FAN', on: st.tN > 50 },
+    { at:[30.8, cy + 1.3, gz + .4], text:'HEATSINK', on: false },
+    { at:[NZX, cy + .3, gz - 4.2], text:'HEAT BREAK', on: false },
+    { at:[30.85, cy + .85, gz - 4.9], text:'HEATER CARTRIDGE', on: hot },
+    { at:[30.72, cy - .55, gz - 5.05], text:'THERMISTOR', on: hot },
+    { at:[NZX, cy, gz - 6], text:'NOZZLE', on: pr },
+    { at:[29.7, cy - 3.7, gz - .8], text:'PART FAN', on: pr },
+    { at:[21.9, XMY - 2.1, gz - 2.5], text:'X MOTOR', on: mv },
+    { at:[27.2, (XIY + XMY)/2 + 8, gz - 2.5], text:'X BELT', on: mv },
+    { at:[27.15, cy - 1.8, gz + 3.2], text:'V-WHEELS', on: mv },
+    { at:[26.4, 34.8, gz + 3], text:'X ENDSTOP', on: st.phase === 'home' },
+    { at:[LSX + 2.1, LSY, 9.5], text:'Z MOTOR', on: mv },
+    { at:[LSX, LSY, (gz + 46)/2], text:'LEAD SCREW', on: mv },
+    { at:[LSX + .75, LSY, gz - .3], text:'BRASS NUT', on: mv },
+    { at:[24, 39.4, 14], text:'Z ENDSTOP', on: st.phase === 'home' },
+    { at:[YMX, 31.2, 11], text:'Y MOTOR', on: mv },
+    { at:[(YMX + YIX)/2 + 6, 25.65, 10.7], text:'Y BELT', on: mv },
+    { at:[40, 21, 8.5], text:'Y RAIL', on: mv },
+    { at:[9.5, 15, 10.5], text:'Y ENDSTOP', on: st.phase === 'home' },
+    { at:[bx + 10, 31.7, 12], text:'BED SPRINGS', on: false },
+    { at:[bx + 10, 12.3, 10.2], text:'LEVELLING KNOB', on: false },
+    { at:[bx + 6, BEDY + 2, BED_TOP], text:'BED HEATER', on: hot },
+    { at:[bx + BEDH, BEDY - 6, BED_TOP], text:'PEI SHEET', on: false },
+    { at:[34, 10, 2.6], text:'MAINBOARD', on: !!(st.seq || st.loading || hot) },
+    { at:[25.8, 8, 2], text:'STEPPER DRIVERS', on: mv || feed },
+    { at:[11, 29, 4.5], text:'POWER SUPPLY', on: hot },
+  ];
+  if (st.partOn || st.hp > 0) it.push({ at:[bx, BEDY - .9, BED_TOP + st.hp*.6], text:'PRINTED PART', on: pr });
+  return it;
+}
+function surfaceLabels(st){
+  const { cy, gz } = st, feed = st.loading || st.phase === 'print';
+  const it = [ { at:[SPX[1], SPC[0] - 4, SPC[1] + 6], text:'FILAMENT SPOOL', on: feed },
+    { at:[25.2, 35, 53], text:'EXTRUDER', on: feed },
+    { at: bowdenPts(st)[7], text:'BOWDEN TUBE', on: feed },
+    { at:[31.7, cy + 2, gz], text:'HOT END', on: st.tN > 50 },
+    { at:[NZX, cy, gz - 6.1], text:'NOZZLE', on: st.phase === 'print' },
+    { at:[26.4, 12, gz + 1], text:'X GANTRY', on: moving(st) },
+    { at:[LSX, LSY, 30], text:'LEAD SCREW', on: moving(st) },
+    { at:[st.bx + BEDH, BEDY - 4, BED_TOP], text:'HEATED BED', on: st.heat },
+    { at:[BX1, 8.6, 5.7], text:'LCD SCREEN', on: false },
+    { at:[BX1 + 1.1, 16.5, 4.5], text:'CONTROL KNOB', on: false } ];
+  return it.filter(t => facing([1,0,0]) || !/LCD|KNOB/.test(t.text));
+}
+
+/* ---------- behaviour: one state object, one loop ---------- */
+let ui, loopOn = false;
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const tween = (to, T, init) => ({ T, init: st => { st._from = { bx: st.bx, cy: st.cy, gz: st.gz }; if (init) init(st); },
+  f: (st, k) => { const e = ease(k); for (const key in to) st[key] = st._from[key] + (to[key] - st._from[key])*e; } });
+function layerAt(st, k){
+  const t = Math.min(NL - 1e-6, k*NL), i = Math.floor(t), fr = t - i, r = pawnR((i + .5)*DH), th = fr*2*Math.PI + i*.9;
+  st.bx = NZX - r*Math.cos(th); st.cy = BEDY + r*Math.sin(th); st.gz = GZ_MIN + (i + 1)*DH; st.hp = Math.min(PAWN_H, (i + fr)*DH);
+}
+function step(dt){
+  const st = ui.st; let busy = false;
+  // heaters: PID-held targets; bed heats slowly, nozzle quickly
+  const tgN = st.heat ? 200 : 22, tgB = st.heat ? 60 : 22;
+  const go = (v, tg, up, dn) => v < tg ? Math.min(tg, v + up*dt) : Math.max(tg, v - dn*dt);
+  st.tN = go(st.tN, tgN, 48, 22); st.tB = go(st.tB, tgB, 10, 3.5);
+  if (st.tN !== tgN || st.tB !== tgB) busy = true;
+  if (st.tN > 50){ st.fanA += dt*25; busy = true; }
+  // loading: the extruder feeds the filament along its route; cold, it stops at the heat break
+  if (st.loading){ const hot = st.tN >= 185, stop = hot ? FIL_NOZ : FIL_HB;
+    if (st.fil < stop){ const i = FSEG.findIndex(([a, b]) => st.fil < b), d = dt / FDUR[Math.max(0, i)] * (FSEG[i][1] - FSEG[i][0]);
+      st.fil = Math.min(stop, st.fil + d); st.eAng += dt*9; st.spA += dt*1.6; busy = true; }
+    else if (!hot){ if (!st.toldCold){ st.toldCold = 1; ui.flash('Filament is at the hot end: heat the nozzle to finish loading', 2800); } if (st.heat) busy = true; }
+    else { st.blob = Math.min(1, st.blob + dt/1.1); st.eAng += dt*5; busy = true; if (st.blob >= 1){ st.loading = false; st.loaded = true; ui.flash('Filament loaded', 1400); } } }
+  // the print job
+  if (st.seq){ busy = true; const sq = st.seq[st.si];
+    if (!sq){ st.seq = null; }
+    else { if (!sq.started){ sq.started = true; sq.t = 0; if (sq.init) sq.init(st); }
+      sq.t += dt;
+      if (sq.until){ if (sq.until(st)) st.si++; }
+      else { const kk = Math.min(1, sq.t / (sq.T || 1e-6)); if (sq.f) sq.f(st, kk); if (kk >= 1) st.si++; } }
+    if (st.phase === 'print' || st.phase === 'purge'){ st.eAng += dt*4; st.spA += dt*.15; } }
+  // taking the part off
+  if (st.rem != null){ st.rem = Math.min(1, st.rem + dt/1.3); busy = true;
+    if (st.rem >= 1){ st.rem = null; st.made++; st.partOn = false; st.hp = 0; st.purge = 0; } }
+  return busy;
+}
+function runLoop(){ if (loopOn) return; loopOn = true;
+  ui.animate(dt => { const b = step(dt); if (!b) loopOn = false; return b; }); }
+
+function load(st){
+  if (st.seq) return ui.flash('Printing: the filament is already in');
+  if (st.loaded) return ui.flash('Filament is already loaded');
+  if (st.loading) return ui.flash(st.fil >= FIL_HB && st.tN < 185 ? 'Heat the nozzle to finish loading' : 'Loading the filament');
+  st.loading = true; st.toldCold = 0; runLoop();
+}
+function heat(st){
+  if (st.heat) return ui.flash(st.tN >= 198 && st.tB >= 59 ? 'Holding nozzle 200 C, bed 60 C' : 'Heating: nozzle to 200 C, bed to 60 C');
+  st.heat = true; runLoop();
+}
+function print(st){
+  if (st.seq) return ui.flash(st.phase === 'heat' ? 'Waiting for the heaters' : 'Already printing');
+  if (st.rem != null || st.partOn) return ui.flash('Take the finished part off the bed first');
+  if (!st.loading && !st.loaded) return ui.flash('Load filament first');
+  st.heat = true; st.si = 0; st.hp = 0; st.purge = 0;
+  st.seq = [
+    { init: st => { st.phase = 'heat'; }, until: st => st.tN >= 198 && st.tB >= 59 && st.loaded },
+    tween({ cy: CY_HOME }, .5, st => { st.phase = 'home'; st.blob = 0; }),
+    tween({ bx: BX_HOME }, .5), tween({ gz: GZ_MIN }, .7), tween({ gz: GZ_MIN + .5 }, .2),
+    tween({ bx: NZX - 8, cy: 13, gz: GZ_MIN }, .5),
+    { T: .8, init: st => { st.phase = 'purge'; }, f: (st, k) => { st.bx = NZX - 8 + 6*k; st.purge = k; } },
+    tween({ bx: NZX - pawnR(DH/2), cy: BEDY, gz: GZ_MIN + DH }, .4),
+    { T: NL*TL, init: st => { st.phase = 'print'; st.partOn = true; }, f: layerAt },
+    tween({ gz: GZ_MIN + PAWN_H + 3, cy: 9, bx: BX_FRONT }, 1.2, st => { st.phase = 'done'; st.heat = false; st.hp = PAWN_H; }),
+    { T: .01, f: st => { st.phase = 'idle'; } } ];
+  runLoop();
+}
+function remove(st){
+  if (st.seq) return ui.flash(st.phase === 'print' ? 'Wait for the print to finish' : 'Nothing printed yet');
+  if (st.rem != null) return;
+  if (!st.partOn) return ui.flash('Nothing on the bed yet: start a print');
+  st.rem = 0; runLoop();
+}
+
+ui = mountFigure({
+  fig:'3D', turn:'full', title:'3D printer',
+  size:[DESK[2] - DESK[0], DESK[3] - DESK[1], 68.5], center:[(DESK[0] + DESK[2])/2, (DESK[1] + DESK[3])/2], palette:'cobalt',
+  state:{ bx: BX_FRONT, cy: BEDY, gz: GZ_PARK, tN: 22, tB: 22, heat: false, fil: 0, loading: false, loaded: false, blob: 0,
+    seq: null, si: 0, phase: 'idle', hp: 0, partOn: false, purge: 0, made: 0, rem: null, eAng: 0, spA: 0, fanA: 0 },
+  scene,
+  stats: st => [ { label:'Nozzle', value: Math.round(st.tN) + ' °C' }, { label:'Bed', value: Math.round(st.tB) + ' °C' },
+    { label:'Layer', value: Math.round(st.hp / PAWN_H * LAYERS) + ' / ' + LAYERS, small: true } ],
+  buttons:[
+    { label:'Load filament', onClick: st => load(st) },
+    { label:'Heat bed + nozzle', onClick: st => heat(st) },
+    { label:'Start print', onClick: st => print(st) },
+    { label:'Remove part', onClick: st => remove(st) } ],
+  acts:{ spool: st => load(st), knob: st => { st.knobA = (st.knobA || 0) + .8; print(st); }, part: st => remove(st) },
+  params:(st, q) => {
+    if (q.get('fil') === '1' || q.has('p') || q.get('done') === '1'){ st.fil = FIL_NOZ; st.loaded = true; }
+    if (q.get('hot') === '1' || q.has('p')){ st.heat = true; st.tN = 200; st.tB = 60; }
+    if (q.has('p')){ layerAt(st, clamp01(+q.get('p'))); st.phase = 'print'; st.partOn = true; st.purge = 1; }
+    if (q.get('done') === '1'){ st.partOn = true; st.hp = PAWN_H; st.purge = 1; st.gz = GZ_MIN + PAWN_H + 3; st.cy = 9; st.bx = BX_FRONT; }
+    if (q.has('made')) st.made = Math.max(0, Math.min(SLOTS.length, +q.get('made') | 0));
+  },
+});
+xrMount(() => ui, () => '');
+</script></body></html>
