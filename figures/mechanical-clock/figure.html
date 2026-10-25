@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mechanical clock</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Teaching assembly of the page 42 weight-driven anchor diagram and hand reduction lesson.
+   1. Raise weight is an external teaching reset. It rewinds the cord on the drum and restores gravitational energy.
+   2. Run releases one escape-wheel tooth per pendulum half-cycle. A pallet locks the next tooth between impulses.
+   3. The drum shares the escape arbor. Its 4-unit radius unwinds 4*2*pi/30 units per tooth; the weight stays on the cord.
+   4. Three touching spur pairs reduce escape speed by 6*4*5 = 120 to the minute arbor.
+   5. The source's 10:30 and 6:24 motion work reduces minute speed by 3*4 = 12 to the hour sleeve.
+   Slow view changes wall-clock animation speed only. One model beat represents one second of clock time.
+   This is a schematic teaching adaptation, not an exact historic clock or edition-union reconstruction.
+   The 1998 and 2016 evidence supports the mechanism. The 1988 edition remains inaccessible and unverified.
+   Parts. Case: base, crown, left/right case walls, back, front rails, glass and dial.
+   Structure: front and back movement brackets, pillars, arbor bearings and pendulum suspension bracket.
+   Power: suspended weight, cord, winding drum and its flanges, escape arbor.
+   Mechanism: escape wheel with teeth and spokes, anchor bridge, entry/exit pallets, anchor pivot,
+   pendulum rod and bob, three compound spur pairs, their arbors, minute wheel, intermediate wheel,
+   intermediate pinion, hour wheel and sleeve, minute hand, hour hand and hand nut.
+   Each shaft runs between bearings ribbed to the movement bracket rails. Pillars join brackets to the case base.
+   Anchor and rod share one rigid pivoted assembly. Pallet faces meet the escape rim near y=50/64,z=99.
+   Going-train pitch centres are 12,10,14 units apart. Motion-work centres are 16 units apart in both planes.
+   shortcut: tooth profiles and pallet faces are schematic, use a conjugate-profile solver for engineering dimensions. */
+const ckBrass=matOf('#d5ad53'), ckSteel=matOf('#a8b9bc'), ckWood=matOf('#aa6c42');
+const ckAxes=[{y:35,z:78},{y:47,z:78},{y:57,z:78},{y:57,z:92}];
+const ckState={mode:'rest',ticks:0,time:0,slow:false,raise:0,xr:0,xrT:0};
+let ckUI,ckLoop=false;
+function ckAngles(st){
+  const half=Math.floor(st.time), q=st.time-half;
+  const release=Math.max(0,Math.min(1,(q-.44)/.12));
+  const ticks=half+ease(release), escape=-ticks*2*Math.PI/30;
+  return {ticks,escape,minute:-escape/120,second:escape/24,third:escape/-6,
+    hour:-escape/1440,rock:.085*Math.cos(Math.PI*st.time),drop:4*ticks*2*Math.PI/30};
+}
+function ckStep(st,dt){
+  if(st.mode==='raise'){
+    st.raise=Math.min(1,st.raise+dt/1.1);
+    st.time=st.fromTime*(1-ease(st.raise));
+    if(st.raise===1){st.time=0;st.mode='rest';}
+  }else if(st.mode==='run'){
+    st.time=Math.min(48,st.time+dt*(st.slow?.2:1));
+    if(st.time===48)st.mode='spent';
+  }
+  st.ticks=ckAngles(st).ticks;
+}
+function ckKick(){
+  if(ckLoop)return;ckLoop=true;
+  ckUI.animate(dt=>{ckStep(ckState,dt);const more=['raise','run'].includes(ckState.mode);if(!more)ckLoop=false;return more;});
+}
+function ckRaise(st){st.fromTime=st.time;st.raise=0;st.mode='raise';ckKick();}
+function ckRun(st){
+  if(st.mode==='raise')return ckUI.flash('Wait for the weight to reach the top.');
+  if(st.mode==='spent')return ckUI.flash('Raise the weight to store energy.');
+  st.mode=st.mode==='run'?'rest':'run';ckKick();
+}
+const ckBounds=pts=>[[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))-.7),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i]))+.7)];
+function ckGear(x,y,z,r,n,a,material){
+  const sg=vis([1,0,0])?1:-1,xf=x+sg*.65;
+  let svg=cylX(x-.6,x+.6,y,z,r-.6,material,toneI,.6,48);
+  const teeth=[];
+  for(let i=0;i<n;i++){
+    const t=a+i*2*Math.PI/n,da=.7/n;
+    const p=[t-da,t+da].map(v=>[y-(r+.5)*Math.sin(v),z+(r+.5)*Math.cos(v)]);
+    const root=[t+da,t-da].map(v=>[y-(r-.8)*Math.sin(v),z+(r-.8)*Math.cos(v)]);
+    const profile=[...p,...root];
+    teeth.push({box:[[x-.6,y-r-1,z-r-1],[x+.6,y+r+1,z+r+1]],at:[x,y-r*Math.sin(t),z+r*Math.cos(t)],svg:extrude(profile,x-.6,x+.6,material,toneI)+shape(on(PX(xf),profile),material.l,.35)});
+  }
+  svg+=byDepth(teeth);
+  for(let i=0;i<4;i++){
+    const t=a+i*Math.PI/2;
+    svg+=rod([xf,y,z],[xf,y-(r-2)*Math.sin(t),z+(r-2)*Math.cos(t)],.55,ckSteel,toneI,.5);
+  }
+  return svg+cylX(x-.9,x+.9,y,z,1.6,ckSteel,toneI,.5,12);
+}
+function ckCallouts(items){
+  const vb=document.getElementById('fig').viewBox.baseVal,half=Math.ceil(items.length/2);
+  const sorted=items.map(it=>({...it,screen:P(...it.at)})).sort((a,b)=>a.screen[0]-b.screen[0]);
+  const cols=[sorted.slice(0,half),sorted.slice(half)];
+  const oldInk=INK_K;INK_K*=.82;
+  const svg=cols.map((col,i)=>col.sort((a,b)=>a.screen[1]-b.screen[1]).map((it,j)=>{
+    const x=vb.width*(i?.86:.16),y=vb.height*(.27+.69*j/Math.max(1,half-1));
+    return tag(it.at,(x-it.screen[0])/INK_K,(y-it.screen[1])/INK_K,it.text,it.on);
+  }).join('')).join('');
+  INK_K=oldInk;return svg;
+}
+function ckScene(st,m){
+  const g=ckAngles(st),k=ease(st.xr||0),parts=[],shell=[],labels=[];
+  const put=(arr,b,svg)=>arr.push({box:b,svg});
+  const bx=(arr,b,mat)=>put(arr,[b.slice(0,3),b.slice(3)],box(...b,mat,toneI,.8));
+  const rr=(a,b,r,mat)=>put(parts,ckBounds([a,b]),rod(a,b,r,mat,toneI,.6));
+  const label=(text,at,active=false)=>labels.push({text,at,on:active&&st.mode==='run'});
+  const gear=(text,x,id,r,n,a)=>{const c=ckAxes[id];put(parts,[[x-1,c.y-r-1,c.z-r-1],[x+1,c.y+r+1,c.z+r+1]],ckGear(x,c.y,c.z,r,n,a,ckBrass));label(text,[x,c.y,c.z+r],true);};
+  bx(shell,[0,0,0,29,80,5],m);bx(shell,[0,0,120,29,80,125],m);
+  for(const [a,b]of [[0,4],[76,80]]){
+    bx(shell,[0,a,54,29,b,120],m);bx(shell,[0,a,5,29,b,12],m);
+    bx(shell,[0,a,12,3,b,54],m);bx(shell,[26,a,12,29,b,54],m);
+    put(shell,[[3,(a+b)/2-.1,12],[26,(a+b)/2+.1,54]],shape(on(PY((a+b)/2),rectUV(3,12,26,54)),'#cfe9f0',.6).replace('fill="#cfe9f0"','fill="#cfe9f0" fill-opacity=".15"'));
+  }
+  bx(shell,[0,4,5,2,76,120],ckWood);
+  bx(shell,[26,4,5,29,76,12],m);bx(shell,[26,4,108,29,76,120],m);
+  bx(shell,[26,8,54,27,72,108],m);bx(shell,[26,4,12,29,8,108],m);bx(shell,[26,72,12,29,76,108],m);
+  const dial=cylX(27.2,28,35,78,24,CERAMIC,toneI,1.3,64);
+  let dialSvg=dial;
+  if(vis([1,0,0]))for(let i=1;i<=12;i++){const a=i*Math.PI/6;dialSvg+=tx(28.1,35-19*Math.sin(a),78+19*Math.cos(a)-1.3,String(i),3.2);}
+  put(shell,[[27.2,11,54],[28,59,102]],dialSvg);
+  put(shell,[[27.8,8,12],[28,72,54]],shape(on(PX(28),rectUV(8,12,72,54)),'#cfe9f0',.6).replace('fill="#cfe9f0"','fill="#cfe9f0" fill-opacity=".15"'));
+  label('CASE BASE',[20,10,3]);label('CROWN',[20,10,122]);label('GLASS',[28,12,20]);label('DIAL',[28,35,98]);
+  for(const x of [3,23]){
+    for(const z of [68,105])bx(parts,[x,11,z,x+1.5,69,z+2],ckSteel);
+    for(const y of [12,68])bx(parts,[x,y,68,x+1.5,y+1.5,107],ckSteel);
+  }
+  for(const y of [12.8,68.8]){
+    for(const z of [69,106])rr([4.5,y,z],[23,y,z],.7,ckBrass);
+    for(const z of [5,35])bx(parts,[3,y-.7,z,5,y+.7,z+33],ckSteel);
+  }
+  label('BACK BRACKET',[3,12,85]);label('FRONT BRACKET',[24,68,85]);label('MOVEMENT PILLAR',[14,68.8,106]);
+  for(const c of [...ckAxes,{y:19,z:78}]){
+    const [z0,z1]=c.z<90?[69.5,c.z-1.5]:[c.z+1.5,105.5];
+    for(const x of [3,23]){
+      bx(parts,[x,c.y-1,z0,x+1.5,c.y+1,z1],ckSteel);
+      bx(parts,[x,c.y-2,c.z-2,x+1.5,c.y+2,c.z+2],ckSteel);
+      put(parts,[[x,c.y-1.2,c.z-1.2],[x+2,c.y+1.2,c.z+1.2]],cylX(x,x+1.8,c.y,c.z,1.25,ckBrass,toneI,.4,12));
+    }
+  }
+  ckAxes.forEach((c,i)=>{
+    rr([4.5,c.y,c.z],[24,c.y,c.z],.65,ckSteel);
+    label(['MINUTE ARBOR','SECOND ARBOR','THIRD ARBOR','ESCAPE ARBOR'][i],[5,c.y,c.z],true);
+  });
+  gear('40 TOOTH WHEEL',9,0,10,40,g.minute);gear('8 TOOTH PINION A',9,1,2,8,g.second);
+  gear('32 TOOTH WHEEL',13,1,8,32,g.second);gear('8 TOOTH PINION B',13,2,2,8,g.third);
+  gear('48 TOOTH WHEEL',17,2,12,48,g.third);gear('8 TOOTH PINION C',17,3,2,8,g.escape);
+  gear('ESCAPE WHEEL',13,3,10,30,g.escape);
+  label('ARBOR BEARING',[24,57,78]);
+  const drop=g.drop,wt=70-drop;
+  put(parts,[[5,53,88],[9,61,96]],cylX(5,9,57,92,4,ckWood,toneI,.7,24));
+  for(const x of [4.6,9])put(parts,[[x,52.5,87.5],[x+.4,61.5,96.5]],cylX(x,x+.4,57,92,4.5,ckBrass,toneI,.6,24));
+  const winding=[];for(let i=0;i<30;i++){const a=i/29*Math.PI*4+g.escape;winding.push([5.3+i/29*3.2,57-4.04*Math.sin(a),92+4.04*Math.cos(a)]);}
+  put(parts,[[5,52.9,87.9],[9,61.1,96.1]],line(winding,.7));
+  rr([7,61,92],[7,61,wt+6],.25,ckWood);
+  put(parts,[[4,58,wt-5],[10,64,wt+6]],cyl(7,61,wt-5,wt+5,3,ckBrass,toneI,1,24)+rod([7,61,wt+5],[7,61,wt+6],.6,ckSteel,toneI,.6));
+  label('DRIVING WEIGHT',[7,61,wt],true);label('CORD',[7,61,(92+wt+6)/2],true);label('WINDING DRUM',[6,55,92],true);label('DRUM FLANGE',[9.4,57,96]);
+  const rot=(y,z)=>[57+(y-57)*Math.cos(g.rock)-(z-107)*Math.sin(g.rock),107+(y-57)*Math.sin(g.rock)+(z-107)*Math.cos(g.rock)];
+  const ap=(y,z)=>[13,...rot(y,z)],bob=ap(57,24);
+  bx(parts,[2,53,107,15,61,110],ckSteel);rr([3.5,57,107],[15,57,107],.7,ckSteel);
+  rr(ap(57,107),bob,.6,ckSteel);
+  rr(ap(50,101),ap(57,107),.8,ckBrass);rr(ap(57,107),ap(64,101),.8,ckBrass);
+  for(const [name,y]of [['ENTRY PALLET',50],['EXIT PALLET',64]]){
+    rr(ap(y,101),ap(y,99),.8,ckSteel);label(name,ap(y,99),true);
+  }
+  put(parts,[[11,bob[1]-4,bob[2]-4],[15,bob[1]+4,bob[2]+4]],cylX(11,15,bob[1],bob[2],4,ckBrass,toneI,1,24));
+  label('ANCHOR',[13,57,107],true);label('ANCHOR PIVOT',[15,57,107],true);label('SUSPENSION BRACKET',[3,57,109]);label('PENDULUM ROD',ap(57,55),true);label('PENDULUM BOB',bob,true);
+  gear('MINUTE WHEEL 10',19,0,4,10,g.minute);
+  const secY=19;
+  put(parts,[[18,6,65],[20,32,91]],ckGear(19,secY,78,12,30,-g.minute/3,ckBrass));
+  rr([4.5,secY,78],[24,secY,78],.65,ckSteel);
+  put(parts,[[21,15,74],[23,23,82]],ckGear(22,secY,78,3.2,6,-g.minute/3,ckBrass));
+  gear('HOUR WHEEL 24',22,0,12.8,24,g.hour);
+  label('INTERMEDIATE WHEEL 30',[19,19,90],true);label('INTERMEDIATE PINION 6',[22,19,81],true);
+  put(parts,[[23,33,76],[28.7,37,80]],cylX(23,28.7,35,78,1.7,ckBrass,toneI,.6));
+  const hand=(x,len,a,width,mat)=>{const end=[x,35-len*Math.sin(a),78+len*Math.cos(a)];rr([x,35,78],end,width,mat);return end;};
+  const hr=hand(29,12,g.hour+Math.PI/3,.85,ckSteel),mn=hand(30,19,g.minute,.55,DARK);
+  put(parts,[[30,33.8,76.8],[31,36.2,79.2]],cylX(30,31,35,78,1.2,ckBrass,toneI,.6,12));
+  label('HOUR SLEEVE',[26,35,78],true);label('HOUR HAND',hr,true);label('MINUTE HAND',mn,true);label('HAND NUT',[31,35,78]);
+  const external=parts.filter(p=>p.box[0][0]>=28.25),inside=parts.filter(p=>p.box[0][0]<28.25);
+  const bottom=shell.filter(p=>p.box[1][2]<=5),top=shell.filter(p=>p.box[0][2]>=120);
+  const walls=shell.filter(p=>!bottom.includes(p)&&!top.includes(p));
+  const near=p=>p.box[1][0]<=2?CAM_V[0]<0:p.box[1][1]<=4?CAM_V[1]<0:p.box[0][1]>=76?CAM_V[1]>=0:CAM_V[0]>=0;
+  const ghost=ps=>`<g opacity="${1-.88*k}">${byDepth(ps)}</g>`;
+  let svg=castShadow([[0,0,0],[29,80,0],[0,0,125],[29,80,125]]);
+  svg+=ghost(bottom)+(!vis([1,0,0])?byDepth(external):'')+ghost(walls.filter(p=>!near(p)))+byDepth(inside)+ghost(walls.filter(near))+ghost(top)+(vis([1,0,0])?byDepth(external):'');
+  if(k>.6)svg+=ckCallouts(labels);
+  return svg;
+}
+ckUI=mountFigure({fig:'42',turn:'full',title:'Mechanical clock',size:[32,80,125],palette:'cobalt',state:ckState,scene:ckScene,
+  stats:st=>[{label:'Escape steps',value:Math.floor(st.ticks),small:true},{label:'Hand reduction',value:'12 : 1',small:true},{label:'View speed',value:st.slow?'1/5':'1',small:true}],
+  buttons:[{label:'Raise weight',onClick:ckRaise},{label:'Run',onClick:ckRun},{label:'Slow view',onClick:st=>{st.slow=!st.slow;}}],
+  params:(st,q)=>{if(q.has('time')){const t=Number(q.get('time'));if(Number.isFinite(t))st.time=Math.max(0,Math.min(48,t));}st.ticks=ckAngles(st).ticks;}
+});
+xrMount(()=>ckUI,()=> '');
+</script></body></html>
