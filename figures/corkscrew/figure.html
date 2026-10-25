@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Corkscrew</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Teaching adaptation of the page 43 winged corkscrew in the saved
+   1998 OCR and 2016 OCR and diagram. The 1988 edition remains inaccessible.
+   Turn rotates the handle, annular central rack and helix four turns clockwise.
+   The helix descends 14 units into the cork, which stays in the bottle neck.
+   Each wing's pinion sector meshes with the central rack and raises its handle.
+   Press wings rotates both sectors back, raising rack, helix and cork 14 units.
+   The frame's annular foot stays on the bottle lip and carries the reaction.
+   Reverse represents specimen handling by an operator. The whole tool and cork
+   first move clear of the bottle. The operator holds the cork as reverse turns
+   move it down the helix. Once free, the cork drops onto the board.
+   Reset exchanges the specimen and reseats the tool. It is a teaching control.
+   Parts. Structure: annular foot on bottle lip, two frame uprights on the foot,
+   two pivot forks on uprights, and central guide bridge joining the forks.
+   Mechanism: two wing handles integral with two pinion sectors on pivot axles,
+   annular-toothed central rack sliding in the guide, lower stem and helix fixed
+   to the rack. Controls: turning loop fixed to the rack, wing grip ends.
+   Specimens: bottle body, shoulder, neck, lip and cork. No motor or central pinion.
+   Pitch radius 6. Wing rotation = rack descent / 6. Rack pitch = pi/2.
+   Helix lead 3.5. Four turns give 14 travel. Cork is 12 long, from z42 to z54.
+   shortcut: teeth use trapezoidal teaching profiles, use involute geometry for a manufacturing model.
+*/
+const csTravel = 14, csRadius = 6, csLead = 3.5, csPitch = Math.PI / 2;
+const csGlass = matOf('#438b72'), csCork = matOf('#c99b60'), csSteel = matOf('#aab7bb');
+const csBounds = pts => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i])))];
+function csPose(st){
+  const moved = Math.min(1, st.reverse/.25), unwind = Math.max(0,Math.min(1,(st.reverse-.25)/.55));
+  const fall = ease(Math.max(0,Math.min(1,(st.reverse-.8)/.2)));
+  const descent = csTravel*(st.insert-st.pull), offset = [34*ease(moved),0,12*ease(moved)];
+  return {descent, offset, angle:-78*Math.PI/180+descent/csRadius,
+    rotation:-8*Math.PI*st.insert+8*Math.PI*unwind,
+    corkZ:(42+csTravel*st.pull+offset[2]-csTravel*unwind)*(1-fall)+3*fall,
+    corkX:offset[0]};
+}
+function csCallouts(items){
+  const svg=document.getElementById('fig'),vb=svg.viewBox.baseVal,u=window.LBL_U?LBL_U():0;
+  const gap=u?21*u:21*INK_K,sorted=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  const columns=[sorted.slice(0,Math.ceil(sorted.length/2)),sorted.slice(Math.ceil(sorted.length/2))];
+  return columns.map((column,side)=>{
+    column.sort((a,b)=>a.p[1]-b.p[1]);
+    let top=vb.height*.16;
+    if(!u){
+      const controls=document.getElementById(side?'stats':'btns');
+      if(controls&&svg.getScreenCTM())top=Math.max(top,new DOMPoint(0,controls.getBoundingClientRect().bottom+18).matrixTransform(svg.getScreenCTM().inverse()).y);
+    }
+    const bottom=vb.height-20*INK_K,x=vb.width*(side?.82:.18);
+    let previous=top-gap;
+    return column.map((it,i)=>{
+      const y=Math.max(previous+gap,Math.min(it.p[1],bottom-(column.length-i-1)*gap));previous=y;
+      return tag(it.at,(x-it.p[0])/INK_K,(y-it.p[1])/INK_K,it.text,it.on);
+    }).join('');
+  }).join('');
+}
+function csScene(st,m){
+  const pose=csPose(st), k=ease(st.xr||0), parts=[], labels=[];
+  const put=(pts,svg)=>parts.push({box:csBounds(pts),svg});
+  const tr=p=>[p[0]+pose.offset[0],p[1],p[2]+pose.offset[2]];
+  const label=(at,text,on=false)=>labels.push({at,text,on});
+  const bar=(a,b,r,mat,ghost=false)=>{
+    const pts=[a,b], bounds=csBounds(pts);bounds[0]=bounds[0].map(v=>v-r);bounds[1]=bounds[1].map(v=>v+r);
+    parts.push({box:bounds,svg:`<g opacity="${ghost?1-.8*k:1}">${rod(a,b,r,mat,tone,1.3)}</g>`});
+  };
+  const ring=(cx,cy,z,r0,r1,h,mat,opacity=1)=>{
+    for(let i=0;i<24;i++){
+      const a=i*Math.PI/12,b=(i+1)*Math.PI/12;
+      const pt=(r,t,zz)=>[cx+r*Math.cos(t),cy+r*Math.sin(t),zz];
+      const q=[pt(r1,a,z),pt(r1,b,z),pt(r1,b,z+h),pt(r1,a,z+h)];
+      const inner=[pt(r0,a,z+h),pt(r0,b,z+h),pt(r0,b,z),pt(r0,a,z)];
+      const top=[pt(r0,a,z+h),pt(r1,a,z+h),pt(r1,b,z+h),pt(r0,b,z+h)];
+      const bottom=[pt(r0,a,z),pt(r0,b,z),pt(r1,b,z),pt(r1,a,z)];
+      let svg='';const normal=[Math.cos((a+b)/2),Math.sin((a+b)/2),0];
+      if(vis(normal))svg+=shape(q,tone(normal,mat),.6);
+      if(vis(normal.map(v=>-v)))svg+=shape(inner,tone(normal.map(v=>-v),mat),.6);
+      if(vis([0,0,1]))svg+=shape(top,tone([0,0,1],mat),.4);
+      if(vis([0,0,-1]))svg+=shape(bottom,mat.d,.4);
+      put([...q,...inner],`<g opacity="${opacity}">${svg}</g>`);
+    }
+  };
+  const shell=(z0,z1,r0,r1)=>{
+    for(let i=0;i<32;i++){
+      const a=i*Math.PI/16,b=(i+1)*Math.PI/16,n=[Math.cos((a+b)/2),Math.sin((a+b)/2),0];
+      const q=[[r0*Math.cos(a),r0*Math.sin(a),z0],[r0*Math.cos(b),r0*Math.sin(b),z0],[r1*Math.cos(b),r1*Math.sin(b),z1],[r1*Math.cos(a),r1*Math.sin(a),z1]];
+      if(vis(n))put(q,`<g opacity="${1-.85*k}">${shape(q,tone(n,csGlass),.55)}</g>`);
+    }
+  };
+  for(const [z0,z1,r0,r1] of [[3,20,13,13],[20,31,13,13],[31,42,13,5.7],[42,48,5.7,5.7],[48,54,5.7,5.7]])shell(z0,z1,r0,r1);
+  ring(0,0,53,4.3,6.3,1,csGlass,1-.85*k);
+  const corkTop=pose.corkZ+12;
+  for(let j=0;j<6;j++){
+    const z=pose.corkZ+j*2;
+    put([ [pose.corkX-4.2,-4.2,z],[pose.corkX+4.2,4.2,z+2] ],`<g opacity="${1-.58*k}">${cyl(pose.corkX,0,z,z+2,4.2,csCork,toneI,.7,24)}</g>`);
+  }
+  for(let i=0;i<18;i++){
+    const a=i*2.399,z=pose.corkZ+1+(i*3.7)%10;
+    const n=[Math.cos(a),Math.sin(a),0];
+    if(vis(n))put([[pose.corkX+4.22*n[0],4.22*n[1],z]],`<g opacity="${1-.58*k}">${line([[pose.corkX+4.23*n[0],4.23*n[1],z],[pose.corkX+4.23*n[0],4.23*n[1],z+.5]],.65)}</g>`);
+  }
+  const frameZ=54, rackBottom=70-pose.descent, rackTop=99-pose.descent;
+  ring(pose.offset[0],0,frameZ+pose.offset[2],4.4,10,2,m,1-.8*k);
+  for(const side of [-1,1]){
+    for(let z=56;z<76;z+=4)bar(tr([0,side*9,z]),tr([0,side*9,Math.min(76,z+4)]),1.25,m,true);
+    for(const x of [-2.8,2.8])bar(tr([x,side*9,72]),tr([x,side*9,76]),1,m,true);
+    bar(tr([-3.8,side*9,76]),tr([3.8,side*9,76]),.85,csSteel);
+    const local=(u,v,x=0)=>tr([x,side*(9+u*Math.cos(pose.angle)-v*Math.sin(pose.angle)),76+u*Math.sin(pose.angle)+v*Math.cos(pose.angle)]);
+    const profile=[[0,0]];
+    for(let tooth=0;tooth<=16;tooth++){
+      const a=(90+tooth*15)*Math.PI/180;
+      for(const [da,r] of [[0,5.4],[.055,6.6],[.14,6.6],[Math.PI/12,5.4]])profile.push([r*Math.cos(a+da),r*Math.sin(a+da)]);
+    }
+    profile.push([0,0]);
+    // Each convex tooth and the fan web sorts independently beside the rack.
+    const polygons=[];
+    for(let t=0;t<17;t++)polygons.push([[0,0],...profile.slice(1+t*4,5+t*4)]);
+    for(const poly of polygons){
+      const A=poly.map(([u,v])=>local(u,v,-1.8)),B=poly.map(([u,v])=>local(u,v,1.8));
+      const cap=vis([1,0,0])?B:A;
+      put([...A,...B],loft(A,B,n=>tone(n,csSteel))+shape(cap,tone([vis([1,0,0])?1:-1,0,0],csSteel),.45));
+    }
+    for(let u=0;u<30;u+=5)bar(local(u,0),local(u+5,0),u>=20?2:1.4,u>=20?m:csSteel);
+    label(local(25,0),side===1?'LEFT WING HANDLE':'RIGHT WING HANDLE',!!st.action);
+    label(local(-4,2),side===1?'LEFT PINION SECTOR':'RIGHT PINION SECTOR',st.action==='insert'||st.action==='pull');
+    label(tr([3.8,side*9,76]),side===1?'LEFT PIVOT AXLE':'RIGHT PIVOT AXLE',!!st.action);
+    label(tr([0,side*9,65]),side===1?'LEFT FRAME UPRIGHT':'RIGHT FRAME UPRIGHT');
+    label(tr([2.8,side*9,73]),side===1?'LEFT PIVOT FORK':'RIGHT PIVOT FORK');
+  }
+  for(const side of [-1,1])bar(tr([0,side*9,79.5]),tr([0,side*3.3,79.5]),1.3,m,true);
+  ring(pose.offset[0],0,78+pose.offset[2],2.5,3.7,3,m,1-.8*k);
+  for(let z=rackBottom;z<rackTop;z+=1.5)bar(tr([0,0,z]),tr([0,0,Math.min(rackTop,z+1.5)]),2.4,csSteel);
+  for(let z=rackBottom+.8;z<rackTop-.5;z+=csPitch){
+    const A=on(PZ(z+pose.offset[2]),ellUV(pose.offset[0],0,2.4,2.4,24));
+    const B=on(PZ(z+.3+pose.offset[2]),ellUV(pose.offset[0],0,3.5,3.5,24));
+    const E=on(PZ(z+.75+pose.offset[2]),ellUV(pose.offset[0],0,3.5,3.5,24));
+    const D=on(PZ(z+1.05+pose.offset[2]),ellUV(pose.offset[0],0,2.4,2.4,24));
+    for(const [a,b] of [[A,B],[B,E],[E,D]])put([...a,...b],loft(a,b,n=>tone(n,csSteel))+hullInk([...a,...b],.55));
+  }
+  bar(tr([0,0,rackBottom-1]),tr([0,0,rackBottom]),1.1,csSteel);
+  for(let j=0;j<112;j++){
+    const p=t=>tr([2.3*Math.cos(t*8*Math.PI+pose.rotation),2.3*Math.sin(t*8*Math.PI+pose.rotation),56-pose.descent+14*t]);
+    const a=p(j/112),b=p((j+1)/112);
+    bar(a,b,j===0?.08:.52,csSteel);
+  }
+  bar(tr([2.3*Math.cos(pose.rotation),2.3*Math.sin(pose.rotation),rackBottom]),tr([0,0,rackBottom]),.52,csSteel);
+  const turnPoint=(y,z)=>tr([y*Math.sin(pose.rotation),y*Math.cos(pose.rotation),z]);
+  bar(tr([0,0,rackTop]),tr([0,0,rackTop+2]),1.7,csSteel);
+  const loopPts=[[-3,rackTop+2],[-5,rackTop+7],[-3,rackTop+9],[3,rackTop+9],[5,rackTop+7],[3,rackTop+2],[-3,rackTop+2]];
+  for(let i=0;i<loopPts.length-1;i++)bar(turnPoint(...loopPts[i]),turnPoint(...loopPts[i+1]),1.2,m);
+  label(turnPoint(0,rackTop+9),'TURNING LOOP',st.action==='insert'||st.action==='reverse');
+  label(tr([0,0,rackTop-5]),'CENTRAL TOOTHED RACK',st.action==='insert'||st.action==='pull');
+  label(tr([3.7,0,79.5]),'RACK GUIDE');
+  label(tr([0,0,rackBottom-.5]),'LOWER STEM',!!st.action);
+  label(tr([2.3*Math.cos(pose.rotation),2.3*Math.sin(pose.rotation),63-pose.descent]),'HELICAL SCREW',!!st.action);
+  const tip=tr([2.3*Math.cos(pose.rotation),2.3*Math.sin(pose.rotation),56-pose.descent]);
+  label(tip,'SCREW POINT',st.action==='insert');
+  label(tr([8,0,55]),'NECK SUPPORT FOOT',st.action==='pull');
+  label([pose.corkX,0,corkTop],'CORK',st.action==='pull'||st.action==='reverse');
+  label([5.7,0,48],'BOTTLE NECK');label([6.3,0,54],'BOTTLE LIP');
+  const shadow=castShadow([[-13,-13,3],[13,13,3],tr([0,-15,76]),tr([0,15,76]),tr([0,0,rackTop+9])],3,boardTop(-21,-37,55,37,3,5));
+  let svg=board(-21,-37,55,37,3,5,WOOD)+shadow+byDepth(parts);
+  if(k>.6)svg+=csCallouts(labels);
+  else svg+=csCallouts(labels.filter(v=>['TURNING LOOP','LEFT WING HANDLE','RIGHT WING HANDLE'].includes(v.text)));
+  return svg;
+}
+function csRun(st,ui,action){
+  if(st.action)return ui.flash('Finish the current movement first');
+  const allowed={insert:'ready',pull:'inserted',reverse:'extracted'};
+  if(st.stage!==allowed[action])return ui.flash(action==='insert'?'Reset for a new cork':action==='pull'?'Turn the helix into the cork first':'Press wings to remove the cork first');
+  st.action=action;st.t=0;
+  ui.animate(dt=>{
+    st.t=Math.min(1,st.t+dt/(action==='reverse'?3.4:2));
+    st[action]=ease(st.t);
+    if(st.t<1)return true;
+    st.stage={insert:'inserted',pull:'extracted',reverse:'released'}[action];st.action=null;return false;
+  });
+}
+const ui=mountFigure({
+  fig:'43',title:'Corkscrew',size:[76,74,122],center:[12,0],palette:'tomato',turn:'full',
+  state:{stage:'ready',action:null,t:0,insert:0,pull:0,reverse:0},scene:csScene,
+  stats:st=>[{label:'Rack travel',value:Math.round(csPose(st).descent*10)/10+' mm',small:true},{label:'Cork lift',value:Math.round(st.pull*14*10)/10+' mm',small:true}],
+  buttons:[{label:'Turn',onClick:(st,ui)=>csRun(st,ui,'insert')},{label:'Press wings',onClick:(st,ui)=>csRun(st,ui,'pull')},{label:'Reverse',onClick:(st,ui)=>csRun(st,ui,'reverse')},{label:'Reset',onClick:(st,ui)=>{
+    if(st.action)return ui.flash('Finish the current movement first');
+    Object.assign(st,{stage:'ready',action:null,t:0,insert:0,pull:0,reverse:0});ui.flash('Teaching reset replaces the cork and reseats the tool');
+  }}],
+  params:(st,q)=>{
+    const stage=q.get('stage');if(['inserted','extracted','released'].includes(stage)){st.insert=1;st.stage=stage;st.pull=stage==='inserted'?0:1;st.reverse=stage==='released'?1:0;}
+  }
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
