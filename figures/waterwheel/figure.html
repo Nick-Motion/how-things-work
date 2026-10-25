@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Waterwheel</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Source is the overshot wheel on printed page 32, directly inspected in the saved 2016 scan.
+   The saved 1998 primary OCR supports the same rim-to-shaft mechanism. 1988 is inaccessible and unverified.
+   1. External refill supplies 6 L to the elevated reservoir and empties the catch tray.
+   2. The gate admits gravity flow along the chute onto the upper, descending rim paddles.
+   3. Water acts at the rim, turns the hub and horizontal shaft, and drains into the catch tray.
+   4. Apply load slides the teaching coupling onto a coaxial rope drum. Shaft rotation winds the rope,
+      lifting the actual 0.5 kg mass. Reduced flow can stall the load; closing flow stops all lifting.
+   The reservoir, flow gate, catch tray and lifting attachment are declared bench teaching fixtures.
+   No pump, gearing, return pipe, perpetual water loop, or edition-union claim is implied.
+   Parts and attachment.
+   STRUCTURE. Plinth holds tank legs and two shaft supports. Each support holds a plain bearing.
+   SUPPLY. Tank floor and four walls sit on the legs. A slide gate closes its outlet. The chute is fixed
+   at the outlet and cantilevers over the wheel. The open catch tray stands below the wheel.
+   WHEEL. Two rim hoops hold radial paddles and a curved backing barrel. Eight spokes on each cheek
+   join the rim to a hub fixed to the shaft. The shaft passes through both bearings.
+   LOAD. A sliding sleeve couples the shaft to the adjacent drum. Rope wraps the drum at radius 3.5 cm,
+   leaves vertically at its tangent, and is tied to the mass. The mass initially rests on the plinth.
+   Model is quasi-static. Bearing static friction of 0.18 Nm can hold this test mass when stopped.
+   Available shaft power is 45 percent of rho*g*Q*head. Torque falls with speed; reduced head lowers flow.
+   shortcut: films and water in flight have negligible inventory, use bucket-volume dynamics for transient research.
+   Water inventory is always reservoir plus tray = 6 L. There is no stored kinetic energy in this model.
+   Travel is exactly shaft angle times drum radius after coupling, with a 25 cm rope travel limit.
+*/
+const wwMat = {wood:matOf('#bf874c'), rim:matOf('#dba45e'), water:matOf('#65b8d6'), rope:matOf('#e7cf94')};
+const wwFresh = () => ({tank:6,tray:0,gate:0,loaded:false,lift:0,angle:0,offset:0,omega:0,flow:0,power:0,time:0,loop:false});
+const wwPoint = (x,r,a,t=0) => [x,48+r*Math.sin(a)+t*Math.cos(a),44+r*Math.cos(a)-t*Math.sin(a)];
+const wwBounds = pts => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i])))];
+function wwPrism(profile,x0,x1,material){
+  const aa=on(PX(x0),profile),bb=on(PX(x1),profile),near=vis([1,0,0])?bb:aa;
+  return loft(aa,bb,n=>toneI(n,material))+shape(near,toneI([vis([1,0,0])?1:-1,0,0],material),.65)+hullInk([...aa,...bb],1.5);
+}
+function wwHydraulics(st){
+  const flow=st.gate*.18*Math.sqrt(Math.max(0,st.tank/6));
+  const head=(84+18*st.tank/6-(6+5*st.tray/6))/100;
+  const power=.45*9.81*flow*head,resist=.18+(st.loaded?.5*9.81*.035:0);
+  const b=resist+.06;
+  const omega=power<=resist*.6?0:(-b+Math.sqrt(b*b- .4*(resist*.6-power)))/.2;
+  return {flow,power,omega:st.loaded&&st.lift>=25?0:omega,head};
+}
+function wwStep(st,dt){
+  const hyd=wwHydraulics(st),volume=Math.min(st.tank,hyd.flow*dt);
+  st.tank-=volume;st.tray+=volume;st.flow=dt?volume/dt:0;st.power=hyd.power;
+  const travel=st.loaded?Math.min(hyd.omega*dt,(25-st.lift)/3.5):hyd.omega*dt;
+  st.angle+=travel;st.omega=dt?travel/dt:0;
+  if(st.loaded)st.lift+=travel*3.5;
+  st.time+=dt;
+  if(st.tank<1e-7){st.tray+=st.tank;st.tank=0;st.flow=st.omega=st.power=0;}
+}
+function wwRun(st,ui){
+  if(st.loop)return;st.loop=true;
+  ui.animate(dt=>{wwStep(st,dt);const more=st.gate>0&&st.tank>0;if(!more)st.loop=false;return more;});
+}
+function wwScene(st,m){
+  const parts=[],k=ease(st.xr||0),moving=st.omega>.001;
+  const put=(pts,svg,ghost=false)=>parts.push({box:wwBounds(pts),svg:ghost?`<g opacity="${1-.78*k}">${svg}</g>`:svg});
+  const bx=(a,b,mat,ghost=false)=>put([a,b],box(...a,...b,mat,toneI,.85),ghost);
+  const rr=(a,b,r,mat,ghost=false)=>put([a.map(v=>v-r),b.map(v=>v+r)],rod(a,b,r,mat,toneI,.85),ghost);
+  let out=board(0,0,86,90,4,4,WOOD);
+  out+=castShadow([[8,6,4],[28,30,106],[8,30,106],[28,6,106],[31,16,44],[46,80,44],[38,48,76],[65,52,44]],4,boardTop(0,0,86,90,4,4));
+  for(const x of [9,25])for(const y of [7,27])bx([x,y,4],[x+2,y+2,84],m,true);
+  bx([8,6,84],[28,30,85.2],m,true);
+  for(const [a,b] of [[[8,6,85.2],[9,30,106]],[[27,6,85.2],[28,22.5,106]],[[27,29,85.2],[28,30,106]],[[27,22.5,91],[28,29,106]],[[9,6,85.2],[27,7,106]],[[9,29,85.2],[27,30,106]]])bx(a,b,m,true);
+  if(st.tank>0)bx([9.1,7.1,85.25],[26.9,28.9,85.25+18*st.tank/6],wwMat.water);
+  const chuteA=[28,26,85.3],chuteB=[38,55.5,80];
+  const side=norm(cross(sub(chuteB,chuteA),[0,0,1]));
+  const chuteP=(p,t,z=0)=>p.map((v,i)=>v+side[i]*t+(i===2?z:0));
+  const ca=[chuteP(chuteA,-3.2),chuteP(chuteA,3.2),chuteP(chuteA,3.2,-1),chuteP(chuteA,-3.2,-1)];
+  const cb=[chuteP(chuteB,-3.2),chuteP(chuteB,3.2),chuteP(chuteB,3.2,-1),chuteP(chuteB,-3.2,-1)];
+  put([...ca,...cb],loft(ca,cb,n=>toneI(n,METAL))+shape([ca[0],ca[1],cb[1],cb[0]],METAL.l,.7),true);
+  for(const sg of [-1,1]){const pts=[chuteP(chuteA,sg*3.2),chuteP(chuteB,sg*3.2),chuteP(chuteB,sg*3.2,3),chuteP(chuteA,sg*3.2,3)];put(pts,shape(pts,METAL.m,.8),true);}
+  bx([27,22.5,84.5+st.gate*4],[28.5,29,91+st.gate*4],DARK);
+  rr([27.8,25.8,91+st.gate*4],[27.8,25.8,96+st.gate*4],.7,METAL);
+  bx([25,13,4],[49,84,5.5],m);
+  const waterZ=5.6+5*st.tray/6;
+  if(st.tray>0)bx([26.2,14.2,5.6],[47.8,82.8,waterZ],wwMat.water);
+  for(const [a,b] of [[[25,13,5.5],[26,84,12]],[[48,13,5.5],[49,84,12]],[[26,13,5.5],[48,14,12]],[[26,83,5.5],[48,84,12]]])bx(a,b,m,true);
+  for(const x of [24,51]){
+    for(const [lo,hi] of [[4,20],[20,38],[38,44]])bx([x,46,lo],[x+3,50,hi],m,true);
+    rr([x,48,44],[x+3,48,44],2.6,DARK,true);
+  }
+  for(const [x0,x1] of [[23,27],[27,32],[32,44],[44,51],[51,58],[58,65]])rr([x0,48,44],[x1,48,44],1.1,METAL);
+  rr([32,48,44],[44,48,44],4,wwMat.wood);
+  for(let i=0;i<16;i++){
+    const a=i*Math.PI/8+st.angle,prof=[[25,-.5],[32,-.5],[32,.5],[25,.5]].map(([r,t])=>wwPoint(0,r,a,t).slice(1));
+    put([30,46].flatMap(x=>prof.map(([y,z])=>[x,y,z])),wwPrism(prof,32,44,wwMat.rim),true);
+    const aa=a-Math.PI/16,bb=a+Math.PI/16;
+    for(const [x0,x1,r0,r1,mat] of [[30,32,27.5,30,wwMat.rim],[44,46,27.5,30,wwMat.rim],[32,44,24.6,25.4,wwMat.wood]]){
+      const pp=[[r0,aa],[r1,aa],[r1,bb],[r0,bb]].map(([r,t])=>wwPoint(0,r,t).slice(1));
+      put([x0,x1].flatMap(x=>pp.map(([y,z])=>[x,y,z])),wwPrism(pp,x0,x1,mat),true);
+    }
+    if(i%2===0)for(const [x0,x1] of [[31,33],[43,45]]){
+      const pp=[[3,-1.3],[28,-1.3],[28,1.3],[3,1.3]].map(([r,t])=>wwPoint(0,r,a,t).slice(1));
+      put([x0,x1].flatMap(x=>pp.map(([y,z])=>[x,y,z])),wwPrism(pp,x0,x1,wwMat.wood),true);
+    }
+  }
+  rr([55,48,44],[st.loaded?58:56.7,48,44],1.8,st.loaded?m:METAL);
+  rr([58,48,44],[64,48,44],3.5,wwMat.rope);
+  for(const x of [57.4,64])rr([x,48,44],[x+.6,48,44],4.1,wwMat.wood);
+  const drumA=st.loaded?st.angle-st.offset:0;
+  const marker=[64.7,48+3*Math.sin(drumA),44+3*Math.cos(drumA)];
+  put([[64.65,44,40],[64.75,52,48]],vis([1,0,0])?line([[64.7,48,44],marker],1.1):'');
+  const mz=4+st.lift;
+  rr([61,51.5,44],[61,51.5,mz+9],.25,wwMat.rope);
+  rr([61,51.5,mz+7],[61,51.5,mz+9],.6,METAL);
+  bx([58,48.5,mz],[64,54.5,mz+7],METAL);
+  if(st.flow>0){
+    const waterPath=[chuteP(chuteA,0,.25),chuteP(chuteB,0,.25),[38,55.5,75],...Array.from({length:15},(_,i)=>wwPoint(38,31.4,.24+i*2.4/14)),[38,63.1,waterZ]];
+    for(let i=0;i<waterPath.length-1;i++){
+      const a=waterPath[i],b=waterPath[i+1],dash=-st.time*30;
+      put([a.map(v=>v-.8),b.map(v=>v+.8)],`<path data-overlay="water-path" d="${pd([a,b],false)}" fill="none" stroke="#379bc4" stroke-width="${st.gate>.5?2.4:1.1}" stroke-dasharray="3 1" stroke-dashoffset="${dash}"/>`);
+    }
+  }
+  out+=byDepth(parts);
+  if(k>.6)out+=xrCallouts([
+    {at:[18,6,100],text:'RESERVOIR'}, {at:[28,26,91+st.gate*4],text:'SLIDE GATE',on:st.gate>0},
+    {at:[34,44,83],text:'CHUTE',on:st.flow>0}, {at:wwPoint(44,31,st.angle),text:'RIM PADDLES',on:moving},
+    {at:wwPoint(46,29,1.3+st.angle),text:'RIM HOOPS',on:moving}, {at:wwPoint(38,25,2+st.angle),text:'BACKING BARREL',on:moving},
+    {at:wwPoint(45,16,Math.PI/4+st.angle),text:'SPOKES',on:moving}, {at:[44,48,44],text:'HUB',on:moving},
+    {at:[49,48,44],text:'SHAFT',on:moving}, {at:[54,48,44],text:'PLAIN BEARINGS'},
+    {at:[52,48,26],text:'SHAFT SUPPORTS'}, {at:[56.5,48,44],text:'COUPLING SLEEVE',on:st.loaded},
+    {at:[64,48,46],text:'ROPE DRUM',on:st.loaded&&moving}, {at:[61,51.5,mz+15],text:'ROPE',on:st.loaded&&moving},
+    {at:[64,52,mz+4],text:'TEST MASS',on:st.loaded&&moving}, {at:[48,75,10],text:'CATCH TRAY',on:st.flow>0},
+    {at:[10,8,50],text:'TANK LEGS'}, {at:[75,75,4],text:'PLINTH'}
+  ],[8,70,6,84,4,106]);
+  return out;
+}
+const ui=mountFigure({fig:'32',turn:'full',title:'Waterwheel',size:[86,90,110],palette:'cobalt',state:wwFresh(),scene:wwScene,
+  stats:st=>[{label:'Reservoir',value:st.tank.toFixed(2)+' L'},{label:'Lift',value:st.lift.toFixed(1)+' cm',small:true},{label:'Shaft',value:(st.omega*60/(2*Math.PI)).toFixed(1)+' rpm',small:true}],
+  buttons:[
+    {label:'Open flow',onClick:(st,u)=>{st.gate=st.gate?0:1;if(!st.gate){st.flow=st.omega=st.power=0;return u.flash('Flow closed');}if(!st.tank)return u.flash('Reservoir empty. Refill externally');wwRun(st,u);}},
+    {label:'Apply load',onClick:(st,u)=>{if(st.loaded)return u.flash('The 0.5 kg test mass is already coupled');st.loaded=true;st.offset=st.angle-st.lift/3.5;if(!st.gate)u.flash('Load coupled. Open flow to lift');}},
+    {label:'Reduce flow',onClick:(st,u)=>{if(!st.gate)return u.flash('Open flow first');st.gate=.12;const h=wwHydraulics(st);st.omega=h.omega;st.flow=h.flow;st.power=h.power;wwRun(st,u);}},
+    {label:'Refill',onClick:(st,u)=>{const loop=st.loop;Object.assign(st,wwFresh());st.loop=loop;u.flash('External reset. Reservoir refilled and load lowered by hand');}}
+  ],
+  params:(st,q)=>{if(q.get('load')==='1')st.loaded=true;for(const [name,min,max] of [['tank',0,6],['lift',0,25],['angle',0,1000]]){const v=Number(q.get(name));if(q.has(name)&&Number.isFinite(v))st[name]=Math.max(min,Math.min(max,v));}st.tray=6-st.tank;st.offset=st.angle-st.lift/3.5;}
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
