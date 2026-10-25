@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mobile crane</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Source is the accepted page 57 mobile-crane brief and its saved 2016 image.
+   1. Four chassis-mounted beams extend sideways, then their hydraulic jack rods lower feet onto the board.
+   2. With support complete the visible ram raises the boom about its foot pin while nested sections extend.
+      Extension is an externally actuated teaching motion. No hidden extension drive or hydraulic circuit is claimed.
+   3. A single rope runs from the base drum along the boom, over its head sheave, under the load sheave and
+      back to a dead-end on the head. The drum takes up twice the load-block travel. The small hanging weight
+      moves with its hook and block. Extension pays out the rope to hold the weight clear of the support surface.
+   Structure. Chassis rails hold axles, wheels, deck, cab and outrigger housings. The deck holds the slew bearing,
+      revolving platform, counterweight, winch and boom-foot brackets. The foot pin carries the outer boom.
+   Mechanism. Nested middle and tip sections stay overlapped. Head cheeks hold the upper axle and sheave.
+      Block cheeks hold the lower axle and sheave, hook and weight eye. Ram pins join platform and boom.
+      Beam ends carry jack barrels, rods and feet. Wheels have thick tires and metal hubs.
+   Case and controls. Cab walls carry the door, windscreen and side windows. Controls below are teaching controls.
+   Adaptation. Tabletop scale model, slowed motion, simplified two-strand tackle, fixed safe teaching reach and
+      illustrative rope drum. Not an exact reconstruction, load chart, hydraulic design or verified edition union.
+      1988 remains inaccessible and unverified. No force or travel overlay is counted as anatomy.
+   Scope. Only this figure, copied core, built page, metadata, screenshots and local verification evidence.
+   Throughput checkpoint. One model and one state, then build, browser checks and at most three repair rounds.
+   Principles. Model the Domain selects one staged state and shared pose geometry. Prove It Works selects actual
+      clicks, numerical attachment checks, full-orbit images and reviewed recording of the built artifact.
+*/
+const mcOrigin=[37,48,34], mcGold=matOf('#d6a53e'), mcSteel=matOf('#6f7d83');
+const mcAdd=(a,b)=>a.map((v,i)=>v+b[i]);
+const mcMix=(a,b,t)=>a.map((v,i)=>v+(b[i]-v)*t);
+const mcBounds=(pts,r=0)=>[ [0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))-r), [0,1,2].map(i=>Math.max(...pts.map(p=>p[i]))+r) ];
+function mcPose(st){
+ const a=(30+22*st.extension)*Math.PI/180, d=[Math.cos(a),0,Math.sin(a)], n=[-Math.sin(a),0,Math.cos(a)];
+ const at=(s,y=0,h=0)=>mcAdd(mcOrigin,[d[0]*s+n[0]*h,y,d[2]*s+n[2]*h]);
+ const head=at(105+28*st.extension), lower=[head[0],head[1],20+30*st.hoist];
+ const ramBase=[55,48,27],ramTop=at(31,0,-5),ramLength=Math.hypot(...sub(ramTop,ramBase)),ramMouth=mcMix(ramBase,ramTop,15.5/ramLength);
+ const feed=at(9,0,6),lead=at(102+28*st.extension,0,4),distance=(p,q)=>Math.hypot(...sub(p,q));
+ const ropeLength=distance([30,48,34],feed)+distance(feed,lead)+distance(lead,[head[0]-2,48,head[2]])+2*(head[2]-lower[2])+4*Math.PI;
+ return {a,d,n,at,head,lower,ramBase,ramTop,ramMouth,ramLength,ropeLength};
+}
+const mcRestRope=mcPose({extension:0,hoist:0}).ropeLength;
+function mcLabels(items){
+ const fig=document.getElementById('fig'),vb=fig.viewBox.baseVal,phone=innerWidth<=560,oldInk=INK_K;
+ if(!phone)INK_K*=.76;
+ const u=window.LBL_U?LBL_U():0,fs=u?10*u:8.6*INK_K,h=u?17*u:fs*1.8;
+ const ordered=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+ const split=Math.ceil(ordered.length/2),cols=[ordered.slice(0,split),ordered.slice(split)];let svg='';
+ cols.forEach((col,side)=>{
+  col.sort((a,b)=>a.p[1]-b.p[1]);
+  const width=u?h*1.3:Math.max(...col.map(it=>it.text.length))*fs*.62+fs*1.5;
+  const x=side?vb.x+vb.width-width/2-5*oldInk:vb.x+width/2+5*oldInk;
+  let top=vb.y+h;
+  const obstruction=document.getElementById(side?'stats':'btns');
+  if(!phone&&obstruction&&fig.getScreenCTM()){
+   const r=obstruction.getBoundingClientRect(),p=new DOMPoint(r.right,r.bottom+12).matrixTransform(fig.getScreenCTM().inverse());top=Math.max(top,p.y+h/2);
+  }
+  const bottom=vb.y+vb.height-h-48*oldInk;
+  col.forEach((it,i)=>{const y=top+(bottom-top)*i/Math.max(1,col.length-1);svg+=tag(it.at,(x-it.p[0])/INK_K,(y-it.p[1])/INK_K,it.text,it.on);});
+ });
+ INK_K=oldInk;return svg;
+}
+function mcScene(st,m){
+ const g=mcPose(st), k=ease(st.xr||0), parts=[], labels=[];
+ const put=(pts,svg,r=0)=>parts.push({box:mcBounds(pts,r),svg});
+ const label=(at,text,on=false)=>labels.push({at,text,on});
+ const bx=(a,b,mat,text,active=false,ghost=false)=>{put([a,b],`<g opacity="${ghost?1-.83*k:1}">${box(...a,...b,mat,tone,.8)}</g>`);if(text)label(mcMix(a,b,.5),text,active);};
+ const rd=(a,b,r,mat,text,active=false)=>{put([a,b],rod(a,b,r,mat,tone,.8),r);if(text)label(mcMix(a,b,.5),text,active);};
+ const cy=(x,y,z0,z1,r,mat,text)=>{put([[x-r,y-r,z0],[x+r,y+r,z1]],cyl(x,y,z0,z1,r,mat,tone,.8));if(text)label([x,y,z1],text);};
+ const wire=pts=>{for(let i=1;i<pts.length;i++)put([pts[i-1],pts[i]],line([pts[i-1],pts[i]],1.2),.25);};
+ for(const y of [37,59])bx([13,y-1.6,13],[108,y+1.6,18],mcSteel,y===37?'CHASSIS RAILS':null);
+ bx([11,33,18],[110,63,22],m,'CARRIER DECK',false,true);
+ for(const x of [24,91]){
+  rd([x,30,13],[x,66,13],1.7,METAL,x===24?'REAR AXLE':'FRONT AXLE');
+  for(const y of [30,66]){
+   rd([x,y-3,13],[x,y+3,13],10,DARK,x===24&&y===66?'REAR TIRES':x===91&&y===66?'FRONT TIRES':null);
+   rd([x,y-3.15,13],[x,y+3.15,13],4.2,METAL,x===91&&y===66?'WHEEL HUBS':null);
+  }
+ }
+ bx([85,34,22],[109,62,40],m,'DRIVER CAB',false,true);
+ bx([88,33.8,28],[103,34,37],CLEAR,'SIDE WINDOW',false,true);
+ bx([109,36,29],[109.3,60,38],CLEAR,'WINDSCREEN',false,true);
+ bx([88,62.1,23],[104,62.3,38],m,'CAB DOOR',false,true);
+ bx([89,62.4,30],[103,62.6,37],CLEAR,null,false,true);
+ bx([109,32,17],[114,64,20],METAL,'BUMPER');
+ for(const x of [18,77]){
+  bx([x-3,32,16],[x+3,64,21],mcSteel,x===18?'REAR OUTRIGGER HOUSING':'FRONT OUTRIGGER HOUSING');
+  for(const sign of [-1,1]){
+   const beamProgress=Math.min(1,st.support*2), jackProgress=Math.max(0,st.support*2-1);
+   const y=48+sign*(17+20*beamProgress), y0=Math.min(48+sign*9,y), y1=Math.max(48+sign*9,y);
+   bx([x-2,y0,17],[x+2,y1,20],m,x===77&&sign===1?'SLIDING OUTRIGGER BEAMS':null,st.phase==='support');
+   cy(x,y,10,20,2.5,m,x===77&&sign===1?'HYDRAULIC JACK BARRELS':null);
+   rd([x,y,10],[x,y,7-3*jackProgress],1.3,METAL,x===77&&sign===1?'JACK PISTON RODS':null,st.phase==='support');
+   cy(x,y,5-3*jackProgress,7-3*jackProgress,5,mcSteel,x===77&&sign===1?'JACK FEET':null);
+  }
+ }
+ cy(37,48,22,25,13,METAL,'SLEW BEARING');
+ bx([20,34,25],[58,62,29],m,'REVOLVING PLATFORM');
+ bx([15,34,29],[28,62,41],mcSteel,'COUNTERWEIGHT');
+ for(const y of [42,54])bx([33,y-1,29],[41,y+1,36],m,y===54?'BOOM FOOT BRACKETS':null);
+ rd([37,40,34],[37,56,34],2,METAL,'BOOM PIVOT PIN',st.phase==='extend');
+ const ring=(s,r)=>[[-r,-r],[r,-r],[r,r],[-r,r]].map(([y,h])=>g.at(s,y,h));
+ const sections=[[0,52,5.2,'OUTER BOOM'],[32+14*st.extension,80+14*st.extension,4.25,'MIDDLE BOOM'],[63+28*st.extension,105+28*st.extension,3.3,'TIP BOOM']];
+ for(const [s0,s1,r,name] of sections){
+  const aa=ring(s0,r),bb=ring(s1,r), body=loft(aa,bb,n=>tone(n,m))+hullInk([...aa,...bb],1.5);
+  put([...aa,...bb],`<g opacity="${1-.84*k}">${body}</g>`);
+  label(g.at((s0+s1)/2,r,0),name,st.phase==='extend');
+  const ri=r-.7;
+  for(let j=0;j<4;j++){
+   const q=[aa[j],aa[(j+1)%4],g.at(s0, ...[[-ri,-ri],[ri,-ri],[ri,ri],[-ri,ri]][(j+1)%4]),g.at(s0,...[[-ri,-ri],[ri,-ri],[ri,ri],[-ri,ri]][j])];
+   put(q,shape(q,toneI(g.d,METAL),.55));
+  }
+  const cc=ring(s1,r+.6),dd=ring(s1-1.4,r+.6);
+  put([...cc,...dd],loft(cc,dd,n=>tone(n,METAL))+hullInk([...cc,...dd],.8));
+ }
+ label(g.at(52,0,5.6),'BOOM COLLAR');
+ rd(g.ramBase,g.ramMouth,2.8,m,'BOOM RAISING RAM',st.phase==='extend');
+ rd(g.ramMouth,g.ramTop,1.3,METAL,'RAM PISTON ROD',st.phase==='extend');
+ for(const [p,name] of [[g.ramBase,'RAM BASE PIN'],[g.ramTop,'RAM BOOM PIN']])rd(mcAdd(p,[0,-3,0]),mcAdd(p,[0,3,0]),1.3,METAL,name);
+ const drum=[30,48,34], feed=g.at(9,0,6), top=g.head, low=g.lower;
+ rd([30,44,34],[30,52,34],3,mcGold,'ROPE DRUM',st.phase==='hoist');
+ rd([30,42,34],[30,54,34],.8,METAL,'DRUM AXLE');
+ for(const y of [43,53])bx([27,y-.5,29],[33,y+.5,34],mcSteel,null);
+ const guide=[top[0],48,top[2]], moving=[low[0],48,low[2]];
+ for(const [p,name] of [[guide,'BOOM HEAD SHEAVE'],[moving,'LOAD SHEAVE']]){
+  rd(mcAdd(p,[0,-1,0]),mcAdd(p,[0,1,0]),2,mcGold,name,st.phase==='hoist');
+  const headRise=top[2]-86.5,angle=name==='LOAD SHEAVE'?(30*st.hoist-headRise)/2:(60*st.hoist-2*headRise)/2;
+  for(const dy of [-1.03,1.03])for(let j=0;j<3;j++){
+   const a=angle+j*Math.PI*2/3,center=mcAdd(p,[0,dy,0]);
+   put([center,mcAdd(center,[1.7*Math.cos(a),0,1.7*Math.sin(a)])],line([center,mcAdd(center,[1.7*Math.cos(a),0,1.7*Math.sin(a)])],.6));
+  }
+  rd(mcAdd(p,[0,-3,0]),mcAdd(p,[0,3,0]),.6,METAL,name==='LOAD SHEAVE'?'LOAD SHEAVE AXLE':'HEAD SHEAVE AXLE');
+  for(const dy of [-2.6,2.6])bx(mcAdd(p,[-2.8,dy-.35,-3.5]),mcAdd(p,[2.8,dy+.35,3.5]),mcSteel,dy>0?(name==='LOAD SHEAVE'?'LOAD BLOCK CHEEK':'BOOM HEAD CHEEK'):null,false,true);
+ }
+ const drumAngle=(mcRestRope-g.ropeLength)/3;
+ for(const dy of [-4.05,4.05]){
+  const center=mcAdd(drum,[0,dy,0]),end=mcAdd(center,[2.5*Math.cos(drumAngle),0,2.5*Math.sin(drumAngle)]);
+  put([center,end],line([center,end],1));
+ }
+ wire([drum,feed,g.at(102+28*st.extension,0,4),[guide[0]-2,guide[1],guide[2]]]);
+ const arc=(center,a0,a1,y)=>Array.from({length:17},(_,i)=>{const a=(a0+(a1-a0)*i/16)*Math.PI/180;return[center[0]+2*Math.cos(a),y,center[2]+2*Math.sin(a)];});
+ wire(arc(guide,180,0,48));
+ wire([[top[0]+2,48,top[2]],[low[0]+2,48,low[2]]]);
+ wire(arc(low,0,-180,48));
+ wire([[low[0]-2,48,low[2]],[top[0]-2,48,top[2]]]);
+ rd([top[0]-2,48,top[2]],[top[0]-2,48,top[2]+3],.6,METAL,'ROPE DEAD END');
+ label([low[0]+2,46.5,(top[2]+low[2])/2],'HOIST ROPE',st.phase==='hoist');
+ rd([low[0],48,low[2]-3.5],[low[0],48,low[2]-5],.9,METAL,null);
+ const hook=Array.from({length:18},(_,i)=>{const a=(90+285*i/17)*Math.PI/180;return[low[0]+1.6*Math.cos(a),48,low[2]-6.6+1.6*Math.sin(a)];});
+ for(let i=1;i<hook.length;i++)rd(hook[i-1],hook[i],.6,METAL,null);
+ label(hook[7],'LOAD HOOK',st.phase==='hoist');
+ const weightTop=low[2]-7;
+ rd([low[0]-1,48,weightTop-1],[low[0]+1,48,weightTop-1],.5,METAL,null);
+ bx([low[0]-4,44,weightTop-8],[low[0]+4,52,weightTop-1],mcSteel,null);
+ let svg=board(0,0,160,96,2,4,WOOD);
+ svg+=castShadow([[12,28,3],[110,28,3],[110,68,3],[12,68,3],top],2,boardTop(0,0,160,96,2,4));
+ svg+=byDepth(parts.filter(p=>p.box[1][2]<=23))+byDepth(parts.filter(p=>p.box[1][2]>23));
+ if(k>.6)svg+=mcLabels(labels);
+ return svg;
+}
+function mcAction(st,ui,key,target,phase){
+ if(st.phase!=='idle')return ui.flash('Wait for the motion to finish');
+ if(key!=='support'&&st.support!==1)return ui.flash('Stabilize before extending or hoisting');
+ if(key==='hoist'&&st.extension!==1)return ui.flash('Extend to the supported reach first');
+ if(st[key]===target)return ui.flash('Already in position');
+ const from=st[key];let elapsed=0;st.phase=phase;
+ ui.animate(dt=>{elapsed=Math.min(1,elapsed+dt/1.6);st[key]=from+(target-from)*ease(elapsed);if(elapsed===1){st.phase='idle';return false;}return true;});
+}
+const mcUI=mountFigure({fig:'57',title:'Mobile crane',turn:'full',size:[160,96,142],palette:'mustard',state:{support:0,extension:0,hoist:0,phase:'idle'},scene:mcScene,
+ buttons:[{label:'Stabilize',onClick:(st,ui)=>mcAction(st,ui,'support',1,'support')},{label:'Extend',onClick:(st,ui)=>mcAction(st,ui,'extension',1,'extend')},{label:'Hoist',onClick:(st,ui)=>mcAction(st,ui,'hoist',1,'hoist')},{label:'Lower',onClick:(st,ui)=>mcAction(st,ui,'hoist',0,'hoist')}],
+ stats:st=>[{label:'Support',value:st.support===1?'Set':'Not set'},{label:'Reach',value:(mcPose(st).head[0]-37).toFixed(1)+' cm',small:true},{label:'Load rise',value:(30*st.hoist).toFixed(1)+' cm',small:true}],
+ params:(st,q)=>{const val=key=>{const n=Number(q.get(key));return Number.isFinite(n)?Math.max(0,Math.min(1,n)):0;};st.support=val('support');st.extension=st.support===1?val('extension'):0;st.hoist=st.extension===1?val('hoist'):0;}
+});
+xrMount(()=>mcUI,()=> '');
+</script></body></html>
