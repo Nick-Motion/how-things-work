@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hydraulic platform</title><style>html:not(.nolabels) .zchip{right:calc(50% - 46px)}</style></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. This scale teaching adaptation follows the hydraulic platform on printed page 29.
+   Primary evidence is saved OCR from the accessible 1998 and 2016 pages cited in meta.json.
+   The 1988 edition is inaccessible and unverified. Dimensions and the truck styling are illustrative.
+   1. Stabilize lowers the four legs from the chassis-mounted beams until the pads touch the ground.
+   2. Raise is blocked until all pads are down. The paired lower rams extend between deck and lower boom.
+      Three overlapping lower sections extend along one axis. Their internal drive is not specified or drawn.
+      The upper ram is pinned above the lower section and between the upper fulcrum and cage load.
+      Its attachment distance SHORTENS as the upper boom swings up. Both booms are third-class levers.
+   3. Lower reverses these motions. The upper ram EXTENDS while lower rams and sliding sections retract.
+      The cage remains attached at the boom tip. Its horizontal floor is a prescribed teaching pose,
+      not a claim of a source-documented leveling circuit. No leveling actuator, pump or valves are drawn.
+   Parts, with supports. VEHICLE: chassis, deck, cab, glass, axles, wheels fixed to axles; four beams on chassis,
+      legs sliding in beams, pads on legs. BOOMS: pedestal on deck, pivot cheeks on pedestal, lower pivot pin,
+      outer section on pivot, two nested sliding sections, collars on section mouths, upper hinge pin,
+      upper boom on hinge. RAMS: paired barrels on deck foot pins, rods on lower-boom effort pins;
+      upper barrel on lower-boom mounting lug, rod on upper-boom effort pin. CAGE: tip hinge on upper boom,
+      floor attached to hinge, toe boards and corner posts on floor, rails on posts, firefighter on floor.
+   Force arrows are overlays and are not included in the anatomy count. All ram endpoints derive from one pose.
+   State shape is {support:0..1, lift:0..1, goal:0|1, moving:boolean}; motion uses one retargetable loop.
+*/
+const hpAdd = (a,b) => a.map((v,i) => v+b[i]);
+const hpMul = (a,k) => a.map(v => v*k);
+const hpMix = (a,b,t) => a.map((v,i) => v+(b[i]-v)*t);
+const hpDir = deg => [Math.cos(deg*Math.PI/180),0,Math.sin(deg*Math.PI/180)];
+const hpLength = (a,b) => Math.hypot(...sub(b,a));
+const hpBounds = (ps,r=0) => [0,1].map(side => [0,1,2].map(i => (side ? Math.max : Math.min)(...ps.map(p=>p[i]))+(side?r:-r)));
+const hpOrigin = [45,40,34], hpSteel = matOf('#788c97'), hpBlue = matOf('#75a9c6'), hpCream = matOf('#f3dfb0');
+function hpPose(p){
+  const ld=hpDir(12+43*p), ln=[-ld[2],0,ld[0]], ud=hpDir(25+75*p), un=[-ud[2],0,ud[0]], len=70+30*p;
+  const lower=t=>hpAdd(hpOrigin,hpMul(ld,t)), elbow=lower(len), upper=t=>hpAdd(elbow,hpMul(ud,t));
+  const lowerFoot=[88,40,24], lowerEffort=lower(28);
+  const upperFoot=hpAdd(lower(len-24),hpMul(ln,6)), upperEffort=upper(16), cage=upper(60);
+  return {ld,ln,ud,un,len,lower,elbow,upper,lowerFoot,lowerEffort,upperFoot,upperEffort,cage,
+    lowerRam:hpLength(lowerFoot,lowerEffort),upperRam:hpLength(upperFoot,upperEffort)};
+}
+function hpScene(st,m){
+  const g=hpPose(st.lift), k=ease(st.xr||0), parts=[], labels=[], overlays=[];
+  const put=(ps,r,svg)=>parts.push({box:hpBounds(ps,r),svg});
+  const label=(at,text,on=false)=>labels.push({at,text,on});
+  const bx=(a,b,mat,text,active=false,ghost=false)=>{
+    const svg=box(...a,...b,mat,tone,1.1);
+    put([a,b],0,ghost?`<g opacity="${1-.77*k}">${svg}</g>`:svg);
+    if(text)label(hpMix(a,b,.5),text,active);
+  };
+  const rd=(a,b,r,mat,text,active=false)=>{put([a,b],r,rod(a,b,r,mat,tone,1));if(text)label(hpMix(a,b,.5),text,active);};
+  const beam=(a,b,width,height,mat,text,active=false,ghost=false)=>{
+    const d=norm(sub(b,a)), v=[-d[2],0,d[0]], corners=p=>[-1,1].flatMap(y=>[-1,1].map(z=>hpAdd(p,[v[0]*z*height/2,y*width/2,v[2]*z*height/2])));
+    const ring=p=>[[-1,-1],[1,-1],[1,1],[-1,1]].map(([y,z])=>hpAdd(p,[v[0]*z*height/2,y*width/2,v[2]*z*height/2]));
+    const ra=ring(a), rb=ring(b), cap=vis(d)?rb:ra;
+    const svg=loft(ra,rb,n=>tone(n,mat))+shape(cap,tone(vis(d)?d:hpMul(d,-1),mat),.9)+hullInk([...ra,...rb],2.3);
+    put([...corners(a),...corners(b)],0,ghost?`<g opacity="${1-.65*k}">${svg}</g>`:svg);
+    if(text)label(hpMix(a,b,.5),text,active);
+  };
+  const pin=(p,half,r,text)=>rd(hpAdd(p,[0,-half,0]),hpAdd(p,[0,half,0]),r,hpSteel,text,st.moving);
+  const ram=(a,b,barrel,text1,text2)=>{
+    const d=norm(sub(b,a)), mouth=hpAdd(a,hpMul(d,barrel));
+    rd(a,mouth,2.4,hpSteel,text1,st.moving);rd(mouth,b,1.1,METAL,text2,st.moving);
+    rd(hpAdd(mouth,hpMul(d,-.6)),mouth,2.65,hpCream);
+  };
+  bx([12,24,10],[136,56,17],hpSteel,'CHASSIS');
+  bx([14,20,17],[133,60,23],m,'LOAD DECK',false,true);
+  bx([109,21,23],[139,59,47],m,'CAB',false,true);
+  bx([122,23,47],[138,57,49],m);
+  bx([138.1,23,32],[138.6,57,43],CLEAR,'WINDSHIELD',false,true);
+  for(const [x,name] of [[116,'FRONT AXLE'],[30,'REAR AXLE']]){
+    rd([x,18,10],[x,62,10],2,hpSteel,name);
+    for(const y of [19,61]){
+      rd([x,y-3,10],[x,y+3,10],9,DARK,y===61&&x===30?'ROAD WHEELS':null);
+      rd([x,y+(y<40?-3.1:3.1),10],[x,y+(y<40?-3.6:3.6),10],4,METAL);
+    }
+  }
+  for(const x of [23,93])for(const [y,side] of [[12,'LEFT'],[68,'RIGHT']]){
+    const footZ=7*(1-st.support), nearY=y<40?24:56;
+    bx([x-3,Math.min(y,nearY),13],[x+3,Math.max(y,nearY),19],hpSteel,x===23?side+' SUPPORT BEAM':null,st.support<1);
+    bx([x-2,y-2,footZ+2],[x+2,y+2,17],METAL,x===23?side+' STABILIZER LEG':null,st.support<1);
+    bx([x-7,y-6,footZ],[x+7,y+6,footZ+2],hpSteel,x===23?side+' FOOTPAD':null,st.support===1);
+  }
+  bx([35,30,23],[55,50,29],hpSteel,'BOOM PEDESTAL');
+  for(const y of [32,46])bx([39,y,29],[50,y+2,39],m,y===46?'PIVOT CHEEKS':null);
+  pin(hpOrigin,10,2.6,'LOWER FULCRUM PIN');
+  const sectionStarts=[0,12+15*st.lift,24+30*st.lift], sectionEnds=[46,58+15*st.lift,g.len];
+  for(let i=0;i<3;i++){
+    const a=g.lower(sectionStarts[i]), b=g.lower(sectionEnds[i]), names=['LOWER OUTER SECTION','FIRST SLIDING SECTION','SECOND SLIDING SECTION'];
+    beam(a,b,11-i*2.5,9-i*2,m,names[i],st.moving,true);
+    if(i<2)beam(g.lower(sectionEnds[i]-.8),g.lower(sectionEnds[i]+.8),12-i*2.5,10-i*2,hpCream,i?'SECOND SECTION COLLAR':'FIRST SECTION COLLAR',st.moving);
+  }
+  for(const [dy,name] of [[-8,'FAR'],[8,'NEAR']]){
+    const a=hpAdd(g.lowerFoot,[0,dy,0]), b=hpAdd(g.lowerEffort,[0,dy,0]);
+    bx([a[0]-4,a[1]-2,23],[a[0]+4,a[1]+2,27],hpSteel);
+    ram(a,b,21.5,name+' LOWER RAM',name+' LOWER ROD');
+    pin(a,2.6,1.4,dy===8?'LOWER RAM FOOT PIN':null);
+    rd(hpAdd(g.lowerEffort,[0,Math.sign(dy)*4,0]),b,1.5,hpSteel);
+    pin(b,2.5,1.4,dy===8?'LOWER EFFORT PIN':null);
+  }
+  beam(g.elbow,g.cage,8,7,m,'UPPER BOOM',st.moving,true);
+  pin(g.elbow,8,2.7,'UPPER FULCRUM PIN');
+  const uf=hpAdd(g.upperFoot,[0,7,0]), ue=hpAdd(g.upperEffort,[0,7,0]);
+  beam(hpAdd(g.lower(g.len-24),[0,4,0]),uf,3,3,hpSteel,'UPPER RAM MOUNT');
+  rd(hpAdd(g.upperEffort,[0,3.5,0]),ue,1.4,hpSteel);
+  ram(uf,ue,29,'UPPER RAM BARREL','UPPER PISTON ROD');
+  pin(uf,2,1.4,'UPPER RAM MOUNT PIN');pin(ue,2,1.4,'UPPER EFFORT PIN');
+  const c=g.cage, floor=c[2]-6;
+  pin(c,6,2,'CAGE SUPPORT HINGE');
+  for(const dy of [-6,6])beam(hpAdd(c,[0,dy,0]),hpAdd(c,[0,dy,-5]),2,2,hpSteel);
+  bx([c[0]-13,26,floor-2],[c[0]+13,54,floor],hpCream,'CAGE FLOOR');
+  for(const y of [26,54])bx([c[0]-13,y-1,floor],[c[0]+13,y+1,floor+3],m,y===54?'CAGE TOE BOARDS':null);
+  for(const x of [-13,13])for(const y of [26,54])rd([c[0]+x,y,floor],[c[0]+x,y,floor+18],.65,hpSteel,x===13&&y===54?'CAGE CORNER POSTS':null);
+  for(const z of [floor+9,floor+18]){
+    for(const y of [26,54])rd([c[0]-13,y,z],[c[0]+13,y,z],.65,hpSteel,y===54&&z===floor+18?'CAGE GUARDRAILS':null);
+    for(const x of [-13,13])rd([c[0]+x,26,z],[c[0]+x,54,z],.65,hpSteel);
+  }
+  for(const x of [-2,2])rd([c[0]+x,40,floor],[c[0]+x,40,floor+8],1.4,DARK);
+  bx([c[0]-3,38,floor+8],[c[0]+3,42,floor+16],hpBlue,'FIREFIGHTER LOAD');
+  rd([c[0],40,floor+16],[c[0],40,floor+20],2.5,hpCream);
+  rd([c[0],40,floor+20],[c[0],40,floor+21],3.2,PALS.mustard);
+  for(const dx of [-1,1])rd([c[0]+dx*3,40,floor+14],[c[0]+dx*6,40,floor+18],1,hpBlue);
+  if(k>.6){
+    const arrow=(a,b,color)=>{
+      const d=norm(sub(b,a)), n=[-d[2],0,d[0]];
+      overlays.push(`<path d="${pd([a,b],false)}" stroke="${color}" stroke-width="2" stroke-dasharray="3 2"/>`+shape([b,hpAdd(hpAdd(b,hpMul(d,-4)),hpMul(n,2)),hpAdd(hpAdd(b,hpMul(d,-4)),hpMul(n,-2))],color,0));
+    };
+    const raising=st.goal===1;
+    const la=hpAdd(g.lowerFoot,[0,14,0]),lb=hpAdd(g.lowerEffort,[0,14,0]);
+    arrow(raising?la:lb,raising?lb:la,'#d87825');
+    const ua=hpAdd(uf,[0,5,0]),ub=hpAdd(ue,[0,5,0]);
+    arrow(raising?ub:ua,raising?ua:ub,'#368793');
+  }
+  const shadow=castShadow([[12,18,0],[139,62,0],[139,62,45],[12,18,23],g.elbow,g.cage]);
+  let out=shadow+byDepth(parts)+overlays.join('');
+  if(k>.6)out+=hpLabels(labels);
+  return out;
+}
+function hpLabels(items){
+  const svg=document.getElementById('fig'),vb=svg.viewBox.baseVal,u=window.LBL_U?LBL_U():0;
+  const rows=Math.ceil(items.length/2),ctm=svg.getScreenCTM();
+  let top=12*INK_K;
+  if(!u&&ctm){
+    for(const id of ['btns','stats']){
+      const rect=document.getElementById(id).getBoundingClientRect();
+      top=Math.max(top,new DOMPoint(rect.left,rect.bottom+8).matrixTransform(ctm.inverse()).y);
+    }
+  }
+  const bottom=vb.height-14*INK_K,gap=(bottom-top)/(rows-1);
+  const ordered=items.map(it=>({...it,screen:P(...it.at)})).sort((a,b)=>a.screen[0]-b.screen[0]);
+  return [ordered.slice(0,rows),ordered.slice(rows)].map((col,side)=>{
+    col.sort((a,b)=>a.screen[1]-b.screen[1]);
+    return col.map((it,i)=>{
+      const x=vb.width*(side?.87:.13),y=top+i*gap;
+      return tag(it.at,(x-it.screen[0])/INK_K,(y-it.screen[1])/INK_K,it.text,it.on);
+    }).join('');
+  }).join('');
+}
+function hpRun(st,ui){
+  if(st.moving)return;
+  st.moving=true;
+  ui.animate(dt=>{
+    st.support=Math.min(1,st.support+dt/1.1);
+    if(st.support===1){const diff=st.goal-st.lift;st.lift+=Math.sign(diff)*Math.min(Math.abs(diff),dt/2);}
+    if(st.support===1&&st.lift===st.goal){st.moving=false;return false;}return true;
+  });
+}
+const hpUi=mountFigure({fig:'29',title:'Hydraulic platform',turn:'full',size:[205,80,195],palette:'tomato',state:{support:0,lift:0,goal:0,moving:false},scene:hpScene,
+  stats:st=>{const g=hpPose(st.lift),base=hpPose(0);return[
+    {label:'Model cage height',value:(g.cage[2]-6).toFixed(1)+' cm'},
+    {label:'Lower ram travel',value:(g.lowerRam-base.lowerRam).toFixed(1)+' cm',small:true},
+    {label:'Upper ram travel',value:(g.upperRam-base.upperRam).toFixed(1)+' cm',small:true}];},
+  buttons:[
+    {label:'Stabilize',onClick:(st,ui)=>{if(st.support===1)return ui.flash('Stabilizers are on the ground');hpRun(st,ui);}},
+    {label:'Raise',onClick:(st,ui)=>{if(st.support<1)return ui.flash('Stabilize before raising the platform');st.goal=1;hpRun(st,ui);}},
+    {label:'Lower',onClick:(st,ui)=>{if(st.lift===0&&!st.moving)return ui.flash('Platform is already lowered');st.goal=0;hpRun(st,ui);}}
+  ],
+  params:(st,q)=>{const value=Number(q.get('lift')||0);st.lift=Number.isFinite(value)?Math.max(0,Math.min(1,value)):0;st.goal=st.lift>0?1:0;st.support=st.lift>0||q.get('stabilized')==='1'?1:0;}
+});
+xrMount(()=>hpUi,()=> '');
+addEventListener('resize',()=>hpUi.invalidate());
+addEventListener('unhandledrejection',e=>{document.documentElement.dataset.errors+=' '+String(e.reason)+';';});
+</script></body></html>
