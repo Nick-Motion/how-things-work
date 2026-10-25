@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hand drill</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Page 66, Drills and Augers, Screws. Primary saved 2016 image and 1998/2016 text.
+   A hand turns the crank and crown wheel. Its 32 teeth drive the lower 8-tooth bevel pinion.
+   The lower pinion is fixed to the spindle, chuck and bit. The upper pinion turns freely on its sleeve.
+   The supporting hand presses the whole tool down. The cutting lips remove wood, and the spiral flutes
+   carry chips from the cutting tip to the surface. The same hand lifts the spinning bit to withdraw it.
+   Parts. Structure: frame, main grip, axle and bearing collars. Drive: crank arm and knob, crown wheel
+   and teeth, driven bevel pinion, freewheeling pinion, spindle, chuck, jaws, bit shank, flutes, cutting lips.
+   The frame carries the axle and spindle bearings. The crank and wheel share the axle. The chuck grips
+   the shank with three jaws. All those parts move down together, held by the hand around the main grip.
+   Contact geometry: crown pitch radius 16 at z=47/79; face x=39..41; pinion axis x=43, y=38,
+   radius about 3.7 at each contact. Ratio 32:8. The upper pinion counter-rotates independently.
+   Teaching adaptation: enlarged, slowed, 4:1 illustrative gearing; fingers and wood are fixtures.
+   Ghosting reveals overlaps without removing anatomy. Chips are enlarged and their count is illustrative.
+   Hand travel 12 includes 6 clearance and 6 cutting depth. No motor, impact action or automatic feed.
+   Minimum real anatomy is 10, declared in the brief. Fixtures and chips are excluded from that count.
+   The 1988 edition is inaccessible and unverified. This is not an edition-union reconstruction. */
+const hdTau = Math.PI*2, hdSkin = matOf('#e8b38e'), hdSteel = matOf('#aebbc0');
+const hdBounds = [12,79,16,61,0,116];
+const hdActions = {crank:{duration:1.8,turns:1},feed:{duration:3,turns:1.7},withdraw:{duration:2.4,turns:1.3}};
+const hdBox = (pts,r=0) => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))-r),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i]))+r)];
+const hdWheelPoint = (x,r,a,d=0) => [x,38+r*Math.cos(a),63-d+r*Math.sin(a)];
+const hdBitPoint = (r,a,z) => [43+r*Math.cos(a),38+r*Math.sin(a),z];
+function hdScene(st,m){
+  const d=st.feed,k=ease(st.xr||0),parts=[],labels=[],moving=st.phase!=='idle',output=-4*st.angle;
+  const put=(pts,svg,r=0)=>parts.push({box:hdBox(pts,r),svg});
+  const label=(at,text,on=moving)=>labels.push({at,text,on});
+  const link=(a,b,r,mat=METAL,ghost=false,r1=r)=>put([a,b],`<g opacity="${ghost?1-.78*k:1}">${rod(a,b,r,mat,toneI,.9,r1)}</g>`,Math.max(r,r1));
+  const solid=(A,B,mat,axis)=>{
+    const cap=vis(axis)?B:A,n=vis(axis)?axis:axis.map(v=>-v);
+    put([...A,...B],loft(A,B,n=>toneI(n,mat))+shape(cap,toneI(n,mat),.6)+hullInk([...A,...B],1.2));
+  };
+  let wood=board(12,16,74,61,10,3,WOOD);
+  for(let y=20;y<60;y+=6) wood+=line([[15,y,10.04],[31,y+.7,10.04],[50,y-.4,10.04],[70,y+.4,10.04]],.45).replaceAll(INK,'#a27140');
+  if(st.holeDepth>0) wood+=shape(on(PZ(10.08),ellUV(43,38,1.45,1.45,20)),'#47301f',.5);
+  let result=`<g opacity="${1-.78*k}">${wood}</g>`;
+  result+=castShadow([[28,35,90-d],[43,38,112-d],[25,22,63-d],[25,54,63-d]],10,boardTop(12,16,74,61,10,3));
+  for(const chip of st.chips){
+    const t=chip.t,a=chip.a;
+    let p;
+    if(t<1){const z=16-d+19*t;p=hdBitPoint(1.4,output+(z-(16-d))*hdTau/9+2.6,z);}
+    else {const u=Math.min(1,(t-1)/.8),r=1.4+u*(5+chip.r);p=hdBitPoint(r,a,Math.max(10.5,35-d+(10.5-(35-d))*u+7*Math.sin(Math.PI*u)));}
+    if(p[2]>10||k>.6) link(p,[p[0]+.8,p[1]+.5,p[2]+.3],.35,WOOD);
+  }
+  link([30,38,36-d],[30,38,91-d],2,m,true);
+  link([30,38,36-d],[43,38,36-d],2,m,true);
+  link([30,38,87-d],[43,38,87-d],2,m,true);
+  for(const z of [43,85]) link([43,38,z-d],[43,38,z+4-d],2.4,hdSteel,true);
+  label([30,38,69-d],'FRAME',false);
+  link([43,38,88-d],[43,38,93-d],2.4,METAL);
+  link([43,38,93-d],[43,38,111-d],4.4,WOOD,true,3.6);
+  label([43,38,97-d],'MAIN GRIP',st.phase==='feed'||st.phase==='withdraw');
+  link([25,38,63-d],[38,38,63-d],1.8,METAL);
+  label([29,38,63-d],'CRANK AXLE');
+  link([25,38,63-d],hdWheelPoint(25,13,st.angle,d),1.8,m);
+  const knob=hdWheelPoint(25,13,st.angle,d),knobEnd=[13,knob[1],knob[2]];
+  link(knobEnd,knob,2.9,WOOD);
+  label(hdWheelPoint(25,9,st.angle,d),'CRANK ARM');label(knobEnd,'CRANK KNOB');
+  link([34,38,63-d],[39,38,63-d],3,m);
+  for(let i=0;i<4;i++)link(hdWheelPoint(37,2.8,st.angle+i*hdTau/4,d),hdWheelPoint(37,13.5,st.angle+i*hdTau/4,d),1.25,m);
+  for(let i=0;i<32;i++){
+    const a=st.angle+i*hdTau/32,b=a+hdTau/32;
+    const ring=x=>[hdWheelPoint(x,12.9,a,d),hdWheelPoint(x,16,a,d),hdWheelPoint(x,16,b,d),hdWheelPoint(x,12.9,b,d)];
+    solid(ring(35.5),ring(39),m,[1,0,0]);
+    const tooth=x=>[hdWheelPoint(x,14.1,a+.025,d),hdWheelPoint(x,16.4,a+.025,d),hdWheelPoint(x,16.4,b-.065,d),hdWheelPoint(x,14.1,b-.065,d)];
+    solid(tooth(39),tooth(41),METAL,[1,0,0]);
+  }
+  label(hdWheelPoint(37,12.8,2.4,d),'CROWN WHEEL');label(hdWheelPoint(41,15.5,.7,d),'CROWN TEETH');
+  for(const [z0,z1,r0,r1,angle,name] of [[46,50,4,2.7,output,'DRIVEN PINION'],[76,80,2.7,4,4*st.angle,'FREEWHEEL PINION']]){
+    link([43,38,z0-d],[43,38,z1-d],r0,hdSteel,false,r1);
+    for(let i=0;i<8;i++){
+      const a=angle+i*hdTau/8,b=a+.37;
+      const ring=(z,r)=>[hdBitPoint(r-.6,a,z-d),hdBitPoint(r+.65,a,z-d),hdBitPoint(r+.65,b,z-d),hdBitPoint(r-.6,b,z-d)];
+      solid(ring(z0,r0),ring(z1,r1),METAL,[0,0,1]);
+    }
+    label([43,38,(z0+z1)/2-d],name);
+  }
+  // The upper pinion has its own sleeve. It is not keyed to the spindle.
+  link([43,38,80-d],[43,38,84-d],1.9,hdSteel);
+  for(const [a,b] of [[41,46],[50,63],[63,76],[80,85]]){
+    link([43,38,a-d],[43,38,b-d],1.1,METAL);
+    const u=[Math.cos(output),Math.sin(output)];
+    link([43+1.1*u[0],38+1.1*u[1],a-d],[43+1.1*u[0],38+1.1*u[1],b-d],.18,DARK);
+  }
+  label([43,38,59-d],'SPINDLE');
+  link([43,38,34-d],[43,38,42-d],4,hdSteel,true);
+  link([43,38,31-d],[43,38,34-d],2.1,hdSteel,true,4);
+  label([46.7,38,39-d],'CHUCK');
+  for(let i=0;i<16;i++){
+    const a=output+i*hdTau/16;
+    const u=hdBitPoint(4.04,a,35-d),v=hdBitPoint(4.04,a,40-d);
+    if(vis([Math.cos(a),Math.sin(a),0])) put([u,v],`<g opacity="${1-.78*k}">${line([u,v],.5)}</g>`,.1);
+  }
+  for(let i=0;i<3;i++){
+    const a=output+i*hdTau/3;
+    link(hdBitPoint(2.7,a,36-d),hdBitPoint(1.3,a,31-d),.65,METAL);
+  }
+  label(hdBitPoint(1.5,output,31.8-d),'CHUCK JAWS');
+  link([43,38,29-d],[43,38,35-d],1.25,hdSteel);
+  label([43,38,30-d],'BIT SHANK');
+  const bottom=16-d,visibleBottom=k>.6?bottom:Math.max(bottom,10.12);
+  if(visibleBottom<29-d)link([43,38,visibleBottom],[43,38,29-d],.55,hdSteel);
+  for(let z=visibleBottom;z<29-d;z+=.65){
+    const zz=Math.min(z+.65,29-d);
+    for(let i=0;i<2;i++){
+      const ring=h=>{const a=output+(h-bottom)*hdTau/9+i*Math.PI;
+        return [hdBitPoint(.5,a,h),hdBitPoint(1.35,a,h),hdBitPoint(1.35,a+1.9,h),hdBitPoint(.5,a+1.9,h)];};
+      solid(ring(z),ring(zz),METAL,[0,0,1]);
+    }
+  }
+  if(bottom>=10||k>.6){
+    for(let i=0;i<2;i++){
+      const a=output+i*Math.PI;
+      const pts=[[43,38,bottom-.6],hdBitPoint(1.35,a,bottom+.8),hdBitPoint(1.35,a+1.9,bottom+.8)];
+      put(pts,shape(pts,METAL.m,.6));
+    }
+  }
+  label(hdBitPoint(1.35,output+6*hdTau/9,22-d),'SPIRAL FLUTES');label([43,38,16-d],'CUTTING LIPS');
+  // The hand is a teaching fixture. Its fingers meet the main grip and follow the whole tool.
+  link([78,38,108-d],[53,38,106-d],4.8,hdSkin,true,5.7);
+  link([53,38,106-d],[44,38,105-d],5.8,hdSkin,true);
+  for(let i=0;i<4;i++){
+    const z=101+i*2.5-d;
+    link([49,34,z],[42,33.6,z],1.1,hdSkin,true);
+    link([42,33.6,z],[39.5,37,z-1.1],1.1,hdSkin,true);
+  }
+  link([50,42,107-d],[45,43,100-d],1.5,hdSkin,true);
+  result+=byDepth(parts);
+  if(k>.6)result+=xrCallouts(labels,hdBounds);
+  else result+=xrCallouts(labels.filter(x=>['MAIN GRIP','CROWN WHEEL','CRANK KNOB','SPIRAL FLUTES'].includes(x.text)),hdBounds);
+  return result;
+}
+function hdStart(action,st,ui){
+  if(st.phase!=='idle')return ui.flash('Finish this hand movement first');
+  if(action==='feed'&&st.feed>=12)return ui.flash('The hand has reached the teaching depth. Withdraw first.');
+  if(action==='withdraw'&&st.feed===0)return ui.flash('The bit is already above the wood');
+  const spec=hdActions[action],from=st.feed,start=st.angle,target=action==='feed'?12:action==='withdraw'?0:from;
+  let elapsed=0;
+  st.phase=action;
+  ui.animate(dt=>{
+    elapsed+=dt;const t=Math.min(1,elapsed/spec.duration);
+    st.angle=start+hdTau*spec.turns*(t+(action==='feed'?Math.max(0,elapsed-spec.duration)/spec.duration:0));
+    st.feed=from+(target-from)*ease(t);
+    const depth=Math.max(0,st.feed-6);
+    for(let i=Math.floor(st.holeDepth/.4);i<Math.floor(depth/.4);i++)st.chips.push({t:0,a:i*2.4,r:i%5});
+    st.holeDepth=Math.max(st.holeDepth,depth);
+    for(const chip of st.chips)chip.t=Math.min(1.8,chip.t+dt);
+    const active=t<1||st.chips.some(c=>c.t<1.8);
+    if(!active)st.phase='idle';
+    return active;
+  });
+}
+const hdUI=mountFigure({fig:'50',title:'Hand drill',turn:'full',size:[82,76,116],center:[43,38],palette:'cobalt',
+  state:{phase:'idle',angle:0,feed:0,holeDepth:0,chips:[]},scene:hdScene,
+  stats:st=>[{label:'Bit / crank',value:'4 : 1'},{label:'Hole depth',value:Math.max(0,st.holeDepth).toFixed(1)+' mm',small:true}],
+  buttons:['Crank','Feed','Withdraw'].map(label=>({label,onClick:(st,ui)=>hdStart(label.toLowerCase(),st,ui)})),
+  params:(st,q)=>{for(const [key,max] of [['feed',12],['angle',hdTau*100],['holeDepth',6]]){const n=Number(q.get(key));if(q.has(key)&&Number.isFinite(n))st[key]=Math.max(0,Math.min(max,n));}st.holeDepth=Math.max(st.holeDepth,st.feed-6);}
+});
+xrMount(()=>hdUI,()=> '');
+addEventListener('resize',()=>hdUI.render());
+</script></body></html>
