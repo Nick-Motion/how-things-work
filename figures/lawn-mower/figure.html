@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lawn mower</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Source is the cleared Lawn Mower diagram on printed page 39, 2016 scan n40,
+   and the accepted 1998 page 39 text. The 1988 edition remains unverified.
+   Push translates the whole mower. Ground contact rolls both road wheels.
+   The wheel's internal ring drives the smaller pinion in the same direction.
+   Its shaft carries the reel spiders and helical blades. At the bottom, each
+   blade sweeps rearward across the fixed bedknife and shears the bent grass.
+   Roots remain in the specimen strip. Cut tips fall behind the cutting edge.
+   Stop removes the input. Slow view scales the one simulation clock.
+   Replace grass stops and repositions the teaching model with a fresh specimen.
+   Teaching adaptation, not an exact reconstruction. Dimensions, 28:8 tooth
+   counts, five blades and specimen spacing are illustrative, not book claims.
+   No engine, independent reel drive, height adjustment or hidden reset hardware.
+   Parts and attachments.
+   Structure: two side frames carry wheel axles, reel bearings and bedbar;
+   handle arms bolt to the frames and meet the cross grip. Crossbar ties frames.
+   Drive: road wheel tyre and hub carry the internal ring; pinion is keyed to
+   reel shaft. Bearings hold shaft ends in side frames. Three reel spiders
+   support five spiral cutting blades along the shaft. Bedknife sits on bedbar.
+   Specimen and fixture: model grass roots in a replaceable strip on a board.
+   These and the travel marks are excluded from anatomy counts.
+   Contact geometry: wheel radius 18, ring pitch radius 14, pinion pitch radius 4;
+   centres differ by 10 in x, share z=21 and gear plane y=12. Reel radius 14.5
+   meets bedknife at z=6.5. Wheel bottom is z=3, exactly on the board.
+   Model the Domain: travel alone determines wheel, ring, pinion and reel angles.
+   Prove It Works: retained browser journey checks the built artifact and drive.
+*/
+const mwTau = 2*Math.PI, mwRatio = 28/8, mwBladeCount = 5;
+const mwGrass = Array.from({length:84}, (_,i)=>({x:90+Math.floor(i/7)*4.5,y:20+(i%7)*6}));
+const mwFresh = () => ({travel:0,running:false,slow:false,cut:mwGrass.map(()=>false),clips:[]});
+const mwWheelAngle = st => -st.travel/18;
+const mwReelAngle = st => mwWheelAngle(st)*mwRatio+Math.PI/8;
+const mwPoint = (x,y,z,r,a) => [x+r*Math.cos(a),y,z+r*Math.sin(a)];
+const mwBounds = (pts,r=0) => [[0,1,2].map(k=>Math.min(...pts.map(p=>p[k]))-r),[0,1,2].map(k=>Math.max(...pts.map(p=>p[k]))+r)];
+function mwStep(st,dt){
+  const t=dt*(st.slow?.22:1), old=mwReelAngle(st);
+  if(st.running){
+    st.travel=Math.min(65,st.travel+11*t);
+    const angle=mwReelAngle(st),knife=85+st.travel;
+    mwGrass.forEach((g,i)=>{
+      const twist=(g.y-16)/44*.85;
+      const a=Math.floor((old+twist+Math.PI/2)/(mwTau/mwBladeCount));
+      const b=Math.floor((angle+twist+Math.PI/2)/(mwTau/mwBladeCount));
+      if(!st.cut[i] && g.x<=knife && g.x>=knife-7 && a!==b){
+        st.cut[i]=true;st.clips.push({x:knife,y:g.y,z:7,vx:-7,vz:12,age:0});
+      }
+    });
+    if(st.travel===65)st.running=false;
+  }
+  for(const c of st.clips){c.age+=t;if(c.z>3.7){c.x+=c.vx*t;c.z=Math.max(3.7,c.z+c.vz*t);c.vz-=34*t;}}
+}
+let mwLoop=false;
+function mwKick(st,ui){
+  if(mwLoop)return;mwLoop=true;
+  ui.animate(dt=>{mwStep(st,dt);const active=st.running||st.clips.some(c=>c.z>3.7);if(!active)mwLoop=false;return active;});
+}
+function mwPush(st,ui){
+  if(st.travel>=65)return ui.flash('Replace the grass strip for another pass');
+  if(st.running)return ui.flash('The handle is already being pushed');
+  st.running=true;mwKick(st,ui);
+}
+function mwPrism(profile,y0,y1,material){
+  const a=profile.map(([x,z])=>[x,y0,z]),b=profile.map(([x,z])=>[x,y1,z]);
+  const near=vis([0,1,0])?b:a,n=vis([0,1,0])?[0,1,0]:[0,-1,0];
+  return loft(a,b,nr=>toneI(nr,material))+shape(near,toneI(n,material),.65)+hullInk([...a,...b],1.1);
+}
+function mwCallouts(labels){
+  const svg=document.getElementById('fig'),vb=svg.viewBox.baseVal,u=window.LBL_U?LBL_U():0;
+  const h=u?17*u:8.6*INK_K*1.8,gap=h+(u?3*u:3*INK_K);
+  const matrix=svg.getScreenCTM().inverse();
+  const below=id=>{const r=document.getElementById(id).getBoundingClientRect();return new DOMPoint(r.left,r.bottom+18).matrixTransform(matrix).y;};
+  const top=Math.max(vb.y+vb.height*.25,below('btns'),below('stats'));
+  const sorted=labels.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  const half=Math.ceil(sorted.length/2);
+  return [sorted.slice(0,half),sorted.slice(half)].map((column,side)=>{
+    column.sort((a,b)=>a.p[1]-b.p[1]);
+    return column.map((it,i)=>{
+      const width=u?h*1.3:it.text.length*8.6*INK_K*.62+8.6*INK_K*1.5;
+      const x=side?vb.x+vb.width-width/2-3*INK_K:vb.x+width/2+3*INK_K;
+      const y=Math.min(top,vb.y+vb.height-column.length*gap)+h/2+i*gap;
+      return tag(it.at,(x-it.p[0])/INK_K,(y-it.p[1])/INK_K,it.text,it.on);
+    }).join('');
+  }).join('');
+}
+function mwScene(st,m){
+  const parts=[],labels=[],cx=75+st.travel,rx=cx+10,z=21,k=ease(st.xr||0),angle=mwReelAngle(st);
+  const put=(pts,svg,r=0)=>parts.push({box:mwBounds(pts,r),svg});
+  const label=(at,text,on=false)=>labels.push({at,text,on});
+  const beam=(a,b,r,mat=METAL)=>put([a,b],rod(a,b,r,mat,toneI,.9),r);
+  const brick=(a,b,mat)=>put([a,b],box(...a,...b,mat,toneI,.8));
+  const ghost=svg=>`<g opacity="${1-.84*k}">${svg}</g>`;
+  const brass=matOf('#d6a94e'),blade=matOf('#99b7bf'),green=matOf('#67a053');
+  let svg=board(0,0,172,82,3,4);
+  svg+=castShadow([[cx-18,5,3],[cx+18,5,39],[cx+18,77,39],[cx-18,77,3],[cx-55,18,88],[cx-55,64,88]],3,boardTop(0,0,172,82,3,4));
+  svg+=box(84,17,3.05,151,63,3.35,matOf('#8ca962'),toneI,.6);
+  for(let i=0;i<8;i++)svg+=line([[87+i*8.5,65,3.2],[87+i*8.5,68,3.2]],.6);
+  mwGrass.forEach((g,i)=>{
+    const cut=st.cut[i],bend=!cut&&g.x<rx?Math.max(0,rx-g.x):0;
+    const top=[g.x+bend,g.y+.8,cut?6.5:(bend?8:13+(i%3))];
+    put([[g.x-.6,g.y,3.35],top],shape([[g.x-.6,g.y,3.35],[g.x+.6,g.y,3.35],top],cut?'#8eae54':'#4d8742',.5));
+  });
+  for(const c of st.clips)beam([c.x-1,c.y,c.z],[c.x+1,c.y+.5,c.z+2],.35,green);
+  for(const y of [10,72]){
+    const a=[cx,y-3,21],b=[cx,y+3,21];
+    let wheel=rod(a,b,18,DARK,toneI,1.8,18,36);
+    const side=vis([0,1,0])?y+3.05:y-3.05;
+    wheel+=shape(on(PY(side),ellUV(cx,z,14.8,14.8,36)),tone([0,side>y?1:-1,0],m),1);
+    for(let j=0;j<8;j++){
+      const ph=mwWheelAngle(st)+j*mwTau/8;
+      wheel+=line([mwPoint(cx,side,z,3,ph),mwPoint(cx,side,z,13.3,ph)],.8);
+    }
+    wheel+=rod([cx,y-3.3,z],[cx,y+3.3,z],3,METAL,toneI,.9);
+    put([[cx-18,y-3.3,3],[cx+18,y+3.3,39]],ghost(wheel));
+  }
+  label([cx,75,35],'ROAD WHEEL',st.running);
+  label([cx+18,72,z],'TYRE',st.running);
+  label([cx,75.3,z],'WHEEL HUB',st.running);
+  if(k>0){
+    for(let j=0;j<112;j++){
+      const a=mwWheelAngle(st)+(j-.5)*mwTau/112,b=a+mwTau/112;
+      const r0=([0,1,1,0][j%4]?13.3:14.7),r1=([0,1,1,0][(j+1)%4]?13.3:14.7);
+      const profile=[[cx+16*Math.cos(a),z+16*Math.sin(a)],[cx+16*Math.cos(b),z+16*Math.sin(b)],[cx+r1*Math.cos(b),z+r1*Math.sin(b)],[cx+r0*Math.cos(a),z+r0*Math.sin(a)]];
+      const pts=profile.flatMap(([x,h])=>[[x,11,h],[x,13,h]]);
+      put(pts,`<g opacity="${k}">${mwPrism(profile,11,13,brass)}</g>`);
+    }
+    const profile=Array.from({length:32},(_,j)=>{
+      const a=angle+(j-.5)*mwTau/32,r=[3.3,4.7,4.7,3.3][j%4];return [rx+r*Math.cos(a),z+r*Math.sin(a)];
+    });
+    // The toothed cap is concave, so each tooth is its own convex solid.
+    put([[rx-3.3,11,z-3.3],[rx+3.3,13,z+3.3]],`<g opacity="${k}">${rod([rx,11,z],[rx,13,z],3.3,brass,toneI,.7)}</g>`);
+    for(let j=0;j<8;j++){
+      const q=profile.slice(j*4,j*4+4);put(q.flatMap(([x,h])=>[[x,11,h],[x,13,h]]),`<g opacity="${k}">${mwPrism(q,11,13,brass)}</g>`);
+    }
+  }
+  label(mwPoint(cx,12,z,14,mwWheelAngle(st)+2),'INTERNAL GEAR RING',st.running);
+  label(mwPoint(cx,12,z,13.3,mwWheelAngle(st)+.35),'RING TEETH',st.running);
+  label([rx,12,z],'PINION',st.running);
+  for(const y of [15,67]){
+    const frame=[[cx-9,13],[cx-9,26],[cx-4,31],[rx+4,25],[rx+4,9],[cx-3,9]];
+    put(frame.flatMap(([x,h])=>[[x,y-1,h],[x,y+1,h]]),ghost(mwPrism(frame,y-1,y+1,m)));
+    beam([cx,y,z],[cx,y<40?10:72,z],1.8);
+    beam([rx,y-1.4,z],[rx,y+1.4,z],3.2,DARK);
+    for(const [xa,xb] of [[cx-7,cx-25],[cx-25,cx-42],[cx-42,cx-55]]){
+      const h=x=>26+(cx-7-x)*62/48;
+      beam([xa,y,h(xa)],[xb,y,h(xb)],1.25,m);
+    }
+    beam([cx-7,y,26],[cx-7,y,31],2,METAL);
+  }
+  beam([cx-55,15,88],[cx-55,67,88],1.6,DARK);
+  beam([cx-7,15,28],[cx-7,67,28],1.3,m);
+  label([cx-55,41,88],'HANDLE GRIP');label([cx-28,15,53.1],'HANDLE ARM');
+  label([cx-3,67,29],'SIDE FRAME');label([cx-7,41,28],'FRAME CROSSBAR');
+  label([cx,70,z],'WHEEL AXLE');label([rx,67,z],'REEL BEARING',st.running);
+  for(let j=0;j<12;j++)beam([rx,13+j*4.5,z],[rx,Math.min(69,17.5+j*4.5),z],1.4,METAL);
+  label([rx,42,z],'REEL SHAFT',st.running);
+  for(const y of [18,41,64])for(let j=0;j<mwBladeCount;j++){
+    const ph=angle+j*mwTau/mwBladeCount+(y-16)/44*.85;
+    const a=mwPoint(rx,y,z,1.4,ph),b=mwPoint(rx,y,z,14.5,ph);
+    beam(a,b,.75,m);
+  }
+  label(mwPoint(rx,41,z,8,angle+25/44*.85),'REEL SPIDER',st.running);
+  for(let j=0;j<mwBladeCount;j++)for(let n=0;n<16;n++){
+    const y0=16+n*3,y1=Math.min(66,y0+3),ph=y=>angle+j*mwTau/mwBladeCount+(y-16)/44*.85;
+    const q=[mwPoint(rx,y0,z,13.3,ph(y0)),mwPoint(rx,y0,z,14.5,ph(y0)),mwPoint(rx,y1,z,14.5,ph(y1)),mwPoint(rx,y1,z,13.3,ph(y1))];
+    put(q,shape(q,toneI([Math.cos(ph((y0+y1)/2)),0,Math.sin(ph((y0+y1)/2))],blade),.65));
+  }
+  label(mwPoint(rx,48,z,14.5,angle+32/44*.85),'SPIRAL CUTTING BLADE',st.running);
+  label(mwPoint(rx,29,z,14.5,angle+13/44*.85+mwTau/5),'REEL CUTTING EDGE',st.running);
+  brick([rx-6,15,4.5],[rx+.2,67,5.7],m);
+  brick([rx-5,16,5.7],[rx+.15,66,6.5],METAL);
+  label([rx-4,55,5.2],'BEDBAR');label([rx,40,6.5],'FIXED BLADE',st.running);
+  svg+=byDepth(parts);
+  if(k>.6)svg+=mwCallouts(labels);
+  return svg;
+}
+const mwUI=mountFigure({fig:'39',title:'Lawn mower',size:[172,82,94],palette:'tomato',turn:'full',state:mwFresh(),scene:mwScene,
+  stats:st=>[{label:'Grass cut',value:Math.round(st.cut.filter(Boolean).length/mwGrass.length*100)+'%'},{label:'Reel / wheel',value:'3.5 : 1',small:true}],
+  buttons:[
+    {label:'Push',onClick:mwPush},
+    {label:'Stop',onClick:(st,ui)=>{st.running=false;ui.flash('Push stopped. Wheel and reel stop together');}},
+    {label:'Slow view',onClick:(st,ui)=>{st.slow=!st.slow;ui.flash(st.slow?'Slow view on':'Normal speed');}},
+    {label:'Replace grass',onClick:(st,ui)=>{Object.assign(st,mwFresh());ui.flash('Fresh teaching specimen. Mower returned to start');}}
+  ],
+  params:(st,q)=>{
+    const travel=Number(q.get('travel'));if(Number.isFinite(travel))st.travel=Math.max(0,Math.min(65,travel));
+    if(st.travel){st.cut=mwGrass.map(g=>g.x<85+st.travel-7);}
+    st.slow=q.get('slow')==='1';
+  }
+});
+xrMount(()=>mwUI,()=> '');
+</script></body></html>
