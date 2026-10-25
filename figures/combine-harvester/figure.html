@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Combine harvester</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. The inspected 2016 pages 68 and 69 show the complete crop path.
+   Harvest sweeps eight finite model stalks into the reciprocating knife and opposed stalk auger,
+   then the slatted elevator. Separate continues this feed into the cylinder and concave.
+   Straw passes the rear beater and walkers to the rear ground. Grain and chaff pass the pan
+   to two vibrating sieves. Fan air carries chaff out. Unthreshed heads return by auger and
+   tailings elevator to the cylinder. Clean grain falls through both sieves, travels along
+   the grain auger and up the grain elevator into the tank. Unload moves only stored grain
+   up the unloading screw and along the spout into the external teaching trailer.
+   Eight crop identities contain 24 grain, eight straw and 16 chaff tokens, conserved throughout.
+   Teaching adaptation. Enlarged colored specimens, slowed staged actions, tray and trailer.
+   Replace crop is specimen replacement, not combine self-repair. 1988 remains unverified.
+   Parts and attachments.
+   CASE/STRUCTURE. Chassis carries wheel axles, threshing housing, header feeder and operator
+   platform. Tank rests on housing roof. Header tray carries knife guards and auger bearings.
+   Reel shaft ends sit in two arms attached to header sidewalls. Tine bars join reel spokes.
+   FEED. Reel spokes, shaft, tine bars and tines. Cutter bar, sliding knife and fixed fingers.
+   Opposed auger flights on shaft. Elevator slats on a loop with end rollers, inside feeder.
+   SEPARATION. Cylinder shaft in housing side bearings carries drum and rasp bars. Concave
+   grate below drum fixed to housing. Beater shaft in sidewalls. Four walkers and grain pan
+   supported from housing sides. Sieve frames carry transverse slats and cross wires. Fan
+   rotor in scroll housing under pan. Return auger feeds attached tailings elevator and return.
+   GRAIN. Clean-grain auger in bottom trough connects to side elevator and tank inlet. Tank
+   outlet connects vertical unloading screw to horizontal unloading auger, casing and outlet.
+   POWER/CONTROLS. The book's drive source is not detailed. No invented geartrain is drawn.
+   Stage controls illustrate the named driven mechanisms without claiming independent operation.
+*/
+const cfClamp = v => Math.max(0,Math.min(1,v));
+const cfGold = matOf('#e6af42'), cfStraw = matOf('#cba977'), cfChaff = matOf('#b784af'), cfBlue = matOf('#559fbd');
+const cfSpecimens = Array.from({length:8},(_,id)=>({id,y:48+id*13,x:264+(id%2)*12}));
+const cfFresh = () => ({phase:'idle',clock:0,harvest:0,separate:0,unload:0,rot:0});
+const cfProgress = (amount,id) => amount===1?1:cfClamp(amount*1.4-id*.4/7);
+function cfAt(route,t){
+  t=cfClamp(t);
+  for(let i=1;i<route.length;i++) if(t<=route[i][0]){
+    const a=route[i-1],b=route[i],k=(t-a[0])/(b[0]-a[0]);
+    return a.slice(1).map((v,j)=>v+(b[j+1]-v)*k);
+  }
+  return route.at(-1).slice(1);
+}
+function cfFeed(c,h){return cfAt([[0,c.x,c.y,48],[.3,237,c.y,46],[.53,216,c.y,37],[.78,207,96,38],[1,185,96,62]],h);}
+function cfGrainRoute(id){
+  const end=[104+(id%6)*4,82+Math.floor(id/6)*7,119+Math.floor(id/12)*2];
+  const clean=[[.68,103,98,49],[.73,103,98,40],[.78,117,98,34],[.82,117,124,34],[.94,117,124,146],[.97,117,108,150],[1,...end]];
+  if(id%4===0)return [[0,153,96,88],[.12,150,96,72],[.22,122,96,63],[.31,90,96,55],[.36,82,96,43],[.40,82,68,43],[.49,82,68,105],[.56,153,68,105],[.60,153,96,88],[.64,150,96,72],...clean];
+  return [[0,153,96,88],[.22,150,96,72],[.42,122,96,63],[.62,103,96,57],...clean];
+}
+function cfMaterial(st){
+  const out=[];
+  for(const c of cfSpecimens){
+    const h=cfProgress(st.harvest,c.id),p=cfProgress(st.separate,c.id);
+    const feed=st.separate>0&&p<.13?cfAt([[0,185,96,62],[1,153,96,88]],p/.13):null;
+    const s=cfClamp((p-.13)/.87), start=st.separate>0&&p>=.13;
+    for(let j=0;j<3;j++){
+      const id=c.id*3+j,route=cfGrainRoute(id),u=cfProgress(st.unload,id*7/23),tank=s===1;
+      let at=start?cfAt(route,s):(feed||cfFeed(c,h));
+      const returned=id%4===0&&s>=.31&&s<.60;
+      if(tank&&st.unload>0)at=cfAt([[0,...route.at(-1).slice(1)],[.18,102,100,117],[.35,102,100,163],[.8,102,192,163],[1,100+(id%6)*4,183+Math.floor(id/6)*5,42+Math.floor(id/12)*2]],u);
+      out.push({kind:'grain',id,at:at.map((v,k)=>v+(!start&&k===1?(j-1)*1.7:0)),head:returned,place:tank?(u===1?'trailer':u>.18?'unloading':'tank'):start?'separating':h===1?'feeder':'crop'});
+    }
+    out.push({kind:'straw',id:c.id,at:start?cfAt([[0,153,96,88],[.2,128,96,91],[.34,118,96,91],[.72,65,96,82],[1,37+c.id*2,82+c.id*4,6]],s):(feed||cfFeed(c,h)),place:start&&s===1?'rear':'crop',h});
+    for(let j=0;j<2;j++)out.push({kind:'chaff',id:c.id*2+j,at:start?cfAt([[0,153,98,88],[.25,150,98,72],[.43,121,98,63],[.6,104,98,57],[.78,65,108,56],[1,33+c.id*2,111+j*7,7]],s):(feed||cfFeed(c,h)),place:start&&s===1?'rear':'crop'});
+  }
+  return out;
+}
+function cfRun(phase,st,ui){
+  if(st.phase!=='idle')return ui.flash('Wait for this batch to finish');
+  if(phase==='harvest'&&st.harvest===1)return ui.flash('The crop tray is empty');
+  if(phase==='separate'&&st.harvest!==1)return ui.flash('Harvest the model wheat first');
+  if(phase==='separate'&&st.separate===1)return ui.flash('This batch is already separated');
+  if(phase==='unload'&&st.separate!==1)return ui.flash('Separate the crop into the tank first');
+  if(phase==='unload'&&st.unload===1)return ui.flash('The grain tank is empty');
+  st.phase=phase;st.clock=0;
+  const duration={harvest:5,separate:12,unload:5}[phase];
+  ui.animate(dt=>{st.clock+=dt;st.rot+=dt*5;st[phase]=cfClamp(st.clock/duration);if(st[phase]===1){st.phase='idle';return false;}return true;});
+}
+const cfBounds = (pts,r=0) => [[0,1,2].map(k=>Math.min(...pts.map(p=>p[k]))-r),[0,1,2].map(k=>Math.max(...pts.map(p=>p[k]))+r)];
+function cfCallouts(items){
+  const omitted=new Set(['SEAT','OPERATOR PLATFORM','FRONT WHEEL','HEADER SIDEWALL','GRAIN TROUGH','ELEVATOR ROLLER','TANK INLET','THRESHING HOUSING']);
+  const labels=items.filter(p=>!omitted.has(p.text)).map(p=>({...p,point:P(...p.at)})).sort((a,b)=>a.point[0]-b.point[0]);
+  const svg=document.getElementById('fig'),vb=svg.viewBox.baseVal,u=window.LBL_U?LBL_U():0;
+  let top=24*(u||INK_K);
+  if(!u){
+    for(const id of ['btns','stats']){
+      const el=document.getElementById(id),r=el.getBoundingClientRect();
+      const p=new DOMPoint(r.left,r.bottom+10).matrixTransform(svg.getScreenCTM().inverse());
+      top=Math.max(top,p.y+8*INK_K);
+    }
+  }
+  const columns=[labels.slice(0,17),labels.slice(17)];
+  return columns.map((col,side)=>{
+    col.sort((a,b)=>a.point[1]-b.point[1]);
+    const step=Math.min((u?21*u:18*INK_K),(vb.height-top-48*(u||INK_K))/Math.max(1,col.length-1));
+    return col.map((p,i)=>{
+      const w=u?23*u:(p.text.length*8.6*.62+12.9)*INK_K;
+      const x=side?vb.width-w/2-4*INK_K:w/2+4*INK_K,y=top+i*step;
+      return tag(p.at,(x-p.point[0])/INK_K,(y-p.point[1])/INK_K,p.text,p.on);
+    }).join('');
+  }).join('');
+}
+function cfScene(st,m){
+  const k=ease(st.xr||0),parts=[],inside=[],labels=[];
+  const put=(list,pts,svg,r=0)=>list.push({box:cfBounds(pts,r),svg});
+  const bx=(list,a,b,mat,name,on=false)=>{put(list,[a,b],box(...a,...b,mat,tone,1));if(name)labels.push({at:b.map((v,i)=>(v+a[i])/2),text:name,on});};
+  const rd=(list,a,b,r,mat,name,on=false)=>{put(list,[a,b],rod(a,b,r,mat,toneI,.8,r,12),r);if(name)labels.push({at:avg([a,b]),text:name,on});};
+  const seg=(list,pts,col,w=.8)=>put(list,pts,`<path d="${pd(pts,false)}" fill="none" stroke="${col}" stroke-width="${w}" stroke-linecap="round"/>`,w/2);
+  const feeding=st.phase==='harvest'||st.phase==='separate',separating=st.phase==='separate',unloading=st.phase==='unload';
+  const roll=(list,x,z,r,y0,y1,mat,spin,name)=>{
+    rd(list,[x,y0,z],[x,y1,z],r,mat,name,spin);
+    for(const y of [y0,y1])if(vis([0,y===y1?1:-1,0])){
+      const pts=on(PY(y+(y===y1?.12:-.12)),ellUV(x,z,r*.48,r*.48,12));
+      put(list,pts,shape(pts,METAL.m,.7));
+      if(spin)seg(list,[[x,y,z],[x+r*.72*Math.cos(st.rot),y,z+r*.72*Math.sin(st.rot)]],INK,1);
+    }
+  };
+  const screw=(list,a,b,r,spin,name,opposed=false)=>{
+    rd(list,a,b,r*.24,METAL);
+    const d=norm(sub(b,a)),u=norm(cross(d,Math.abs(d[2])>.9?[1,0,0]:[0,0,1])),v=cross(d,u),len=Math.hypot(...sub(b,a)),n=Math.ceil(len/2);
+    for(let i=0;i<n;i++){
+      const t0=i/n,t1=(i+1)/n,ring=t=>{
+        const ang=t*len*.65*(opposed&&t>.5?-1:1)+(spin?st.rot:0);
+        const base=a.map((x,j)=>x+(b[j]-x)*t);
+        const radial=u.map((x,j)=>r*(x*Math.cos(ang)+v[j]*Math.sin(ang)));
+        return [base.map((x,j)=>x+radial[j]*.24),base.map((x,j)=>x+radial[j])];
+      };
+      const [c0,o0]=ring(t0),[c1,o1]=ring(t1),q=[c0,o0,o1,c1];
+      put(list,q,shape(q,cfGold.l,.6),.2);
+    }
+    labels.push({at:avg([a,b]),text:name,on:spin});
+  };
+  let out=board(0,0,294,224,3,6)+castShadow([[55,56,40],[175,134,40],[132,121,153],[215,38,50],[239,155,58],[102,197,164]],3,boardTop(0,0,294,224,3,6));
+  bx(parts,[245,35,3],[288,153,7],WOOD);
+  bx(parts,[57,69,31],[180,123,38],DARK,'CHASSIS');
+  for(const [x,z,r]of [[157,29,26],[73,20,17]]){
+    rd(parts,[x,56,z],[x,135,z],3,METAL);
+    for(const [y0,y1]of [[54,67],[125,138]])roll(parts,x,z,r,y0,y1,DARK,false,x===157&&y0===125?'FRONT WHEEL':null);
+  }
+  bx(parts,[64,68,39],[176,125,112],m,'THRESHING HOUSING');
+  bx(parts,[65,68,110],[138,125,115],m);
+  bx(parts,[139,70,109],[178,123,115],m,'OPERATOR PLATFORM');
+  bx(parts,[151,87,115],[165,107,119],DARK,'SEAT');
+  bx(parts,[150,87,119],[154,107,132],DARK);
+  rd(parts,[172,99,115],[176,99,132],1.3,METAL);
+  const steer=on(PZ(133),ellUV(176,99,6,6,16));put(parts,steer,ink(pd(steer),1.5));
+  bx(parts,[180,78,66],[184,115,71],m);
+  const feederA=[211,96,33],feederB=[164,96,86];
+  rd(parts,feederA,feederB,14,m,'FEEDER CASING');
+  const headerStart=parts.length;
+  bx(parts,[204,36,22],[239,157,25],m,'HEADER TRAY');
+  for(const y of [36,154]){
+    bx(parts,[204,y,25],[227,y+3,46],m,y===36?'HEADER SIDEWALL':null);
+    rd(parts,[210,y+1.5,40],[232,y+1.5,61],1.5,METAL,y===36?'REEL SUPPORT ARM':null);
+  }
+  bx(parts,[236,37,26],[239,155,28],METAL,'CUTTER BAR',feeding);
+  for(let y=39;y<155;y+=7){
+    const q=[[236,y,27],[244,y+2,27],[236,y+4,27]];put(parts,q,shape(q,METAL.m,.7));
+  }
+  labels.push({at:[242,53,27],text:'GUARD FINGERS',on:feeding});
+  const slide=feeding?Math.sin(st.rot*5)*2:0;
+  bx(parts,[237,38+slide,28],[239,153+slide,29],cfGold,'CUTTER KNIFE',feeding);
+  for(let y=40;y<150;y+=7){const q=[[238,y+slide,29],[243,y+2+slide,29],[238,y+4+slide,29]];put(parts,q,shape(q,cfGold.l,.6));}
+  roll(parts,232,61,1.8,36,157,METAL,false,'REEL SHAFT');
+  for(let n=0;n<6;n++){
+    const a=n*Math.PI/3+(feeding?-st.rot*.45:0),x=232+20*Math.cos(a),z=61+20*Math.sin(a);
+    for(const y of [38,155])rd(parts,[232,y,61],[x,y,z],.65,m);
+    rd(parts,[x,38,z],[x,155,z],.9,m);
+    for(let y=44;y<151;y+=10)rd(parts,[x,y,z],[x+2,y,z-6],.28,DARK);
+    if(n===0){labels.push({at:[x,38,z],text:'REEL SPOKES',on:feeding},{at:[x,95,z],text:'TINE BAR',on:feeding},{at:[x+2,74,z-6],text:'REEL TINES',on:feeding});}
+  }
+  screw(parts,[213,40,35],[213,152,35],7,feeding,'STALK AUGER',true);
+  const headerEnd=parts.length;
+  roll(inside,209,33,3,84,108,METAL,feeding,'ELEVATOR ROLLER');
+  roll(inside,166,83,3,84,108,METAL,feeding,null);
+  for(let n=0;n<10;n++){
+    const t=(n/10+(feeding?st.rot*.05:0))%1,x=209-43*t,z=33+50*t;
+    bx(inside,[x-1,83,z],[x+1,109,z+1.5],METAL,n===0?'ELEVATOR SLATS':null,feeding);
+  }
+  for(const y of [84,108])seg(inside,[[209,y,33],[166,y,83],[166,y,78],[209,y,28],[209,y,33]],DARK.m,1.2);
+  roll(inside,153,88,13,74,119,cfGold,separating,'THRESHING CYLINDER');
+  rd(inside,[153,69,88],[153,125,88],1.8,METAL,'CYLINDER SHAFT',separating);
+  for(let n=0;n<8;n++){
+    const a=n*Math.PI/4+(separating?st.rot:0),x=153+14*Math.cos(a),z=88+14*Math.sin(a);
+    rd(inside,[x,75,z],[x,118,z],1.1,METAL,n===0?'RASP BARS':null,separating);
+  }
+  for(const y of [74,84,96,108,119]){
+    const q=arcUV(153,88,17,185,355,18).map(([x,z])=>[x,y,z]);seg(inside,q,METAL.d,1);
+  }
+  for(let n=0;n<13;n++){
+    const a=(185+n*170/12)*Math.PI/180,x=153+17*Math.cos(a),z=88+17*Math.sin(a);rd(inside,[x,74,z],[x,119,z],.4,METAL);
+  }
+  labels.push({at:[153,96,71],text:'CONCAVE GRATE',on:separating});
+  roll(inside,127,91,7,74,119,m,separating,'REAR BEATER');
+  for(let i=0;i<4;i++){
+    const y=75+i*11,dx=separating?Math.cos(st.rot*2+i*Math.PI)*1.6:0,dz=separating?Math.sin(st.rot*2+i*Math.PI)*.8:0;
+    bx(inside,[65+dx,y,82+dz],[120+dx,y+9,84+dz],cfStraw,i===0?'STRAW WALKERS':null,separating);
+    for(let x=67;x<120;x+=10)bx(inside,[x+dx,y,84+dz],[x+2+dx,y+9,87+dz],cfStraw);
+    for(const x of [75,111])rd(inside,[x,y+4,79],[x+dx,y+4,82+dz],.6,METAL);
+  }
+  for(const y of [74,120])rd(inside,[65,y,79],[165,y,79],.8,METAL);
+  bx(inside,[60,74,77],[66,120,81],m,'STRAW OUTLET',separating);
+  const vib=separating?Math.sin(st.rot*3)*1.3:0;
+  bx(inside,[113+vib,75,61],[165+vib,119,63],cfBlue,'GRAIN PAN',separating);
+  for(const z of [53,45]){
+    for(let x=84;x<122;x+=5)bx(inside,[x+vib,75,z],[x+2+vib,119,z+1.2],METAL);
+    for(const y of [75,86,97,108,119])rd(inside,[84+vib,y,z],[123+vib,y,z],.4,METAL);
+    for(const y of [74,119])bx(inside,[82+vib,y,z-1],[124+vib,y+1,z+1],cfBlue);
+    labels.push({at:[104,96,z],text:z===53?'UPPER SIEVE':'LOWER SIEVE',on:separating});
+  }
+  rd(inside,[140,74,43],[140,120,43],1.8,METAL,'CLEANING FAN',separating);
+  for(let n=0;n<5;n++){
+    const a=n*Math.PI*2/5+(separating?st.rot:0),x=140+10*Math.cos(a),z=43+10*Math.sin(a);
+    const q=[[140,75,43],[140,119,43],[x,119,z],[x,75,z]];put(inside,q,shape(q,cfBlue.l,.8));
+  }
+  bx(inside,[125,74,29],[153,120,31],cfBlue,'FAN HOUSING');
+  bx(inside,[85,75,32],[122,121,34],m,'GRAIN TROUGH');
+  screw(inside,[117,76,34],[117,124,34],3,separating,'GRAIN AUGER');
+  for(const z of [36,144])roll(inside,117,z,3,122,126,METAL,separating,null);
+  for(const x of [114,120])seg(inside,[[x,124,36],[x,124,144]],DARK.m,.8);
+  for(let n=0;n<8;n++){
+    const t=(n/8+(separating?st.rot*.03:0))%1,z=38+t*104;
+    bx(inside,[117,122,z],[120,126,z+2],cfGold);
+    bx(inside,[114,122,180-z],[117,126,182-z],cfGold);
+  }
+  labels.push({at:[120,124,105],text:'GRAIN ELEVATOR',on:separating});
+  rd(parts,[117,124,34],[117,124,146],4,m);
+  rd(parts,[117,124,146],[117,108,150],4,m,'TANK INLET');
+  screw(inside,[82,68,43],[82,128,43],3,separating,'TAILINGS AUGER');
+  rd(parts,[82,68,43],[82,68,105],4,m);
+  rd(parts,[82,68,105],[153,68,105],4,m);
+  rd(parts,[153,68,105],[153,86,90],4,m);
+  screw(inside,[82,68,43],[82,68,105],2.8,separating,'TAILINGS ELEVATOR');
+  screw(inside,[82,68,105],[153,68,105],2.8,separating,'HEAD RETURN');
+  const tankWalls=[[[88,72,115],[134,74,153]],[[88,119,115],[134,121,153]],[[88,74,115],[90,119,153]],[[132,74,115],[134,119,153]],[[90,74,113],[132,119,115]]];
+  for(const [a,b]of tankWalls)bx(parts,a,b,m);
+  labels.push({at:[110,120,137],text:'GRAIN TANK',on:separating||unloading});
+  rd(parts,[102,100,116],[102,100,163],4,m);
+  rd(parts,[102,100,163],[102,193,163],4,m);
+  rd(parts,[102,193,163],[102,193,153],4,m,'UNLOADING OUTLET',unloading);
+  screw(inside,[102,100,116],[102,100,163],3,unloading,'VERTICAL UNLOADING SCREW');
+  screw(inside,[102,100,163],[102,193,163],3,unloading,'UNLOADING AUGER');
+  const trailer=[];
+  bx(trailer,[88,174,28],[132,210,32],cfBlue);
+  for(const [a,b]of [[ [88,174,32],[132,176,61] ],[[88,208,32],[132,210,61]],[[88,176,32],[90,208,61]],[[130,176,32],[132,208,61]]])bx(trailer,a,b,cfBlue);
+  rd(trailer,[110,170,18],[110,214,18],2,METAL);
+  for(const [a,b]of [[169,175],[209,215]])roll(trailer,110,18,15,a,b,DARK,false);
+  for(const c of cfSpecimens){
+    const h=cfProgress(st.harvest,c.id),pos=cfFeed(c,h);
+    if(h<.3)seg(parts,[[c.x,c.y,7],pos],cfStraw.d,1.2);
+    else seg(parts,[[c.x,c.y,7],[c.x,c.y,26]],cfStraw.d,1.2);
+  }
+  const materials=cfMaterial(st),cargo=[];
+  for(const p of materials){
+    const [x,y,z]=p.at,r=p.kind==='grain'?1.7:p.kind==='chaff'?1.4:1;
+    let svg;
+    if(p.kind==='straw')svg=st.separate===0&&p.h<.3?'':rod([x-15,y,z-7],[x,y,z],.6,cfStraw,toneI,.4,.6,6);
+    else if(p.head)svg=rod([x-3,y,z],[x+3,y,z],2,cfBlue,toneI,.5,2,8);
+    else svg=rod([x,y,z],[x+2,y+1,z+1],r,p.kind==='grain'?cfGold:cfChaff,toneI,.4,r,8);
+    const list=p.place==='tank'||p.place==='trailer'||p.place==='rear'||p.place==='crop'&&st.separate===0?cargo:inside;
+    put(list,[[x-7,y-2,z-2],[x+7,y+2,z+2]],svg);
+  }
+  if(separating){
+    for(const y of [82,105])seg(inside,[[130,y,44],[121,y,49],[101,y,55],[80,y,56],[60,y,55]],cfBlue.l,1.2);
+  }
+  if(k>0){
+    out+=`<g opacity="${1-.90*k}">${byDepth(parts.filter((p,i)=>i<headerStart||i>=headerEnd))}</g>`;
+    out+=`<g opacity="${k}">${byDepth([...inside,...parts.slice(headerStart,headerEnd)])}</g>`+byDepth(cargo);
+    out+=byDepth(trailer.map(p=>({...p,svg:`<g opacity="${1-.7*k}">${p.svg}</g>`})));
+  }else out+=byDepth([...parts,...trailer,...cargo]);
+  if(k>.6)out+=cfCallouts(labels);
+  return out;
+}
+const cfUI=mountFigure({fig:'68',title:'Combine harvester',size:[294,224,170],center:[147,112],palette:'tomato',turn:'full',state:cfFresh(),scene:cfScene,
+  stats:st=>{const g=cfMaterial(st).filter(p=>p.kind==='grain');return [{label:'Tank grain',value:g.filter(p=>p.place==='tank').length,small:true},{label:'Trailer grain',value:g.filter(p=>p.place==='trailer').length,small:true}];},
+  buttons:[{label:'Harvest',onClick:(st,ui)=>cfRun('harvest',st,ui)},{label:'Separate',onClick:(st,ui)=>cfRun('separate',st,ui)},{label:'Unload',onClick:(st,ui)=>cfRun('unload',st,ui)},{label:'Replace crop',onClick:(st,ui)=>{if(st.phase!=='idle')return ui.flash('Wait before replacing the teaching specimens');Object.assign(st,cfFresh());ui.flash('New model wheat; teaching collectors cleared');}}],
+  params:(st,q)=>{for(const key of ['harvest','separate','unload'])if(q.has(key)){const v=Number(q.get(key));if(Number.isFinite(v))st[key]=cfClamp(v);}if(st.unload>0)st.separate=st.harvest=1;if(st.separate>0)st.harvest=1;}
+});
+xrMount(()=>cfUI,()=> '');
+</script></body></html>
