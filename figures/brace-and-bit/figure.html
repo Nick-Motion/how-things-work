@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Brace and bit</title><style>html.zoomed #art{filter:none!important}</style></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. A scale teaching adaptation of the named diagram on printed page 66.
+   The bowed crank turns the chuck and bit directly, at one rotation rate.
+   Turn supplies rotation alone. Feed adds external hand pressure while turning.
+   The cutting end removes wood. Chips travel up the waste grooves and fall onto the specimen.
+   Withdraw lifts the complete tool with the operating hand. The hole and escaped chips remain.
+   The bench, specimen clamp and hand are declared teaching fixtures, not brace anatomy.
+   The 1988 edition remains inaccessible and unverified. This is not a literal page reproduction.
+   Anatomy, minimum seven. Head on crank spindle; bowed crank continuous between spindle and chuck;
+   rotating grip around the offset crank; chuck holds the bit; cutting end and helical waste grooves
+   are physical features of that bit. No gears, motor, feed screw or hidden drive is added.
+   Structure. The specimen rests on the bench and the clamp holds its side down.
+   Inputs. An external palm rests on the head. Force arrows are overlays, not anatomy.
+   State. phase is idle, turn, feed or withdraw. angle drives every rotating part;
+   depth translates the whole tool; maxDepth retains the material removed. */
+const bbX=40, bbY=35, bbSurface=26, bbRadius=4;
+const bbSkin=matOf('#eab18e'), bbSteel=matOf('#acb8ba');
+const bbBounds=(pts,r=0)=>[0,1].map(side=>[0,1,2].map(k=>(side?Math.max:Math.min)(...pts.map(p=>p[k]))+(side?r:-r)));
+const bbPoint=(st,r,z,a=0)=>[bbX+r*Math.cos(st.angle+a),bbY+r*Math.sin(st.angle+a),z-st.depth];
+const bbTip=st=>27-st.depth;
+const bbGroove=(st,z,offset=Math.PI/2)=>{
+  const a=st.angle+(z-bbTip(st))*.65+offset;
+  return [bbX+bbRadius*Math.cos(a),bbY+bbRadius*Math.sin(a),z];
+};
+function bbScene(st,m){
+  const bbParts=[],bbGhost=ease(st.xr||0),bbMoving=st.phase!=='idle';
+  const put=(pts,svg,r=0)=>bbParts.push({box:bbBounds(pts,r),svg});
+  const bar=(a,b,r,mat=bbSteel)=>put([a,b],rod(a,b,r,mat,toneI,1.1),r);
+  let out=board(0,0,84,72,3,5);
+  out+=castShadow([[bbX-6,bbY-6,27],[bbX+23,bbY,80],[bbX,bbY,105-st.depth]],3,boardTop(0,0,84,72,3,5));
+  const bbHole=st.maxDepth>1,bbFloor=Math.max(9,27-st.maxDepth);
+  let timber='';
+  for(const [normal,pts] of [
+    [[1,0,0],[[67,11,3],[67,59,3],[67,59,26],[67,11,26]]],
+    [[-1,0,0],[[13,11,3],[13,59,3],[13,59,26],[13,11,26]]],
+    [[0,1,0],[[13,59,3],[67,59,3],[67,59,26],[13,59,26]]],
+    [[0,-1,0],[[13,11,3],[67,11,3],[67,11,26],[13,11,26]]]])
+    if(vis(normal))timber+=shape(pts,toneI(normal,WOOD),1.5);
+  const bbTop=on(PZ(bbSurface+.02),rectUV(13,11,67,59));
+  if(bbHole){
+    // The blind cavity has a real bottom. Its wall and rim replace the solid top face.
+    
+    const bottom=on(PZ(bbFloor),ellUV(bbX,bbY,4.5,4.5,40));
+    const rim=on(PZ(bbSurface+.04),ellUV(bbX,bbY,4.5,4.5,40));
+    timber+=fill(pd(bottom),'#684626')+loft(bottom,rim,n=>toneI(n,WOOD),true);
+    timber+=`<path d="${pd(bbTop)}${pd(rim)}" fill="${WOOD.l}" fill-rule="evenodd"/>`+ink(pd(rim),1);
+  }
+  if(!bbHole)timber+=shape(bbTop,WOOD.l,1.5);
+  for(const yy of [17,23,47,53])timber+=line([[15,yy,26.06],[65,yy+.7,26.06]],.35).replaceAll(INK,'#a77c49');
+  put([[13,11,3],[67,59,26.1]],`<g opacity="${1-.83*bbGhost}">${timber}</g>`);
+  put([[64,27,3],[73,43,29]],box(64,27,3,73,43,7,m,toneI,1)+box(67,27,7,72,31,29,m,toneI,1)+box(63,27,26.1,71,31,29,m,toneI,1));
+  const bbLow=bbGhost>.01?bbTip(st):Math.max(bbSurface+.1,bbTip(st));
+  for(let zz=bbLow;zz<51-st.depth;zz+=1.5){
+    const zz1=Math.min(zz+1.5,51-st.depth);
+    bar([bbX,bbY,zz],[bbX,bbY,zz1],1.1);
+    for(const phase of [0,Math.PI]){
+      const ring=z=>{const a=st.angle+(z-bbTip(st))*.65+phase;
+        return [[bbX+1.1*Math.cos(a-.25),bbY+1.1*Math.sin(a-.25),z],
+          [bbX+4*Math.cos(a-.25),bbY+4*Math.sin(a-.25),z],
+          [bbX+4*Math.cos(a+.25),bbY+4*Math.sin(a+.25),z],
+          [bbX+1.1*Math.cos(a+.25),bbY+1.1*Math.sin(a+.25),z]];};
+      const aa=ring(zz),be=ring(zz1);
+      put([...aa,...be],loft(aa,be,n=>toneI(n,METAL))+shape(vis([0,0,1])?be:aa,METAL.m,.35)+hullInk([...aa,...be],.65));
+    }
+  }
+  if(bbTip(st)>26||bbGhost>.01){
+    const edge=[bbPoint(st,-4,28),bbPoint(st,4,28)];
+    bar(...edge,.65,DARK);
+    bar([bbX,bbY,27.2-st.depth],[bbX,bbY,29.2-st.depth],.5,DARK);
+  }
+  bar(bbPoint(st,0,51),bbPoint(st,0,60),3.3,DARK);
+  for(const h of [52,54,56,58]){
+    const rr=on(PZ(h-st.depth),ellUV(bbX,bbY,3.35,3.35,20));
+    put(rr,ink(pd(rr.filter(p=>facing([p[0]-bbX,p[1]-bbY,0]))),.4));
+  }
+  const crank=[[0,60],[0,64],[23,67],[23,88],[0,92],[0,101]].map(([r,z])=>bbPoint(st,r,z));
+  for(let i=0;i<crank.length-1;i++)bar(crank[i],crank[i+1],1.8);
+  bar(bbPoint(st,23,70),bbPoint(st,23,85),3.2,m);
+  const headA=bbPoint(st,0,101),headB=bbPoint(st,0,105);
+  bar(headA,headB,6.5,m);
+  // A palm and four fingers remain in contact with the head throughout feed and withdrawal.
+  put([[bbX-7,bbY-6,104-st.depth],[bbX+17,bbY+6,112-st.depth]],
+    box(bbX-6,bbY-5,105-st.depth,bbX+8,bbY+5,109-st.depth,bbSkin,toneI,1)+
+    rod([bbX+7,bbY,108-st.depth],[bbX+22,bbY,112-st.depth],3.8,bbSkin,toneI,1.1));
+  for(let i=0;i<4;i++)bar([bbX-5+i*3,bbY+4,107-st.depth],[bbX-5+i*3,bbY+6,102-st.depth],.9,bbSkin);
+  const bbChipCount=Math.floor(Math.max(0,st.maxDepth-1)*1.3);
+  for(let i=0;i<bbChipCount;i++){
+    const a=i*2.4,rr=7+(i%4)*1.8,p=[bbX+rr*Math.cos(a),bbY+rr*Math.sin(a),26.4];
+    put([p],rod(p,[p[0]+1.8*Math.cos(a+.8),p[1]+1.8*Math.sin(a+.8),26.8],.35,WOOD,toneI,.4),1);
+  }
+  if(st.phase==='feed'&&st.depth>1){
+    for(let i=0;i<7;i++){
+      const t=(st.elapsed*.65+i/7)%1,z=bbTip(st)+(bbSurface+4-bbTip(st))*t;
+      const p=bbGroove(st,z),q=bbGroove(st,z+.9);
+      if(bbGhost>.1||z>26.1)bar(p,q,.55,WOOD);
+    }
+  }
+  out+=byDepth(bbParts);
+  if(st.phase==='feed'||st.phase==='withdraw'){
+    const sign=st.phase==='feed'?-1:1,za=116-st.depth,zb=za+sign*8;
+    out+=line([[bbX-13,bbY,za],[bbX-13,bbY,zb]],1.6).replaceAll(INK,'#cf5038');
+    out+=shape([[bbX-15,bbY,zb-sign*3],[bbX-13,bbY,zb],[bbX-11,bbY,zb-sign*3]],'#cf5038',.4);
+  }
+  const anatomy=[
+    {at:bbPoint(st,0,103),text:'HEAD',on:st.phase==='feed'},
+    {at:bbPoint(st,12,66),text:'BOWED CRANK',on:bbMoving&&st.phase!=='withdraw'},
+    {at:bbPoint(st,23,78),text:'ROTATING GRIP',on:bbMoving&&st.phase!=='withdraw'},
+    {at:bbPoint(st,0,55),text:'CHUCK',on:bbMoving&&st.phase!=='withdraw'},
+    {at:bbPoint(st,0,47),text:'BIT',on:bbMoving&&st.phase!=='withdraw'},
+    {at:bbPoint(st,3,28),text:'CUTTING END',on:st.phase==='feed'},
+    {at:bbGroove(st,38-st.depth),text:'HELICAL WASTE GROOVES',on:st.phase==='feed'}];
+  if(bbGhost>.6)out+=xrCallouts([...anatomy,
+    {at:[68,29,28],text:'CLAMP - FIXTURE'},
+    {at:[bbX+7,bbY,108-st.depth],text:'HAND - EXTERNAL INPUT'},
+    {at:[20,45,26],text:'WOOD SPECIMEN'}],[13,67,11,59,3,109]);
+  else out+=xrCallouts(anatomy.slice(0,4),[13,67,11,59,3,109]);
+  return out;
+}
+function bbAction(st,ui,phase){
+  if(st.phase!=='idle')return ui.flash('Finish this hand movement first');
+  if(phase==='feed'&&st.depth>=18)return ui.flash('Withdraw the bit before another cut');
+  if(phase==='withdraw'&&st.depth===0)return ui.flash('The bit is already clear of the wood');
+  st.phase=phase;st.elapsed=0;
+  const from=st.depth,target=phase==='feed'?18:phase==='withdraw'?0:from,duration=phase==='feed'?3.2:2;
+  ui.animate(dt=>{
+    st.elapsed=Math.min(duration,st.elapsed+dt);
+    const progress=st.elapsed/duration;
+    if(phase!=='withdraw')st.angle+=dt*Math.PI*1.8;
+    st.depth=from+(target-from)*ease(progress);
+    st.maxDepth=Math.max(st.maxDepth,st.depth);
+    if(progress>=1){st.phase='idle';return false;}return true;
+  });
+}
+const bbUI=mountFigure({fig:'71',turn:'full',title:'Brace and bit',size:[84,72,120],palette:'tomato',
+  state:{phase:'idle',angle:0,depth:0,maxDepth:0,elapsed:0,xr:0,xrT:0},scene:bbScene,
+  stats:st=>[{label:'Hole depth',value:Math.max(0,st.maxDepth-1).toFixed(1)+' mm',small:true}],
+  buttons:[{label:'Turn',onClick:(st,ui)=>bbAction(st,ui,'turn')},
+    {label:'Feed',onClick:(st,ui)=>bbAction(st,ui,'feed')},
+    {label:'Withdraw',onClick:(st,ui)=>bbAction(st,ui,'withdraw')}],
+  params:(st,q)=>{for(const key of ['depth','angle'])if(q.has(key)){const n=Number(q.get(key));if(Number.isFinite(n))st[key]=key==='depth'?Math.max(0,Math.min(18,n)):n;}st.maxDepth=st.depth;}
+});
+xrMount(()=>bbUI,()=> '');
+</script></body></html>
