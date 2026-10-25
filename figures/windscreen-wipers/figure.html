@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Windscreen wipers</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Teaching adaptation of the rack variant on printed page 49.
+   2016 scan n50 and saved 1998 scan n52 support the motor, worm reduction,
+   crank, connecting rod, rack and blade-shaft pinions. 1988 is inaccessible.
+   Wipe turns a single crank phase. The rod has fixed length 28, its slider
+   stays at z25, and rack displacement rotates both pitch-radius-7 pinions.
+   Stop removes drive immediately at the current phase. There is no park switch.
+   Wet traverses an external dropper on a teaching stand. Drops fall from its
+   tip onto the glass and adhere, then disappear only where a rubber edge passes.
+   This omits runoff, friction and motor inertia. Speed and scale are illustrative.
+   Parts. Case: gearbox cover bolted to a bench chassis. Structure: glass in a
+   frame, pivot bearings and rack guides fixed to the chassis. Mechanism: motor
+   shaft, single-start worm, driven wheel, crank hub, eccentric pin, connecting
+   rod, slider pin, rack with teeth, two pinions, shafts, arms and rubber edges.
+   Power: external lead into the motor. Controls: external teaching buttons.
+   Fixture: board, glass frame and dropper gantry. These do not count as anatomy.
+   Contacts. Wheel x27..30, centre(y22,z17), pitch9. Worm axis(x31,z7),
+   radius2, y14..30, touches the wheel's bottom rim. Pinions x34..37 at
+   (y50/92,z33), pitch7. Rack top pitch26, tooth tips27, roots25.
+   Shaft x26..47 joins each pinion to its arm. Rubber x44.8 contacts glass x44.8.
+   Expected real anatomy minimum 12, declared by the individual brief.
+*/
+const wwPitch=2*Math.PI*7/16;
+const wwPivots=[50,92];
+const wwBlue=matOf('#85b5d0'),wwBrass=matOf('#ddb44f'),wwSteel=matOf('#9aa9ad');
+function wwKinematics(phase){
+  const pin=[31,22+5*Math.cos(phase),17+5*Math.sin(phase)];
+  const slider=[31,pin[1]+Math.sqrt(28*28-(25-pin[2])**2),25];
+  const zero=22+Math.sqrt(28*28-8*8);
+  const travel=slider[1]-zero;
+  return {pin,slider,travel,angle:travel/7};
+}
+function wwBounds(points,r=0){return [0,1].map(side=>[0,1,2].map(k=>(side?Math.max:Math.min)(...points.map(p=>p[k]))+(side?r:-r)));}
+function wwScene(st,m){
+  const g=wwKinematics(st.phase),k=ease(st.xr||0),parts=[],labels=[];
+  const put=(points,svg,r=0)=>parts.push({box:wwBounds(points,r),svg});
+  const bx=(a,b,mat,alpha=1)=>put([a,b],`<g opacity="${alpha}">${box(...a,...b,mat,toneI,.8)}</g>`);
+  const rd=(a,b,r,mat)=>put([a,b],rod(a,b,r,mat,toneI,.9),r);
+  const label=(at,text,on=false)=>labels.push({at,text,on});
+  const gear=(x,y,z,r,n,angle,mat)=>{
+    put([[x,y-r+.7,z-r+.7],[x+3,y+r-.7,z+r-.7]],cylX(x,x+3,y,z,r-.65,mat,toneI,.9,32));
+    for(let j=0;j<n;j++){
+      const a=angle+j*2*Math.PI/n,da=Math.PI/n;
+      const profile=[[-.7,r-.8],[-.48,r+.65],[.48,r+.65],[.7,r-.8]].map(([q,radius])=>[y+radius*Math.cos(a+q*da),z+radius*Math.sin(a+q*da)]);
+      const rings=[on(PX(x),profile),on(PX(x+3),profile)];
+      const cap=vis([1,0,0])?rings[1]:rings[0];
+      put(rings.flat(),loft(...rings,nr=>toneI(nr,mat))+shape(cap,toneI(vis([1,0,0])?[1,0,0]:[-1,0,0],mat),.6)+hullInk(rings.flat(),.7));
+    }
+  };
+  let out=board(0,0,62,138,3,4,WOOD);
+  out+=castShadow([[12,7,3],[43,120,35],[44,20,81],[44,122,81]],3,boardTop(0,0,62,138,3,4));
+  // The glass and its frame are split into narrow members to keep the orbit order local.
+  for(const y of [18,124]){
+    bx([40,y-1.5,3],[45,y+1.5,82],m,1-.7*k);
+    bx([37,y-5,3],[49,y+5,5],wwSteel,1-.7*k);
+  }
+  for(const z of [30,80])bx([41,18,z],[45,124,z+2],m,1-.7*k);
+  const pane=box(43.8,20,32,44.8,122,80,CLEAR,toneI,.65);
+  put([[43.8,20,32],[44.8,122,80]],`<g opacity="${.25-.18*k}">${pane}</g>`);
+  // The camera stays above the chassis; sorting its long box with upright parts creates cycles.
+  out+=box(12,7,3,39,120,5,wwSteel,toneI,.8);
+  // The closed protective case hides the drive. Its ghost precedes crisp interior parts.
+  let cover=box(10,7,5,40,120,35,m,tone,1.4);
+  if(k>0)out+=`<g opacity="${1-.91*k}">${cover}</g>`;
+  const machinery=[];
+  const begin=parts.length;
+  rd([31,3,7],[31,12,7],4.1,wwBlue);
+  rd([31,12,7],[31,33,7],1.1,METAL);
+  rd([31,14,7],[31,30,7],1.65,wwBrass);
+  const helix=[];
+  for(let j=0;j<=100;j++){
+    const t=j/100,a=t*Math.PI*12-st.phase*24;
+    helix.push([31+2*Math.cos(a),14+16*t,7+2*Math.sin(a)]);
+  }
+  for(let j=0;j<helix.length-1;j++)rd(helix[j],helix[j+1],.38,wwBrass);
+  const wheelStart=parts.length;
+  gear(27,22,17,9,24,st.phase,wwBrass);
+  const wheelParts=parts.splice(wheelStart);
+  for(const [a,b] of [[17,18],[18,27],[27,30],[30,31]])rd([a,22,17],[b,22,17],1.5,METAL);
+  bx([13,19,5],[18,25,19],wwSteel);
+  rd([30.5,22,17],g.pin,1.5,wwSteel);
+  rd([30,g.pin[1],g.pin[2]],[33,g.pin[1],g.pin[2]],1.25,wwBrass);
+  const crankParts=parts.splice(parts.length-2);
+  // The crank is on the wheel's +x face throughout its turn, even when their bounds overlap.
+  const wheelSvg=byDepth(wheelParts);
+  const crankSvg=(CAM_V[0]>=0?crankParts:crankParts.slice().reverse()).map(part=>part.svg).join('');
+  const driveLayers=CAM_V[0]>=0?[wheelSvg,crankSvg]:[crankSvg,wheelSvg];
+  put([...wheelParts,...crankParts].flatMap(part=>part.box),driveLayers.join(''));
+  rd(g.pin,g.slider,1.2,METAL);
+  rd([30,g.slider[1],25],[35,g.slider[1],25],1.25,wwBrass);
+  const rack0=33+g.travel,rack1=115+g.travel;
+  bx([34,rack0,23],[37,rack1,25],METAL);
+  for(let j=0;j<30;j++){
+    const y=rack0+j*wwPitch;
+    bx([34,y,25],[37,y+wwPitch*.46,27],wwSteel);
+  }
+  for(const y of [38,74,111]){
+    bx([31,y-2,5],[33,y+2,28],wwSteel);
+    bx([33,y-2,21],[39,y+2,23],wwSteel);
+    bx([37,y-2,23],[39,y+2,28],wwSteel);
+  }
+  for(const y of wwPivots){
+    gear(34,y,33,7,16,g.angle+Math.PI/16,wwBrass);
+    for(const [a,b] of [[26,34],[34,37],[37,39],[39,44],[44,47]])rd([a,y,33],[b,y,33],1.25,METAL);
+    for(const x of [25,39]){
+      bx([x-1,y-3,5],[x+1,y+3,33],wwSteel);
+      rd([x-1.5,y,33],[x+1.5,y,33],2.4,wwBlue);
+    }
+  }
+  for(let i=begin;i<parts.length;i++)machinery.push(parts[i]);
+  parts.splice(begin);
+  if(k>0)parts.push(...machinery.map(part=>({...part,svg:`<g opacity="${k}">${part.svg}</g>`})));
+  // Surface shafts and blades stay visible in both modes and share the same rack-derived angle.
+  for(const [i,y] of wwPivots.entries()){
+    rd([40,y,33],[47,y,33],1.3,METAL);
+    const tip=[47,y+36*Math.sin(g.angle),33+36*Math.cos(g.angle)];
+    const arm=[47,y+21*Math.sin(g.angle),33+21*Math.cos(g.angle)];
+    rd([47,y,33],arm,1.1,wwSteel);
+    rd([44.9,y+12*Math.sin(g.angle),33+12*Math.cos(g.angle)],tip.map((v,j)=>j===0?44.9:v),.65,DARK);
+    rd(arm,[44.9,arm[1],arm[2]],.65,METAL);
+    rd([46,y,33],[48,y,33],2,m);
+    label([35.5,y,33],i?'RIGHT PINION':'LEFT PINION',st.running);
+    label([42,y,33],i?'RIGHT BLADE SHAFT':'LEFT BLADE SHAFT',st.running);
+    label([47,y+17*Math.sin(g.angle),33+17*Math.cos(g.angle)],i?'RIGHT WIPER ARM':'LEFT WIPER ARM',st.running);
+    label([44.9,y+31*Math.sin(g.angle),33+31*Math.cos(g.angle)],i?'RIGHT RUBBER EDGE':'LEFT RUBBER EDGE',st.running);
+  }
+  // The stand and traversing dropper are external teaching fixtures.
+  bx([51,129,3],[55,133,90],wwSteel);
+  rd([53,131,90],[45,131,90],1.2,METAL);
+  rd([45,13,90],[45,131,90],1.1,METAL);
+  const dy=st.wetting?22+96*Math.min(1,st.wetTime/1.8):118;
+  rd([45,dy,88],[45,dy,82],.8,CLEAR);
+  rd([45,dy,89],[45,dy,94],2.5,wwBlue);
+  rd([45,dy,88],[45,dy,90],1.6,wwSteel);
+  for(const d of st.drops)if(!d.cleared){
+    const pts=on(PX(44.9),ellUV(d.y,d.z,.65,1.15,12));
+    put(pts,shape(pts,'#4da9d1',.4));
+  }
+  // A short external power lead ends at the motor, on the bench base.
+  for(const [a,b] of [[[0,2,4],[25,2,4]],[[25,2,4],[31,3,7]]])rd(a,b,.6,DARK);
+  if(k===0)parts.push({box:[[10,7,5],[40,120,35]],svg:cover});
+  out+=byDepth(parts);
+  label([31,7,10],'ELECTRIC MOTOR',st.running);
+  label([31,13,7],'MOTOR SHAFT',st.running);
+  label([32,23,7],'WORM',st.running);
+  label([30,22,23],'DRIVEN WHEEL',st.running);
+  label([31,22,17],'CRANK HUB',st.running);
+  label(g.pin,'ECCENTRIC PIN',st.running);
+  label(avg([g.pin,g.slider]),'CONNECTING ROD',st.running);
+  label(g.slider,'SLIDER PIN',st.running);
+  label([35.5,76+g.travel,24],'RACK',st.running);
+  label([35.5,81+g.travel,26.5],'RACK TEETH',st.running);
+  label([38,74,27],'RACK GUIDE');
+  label([39,92,33],'SHAFT BEARING');
+  if(k>.6)out+=xrCallouts(labels,[8,49,7,124,3,82]);
+  return out;
+}
+function wwUpdate(st,dt){
+  const before=wwKinematics(st.phase).angle;
+  if(st.running){st.phase+=dt*1.7;st.turns+=dt*1.7/(2*Math.PI);}
+  const after=wwKinematics(st.phase).angle;
+  if(st.wetting){
+    st.wetTime+=dt;
+    while(st.spawned<24&&st.spawned/24*1.8<=st.wetTime){
+      const i=st.spawned++;
+      st.drops.push({y:22+96*i/24,z:82,target:40+(i*17%34),cleared:false});
+    }
+    if(st.wetTime>=2.4)st.wetting=false;
+  }
+  for(const d of st.drops){
+    if(d.cleared)continue;
+    if(d.z>d.target){d.z=Math.max(d.target,d.z-dt*90);continue;}
+    if(st.running)for(const y of wwPivots){
+      const r=Math.hypot(d.y-y,d.z-33),a=Math.atan2(d.y-y,d.z-33);
+      if(r>=12&&r<=36&&a>=Math.min(before,after)-.025&&a<=Math.max(before,after)+.025)d.cleared=true;
+    }
+  }
+}
+let wwLoop=false;
+function wwKick(st,ui){
+  if(wwLoop)return;wwLoop=true;
+  ui.animate(dt=>{wwUpdate(st,dt);const more=st.running||st.wetting||st.drops.some(d=>!d.cleared&&d.z>d.target);wwLoop=more;return more;});
+}
+const wwUI=mountFigure({fig:'49',title:'Windscreen wipers',turn:'full',size:[62,138,95],palette:'mint',
+  state:{phase:0,running:false,turns:0,wetting:false,wetTime:0,spawned:0,drops:[]},scene:wwScene,
+  buttons:[
+    {label:'Wet',onClick(st,ui){if(st.wetting)return ui.flash('The external dropper is still applying water');st.drops=st.drops.filter(d=>!d.cleared);st.wetTime=0;st.spawned=0;st.wetting=true;wwKick(st,ui);}},
+    {label:'Wipe',onClick(st,ui){if(st.running)return ui.flash('The motor is already running');st.running=true;wwKick(st,ui);}},
+    {label:'Stop',onClick(st,ui){st.running=false;ui.flash('Motor drive off at the current phase');}}
+  ],
+  stats:st=>[{label:'Crank turns',value:st.turns.toFixed(1),small:true},{label:'Drops on glass',value:String(st.drops.filter(d=>!d.cleared&&d.z===d.target).length),small:true}],
+  params(st,q){for(const key of ['phase','turns']){const n=Number(q.get(key));if(q.has(key)&&Number.isFinite(n))st[key]=Math.max(0,Math.min(100,n));}}
+});
+xrMount(()=>wwUI,()=> '');
+</script></body></html>
