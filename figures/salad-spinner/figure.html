@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Salad spinner</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. The checked 2016 page 39 shows an internal ring, one planet, a sun and a perforated basket.
+   The accepted teaching adaptation fixes the planet pin to the lid. It does not claim every commercial spinner
+   uses this constraint. The 1988 edition remains inaccessible and unverified.
+   Hand input -> 64-tooth ring -> 24-tooth planet -> 16-tooth sun -> coaxial shaft -> basket.
+   Pitch radii 32, 12, 8; planet centre 20 from the sun. Both meshes touch at x=76 and x=52.
+   Planet angle = ring angle * 64/24; sun and basket angle = -4 * ring angle. No freewheel or brake.
+   Stop removes input. The complete connected train coasts under friction and stops before emptying.
+   Wet leaves stay inside the basket. Droplets leave tangentially, pass through basket slots and hit the bowl.
+   Separated water stays outside the basket. Empty is a manual teaching action. The lid lifts, disengaging
+   its sun socket from the basket shaft; a hand holds the basket in the bowl while tipping the bowl over a dish.
+   The assembly returns and the socket re-engages. No pump, drain valve, pull cord or invented brake.
+   Parts. Case: collecting bowl, bowl rim, bottom pivot, lid. Mechanism: ring, internal teeth, ring bearing lip,
+   planet, fixed planet pin attached to lid, sun, central lid bearing, output shaft, basket hub, basket, slots.
+   Controls: hand crank fixed to ring and its rotating grip. Specimens and receiving dish do not count as anatomy.
+   Water arrows and rotation arcs are overlays. The 120 ml wet load and 4:1 ratio are illustrative model values.
+   Principle Model the Domain keeps all gear angles derived from one ring angle. Prove It Works requires
+   actual button clicks, conservation checks, all orbit views and reviewed video on the built page.
+   Throughput checkpoint. One owned figure, one browser verification batch and at most three functional repair rounds.
+*/
+const ssCX=44, ssCY=44, ssGearZ=46, ssBowlBottom=6, ssBowlTop=43;
+const ssState={phase:'idle',angle:0,omega:0,wet:120,collected:0,emptied:0,time:0,pour:0,slow:1};
+const ssRad=a=>a*Math.PI/180;
+const ssPolar=(r,a,z,cx=ssCX,cy=ssCY)=>[cx+r*Math.cos(a),cy+r*Math.sin(a),z];
+const ssBounds=pts=>[[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i])))];
+const ssRing=(r,z,cx=ssCX,cy=ssCY,n=64)=>on(PZ(z),ellUV(cx,cy,r,r,n));
+function ssPose(st){
+  const p=st.pour, lift=p<.18?p/.18:p>.84?(1-p)/.16:1;
+  const tip=p<.22?0:p<.44?(p-.22)/.22:p<.66?1:p<.86?1-(p-.66)/.20:0;
+  return {lift:Math.max(0,lift)*38,tip:ease(Math.max(0,Math.min(1,tip)))*ssRad(85)};
+}
+function ssBowlPoint(p,pose){
+  const [x,y,z]=p, a=pose.tip, dx=x-ssCX,dz=z-24,k=a/ssRad(85);
+  return [ssCX+29*k+dx*Math.cos(a)+dz*Math.sin(a),y,24+22*k-dx*Math.sin(a)+dz*Math.cos(a)];
+}
+function ssSolid(A,B,m){
+  const v=norm(cross(sub(B[1],B[0]),sub(B[2],B[1]))), cap=vis(v)?B:A;
+  return loft(A,B,n=>toneI(n,m))+shape(cap,toneI(vis(v)?v:v.map(x=>-x),m),.9)+hullInk([...A,...B],2.2);
+}
+function ssAnnulus(ro,ri,z0,z1,m,transform=p=>p,phase=0){
+  const parts=[];
+  for(let i=0;i<64;i++){
+    const a=phase+i*Math.PI/32,b=phase+(i+1)*Math.PI/32;
+    const A=[ssPolar(ro,a,z0),ssPolar(ro,b,z0),ssPolar(ri,b,z0),ssPolar(ri,a,z0)].map(transform);
+    const B=[ssPolar(ro,a,z1),ssPolar(ro,b,z1),ssPolar(ri,b,z1),ssPolar(ri,a,z1)].map(transform);
+    parts.push({box:ssBounds([...A,...B]),svg:loft(A,B,n=>toneI(n,m))+fill(pd(B),toneI([0,0,1],m))});
+  }
+  const outside=ssRing(ro,z1).map(transform),inside=ssRing(ri,z1).map(transform);
+  return byDepth(parts)+ink(pd(outside),1.3)+ink(pd(inside),.9);
+}
+function ssGear(cx,cy,r,teeth,ang,z,m,lift){
+  const top=[],bottom=[];
+  for(let i=0;i<teeth*4;i++){
+    const a=ang+i*Math.PI*2/(teeth*4),rr=r+([-.8,.8,.8,-.8][i%4]);
+    top.push([cx+rr*Math.cos(a),cy+rr*Math.sin(a),z+3+lift]);bottom.push([cx+rr*Math.cos(a),cy+rr*Math.sin(a),z+lift]);
+  }
+  // Each tooth is convex and sorted with the hub rather than lofting a concave gear outline.
+  const parts=[{box:[[cx-r+.9,cy-r+.9,z+lift],[cx+r-.9,cy+r-.9,z+3+lift]],svg:cyl(cx,cy,z+lift,z+3+lift,r-.9,m,toneI,1)}];
+  for(let i=0;i<teeth;i++){
+    const a=ang+(i*4+1)*Math.PI*2/(teeth*4),b=ang+(i*4+2)*Math.PI*2/(teeth*4),c=ang+(i*4+3)*Math.PI*2/(teeth*4),d=ang+i*8*Math.PI/(teeth*4);
+    const poly=[[r-.95,d],[r+.8,a],[r+.8,b],[r-.95,c]];
+    const A=poly.map(([rr,th])=>[cx+rr*Math.cos(th),cy+rr*Math.sin(th),z+lift]),B=A.map(p=>[p[0],p[1],p[2]+3]);
+    parts.push({box:ssBounds([...A,...B]),svg:loft(A,B,n=>toneI(n,m))+shape(B,m.l,.4)});
+  }
+  return `<g data-part="${teeth===16?'sun':'planet'}" data-angle="${ang}">${byDepth(parts)}${line([[cx,cy,z+3.1+lift],[cx+(r-2)*Math.cos(ang),cy+(r-2)*Math.sin(ang),z+3.1+lift]],1.5)}</g>`;
+}
+function ssRingGear(st,lift,m){
+  const tr=p=>[p[0],p[1],p[2]+lift],parts=[];
+  for(let i=0;i<64;i++){
+    const a=st.angle+(i+.15)*Math.PI/32,b=st.angle+(i+.65)*Math.PI/32;
+    const A=[ssPolar(32.85,a,46),ssPolar(31.2,a+.01,46),ssPolar(31.2,b-.01,46),ssPolar(32.85,b,46)].map(tr),B=A.map(p=>[p[0],p[1],p[2]+3]);
+    parts.push({box:ssBounds([...A,...B]),svg:loft(A,B,n=>toneI(n,m))+shape(B,m.l,.35)});
+  }
+  return `<g data-part="ring" data-angle="${st.angle}">${ssAnnulus(35.5,32.8,46,52,m,tr)}${byDepth(parts)}</g>`;
+}
+function ssBasket(st,pose){
+  const tr=p=>ssBowlPoint(p,pose),parts=[],ang=-4*st.angle;
+  const bottom=ssRing(22,11).map(tr),base=ssRing(22,13).map(tr);
+  parts.push({box:ssBounds([...bottom,...base]),svg:ssSolid(bottom,base,matOf('#e2dfcb'))});
+  // The open slots are gaps between actual ribs, so contents remain behind the near basket wall.
+  for(let i=0;i<32;i++){
+    const a=ang+i*Math.PI/16,b=a+.095;
+    const A=[ssPolar(22,a,13),ssPolar(22,b,13),ssPolar(21.3,b,13),ssPolar(21.3,a,13)].map(tr);
+    const B=[ssPolar(28,a,39),ssPolar(28,b,39),ssPolar(27.2,b,39),ssPolar(27.2,a,39)].map(tr);
+    parts.push({box:ssBounds([...A,...B]),svg:loft(A,B,n=>toneI(n,CERAMIC))+shape(B,CERAMIC.l,.3)});
+  }
+  const shaft0=tr([44,44,8]),shaft1=tr([44,44,47]);
+  const pivotA=tr([44,44,6]),pivotB=tr([44,44,8]);
+  parts.push({box:ssBounds([pivotA.map(v=>v-3),pivotB.map(v=>v+3)]),svg:rod(pivotA,pivotB,3,DARK)});
+  for(const [z0,z1,r,m] of [[8,13,2.4,METAL],[13,18,5,PALS.tomato],[18,44,1.7,METAL],[44,47,2.2,DARK]]){
+    const a=tr([44,44,z0]),b=tr([44,44,z1]);parts.push({box:ssBounds([a.map(v=>v-r),b.map(v=>v+r)]),svg:rod(a,b,r,m)});
+  }
+  for(let i=0;i<9;i++){
+    const a=ang+i*2.4,r=8+(i%3)*4,c=ssPolar(r,a,17+(i%3)*3);
+    const pts=[[0,-3,0],[5,0,1],[7,3,0],[2,5,-1],[-3,2,0]].map(([x,y,z])=>tr([c[0]+x*Math.cos(a)-y*Math.sin(a),c[1]+x*Math.sin(a)+y*Math.cos(a),c[2]+z]));
+    parts.push({box:ssBounds(pts),svg:shape(pts,i%2?'#7ab35d':'#a5c766',.8)+line([pts[0],pts[2]],.5)});
+  }
+  return `<g data-part="basket" data-angle="${ang}">${byDepth(parts)}${ssAnnulus(28.4,26.9,38.2,40,CERAMIC,tr,ang)}</g>`;
+}
+function ssDrive(st,lift,m,k){
+  const tr=p=>[p[0],p[1],p[2]+lift],parts=[];
+  parts.push({box:[[8.5,8.5,46+lift],[79.5,79.5,52+lift]],svg:ssRingGear(st,lift,m)});
+  parts.push({box:[[51.2,31.2,46+lift],[76.8,56.8,49+lift]],svg:ssGear(64,44,12,24,st.angle*64/24+Math.PI/24,46,PALS.cobalt,lift)});
+  parts.push({box:[[35.2,35.2,46+lift],[52.8,52.8,49+lift]],svg:ssGear(44,44,8,16,-4*st.angle,46,PALS.tomato,lift)});
+  for(const [x,r,z0,z1] of [[64,1.3,46,51],[44,2.7,49,51]])parts.push({box:[[x-r,44-r,z0+lift],[x+r,44+r,z1+lift]],svg:cyl(x,44,z0+lift,z1+lift,r,METAL)});
+  const a=ssPolar(34,st.angle,52+lift),b=[a[0],a[1],59+lift];
+  parts.push({box:ssBounds([a.map(v=>v-2.5),b.map(v=>v+2.5)]),svg:act('spin',rod(a,b,1.2,METAL)+cyl(b[0],b[1],b[2]-3,b[2]+2,2.5,DARK))});
+  return byDepth(parts);
+}
+function ssShell(st,pose,m){
+  const tr=p=>ssBowlPoint(p,pose),A=ssRing(25,6).map(tr),B=ssRing(36,43).map(tr);
+  const footA=ssRing(19,3).map(tr),footB=ssRing(25,6).map(tr);
+  return ssSolid(footA,footB,DARK)+loft(A,B,n=>tone(n,m))+shape(A,m.d,.8)+ink(pd(B),1.5)+hullInk([...A,...B],2.8);
+}
+function ssWater(st,pose){
+  const tr=p=>ssBowlPoint(p,pose),parts=[];
+  if(st.collected>.1){
+    const floor=ssRing(24.7,7).map(tr),rim=ssRing(35,42.5).map(tr);
+    const lip=Math.min(...rim.map(p=>p[2]));
+    const z=Math.min(lip,Math.min(...floor.map(p=>p[2]))+st.collected/35);
+    const points=[];
+    for(let i=0;i<64;i++)for(const [a,b] of [[floor[i],rim[i]],[floor[i],floor[(i+1)%64]],[rim[i],rim[(i+1)%64]]]){
+      if((a[2]-z)*(b[2]-z)<=0&&Math.abs(b[2]-a[2])>1e-9){
+        const t=(z-a[2])/(b[2]-a[2]);points.push([a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,z]);
+      }
+    }
+    const center=points.length?avg(points):[0,0,z];
+    points.sort((a,b)=>Math.atan2(a[1]-center[1],a[0]-center[0])-Math.atan2(b[1]-center[1],b[0]-center[0]));
+    if(points.length>2)parts.push({box:ssBounds(points),svg:`<g opacity=".7">${shape(points,'#78bdd7',.7)}</g>`});
+  }
+  if(st.omega>.1&&st.wet>.1)for(let i=0;i<10;i++){
+    const age=((st.time*1.8+i/10)%1)*.12,a=-4*(st.angle-st.omega*age)+i*2.1,v=4*st.omega*22;
+    const trajectory=t=>[44+22*Math.cos(a)+Math.sin(a)*v*t,44+22*Math.sin(a)-Math.cos(a)*v*t,19+4*(i%3)-160*t*t];
+    const p=tr(trajectory(age)),q=tr(trajectory(Math.max(0,age-.008)));
+    parts.push({box:ssBounds([p,q]),svg:rod(q,p,.4,matOf('#65afd1'),toneI,.4)});
+  }
+  return byDepth(parts);
+}
+function ssScene(st,m){
+  const pose=ssPose(st),k=ease(st.xr||0),tr=p=>ssBowlPoint(p,pose),lt=p=>[p[0],p[1],p[2]+pose.lift];
+  let out=board(0,0,130,94,3,5,WOOD)+castShadow([...ssRing(36,43),...ssRing(25,6)],3,boardTop(0,0,130,94,3));
+  const dishA=on(PZ(3),ellUV(109,44,17,21,40)),dishB=on(PZ(8),ellUV(109,44,20,24,40));
+  out+=openShell(dishA,dishB,n=>toneI(n,CLEAR),shape(on(PZ(4),ellUV(109,44,15,19,40)),st.emptied>0?'#8ac9df':CLEAR.l,.7))+ink(pd(dishB),1.2);
+  const body=ssShell(st,pose,m),lid=cyl(44,44,50+pose.lift,52+pose.lift,32.5,m,tone,1.7);
+  const grip=ssPolar(34,st.angle,52+pose.lift);
+  if(k>0){
+    const A=ssRing(25,6).map(tr),B=ssRing(36,43).map(tr);
+    out+=xrGhostRings(body,'',k,A,B,m)+`<g opacity="${1-.88*k}">${lid}</g>`;
+    out+=`<g opacity="${k}">`+ssWater(st,pose)+ssBasket(st,pose);
+    out+=ssDrive(st,pose.lift,m,k);
+    out+=ssAnnulus(36,35,43,46,m,tr)+cyl(44,44,49+pose.lift,50+pose.lift,3.5,METAL);
+    out+='</g>';
+  }else{
+    const A=ssRing(25,6).map(tr),B=ssRing(36,43).map(tr);
+    const base0=ssRing(19,3).map(tr),base1=ssRing(25,6).map(tr);
+    out+=ssSolid(base0,base1,DARK)+openShell(A,B,n=>tone(n,m),ssWater(st,pose)+ssBasket(st,pose))+ink(pd(B),1.6);
+    out+=ssAnnulus(36,35,43,46,m,tr)+lid+ssAnnulus(35.5,32.8,46,52,m,lt)+cyl(grip[0],grip[1],grip[2],grip[2]+7,2,DARK);
+  }
+  if(st.phase==='pour'&&st.pour>.42&&st.pour<.69&&st.collected>.1){
+    const lip=tr([79,44,43]),end=[109,44,6];
+    const stream=Array.from({length:16},(_,i)=>{const t=i/15;return [lip[0]+(end[0]-lip[0])*t,44,lip[2]+(6-lip[2])*t*t];});
+    out+=`<path d="${pd(stream,false)}" fill="none" stroke="#71b7d6" stroke-width="3" opacity=".8"/>`;
+  }
+  if(k>.6){
+    const labels=[
+      {at:tr([72,56,33]),text:'COLLECTING BOWL'}, {at:tr([78,44,43]),text:'BOWL RIM'},
+      {at:tr([44,44,8]),text:'BOTTOM PIVOT'}, {at:lt([36,24,52]),text:'LID'},
+      {at:lt(ssPolar(34,2.4+st.angle,51)),text:'GEAR RING',on:st.omega>.05},
+      {at:lt(ssPolar(31.2,2.4+st.angle,48)),text:'INTERNAL TEETH',on:st.omega>.05},
+      {at:lt([79,44,46]),text:'RING BEARING LIP'},
+      {at:lt([64,44,49]),text:'PLANET GEAR',on:st.omega>.05},
+      {at:lt([64,44,51]),text:'FIXED PLANET PIN'},
+      {at:lt([44,44,49]),text:'SUN GEAR',on:st.omega>.05},
+      {at:lt([44,44,50]),text:'CENTRAL LID BEARING'},
+      {at:tr([44,44,33]),text:'OUTPUT SHAFT',on:st.omega>.05},
+      {at:tr([44,44,17]),text:'BASKET HUB',on:st.omega>.05},
+      {at:tr(ssPolar(27,-4*st.angle+.7,35)),text:'PERFORATED BASKET',on:st.omega>.05},
+      {at:tr(ssPolar(26,-4*st.angle+.24,31)),text:'BASKET SLOTS'},
+      {at:[grip[0],grip[1],grip[2]+4],text:'HAND CRANK',on:st.phase==='driven'}
+    ];
+    out+=xrCallouts(labels,[8,80,8,80,3,60]);
+    if(st.omega>.05){
+      const arc=Array.from({length:17},(_,i)=>ssPolar(13,.7-i*.12,53+pose.lift));
+      out+=`<g data-overlay="rotation">${line(arc,1).replaceAll(INK,'#d25338')}${line([arc[14],arc[16],ssPolar(15,.7-16*.12,53+pose.lift)],1).replaceAll(INK,'#d25338')}</g>`;
+    }
+  }
+  return out;
+}
+function ssStep(st,dt){
+  dt*=st.slow; st.time+=dt;
+  if(st.phase==='driven')st.omega=Math.min(2,st.omega+dt*1.6);
+  else if(st.phase==='coast'){
+    st.omega=Math.max(0,st.omega-dt*.7);
+    if(st.omega===0)st.phase='idle';
+  }
+  st.angle+=st.omega*dt;
+  if(st.omega>.1&&st.wet>0){const water=Math.min(st.wet,st.wet*(1-Math.exp(-st.omega*dt*.4)));st.wet-=water;st.collected+=water;}
+  if(st.phase==='pour'){
+    st.pour=Math.min(1,st.pour+dt/5);
+    if(st.pour>.42&&st.pour<.69){const water=Math.min(st.collected,dt*140);st.collected-=water;st.emptied+=water;}
+    if(st.pour===1){st.pour=0;st.phase='idle';}
+  }
+  return st.phase!=='idle';
+}
+let ssLoop=false,ssUI;
+function ssKick(){
+  if(ssLoop)return;ssLoop=true;
+  ssUI.animate(dt=>{const more=ssStep(ssState,dt);if(!more)ssLoop=false;return more;});
+}
+function ssSpin(st,ui){if(st.phase==='pour')return ui.flash('Finish pouring before turning the crank');st.phase='driven';ssKick();}
+function ssStop(st,ui){if(st.phase==='pour')return ui.flash('The drive is already stopped');if(!st.omega){st.phase='idle';return ui.flash('The basket is already stopped');}st.phase='coast';ssKick();}
+function ssEmpty(st,ui){
+  if(st.phase!=='idle'||st.omega>0)return ui.flash('Stop drive and let the basket coast to rest first');
+  if(st.collected<.1)return ui.flash('There is no separated water in the bowl');
+  st.phase='pour';st.pour=0;ssKick();
+}
+ssUI=mountFigure({fig:'43',turn:'full',title:'Salad spinner',size:[130,94,94],palette:'mint',state:ssState,scene:ssScene,
+  stats:st=>[{label:'Basket speed',value:Math.round(st.omega*4*60/(Math.PI*2))+' rpm'},{label:'Water in bowl',value:Math.round(st.collected)+' ml',small:true},{label:'Gear ratio',value:'4 : 1',small:true}],
+  buttons:[{label:'Spin',onClick:ssSpin},{label:'Stop drive',onClick:ssStop},{label:'Empty bowl',onClick:ssEmpty},{label:'Slow view',onClick:(st,ui)=>{st.slow=st.slow===1?.25:1;ui.flash(st.slow===1?'Real time':'Quarter speed teaching view');}}],
+  acts:{spin:(st,el,ui)=>ssSpin(st,ui)},
+  params:(st,q)=>{for(const key of ['angle','wet','collected'])if(q.has(key)){const v=Number(q.get(key));if(Number.isFinite(v))st[key]=key==='angle'?v:Math.max(0,Math.min(120,v));}
+    if(q.get('slow')==='1')st.slow=.25;
+  }
+});
+xrMount(()=>ssUI,()=> '');
+</script></body></html>
