@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Car window winder</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   The 1998 page 39 text supports a handle turning a small cog, a toothed quadrant and window levers.
+   The checked 2016 page 39 image corroborates the crossed linkage, but shows motor input.
+   This is the 1998 manual-input teaching adaptation, not an exact door reconstruction.
+   1988 is inaccessible and unverified. No edition-union claim is made.
+   Wind up rotates the cog and reverses the quadrant to open the crossed levers.
+   The pane stays in two vertical guides. The upper and lower sliding supports move along their tracks.
+   Wind down reverses the same connected train. A teaching hand holds the crank at rest.
+   Spur gears can back-drive. There is no brake, worm drive or claim of self-locking.
+   Parts. Input has a crank, grip, shaft and small cog in a frame-mounted bearing.
+   Linkage has a quadrant with teeth, driven arm, crossing arm, centre rivet and fixed pivot.
+   Supports have a lower guide track and slide, upper slide, carrier channel, pane and two glass guides.
+   The frame, removable covers, board and holding hand stage the lesson and do not pad anatomy.
+   Geometry. Arms are 62 units long. Fixed pivot is y32,z22. Slide separation is 62*cos(angle).
+   Carrier height is 22+62*sin(angle). Both arms share their exact midpoint.
+   Pitch radii are 18 and 6, centres are 24 apart, and crank rotation is minus 3 times quadrant rotation.
+   Gears occupy x18..21, clear of the glass-guide posts ending at x17, and ahead of the arms on one pivot shaft.
+   shortcut: tooth flanks are teaching trapezoids, use involute profiles for manufacturing analysis.
+*/
+const wwRad = d => d*Math.PI/180;
+const wwState = {angle:18,target:18,slow:false,moving:false};
+function wwGeometry(st){
+  const a=wwRad(st.angle), dy=62*Math.cos(a), dz=62*Math.sin(a);
+  return {a,dy,dz,top:22+dz,slide:32+dy,cy:32+dy/2,cz:22+dz/2,crank:-3*a+Math.PI/16};
+}
+const wwBounds = (pts,r=0) => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))-r),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i]))+r)];
+function wwPlate(profile,x0,x1,material){
+  const near=vis([1,0,0])?x1:x0;
+  return extrude(profile,x0,x1,material,toneI)+shape(on(PX(near),profile),toneI([near===x1?1:-1,0,0],material),.8)+hullInk([...on(PX(x0),profile),...on(PX(x1),profile)],1.5);
+}
+function wwWind(st,ui,target){
+  if(st.angle===target&&!st.moving) return ui.flash(target===60?'The glass is fully raised. The hand holds the crank.':'The glass is fully lowered.');
+  st.target=target;
+  if(st.moving) return;
+  st.moving=true;
+  ui.animate(dt=>{
+    st.angle+=Math.sign(st.target-st.angle)*Math.min(Math.abs(st.target-st.angle),dt*(st.slow?7:28));
+    if(Math.abs(st.angle-st.target)<1e-8){st.angle=st.target;st.moving=false;return false;}
+    return true;
+  });
+}
+function wwScene(st,m){
+  const g=wwGeometry(st),k=ease(st.xr||0),pieces=[],anatomy=[];
+  const put=(bounds,svg)=>pieces.push({box:bounds,svg});
+  const bx=(x0,y0,z0,x1,y1,z1,mat)=>put([[x0,y0,z0],[x1,y1,z1]],box(x0,y0,z0,x1,y1,z1,mat,toneI,.9));
+  const link=(a,b,r,mat)=>put(wwBounds([a,b],r),rod(a,b,r,mat,toneI,1));
+  const pin=(x0,x1,y,z,r=1.8)=>put([[x0,y-r,z-r],[x1,y+r,z+r]],cylX(x0,x1,y,z,r,METAL,toneI,.8));
+  const label=(at,text,working=false)=>anatomy.push({at,text,on:working&&st.moving});
+  let svg=board(0,0,40,120,3,4,WOOD);
+  svg+=castShadow([[10,19,3],[10,107,3],[10,19,121],[10,107,121]],3,boardTop(0,0,40,120,3,4));
+  for(const y of [18,106]){
+    bx(4,y-3,3,24,y+3,6,m);
+    bx(7,y-2,6,17,y+2,121,m);
+    bx(10,y+(y===18?2:-3),6,14,y+(y===18?3:-2),118,DARK);
+  }
+  bx(7,16,118,17,108,122,m);
+  bx(5,0,3,8,100,8,m);
+  bx(5,5,8,8,11,26,METAL);
+  bx(5,29,8,8,35,26,METAL);
+  pin(7,22,32,22,3);
+  pin(7,24,8,22,2.3);
+  bx(8,30,18,10,97,20,METAL);
+  bx(8,30,24,10,97,26,METAL);
+  for(const y of [32,96]) bx(5,y-1,8,8,y+1,25,METAL);
+  bx(8,g.slide-2,20,11,g.slide+2,24,DARK);
+  pin(9,15,g.slide,22,1.5);
+  bx(8,28,g.top-3.5,15,101,g.top-1.5,METAL);
+  bx(8,28,g.top+1.5,15,101,g.top+3.5,METAL);
+  bx(8,28,g.top-1.5,10,101,g.top+1.5,METAL);
+  bx(10,g.slide-2,g.top-1.5,13,g.slide+2,g.top+1.5,DARK);
+  pin(10,14,g.slide,g.top,1.3);
+  pin(9,16,32,g.top,1.5);
+  // The levers lie in different depth planes and meet through the centre rivet.
+  link([11,32,22],[11,g.slide,g.top],1.5,METAL);
+  link([14,g.slide,22],[14,32,g.top],1.5,matOf('#d48b59'));
+  pin(9,16,g.cy,g.cz,2);
+  const sector=[[32,22],...arcUV(32,22,17,st.angle+80,st.angle+200,24)];
+  put([[18,12,2],[21,52,42]],wwPlate(sector,18,21,matOf('#e9b13c')));
+  for(let i=11;i<=26;i++){
+    const a=g.a+i*Math.PI/24;
+    const prof=[[-.42,17],[-.22,19],[.22,19],[.42,17]].map(([u,r])=>[32+r*Math.cos(a+u*Math.PI/24),22+r*Math.sin(a+u*Math.PI/24)]);
+    put(wwBounds([...on(PX(18),prof),...on(PX(21),prof)]),wwPlate(prof,18,21,matOf('#e9b13c')));
+  }
+  pin(17,22,32,22,2.1);
+  put([[18,3,17],[21,13,27]],cylX(18,21,8,22,5,matOf('#778d99'),toneI,.8));
+  for(let i=0;i<16;i++){
+    const a=g.crank+i*Math.PI/8;
+    const prof=[[-.42,5],[-.22,7],[.22,7],[.42,5]].map(([u,r])=>[8+r*Math.cos(a+u*Math.PI/8),22+r*Math.sin(a+u*Math.PI/8)]);
+    put(wwBounds([...on(PX(18),prof),...on(PX(21),prof)]),wwPlate(prof,18,21,matOf('#778d99')));
+  }
+  // The pane is captured along both edges and seated in the moving carrier channel.
+  const pane=box(11,20,g.top+4,12,104,g.top+43,CLEAR,toneI,.8);
+  put([[11,20,g.top+4],[12,104,g.top+43]],`<g opacity="${.72-.42*k}">${pane}</g>`);
+  for(const y of [20,102]) bx(10.5,y,g.top+2,12.5,y+2,g.top+7,DARK);
+  // Covers are removable teaching panels, with the same complete mechanism behind them.
+  const cover=box(23,0,6,24,106,64,m,tone,1.2);
+  const back=box(3,0,6,4,106,64,m,tone,1.2);
+  if(k>0) svg+=`<g opacity="${1-.94*k}">${cover}${back}</g>`;
+  else {put([[23,0,6],[24,106,64]],cover);put([[3,0,6],[4,106,64]],back);}
+  pin(24,25,8,22,3);
+  const gripY=8+10*Math.cos(g.crank),gripZ=22+10*Math.sin(g.crank);
+  link([25,8,22],[25,gripY,gripZ],1.4,METAL);
+  put([[24,gripY-2,gripZ-2],[31,gripY+2,gripZ+2]],act('crank',cylX(24,31,gripY,gripZ,2,DARK,toneI,1)));
+  const skin=matOf('#dda67a');
+  bx(30,gripY-3,gripZ-3,35,gripY+3,gripZ+3,skin);
+  for(const z of [-2,0,2]) link([30,gripY-3,gripZ+z],[28,gripY+1.8,gripZ+z],.65,skin);
+  link([33,gripY+2,gripZ+2],[29,gripY+3,gripZ-1],.9,skin);
+  svg+=byDepth(pieces);
+  label([25,8,22],'HAND CRANK',true);
+  label([29,gripY,gripZ],'CRANK GRIP',true);
+  label([17,8,22],'DRIVE SHAFT',true);
+  label([21,8,26],'SMALL COG',true);
+  label([21,32+12*Math.cos(g.a+2.6),22+12*Math.sin(g.a+2.6)],'TOOTHED QUADRANT',true);
+  label([21,32+18*Math.cos(g.a+2),22+18*Math.sin(g.a+2)],'QUADRANT TEETH',true);
+  label([11,32+g.dy*.72,22+g.dz*.72],'DRIVEN LEVER',true);
+  label([14,32+g.dy*.25,22+g.dz*.75],'CROSSED LEVER',true);
+  label([16,g.cy,g.cz],'CENTRE RIVET',true);
+  label([22,32,22],'FIXED PIVOT');
+  label([10,70,19],'LOWER GUIDE TRACK');
+  label([11,g.slide,22],'LOWER SLIDE',true);
+  label([13,g.slide,g.top],'UPPER SLIDE',true);
+  label([14,60,g.top+4],'GLASS CARRIER',true);
+  label([12,60,g.top+30],'GLASS PANE',true);
+  label([15,20,70],'LEFT GLASS GUIDE');
+  label([15,104,70],'RIGHT GLASS GUIDE');
+  if(k>.6) svg+=xrCallouts(anatomy,[3,35,0,108,3,122]);
+  return svg;
+}
+const ui=mountFigure({fig:'39',turn:'full',title:'Car window winder',size:[40,120,124],palette:'cobalt',state:wwState,scene:wwScene,
+  stats:st=>[{label:'Glass travel',value:Math.round(wwGeometry(st).dz-62*Math.sin(wwRad(18)))+' cm'},{label:'View speed',value:st.slow?'Slow':'Normal',small:true}],
+  buttons:[
+    {label:'Wind up',onClick:(st,ui)=>wwWind(st,ui,60)},
+    {label:'Wind down',onClick:(st,ui)=>wwWind(st,ui,18)},
+    {label:'Slow view',onClick:(st,ui)=>{st.slow=!st.slow;ui.flash(st.slow?'Slow explanatory motion':'Normal explanatory motion');}}
+  ],
+  acts:{crank:(st,el,ui)=>wwWind(st,ui,st.target===60?18:60)},
+  params:(st,q)=>{const v=Number(q.get('angle'));if(q.has('angle')&&Number.isFinite(v))st.angle=st.target=Math.max(18,Math.min(60,v));st.slow=q.get('slow')==='1';}
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
