@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nut and bolt</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Teaching adaptation of Macaulay pp.62 and 64, supported in the saved
+   1998 and 2016 scans. 1988 is inaccessible and unverified.
+   An external hand restrains the bolt head. The spanner and nut rotate together.
+   A right-hand thread advances 3 drawing units per clockwise revolution. The nut
+   takes up clearance, lowers the upper plate, then stretches the bolt and compresses
+   the plates. Loosen reverses that path. Friction retains preload after turning.
+   Pull applies only 100 N to the tightened teaching joint, then removes that load.
+   This is an illustrative elastic model, not a strength rating or an overload test.
+   Parts. Bolt head, integral bearing face, unthreaded shank, external thread flanks.
+   Nut body, internal thread flanks, lower bearing face. Spanner jaws grip nut flats.
+   Fixtures. Two metal plates with unthreaded clearance holes, tabletop, restraining
+   hand and the externally applied test load. No washers or hidden locking hardware.
+   Overlays. Red bolt tension and blue plate compression are forces, not anatomy.
+   The model is enlarged, motion slowed and elastic movement exaggerated. See-through
+   fades the plates, spanner and near half of the nut to expose real mating threads.
+   Expected anatomy minimum 6 was declared in the individual brief before building. */
+const nb = {cx:42, cy:42, pitch:3, maxTurns:4.1, nutHeight:7};
+const nbState = {turns:0, target:0, phase:'idle', load:0, pullTime:0};
+const nbSkin = matOf('#edba94'), nbThread = matOf('#c4ced4');
+function nbJoint(st){
+  const preload = Math.max(0, (st.turns-4)*10000), tension=preload+.2*st.load, compression=Math.max(0,preload-.8*st.load);
+  const stretch=tension/10000, squeeze=compression/5000;
+  const bottom=14-stretch, middle=bottom+10-squeeze/2, gap=Math.max(0,Math.min(4,12-3*st.turns));
+  const top=middle+gap+10-squeeze/2;
+  return {preload,tension,compression,bottom,middle,top,gap,nut:46-3*st.turns+st.load*.00014,angle:-st.turns*2*Math.PI};
+}
+function nbBounds(pts){return [0,1].map(k=>[0,1,2].map(i=>(k?Math.max:Math.min)(...pts.map(p=>p[i]))));}
+function nbFace(parts,pts,normal,material,opacity=1,w=.7){
+  if(!vis(normal))return;
+  parts.push({box:nbBounds(pts),svg:`<g opacity="${opacity}">${shape(pts,tone(normal,material),w)}</g>`});
+}
+function nbRing(r,z,a=0,n=48){return Array.from({length:n},(_,i)=>[nb.cx+r*Math.cos(a+i*2*Math.PI/n),nb.cy+r*Math.sin(a+i*2*Math.PI/n),z]);}
+function nbPrism(parts,profile,z0,z1,material,opacity=1){
+  const a=profile.map(([x,y])=>[x,y,z0]), b=profile.map(([x,y])=>[x,y,z1]);
+  nbFace(parts,a,[0,0,-1],material,opacity);nbFace(parts,b,[0,0,1],material,opacity);
+  for(let i=0;i<a.length;i++){const j=(i+1)%a.length,d=sub(a[j],a[i]);nbFace(parts,[a[i],a[j],b[j],b[i]],norm([d[1],-d[0],0]),material,opacity);}
+}
+function nbPlate(parts,z0,z1,material,k){
+  const plateParts=[];
+  const n=48, outer=z=>Array.from({length:n},(_,i)=>{const a=i*2*Math.PI/n,r=20/Math.max(Math.abs(Math.cos(a)),Math.abs(Math.sin(a)));return [42+r*Math.cos(a),42+r*Math.sin(a),z];});
+  const a=outer(z0),b=outer(z1),h0=nbRing(5.35,z0),h1=nbRing(5.35,z1),op=1-.88*k;
+  for(let i=0;i<n;i++){const j=(i+1)%n,ang=(i+.5)*2*Math.PI/n;
+    nbFace(plateParts,[b[i],b[j],h1[j],h1[i]],[0,0,1],material,op,.35);
+    nbFace(plateParts,[a[i],a[j],h0[j],h0[i]],[0,0,-1],material,op,.35);
+    nbFace(plateParts,[a[i],a[j],b[j],b[i]],Math.abs(Math.cos(ang))>Math.abs(Math.sin(ang))?[Math.sign(Math.cos(ang)),0,0]:[0,Math.sign(Math.sin(ang)),0],material,op,.35);
+    nbFace(plateParts,[h0[i],h0[j],h1[j],h1[i]],[-Math.cos(ang),-Math.sin(ang),0],METAL,op,.5);
+  }
+  parts.push({box:[[22,22,z0],[62,62,z1]],svg:byDepth(plateParts)});
+}
+const nbRadius=(z,a)=>{const p=((z/3-a/(2*Math.PI))%1+1)%1;return 3.8+.8*(1-Math.abs(2*p-1));};
+function nbThreadSurface(parts,z0,z1,internal,k){
+  const nz=Math.ceil((z1-z0)/.5),na=32;
+  for(let j=0;j<nz;j++)for(let i=0;i<na;i++){
+    const a=i*2*Math.PI/na,b=(i+1)*2*Math.PI/na,z=z0+(z1-z0)*j/nz,zz=z0+(z1-z0)*(j+1)/nz;
+    const p=(h,t)=>{const r=nbRadius(h,t)+(internal?.12:0);return [42+r*Math.cos(t),42+r*Math.sin(t),h];};
+    const mid=(a+b)/2,near=vis([Math.cos(mid),Math.sin(mid),0]);
+    if(internal&&!near)continue;
+    if(!internal&&!near)continue;
+    const pts=[p(z,a),p(z,b),p(zz,b),p(zz,a)],normal=norm([Math.cos(mid),Math.sin(mid),.3]);
+    parts.push({box:nbBounds(pts),svg:shape(pts,internal?'#f0bd63':tone(normal,nbThread),0)});
+  }
+  for(let z=z0-3;z<z1;z+=3){let seg=[];for(let i=0;i<=96;i++){const a=i*2*Math.PI/96,h=z+3*(a/(2*Math.PI)+.5);if(h<z0||h>z1||!vis([Math.cos(a),Math.sin(a),0])){if(seg.length>1)parts.push({box:nbBounds(seg),svg:line(seg,.6)});seg=[];continue;}const r=4.6+(internal?.12:0);seg.push([42+r*Math.cos(a),42+r*Math.sin(a),h]);}if(seg.length>1)parts.push({box:nbBounds(seg),svg:line(seg,.6)});}
+}
+function nbNut(parts,g,k){
+  const nutParts=[];
+  const a=nbRing(9,g.nut,g.angle+Math.PI/6,6),b=nbRing(9,g.nut+7,g.angle+Math.PI/6,6),hi=nbRing(4.72,g.nut+7,0,48),lo=nbRing(4.72,g.nut,0,48);
+  for(let i=0;i<6;i++){const j=(i+1)%6,mid=(i+.5)*2*Math.PI/6+g.angle+Math.PI/6,n=[Math.cos(mid),Math.sin(mid),0];
+    nbFace(nutParts,[a[i],a[j],b[j],b[i]],n,METAL,1-.9*k,1);
+  }
+  for(let i=0;i<48;i++){const j=(i+1)%48,ang=i*2*Math.PI/48,ang2=(i+1)*2*Math.PI/48;
+    const outer=(t,z)=>{const local=((t-g.angle-Math.PI/6)%(Math.PI/3)+Math.PI/3)%(Math.PI/3)-Math.PI/6,r=9*Math.cos(Math.PI/6)/Math.cos(local);return [42+r*Math.cos(t),42+r*Math.sin(t),z];};
+    nbFace(nutParts,[outer(ang,g.nut+7),outer(ang2,g.nut+7),hi[j],hi[i]],[0,0,1],METAL,1-.7*k,.35);
+    nbFace(nutParts,[outer(ang,g.nut),outer(ang2,g.nut),lo[j],lo[i]],[0,0,-1],METAL,1-.7*k,.35);
+  }
+  parts.push({box:[[33,33,g.nut],[51,51,g.nut+7]],svg:byDepth(nutParts)});
+}
+function nbTool(parts,g,k){
+  const tr=([x,y])=>[42+x*Math.cos(g.angle)-y*Math.sin(g.angle),42+x*Math.sin(g.angle)+y*Math.cos(g.angle)];
+  const pieces=[[[ -7.8,-12],[7.8,-12],[7.8,-8],[-7.8,-8]],[[7.8,-12],[12,-12],[12,5],[7.8,5]],[[-12,-12],[-7.8,-12],[-7.8,5],[-12,5]],[[-3.3,-39],[3.3,-39],[3.3,-12],[-3.3,-12]]];
+  for(const p of pieces)nbPrism(parts,p.map(tr),g.nut+1.5,g.nut+4.5,matOf('#6d8794'),1-.78*k);
+}
+function nbHand(parts,g){
+  const z=g.bottom-3;
+  const pieces=[[[29,29],[48,29],[48,33],[29,33]],[[29,33],[34,33],[34,55],[29,55]],[[34,51],[48,51],[48,55],[34,55]],[[0,32],[14,32],[14,44],[0,44]],[[10,29],[29,29],[29,46],[10,46]]];
+  for(const p of pieces)nbPrism(parts,p,z-2,z+2,nbSkin);
+}
+function nbArrow(a,b,col){
+  const p=P(...a),q=P(...b),d=norm([q[0]-p[0],q[1]-p[1],0]),u=INK_K;
+  return `<g class="force-overlay"><path d="M${p[0]} ${p[1]}L${q[0]} ${q[1]}" fill="none" stroke="${col}" stroke-width="2"/><path d="M${q[0]} ${q[1]}l${-d[0]*7*u-d[1]*3*u} ${-d[1]*7*u+d[0]*3*u}l${d[1]*6*u} ${-d[0]*6*u}Z" fill="${col}"/></g>`;
+}
+function nbScene(st,m){
+  const g=nbJoint(st),k=ease(st.xr||0),parts=[];
+  let svg=board(0,0,84,84,3,5)+castShadow([...nbRing(9,8),...nbRing(9,g.nut+7)],3,boardTop(0,0,84,84,3,5));
+  nbPlate(parts,g.bottom,g.middle,m,k);nbPlate(parts,g.middle+g.gap,g.top,PALS.cobalt,k);
+  nbPrism(parts,nbRing(9,0,Math.PI/6,6).map(p=>p.slice(0,2)),g.bottom-6,g.bottom,METAL);
+  const stops=[...new Set([g.bottom,g.middle,g.middle+g.gap,g.top,26,g.nut,g.nut+7,64])].sort((a,b)=>a-b);
+  for(let i=0;i<stops.length-1;i++){
+    const a=stops[i],b=stops[i+1],mid=(a+b)/2,shaft=[];
+    if(b<=26)shaft.push({box:[[38.2,38.2,a],[45.8,45.8,b]],svg:cyl(42,42,a,b,3.8,METAL,tone,1,24)});
+    else nbThreadSurface(shaft,a,b,false,k);
+    let drawing=byDepth(shaft);
+    if(k===0){
+      const cover=mid>g.bottom&&mid<g.middle?g.middle:mid>g.middle+g.gap&&mid<g.top?g.top:mid>g.nut&&mid<g.nut+7?g.nut+7:null;
+      if(cover!==null)drawing=clipTo(nbRing(cover===g.nut+7?4.72:5.35,cover),drawing);
+    }
+    parts.push({box:[[37.4,37.4,a],[46.6,46.6,b]],svg:drawing});
+  }
+  const tip=nbRing(3.8,64);nbFace(parts,tip,[0,0,1],METAL,1,1);
+  nbNut(parts,g,k);nbTool(parts,g,k);nbHand(parts,g);
+  const layers=new Map();
+  for(const part of parts){
+    const mid=(part.box[0][2]+part.box[1][2])/2;
+    const level=mid<g.bottom?g.bottom:mid<g.middle?g.middle:mid<g.middle+g.gap?g.middle+g.gap:mid<g.top?g.top:mid<g.nut?g.nut:mid<g.nut+7?g.nut+7:64;
+    if(!layers.has(level))layers.set(level,[]);layers.get(level).push(part);
+  }
+  svg+=[...layers].sort((a,b)=>a[0]-b[0]).map(([,layer])=>byDepth(layer)).join('');
+  if(k>.01){
+    const inside=[];nbThreadSurface(inside,g.nut,g.nut+7,true,k);svg+=`<g opacity="${k}">${byDepth(inside)}</g>`;
+    if(g.tension>1)svg+=nbArrow([33,42,29],[33,42,16],'#c34632')+nbArrow([33,42,31],[33,42,46],'#c34632');
+    if(g.compression>1)svg+=nbArrow([63,42,43],[63,42,34],'#2868ac')+nbArrow([63,42,6],[63,42,14],'#2868ac');
+    if(st.load>0)svg+=nbArrow([62,62,g.top],[62,62,g.top+9],'#98611e')+nbArrow([62,62,g.bottom],[62,62,g.bottom-8],'#98611e');
+  }
+  if(k>.6)svg+=xrCallouts([
+    {at:[42,49,g.bottom-3],text:'BOLT HEAD'},
+    {at:[48,42,g.bottom],text:'HEAD BEARING FACE',on:g.preload>0},
+    {at:[45.8,42,20],text:'UNTHREADED SHANK',on:g.tension>0},
+    {at:[46.2,42,59],text:'EXTERNAL THREAD FLANKS',on:st.phase==='turn'},
+    {at:[50,42,g.nut+4],text:'NUT',on:st.phase==='turn'},
+    {at:[46,42,g.nut+3],text:'INTERNAL THREAD FLANKS',on:st.phase==='turn'},
+    {at:[48,42,g.nut],text:'NUT BEARING FACE',on:g.preload>0},
+    {at:[42+7.8*Math.cos(g.angle),42+7.8*Math.sin(g.angle),g.nut+2],text:'SPANNER JAWS',on:st.phase==='turn'},
+    {at:[42,47.35,g.middle],text:'CLEARANCE HOLES'},
+    {at:[22,35,g.bottom-3],text:'RESTRAINING HAND'}
+  ],[22,62,22,62,8,64]);
+  return svg;
+}
+function nbDrive(st,ui){
+  if(st.phase==='turn')return;
+  st.phase='turn';
+  ui.animate(dt=>{const d=st.target-st.turns;st.turns+=Math.sign(d)*Math.min(Math.abs(d),dt*1.5);if(st.turns===st.target){st.phase='idle';return false;}return true;});
+}
+function nbTighten(st,ui){if(st.phase==='pull')return ui.flash('Wait for the 100 N test to finish');if(st.turns===nb.maxTurns)return ui.flash('Demonstration preload reached');st.target=nb.maxTurns;nbDrive(st,ui);}
+function nbLoosen(st,ui){if(st.phase==='pull')return ui.flash('Wait for the 100 N test to finish');if(st.turns===0)return ui.flash('Nut is already loose and still engaged');st.target=0;nbDrive(st,ui);}
+function nbPull(st,ui){
+  if(st.phase!=='idle'||st.turns!==nb.maxTurns)return ui.flash('Tighten the joint before the 100 N pull test');
+  st.phase='pull';st.pullTime=0;
+  ui.animate(dt=>{st.pullTime+=dt;st.load=100*Math.sin(Math.PI*Math.min(1,st.pullTime/2));if(st.pullTime>=2){st.load=0;st.phase='idle';ui.flash('Joint held the 100 N demonstration load');return false;}return true;});
+}
+const ui=mountFigure({fig:'67',title:'Nut and bolt',turn:'full',size:[84,84,72],palette:'mustard',state:nbState,scene:nbScene,
+  buttons:[{label:'Tighten',onClick:nbTighten},{label:'Loosen',onClick:nbLoosen},{label:'Pull',onClick:nbPull}],
+  stats:st=>{const g=nbJoint(st);return [{label:'Bolt tension / red',value:Math.round(g.tension)+' N'},{label:'Plate compression / blue',value:Math.round(g.compression)+' N',small:true},{label:'Test pull / 100 N max',value:Math.round(st.load)+' N',small:true}];},
+  params:(st,q)=>{const n=Number(q.get('turns'));if(q.has('turns')&&Number.isFinite(n))st.turns=st.target=Math.max(0,Math.min(nb.maxTurns,n));}
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
