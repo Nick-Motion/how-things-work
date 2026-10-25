@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Greek mill</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Source is the Greek mill diagram on printed page 32 of the 2016 book, read from the saved primary image.
+   Water travels from the finite elevated bench tank, through a gate and the descending open chute,
+   onto the outer paddle faces, then falls into the catch tray. It is never pumped back to the tank.
+   The horizontal paddle rotor and its hub turn the vertical axle directly, at the same angular speed.
+   This is the pictured waterwheel principle model, not a complete grain mill. There are no millstones,
+   grain, hopper or gears. The 1988 edition remains inaccessible and unverified. No edition union is claimed.
+   Teaching adaptations are the supply tank, gate, catch tray, base and necessary bearing frame.
+   Reset represents the teacher emptying the tray and refilling the tank. Slow view scales explanatory time
+   for the entire simulation, including water motion and tank depletion. It changes no physical gearing or efficiency.
+   Parts. Structure: bench board; tank legs fixed to board; tray floor and walls fixed to board;
+   bearing posts seated on tray floor; split crossbeam fixed to posts; upper bearing held by crossbeam;
+   lower thrust bearing fixed to tray floor. Mechanism: twelve radial wooden paddles joined to a hub;
+   hub fixed to direct vertical axle, held by the two bearings. Power: finite tank water and open chute.
+   Controls: slide gate at tank outlet. Chute floor and side cheeks are held by tank outlet and a board-mounted trestle.
+   Geometry. Rotor centre [74,38], inner radius 7, outer radius 19, paddles z18..32, hub z24..32.
+   Jet leaves [54,22,35] and meets the negative-y rim near [64,22,27], giving positive rotation about z.
+   Crossbeam has a real opening for the axle, not a solid slab through the shaft.
+   shortcut: speed response and flow are qualitative bench-model values, use measured hydraulics for a quantitative simulator.
+*/
+const gmCX=74, gmCY=38, gmBounds=[0,108,0,78,0,76];
+const gmWater=matOf('#6fc6e6'), gmTimber=matOf('#c38d52');
+const gmInitial=()=>({gate:0,rate:.25,remaining:5,collected:0,angle:0,omega:0,clock:0,scale:1});
+let ui,gmLoop=false;
+function gmStep(st,dt){
+  const elapsed=dt*st.scale, flow=st.gate&&st.remaining>0?st.rate:0;
+  const used=Math.min(st.remaining,flow*elapsed);
+  st.remaining-=used; st.collected+=used; st.clock+=elapsed;
+  const target=flow*10;
+  st.omega+=(target-st.omega)*(1-Math.exp(-elapsed*3));
+  if(!flow&&st.omega<.002)st.omega=0;
+  st.angle=(st.angle+st.omega*elapsed)%(2*Math.PI);
+  if(st.remaining<=0){st.remaining=0;st.gate=0;}
+  return flow>0||st.omega>0;
+}
+function gmRun(){
+  if(gmLoop)return;gmLoop=true;
+  ui.animate(dt=>{const more=gmStep(ui.st,dt);if(!more)gmLoop=false;return more;});
+}
+function gmOpen(st){
+  if(st.remaining<=0)return ui.flash('Tank empty. Reset refills the teaching model.');
+  st.gate=st.gate?0:1;gmRun();
+}
+const gmBoxOf=pts=>[0,1].map(side=>[0,1,2].map(k=>(side?Math.max:Math.min)(...pts.map(p=>p[k]))));
+function gmPrism(bottom,top,m){
+  return loft(bottom,top,n=>tone(n,m))+shape(top,tone([0,0,1],m),.8)+hullInk([...bottom,...top],1.8);
+}
+function gmScene(st,m){
+  const gmParts=[], k=ease(st.xr||0), flowing=st.gate&&st.remaining>0;
+  const put=(bounds,svg)=>gmParts.push({box:bounds,svg});
+  const bx=(a,b,mat=m,ghost=false)=>put([a,b],`<g opacity="${ghost?1-.78*k:1}">${box(...a,...b,mat,tone,1.1)}</g>`);
+  const vc=(x,y,z0,z1,r,mat)=>put([[x-r,y-r,z0],[x+r,y+r,z1]],cyl(x,y,z0,z1,r,mat,tone,1.2));
+  let out=board(0,0,108,78,3,5);
+  out+=castShadow([[4,8,3],[30,28,3],[4,8,72],[30,28,72],[74,38,70],[93,57,18]],3,boardTop(0,0,108,78,3,5));
+  bx([43,7,3],[104,70,5],METAL);
+  if(st.collected>0)bx([45,9,5.05],[102,68,5.05+st.collected*.75],gmWater);
+  for(const [a,b] of [[[43,7,5],[104,9,12]],[[43,68,5],[104,70,12]],[[43,9,5],[45,68,12]],[[102,9,5],[104,68,12]]])bx(a,b,m,true);
+  for(const x of [6,26])for(const y of [10,26])bx([x-1.5,y-1.5,3],[x+1.5,y+1.5,48],gmTimber);
+  bx([4,8,48],[30,28,49.5],m);
+  for(const [a,b]of [[[4,8,49.5],[6,28,72]],[[4,8,49.5],[30,10,72]],[[4,26,49.5],[30,28,72]],[[28,10,55],[30,26,72]],[[28,10,49.5],[30,15,55]],[[28,23,49.5],[30,26,55]]])bx(a,b,m,true);
+  const waterZ=50+st.remaining*3.8;
+  if(st.remaining>0)bx([6.1,10.1,49.6],[27.9,25.9,waterZ],gmWater,true);
+  bx([29.5,14.8,49.5+st.gate*7],[30.4,23.2,56.5+st.gate*7],METAL);
+  const chute=(y0,y1,thick)=>{
+    const bottom=[[30,y0,49],[54,y0,34],[54,y1,34],[30,y1,49]],top=bottom.map(p=>[p[0],p[1],p[2]+thick]);
+    put(gmBoxOf([...bottom,...top]),gmPrism(bottom,top,gmTimber));
+  };
+  chute(15,23,1);chute(14,15,6);chute(23,24,6);
+  for(const y of [15,23])bx([49,y-1,3],[51,y+1,37.5],gmTimber,true);
+  bx([48,14,36],[52,25,37.5],gmTimber,true);
+  bx([69,33,5],[79,43,9],gmTimber,true);
+  vc(74,38,9,14,4,METAL);
+  for(const y of [12,65])for(const [za,zb]of [[5,34],[34,56]])bx([71,y-1.7,za],[77,y+1.7,zb],gmTimber,true);
+  bx([71,10.3,56],[77,34,60],gmTimber,true);bx([71,42,56],[77,66.7,60],gmTimber,true);
+  const outer0=on(PZ(56),ellUV(74,38,4,4,24)),outer1=on(PZ(60),ellUV(74,38,4,4,24));
+  const inner0=on(PZ(56),ellUV(74,38,2.6,2.6,24)),inner1=on(PZ(60),ellUV(74,38,2.6,2.6,24));
+  put([[70,34,56],[78,42,60]],loft(outer0,outer1,n=>tone(n,METAL))+loft(inner0,inner1,n=>tone(n,METAL),true)+`<path d="${pd(outer1)}${pd(inner1)}" fill="${METAL.l}" fill-rule="evenodd"/>`+ink(pd(outer1),1)+ink(pd(inner1),.6));
+  for(const [za,zb]of [[14,24],[24,32],[32,56],[56,60],[60,70]]){
+    let shaft=cyl(74,38,za,zb,2.4,gmTimber,tone,1.2);
+    const mark=[74+2.42*Math.cos(st.angle),38+2.42*Math.sin(st.angle),za];
+    if(facing([Math.cos(st.angle),Math.sin(st.angle),0]))shaft+=line([mark,[mark[0],mark[1],zb]],1.1);
+    put([[71.6,35.6,za],[76.4,40.4,zb]],shaft);
+  }
+  vc(74,38,24,32,7.5,gmTimber);
+  for(let i=0;i<12;i++){
+    const a=st.angle+i*Math.PI/6;
+    const rot=(r,t,z)=>[74+r*Math.cos(a)-t*Math.sin(a),38+r*Math.sin(a)+t*Math.cos(a),z];
+    const low=[rot(7,-.9,18),rot(19,-.9,18),rot(19,.9,18),rot(7,.9,18)];
+    const high=low.map(p=>[p[0],p[1],32]);
+    put(gmBoxOf([...low,...high]),gmPrism(low,high,gmTimber));
+  }
+  if(flowing){
+    const route=t=>t<.65?[30+24*t/.65,19,50-15*t/.65]:t<.85?[54+10*(t-.65)/.2,19+3*(t-.65)/.2,35-8*(t-.65)/.2]:[64+3*(t-.85)/.15,22,27-20*(t-.85)/.15];
+    for(let i=0;i<20;i++){
+      const t=(i/20+st.clock*.6)%1,p=route(t),q=route(Math.min(.999,t+.025));
+      put(gmBoxOf([p.map(v=>v-.6),q.map(v=>v+.6)]),rod(p,q,st.rate>.1?.8:.42,gmWater,toneI,.35));
+    }
+  }
+  out+=byDepth(gmParts);
+  if(k>.6){
+    const paddle=[74+17*Math.cos(st.angle),38+17*Math.sin(st.angle),28];
+    out+=xrCallouts([
+      {at:[15,18,waterZ],text:'SUPPLY TANK',on:flowing},
+      {at:[30,19,54+st.gate*7],text:'SLIDE GATE',on:flowing},
+      {at:[42,19,42.5],text:'CHUTE',on:flowing},
+      {at:[54,19,35],text:'CHUTE OUTLET',on:flowing},
+      {at:paddle,text:'PADDLE FACES',on:st.omega>.01},
+      {at:[74,38,32],text:'ROTOR HUB',on:st.omega>.01},
+      {at:[74,38,68],text:'DIRECT VERTICAL AXLE',on:st.omega>.01},
+      {at:[77,38,60],text:'UPPER BEARING',on:false},
+      {at:[74,38,12],text:'THRUST BEARING',on:false},
+      {at:[74,65,45],text:'BEARING FRAME',on:false},
+      {at:[50,23,24],text:'CHUTE TRESTLE',on:false},
+      {at:[100,65,8],text:'CATCH TRAY',on:flowing},
+      {at:[7,10,30],text:'TANK LEGS',on:false}
+    ],gmBounds);
+  }
+  return out;
+}
+ui=mountFigure({fig:'36',turn:'full',title:'Greek mill',size:[108,78,76],palette:'mint',state:gmInitial(),scene:gmScene,
+  stats:st=>[{label:'Water input',value:(st.gate&&st.remaining>0?st.rate:0).toFixed(2)+' L/s'},{label:'Supply',value:st.remaining.toFixed(1)+' L',small:true},{label:'View speed',value:st.scale===1?'1x':'0.25x',small:true}],
+  buttons:[
+    {label:'Open water',onClick:gmOpen},
+    {label:'Reduce flow',onClick:st=>{st.rate=st.rate===.25?.08:.25;ui.flash(st.rate===.08?'Low input set. Open water to run.':'Full input set. Open water to run.');}},
+    {label:'Slow view',onClick:st=>{st.scale=st.scale===1?.25:1;}},
+    {label:'Reset',onClick:st=>Object.assign(st,gmInitial())}
+  ],
+  params:(st,q)=>{
+    const read=(key,lo,hi,fallback)=>{const val=Number(q.get(key));return q.has(key)&&Number.isFinite(val)?Math.max(lo,Math.min(hi,val)):fallback;};
+    st.angle=read('angle',0,Math.PI*2,0);st.remaining=read('supply',0,5,5);st.collected=5-st.remaining;
+    st.rate=q.get('flow')==='low'?.08:.25;st.scale=q.get('slow')==='1'?.25:1;
+    st.gate=q.get('water')==='1'&&st.remaining>0?1:0;
+  }
+});
+xrMount(()=>ui,()=> '');
+if(ui.st.gate)gmRun();
+</script></body></html>
