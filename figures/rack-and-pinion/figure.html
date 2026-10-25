@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rack and pinion</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. This is a bench teaching adaptation of the named gear principle on
+   pages 37 and 43 of the accessible 1998 and 2016 books. The 1988 edition is unverified.
+   Turn rotates a hand crank, its shaft and pinion. Meshing teeth translate the rack
+   and its attached carriage. Reverse turns the same assembly back. Push rack applies
+   the input at the rack and back-drives the same teeth, pinion, shaft and crank.
+   One displacement d fixes every moving coordinate, with pinion angle = -d / 16.
+   Structure. Table carries end blocks, guide rails and two bearing supports.
+   Mechanism. Carriage sleeves slide on both rails. Rack is fixed to the carriage.
+   A 16-tooth module-2 pinion is fixed to the shaft held in the bearing supports.
+   Control. Crank arm is fixed to the shaft; its grip turns about the crank pin.
+   Rack pitch is 2*pi. Pitch line z=22 touches the pinion pitch circle at z=38-16.
+   Teeth use 20-degree involute flanks and a matching straight-sided rack.
+   Shaft, guides and carriage remain attached through the full 36-unit travel.
+   Arrows are teaching overlays, not anatomy. No motor or steering assembly is implied. */
+const rpPitch = 2*Math.PI, rpRadius = 16, rpAlpha = 20*Math.PI/180;
+const rpBase = rpRadius*Math.cos(rpAlpha), rpInv = a => Math.tan(a)-a;
+const rpState = {d:0, target:0, from:0, elapsed:0, moving:false, driver:'Pinion'};
+const rpSteel = matOf('#86999e'), rpRackMat = matOf('#7fc6b3');
+const rpBounds = pts => [0,1].map(side => [0,1,2].map(k => (side ? Math.max : Math.min)(...pts.map(p => p[k]))));
+function rpPrism(profile, x0, x1, material){
+  const aa = on(PX(x0),profile), bb = on(PX(x1),profile), front = vis([1,0,0]);
+  return loft(aa,bb,n=>tone(n,material)) + shape(front ? bb : aa,tone(front ? [1,0,0] : [-1,0,0],material),1.1);
+}
+function rpMove(st, ui, goal, driver){
+  st.driver = driver;
+  if (Math.abs(goal-st.d)<.001 && !st.moving) return ui.flash('At the end of the guides. Reverse the direction.');
+  st.from=st.d; st.target=goal; st.elapsed=0;
+  if (st.moving) return;
+  st.moving=true;
+  ui.animate(dt=>{
+    st.elapsed=Math.min(1,st.elapsed+dt/1.7);
+    st.d=st.from+(st.target-st.from)*ease(st.elapsed);
+    if(st.elapsed===1){st.moving=false;return false;}
+    return true;
+  });
+}
+function rpScene(st, material){
+  const parts=[], supports=[], angle=-st.d/rpRadius;
+  const put=(pts,svg)=>parts.push({box:rpBounds(pts),svg});
+  const block=(a,b,mat,ghost=false)=>{
+    const svg=box(...a,...b,mat,tone,1.1);
+    (ghost ? supports : parts).push({box:[a,b],svg});
+  };
+  const shaft=(a,b,r,mat)=>put([a.map((v,k)=>Math.min(v,b[k])-r),a.map((v,k)=>Math.max(v,b[k])+r)],rod(a,b,r,mat,tone,1.1));
+  let svg=board(0,0,82,150,4,5,WOOD);
+  svg+=castShadow([[22,62,4],[60,78,4],[36,52,38],[44,88,56],[72,70,38]],4,boardTop(0,0,82,150,4,5));
+  for(const xx of [31,49]){
+    for(const yy of [6,138]) block([xx-4,yy,4],[xx+4,yy+6,10],rpSteel);
+    for(let yy=12;yy<138;yy+=7) shaft([xx,yy,10],[xx,Math.min(138,yy+7),10],2,METAL);
+    for(const yy of [47+st.d,87+st.d]){
+      shaft([xx,yy,10],[xx,yy+6,10],3.5,rpSteel);
+      block([xx-3.5,yy,10],[xx+3.5,yy+6,14],material);
+    }
+  }
+  block([28,45+st.d,14],[52,95+st.d,16],material);
+  block([36,20+st.d,16],[44,120+st.d,19.5],rpRackMat);
+  for(let i=-7;i<=7;i++){
+    const yy=70+i*rpPitch+st.d;
+    const half=z=>rpPitch/4+(22-z)*Math.tan(rpAlpha);
+    const pp=[[yy-half(19.5),19.5],[yy+half(19.5),19.5],[yy+half(24),24],[yy-half(24),24]];
+    put([...on(PX(36),pp),...on(PX(44),pp)],rpPrism(pp,36,44,rpRackMat));
+  }
+  for(const xx of [22,54]){
+    block([xx,65,4],[xx+6,75,33],material,true);
+    block([xx,64,33],[xx+6,76,43],material,true);
+    put([[xx,65.5,33.5],[xx+6,74.5,42.5]],cylX(xx,xx+6,70,38,4.5,rpSteel));
+  }
+  for(const [a,b] of [[20,22],[22,28],[28,36],[36,44],[44,54],[54,60],[60,64]])
+    put([[a,68,36],[b,72,40]],cylX(a,b,70,38,2,METAL));
+  put([[36,56.5,24.5],[44,83.5,51.5]],cylX(36,44,70,38,13.5,material,tone));
+  for(let i=0;i<16;i++){
+    const center=angle+Math.PI+Math.PI/16+i*2*Math.PI/16;
+    const flank=[];
+    for(let j=0;j<=7;j++){
+      const radius=rpBase+(18-rpBase)*j/7;
+      const beta=Math.acos(rpBase/radius);
+      flank.push([radius,Math.PI/32+rpInv(rpAlpha)-rpInv(beta)]);
+    }
+    const polar=(r,a)=>[70+r*Math.sin(center+a),38+r*Math.cos(center+a)];
+    const rootHalf=flank[0][1];
+    const pp=[polar(13.5,-rootHalf),...flank.map(([r,a])=>polar(r,-a)),...flank.slice().reverse().map(([r,a])=>polar(r,a)),polar(13.5,rootHalf)];
+    put([...on(PX(36),pp),...on(PX(44),pp)],rpPrism(pp,36,44,material));
+  }
+  for(const [a,b] of [[34,36],[44,46]]) put([[a,65.5,33.5],[b,74.5,42.5]],cylX(a,b,70,38,4.5,rpSteel));
+  const grip=[64,70+12*Math.sin(angle+.6),38+12*Math.cos(angle+.6)];
+  shaft([64,70,38],grip,1.8,rpSteel);
+  put([[62,67,35],[65,73,41]],cylX(62,65,70,38,3,rpSteel));
+  put([[64,grip[1]-2.6,grip[2]-2.6],[73,grip[1]+2.6,grip[2]+2.6]],cylX(64,73,grip[1],grip[2],2.6,DARK));
+  const k=ease(st.xr||0);
+  if(k>0) svg+=`<g opacity="${1-.84*k}">${byDepth(supports)}</g>`+byDepth(parts);
+  else svg+=byDepth([...supports,...parts]);
+  if(st.moving){
+    const sign=Math.sign(st.target-st.from), tip=st.d+70+sign*31;
+    svg+=`<g data-overlay="input direction">${line([[46,tip-sign*14,25],[46,tip,25]],2.4)}${shape([[46,tip,25],[44,tip-sign*4,25],[48,tip-sign*4,25]],'#ef6a4c',.8)}</g>`;
+  }
+  if(k>.6) svg+=xrCallouts([
+    {at:[44,70,48],text:'PINION',on:st.moving},
+    {at:[44,70+18*Math.sin(angle+Math.PI+Math.PI/16),38+18*Math.cos(angle+Math.PI+Math.PI/16)],text:'PINION TEETH',on:st.moving},
+    {at:[50,70,38],text:'SHAFT',on:st.moving},
+    {at:[44,112+st.d,18],text:'RACK',on:st.moving},
+    {at:[44,70+st.d,24],text:'RACK TEETH',on:st.moving},
+    {at:[52,90+st.d,15],text:'CARRIAGE',on:st.moving},
+    {at:[49,118,10],text:'GUIDE RAILS'},
+    {at:[49,90+st.d,12],text:'SLIDING SLEEVES',on:st.moving},
+    {at:[60,70,38],text:'SHAFT BEARINGS',on:st.moving},
+    {at:[25,70,22],text:'BEARING SUPPORTS'},
+    {at:grip,text:'HAND CRANK',on:st.moving},
+    {at:[49,141,8],text:'RAIL SUPPORTS'}
+  ],[20,73,14,138,4,56]);
+  return svg;
+}
+const ui=mountFigure({fig:'47',title:'Rack and pinion',size:[82,150,58],palette:'mustard',turn:'full',state:rpState,scene:rpScene,
+  stats:st=>[{label:'Rack travel',value:st.d.toFixed(1)+' cm'},{label:'Pinion rotation',value:(-st.d/rpRadius*180/Math.PI).toFixed(0)+' deg',small:true},{label:'Input',value:st.driver,small:true}],
+  buttons:[
+    {label:'Turn',onClick:(st,ui)=>rpMove(st,ui,18,'Pinion')},
+    {label:'Reverse',onClick:(st,ui)=>rpMove(st,ui,-18,'Pinion')},
+    {label:'Push rack',onClick:(st,ui)=>rpMove(st,ui,st.d>0?-18:18,'Rack')}
+  ],
+  params:(st,q)=>{const d=Number(q.get('travel')||0);if(Number.isFinite(d))st.d=st.target=st.from=Math.max(-18,Math.min(18,d));if(q.get('input')==='rack')st.driver='Rack';}
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
