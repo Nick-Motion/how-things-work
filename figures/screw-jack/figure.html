@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Screw jack</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. This is the accepted scale teaching adaptation of the page 64 direct screw jack.
+   Crank rotates the transverse handle and screw together. One turn raises both by one thread lead.
+   The fixed female thread in the pedestal carries the screw. A swivel saddle carries the car without turning it.
+   Reverse follows the same helix down. Thread friction holds a stopped real jack; the effort readout is ideal,
+   without friction, and is not a prediction of a real jack's operating or lowering effort.
+   Load exchanges external test weights on the miniature car at the same height, handle radius and lead.
+   The board, car, weights and slow motion are teaching apparatus. Blue dashed travel paths are overlays.
+   Parts. Structure has a base foot on the board and a pedestal wall cast into the foot.
+   Mechanism has a fixed internal thread in the pedestal, a screw shaft with its helical thread,
+   a transverse handle through the screw head and a load saddle bearing on that head.
+   The car chassis rests on the saddle. Wheels attach to chassis axles, roof weights rest on the roof.
+   The six-part exception was declared before building. Seven real anatomy labels are drawn.
+   Source image and saved 1998 and 2016 page text were inspected. The 1988 edition remains unverified. */
+const sjLead = 2*Math.PI*30/50, sjMaxTurns = 4;
+const sjIron = matOf('#646b70'), sjBrass = matOf('#d9ab53'), sjBlue = '#396b9e';
+const sjGeo = st => ({ rise:st.turns*sjLead, angle:st.turns*2*Math.PI, head:58+st.turns*sjLead, car:68+st.turns*sjLead });
+const sjBounds = (pts, e=0) => [0,1].map(side => [0,1,2].map(k => (side ? Math.max : Math.min)(...pts.map(p=>p[k]))+(side?e:-e)));
+function sjThread(parts, z0, z1, phase, rotation, inside){
+  const r0=inside?5.5:4.15, r1=inside?8.2:5.5, material=inside?sjBrass:METAL;
+  const start=Math.floor((z0-phase)/sjLead*16), end=Math.ceil((z1-phase)/sjLead*16);
+  for(let i=start;i<end;i++){
+    const za=Math.max(z0,phase+i*sjLead/16), zb=Math.min(z1,phase+(i+1)*sjLead/16);
+    if(zb<=za) continue;
+    const a=(za-phase)/sjLead*2*Math.PI+rotation, b=(zb-phase)/sjLead*2*Math.PI+rotation;
+    const point=(r,t,z)=>[50+r*Math.cos(t),50+r*Math.sin(t),z];
+    const pts=[point(r0,a,za-.55),point(r1,a,za-.55),point(r1,b,zb-.55),point(r0,b,zb-.55),
+      point(r0,a,za+.55),point(r1,a,za+.55),point(r1,b,zb+.55),point(r0,b,zb+.55)];
+    const faces=[[0,3,2,1],[4,5,6,7],[1,2,6,5],[0,4,7,3],[0,1,5,4],[3,7,6,2]];
+    let svg='';
+    for(const ids of faces){const q=ids.map(j=>pts[j]), n=norm(cross(sub(q[1],q[0]),sub(q[2],q[0]))); if(vis(n)) svg+=shape(q,toneI(n,material),.32);}
+    parts.push({box:sjBounds(pts),svg});
+  }
+}
+function sjScene(st,m){
+  const g=sjGeo(st), k=ease(st.xr||0), parts=[];
+  const put=(b,svg)=>parts.push({box:b,svg});
+  const bx=(x0,y0,z0,x1,y1,z1,mat)=>put([[x0,y0,z0],[x1,y1,z1]],box(x0,y0,z0,x1,y1,z1,mat,toneI,.8));
+  const vc=(z0,z1,r,mat)=>put([[50-r,50-r,z0],[50+r,50+r,z1]],cyl(50,50,z0,z1,r,mat,toneI,1.1));
+  let out=board(3,3,97,97,3,6);
+  out+=castShadow([...on(PZ(3),ellUV(50,50,21,21)),...on(PZ(40),ellUV(50,50,11,11)),[19,31,g.car+21],[81,69,g.car+21]],3,boardTop(3,3,97,97,3,6));
+  vc(3,7,21,m);
+  const bottom=on(PZ(7),ellUV(50,50,16,16,32)), top=on(PZ(40),ellUV(50,50,10.5,10.5,32));
+  const bore=on(PZ(40.02),ellUV(50,50,5.65,5.65,32));
+  const shell=loft(bottom,top,n=>tone(n,m))+fill(pd(top)+pd(bore),tone([0,0,1],m),'fill-rule="evenodd"')+ink(pd(bore),.8)+hullInk([...bottom,...top],2.5);
+  if(k>0) out+=xrGhostRings(shell,'',k,bottom,top,m);
+  else put([[34,34,7],[66,66,40]],shell);
+  const low=k>0?10+g.rise:40.05, high=g.head;
+  for(let z=low;z<high;z+=sjLead) vc(z,Math.min(high,z+sjLead),4.15,METAL);
+  sjThread(parts,low+.6,high-.6,10+g.rise,g.angle,false);
+  if(k>0) sjThread(parts,28,39.4,10+sjLead/2,0,true);
+  vc(g.head,g.head+5,6.7,sjIron);
+  const handle=t=>[50+t*Math.cos(g.angle),50+t*Math.sin(g.angle),g.head+2.5];
+  for(const [a,b] of [[-30,-6],[-6,6],[6,30]]){
+    const pts=[handle(a),handle(b)]; put(sjBounds(pts,1.3),rod(...pts,1.3,METAL,toneI,1.1));
+  }
+  vc(g.head+5,g.head+7,4.7,sjBrass);
+  vc(g.head+7,g.car,10.5,sjIron);
+  out+=byDepth(parts);
+  const carFloor=[], carSides=[[],[]], carBody=[], carCabin=[], carWindows=[], carWeights=[];
+  const carBox=(target,coords,mat)=>target.push({box:[coords.slice(0,3),coords.slice(3)],svg:box(...coords,mat,toneI,.8)});
+  carBox(carBody,[19,34,g.car,81,66,g.car+3],sjIron);
+  carBox(carBody,[17,33,g.car+3,83,67,g.car+9],PALS.cobalt);
+  carBox(carCabin,[36,35,g.car+9,65,65,g.car+19],PALS.cobalt);
+  carBox(carCabin,[38,36,g.car+19,63,64,g.car+20],PALS.cobalt);
+  for(const x of [29,71]){
+    carFloor.push({box:[[x-1,29,g.car],[x+1,71,g.car+2]],svg:rod([x,29,g.car+1],[x,71,g.car+1],.9,sjIron)});
+    for(const [side,ya,yb] of [[0,29,34],[1,66,71]]){
+      const near=CAM_V[1]>0?yb+.03:ya-.03;
+      const wheel=rod([x,ya,g.car+1],[x,yb,g.car+1],6,DARK,toneI,1.2)+shape(on(PY(near),ellUV(x,g.car+1,2.5,2.5,16)),METAL.m,.65);
+      carSides[side].push({box:[[x-6,ya,g.car-5],[x+6,yb,g.car+7]],svg:wheel});
+    }
+  }
+  const windows=[
+    {n:[1,0,0],q:[[65.03,37,g.car+11],[65.03,63,g.car+11],[65.03,63,g.car+17],[65.03,37,g.car+17]]},
+    {n:[-1,0,0],q:[[35.97,37,g.car+11],[35.97,63,g.car+11],[35.97,63,g.car+17],[35.97,37,g.car+17]]},
+    ...[34.97,65.03].map(y=>({n:[0,y<50?-1:1,0],q:[[39,y,g.car+11],[62,y,g.car+11],[62,y,g.car+17],[39,y,g.car+17]]}))];
+  for(const w of windows) if(vis(w.n))carWindows.push({box:sjBounds(w.q),svg:shape(w.q,'#c9e2e5',.65)});
+  for(let i=0;i<(st.load===2?3:1);i++)carBox(carWeights,[44,42,g.car+20+i*2.2,58,58,g.car+22+i*2.2],sjBrass);
+  const nearSide=CAM_V[1]>0?1:0;
+  const carSvg=[carFloor,carSides[1-nearSide],carBody,carSides[nearSide],carCabin,carWindows,carWeights].map(byDepth).join('');
+  out+=byDepth([{box:[[17,29,g.car-5],[83,71,g.car+26.4]],svg:`<g opacity="${1-.8*k}">${carSvg}</g>`}]);
+  const orbit=Array.from({length:49},(_,i)=>{const a=2*Math.PI*i/48;return[50+30*Math.cos(a),50+30*Math.sin(a),g.head+2.5];});
+  out+=`<g data-overlay="travel" fill="none" stroke="${sjBlue}" stroke-width="1" stroke-dasharray="2 2" opacity=".7"><path d="${pd(orbit,false)}"/><path d="${pd([[87,50,68],[87,50,g.car]],false)}"/></g>`;
+  if(g.rise>.1) out+=shape([[87,50,g.car],[85.5,50,g.car-3],[88.5,50,g.car-3]],sjBlue,.4);
+  if(k>.6) out+=xrCallouts([
+    {at:[65,50,5],text:'BASE FOOT'},
+    {at:[59,50,30],text:'PEDESTAL WALL'},
+    {at:[50+6.5*Math.cos(YAW*Math.PI/180),50+6.5*Math.sin(YAW*Math.PI/180),35],text:'FIXED INTERNAL THREAD',on:st.moving},
+    {at:[50,50,46+g.rise],text:'SCREW SHAFT',on:st.moving},
+    {at:[50+5*Math.cos(g.angle),50+5*Math.sin(g.angle),10+g.rise+11*sjLead],text:'SCREW THREAD',on:st.moving},
+    {at:handle(24),text:'TURNING HANDLE',on:st.moving},
+    {at:[50,50,g.car-.5],text:'LOAD SADDLE',on:st.moving}
+  ],[28,72,28,72,3,g.car+18]);
+  return out;
+}
+function sjTurn(st,ui,direction){
+  const goal=Math.max(0,Math.min(sjMaxTurns,Math.round(st.turns+direction)));
+  if(st.moving) return ui.flash('Finish this turn first');
+  if(goal===st.turns) return ui.flash(direction>0?'Top of the teaching stroke':'Bottom of the teaching stroke');
+  const from=st.turns; let elapsed=0; st.moving=true;
+  ui.animate(dt=>{elapsed=Math.min(1,elapsed+dt/1.8); st.turns=from+(goal-from)*ease(elapsed); if(elapsed===1){st.moving=false;return false;}return true;});
+}
+const sjUI=mountFigure({
+  fig:'64', title:'Screw jack', turn:'full', size:[100,100,112], center:[50,50], palette:'mustard',
+  state:{turns:0,load:1,moving:false},scene:sjScene,
+  stats:st=>[
+    {label:'Load',value:(st.load*10)+' N',small:true},
+    {label:'Ideal effort',value:(st.load*10/50).toFixed(2)+' N',small:true},
+    {label:'Load rise',value:(st.turns*sjLead).toFixed(2)+' mm',small:true},
+    {label:'Handle travel',value:(st.turns*2*Math.PI*30).toFixed(1)+' mm',small:true}
+  ],
+  buttons:[
+    {label:'Crank',onClick:(st,ui)=>sjTurn(st,ui,1)},
+    {label:'Reverse',onClick:(st,ui)=>sjTurn(st,ui,-1)},
+    {label:'Load',onClick:(st,ui)=>{if(st.moving)return ui.flash('Change the test weight after the turn');st.load=st.load===1?2:1;}}
+  ],
+  params:(st,q)=>{const t=Number(q.get('turns')); if(Number.isFinite(t))st.turns=Math.max(0,Math.min(sjMaxTurns,t)); if(q.get('load')==='2')st.load=2;}
+});
+xrMount(()=>sjUI,()=> '');
+addEventListener('resize',()=>sjUI.render());
+</script></body></html>
