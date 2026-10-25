@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bicycle distance counter</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Macaulay and Ardley, The Way Things Work Now, printed page 38.
+   The spoke peg enters a radial space in the five-arm input wheel once per wheel revolution.
+   Its contact angle, not an independent clock, indexes the input by one tooth. Coaxial pinions
+   and three touching reductions drive the first drum. Twenty teeth on each drum's right flange
+   mesh with an eight-tooth carry wheel. Four wide teeth reach the adjacent drum's left flange.
+   Two projections bordering its gap drive that carry wheel during 9 to 0. The next drum turns
+   two of its twenty teeth, one numeral, while the right drum completes its last numeral interval.
+   The gap lies by 2, away from the reading window, when 9 is entering that window.
+   Parts. Structure: tire, rim, spokes, hub, front axle, fork, axle mounting bracket, counter case,
+   viewing window, shaft brackets and bearing cheeks. Mechanism: spoke peg, five-arm driving gear,
+   three reduction pairs and their shafts, three numbered drums on a common stationary shaft,
+   twenty-tooth right flanges, left flanges with gaps and two projections, two carry wheels on
+   a lower fixed shaft, each with alternating wide and narrow teeth. Power: the wheel only.
+   All shafts terminate in case-supported brackets. No reset assembly or electrical hardware.
+   Teaching adaptation. The case, enlarged proportions and tooth counts of the reduction train
+   are illustrative. A 2 m circumference and ratios 5 x 5 x 4 x 5 give 500 wheel revolutions per
+   first-drum revolution, exactly 1 km. The initial scene already records 450 revolutions.
+   Slow view changes playback only. Three drums display tenths, units and tens of kilometres.
+   The 1988 edition remains inaccessible and unverified. No edition-union claim.
+   shortcut: gears use pitch-correct polygonal teeth, use involute profiles for a manufacturing model. */
+const bcTau = 2*Math.PI, bcRead = Math.PI/10;
+const bcBrass = matOf('#dfb454'), bcIvory = matOf('#f7efd7'), bcBlue = matOf('#6b95bb');
+const bcClamp = v => Math.max(0,Math.min(1,v));
+const bcContact = Math.acos((12-(12*Math.cos(Math.PI/5)-Math.sqrt(64-144*Math.sin(Math.PI/5)**2))*Math.cos(Math.PI/5))/8);
+const bcAt = (x,y,z,r,a) => [x,y+r*Math.cos(a),z+r*Math.sin(a)];
+const bcBounds = (pts,r=0) => [[0,1,2].map(k=>Math.min(...pts.map(p=>p[k]))-r),[0,1,2].map(k=>Math.max(...pts.map(p=>p[k]))+r)];
+function bcMotion(wheel){
+  const whole=Math.floor(wheel), phase=(wheel-whole-.5)*bcTau;
+  let step=phase < -bcContact ? 0 : phase > bcContact ? 1 : 0;
+  if(Math.abs(phase)<=bcContact){let a=Math.atan2(8*Math.sin(phase),8*Math.cos(phase)-12);if(a<0)a+=bcTau;step=(Math.PI+Math.PI/5-a)/(bcTau/5);}
+  const input=whole+step, first=input/500;
+  const carry=t=>(Math.floor(t)+bcClamp((t-Math.floor(t)-.9)*10))/10;
+  const next=carry(first), last=carry(next);
+  return {phase,input,first,drums:[first,next,last],carry:[next*2.5,last*2.5],contact:Math.abs(phase)<=bcContact,metres:input*2};
+}
+function bcSolid(parts,pts,svg,r=0){parts.push({box:bcBounds(pts,r),svg});}
+function bcBar(parts,a,b,r,material){bcSolid(parts,[a,b],rod(a,b,r,material,toneI,.85),r);}
+function bcBlock(parts,b,material,opacity=1){parts.push({box:[b.slice(0,3),b.slice(3)],svg:`<g opacity="${opacity}">${box(...b,material,tone,.9)}</g>`});}
+function bcRotor(parts,x0,x1,y,z,r,n,angle,material,wide=false){
+  bcSolid(parts,[[x0,y-r+.5,z-r+.5],[x1,y+r-.5,z+r-.5]],cylX(x0,x1,y,z,r-.5,material,toneI,.8,32));
+  for(let j=0;j<n;j++){
+    const a=angle+j*bcTau/n, span=bcTau/n;
+    const uv=[[-.34,r-.55],[-.22,r+.45],[.22,r+.45],[.34,r-.55]].map(([q,rr])=>[y+rr*Math.cos(a+q*span),z+rr*Math.sin(a+q*span)]);
+    const end=wide&&j%2===1?x0+2:x1, A=on(PX(x0),uv),B=on(PX(end),uv);
+    const cap=facing([1,0,0])?B:A;
+    bcSolid(parts,[...A,...B],loft(A,B,nr=>toneI(nr,material))+shape(cap,toneI(facing([1,0,0])?[1,0,0]:[-1,0,0],material),.6));
+  }
+}
+function bcStar(parts,motion){
+  const x0=114.5,x1=117,y=50,z=35,ang=-motion.input*bcTau/5+Math.PI/5;
+  bcSolid(parts,[[x0,y-2.7,z-2.7],[x1,y+2.7,z+2.7]],cylX(x0,x1,y,z,2.7,bcBrass,toneI,1));
+  for(let j=0;j<5;j++){
+    const a=ang+j*bcTau/5;
+    const uv=[[2.1,-.9],[6.4,-.65],[6.4,.65],[2.1,.9]].map(([u,v])=>[y+u*Math.cos(a)-v*Math.sin(a),z+u*Math.sin(a)+v*Math.cos(a)]);
+    const A=on(PX(x0),uv),B=on(PX(x1),uv),cap=facing([1,0,0])?B:A;
+    bcSolid(parts,[...A,...B],loft(A,B,nr=>toneI(nr,bcBrass))+shape(cap,bcBrass.l,.8));
+  }
+}
+function bcDrum(parts,x0,t){
+  const x1=x0+10,y=50,z=45,r=9.5,angle=t*bcTau;
+  const ring=x=>on(PX(x),ellUV(y,z,r,r,40));
+  bcSolid(parts,[...ring(x0),...ring(x1)],cylX(x0,x1,y,z,r,bcIvory,toneI,1,40));
+  for(let j=0;j<10;j++){
+    const a=bcRead-j*bcTau/10+angle,nr=[0,Math.cos(a),Math.sin(a)];
+    if(!facing(nr))continue;
+    const p=bcAt((x0+x1)/2,y,z,r+.04,a),o=P(...p),U=Dv(1,0,0),V=Dv(0,Math.sin(a),-Math.cos(a));
+    const svg=`<text transform="${txM(o,U,V)}" fill="${INK}" font-size="5.8" font-family="ui-monospace,monospace" text-anchor="middle" dominant-baseline="central" font-weight="800">${j}</text>`;
+    bcSolid(parts,[p],svg);
+  }
+  bcRotor(parts,x1,x1+1.5,y,z,10,20,angle+bcRead,bcBlue);
+  const gap=bcRead-2*bcTau/10+angle-Math.PI/10;
+  for(let j=0;j<40;j++){
+    const a=gap+(j+.5)*bcTau/40, dist=Math.abs(((a-gap+3*Math.PI)%bcTau)-Math.PI);
+    const rr=dist<Math.PI/10?7.3:10;
+    const uv=[[0,0],...arcUV(0,0,rr,(a-bcTau/80)*180/Math.PI,(a+bcTau/80)*180/Math.PI,1)].map(([u,v])=>[y+u,z+v]);
+    const A=on(PX(x0-1),uv),B=on(PX(x0),uv),cap=facing([1,0,0])?B:A;
+    bcSolid(parts,[...A,...B],loft(A,B,nr=>toneI(nr,bcBlue))+fill(pd(cap),toneI(facing([1,0,0])?[1,0,0]:[-1,0,0],bcBlue)));
+  }
+  for(const a of [gap-Math.PI/10,gap+Math.PI/10]){
+    const p=bcAt(x0-1.8,y,z,9.9,a);
+    bcBar(parts,[x0-2.4,p[1],p[2]],[x0-.2,p[1],p[2]],.75,bcBrass);
+  }
+}
+function bcWheel(parts,motion,wheel,material){
+  for(const [r0,r1,x0,x1,mat] of [[29.3,32,118,122,DARK],[28,29.3,118.6,121.4,METAL]]){
+    for(let j=0;j<48;j++){
+      const a=j*bcTau/48,b=(j+1)*bcTau/48;
+      const uv=[[r0,a],[r1,a],[r1,b],[r0,b]].map(([r,t])=>[38+r*Math.cos(t),35+r*Math.sin(t)]);
+      const A=on(PX(x0),uv),B=on(PX(x1),uv),cap=facing([1,0,0])?B:A;
+      bcSolid(parts,[...A,...B],loft(A,B,nr=>tone(nr,mat))+fill(pd(cap),tone(facing([1,0,0])?[1,0,0]:[-1,0,0],mat)));
+    }
+  }
+  for(let j=0;j<16;j++){
+    const a=motion.phase+j*bcTau/16;
+    bcBar(parts,bcAt(120,38,35,3,a),bcAt(120,38,35,28,a),.22,METAL);
+  }
+  bcSolid(parts,[[117,35,32],[123,41,38]],cylX(117,123,38,35,3,material,tone,1.2));
+  for(const [a,b] of [[112,117],[123,126]])bcBar(parts,[a,38,35],[b,38,35],1.2,METAL);
+  for(const x of [116,124]){
+    bcBar(parts,[x,38,35],[x,38,70],1.15,material);
+    bcSolid(parts,[[x-1.6,36.4,33.4],[x+1.6,39.6,36.6]],cylX(x-.8,x+.8,38,35,1.6,METAL,toneI,1,6));
+  }
+  bcBar(parts,[116,38,70],[124,38,70],1.15,material);
+  const peg=bcAt(120,38,35,8,motion.phase);
+  bcBar(parts,[114.4,peg[1],peg[2]],[120,peg[1],peg[2]],.6,bcBrass);
+  return peg;
+}
+function bcMechanism(parts,motion){
+  bcStar(parts,motion);
+  const t=motion.input;
+  bcRotor(parts,111,113,50,35,2,8,-t*bcTau/5,bcBrass);
+  bcRotor(parts,111,113,38,35,10,40,t*bcTau/25+Math.PI/40,bcBrass);
+  bcRotor(parts,108,110,38,35,2,8,t*bcTau/25,bcBrass);
+  bcRotor(parts,108,110,38,45,8,32,-t*bcTau/100+Math.PI/32,bcBlue);
+  bcRotor(parts,105,107,38,45,2,8,-t*bcTau/100,bcBlue);
+  bcRotor(parts,105,107,50,45,10,40,t*bcTau/500+Math.PI/40,bcBrass);
+  for(const [a,b,y,z] of [[110,114.5,50,35],[110,114,38,35],[107,111,38,45],[98,108,50,45]])bcBar(parts,[a,y,z],[b,y,z],.8,METAL);
+  for(const [x,y,z] of [[110,50,35],[114,38,35],[107,38,45],[103,50,45]]){
+    bcBlock(parts,[x-.7,y-1.4,23,x+.7,y+1.4,z+1.2],METAL);
+  }
+  for(const [j,x] of [[0,88],[1,72],[2,56]])bcDrum(parts,x,motion.drums[j]);
+  for(const [a,b] of [[50,54],[67.5,69.6],[83.5,85.6],[99.5,103]])bcBar(parts,[a,50,45],[b,50,45],.7,METAL);
+  for(const x of [50,102]){
+    bcBlock(parts,[x-1,48.5,23,x+1,51.5,46.5],METAL);
+    bcBlock(parts,[x-1,48.5,23,x+1,51.5,32.5],METAL);
+  }
+  for(const [a,b] of [[50,66],[72,82],[88,102]])bcBar(parts,[a,50,31],[b,50,31],.65,METAL);
+  for(const [j,x] of [[0,82],[1,66]])bcRotor(parts,x,x+6,50,31,4,8,-motion.carry[j]*bcTau+Math.PI/8,bcBrass,true);
+}
+function bcScene(st,material){
+  const motion=bcMotion(st.wheel),k=ease(st.xr||0),outside=[],inside=[],shell=[];
+  const peg=bcWheel(outside,motion,st.wheel,material);
+  bcBar(outside,[113,38,35],[116,38,35],2,METAL);
+  bcBlock(outside,[111,37,33,114,51,36],METAL);
+  bcMechanism(inside,motion);
+  for(const b of [[48,26,22,114,62,23],[48,26,23,49,62,59],[113,26,23,114,62,59],[49,26,23,113,27,59],[49,27,58,113,62,59],[49,61,23,113,62,42],[49,61,53,113,62,58],[49,61,42,54,62,53],[100,61,42,113,62,53]])bcBlock(shell,b,material);
+  const win=[[54,62.05,42],[100,62.05,42],[100,62.05,53],[54,62.05,53]];
+  shell.push({box:bcBounds(win),svg:facing([0,1,0])?fill(pd(win),'#cfe9f0','opacity=".12"')+ink(pd(win),1.2):''});
+  let s=board(0,0,130,80,3,4)+castShadow([[48,26,22],[114,62,59],[120,6,35],[120,70,35],[120,38,67]],3,boardTop(0,0,130,80,3,4));
+  s+=k>0?`<g opacity="${1-.88*k}">${byDepth(shell)}</g>`+byDepth([...outside,...inside.map(p=>({...p,svg:`<g opacity="${k}">${p.svg}</g>`}))]):byDepth([...outside,...inside,...shell]);
+  if(k>.6){
+    const gap=bcRead-2*bcTau/10+motion.first*bcTau-Math.PI/10;
+    const carryA=-motion.carry[0]*bcTau+Math.PI/8;
+    const labels=[
+      [peg,'SPOKE PEG',motion.contact],[[115.5,50,40],'DRIVING GEAR',motion.contact],
+      [[112,38,45],'FIRST REDUCTION',st.running],[[109,38,53],'SECOND REDUCTION',st.running],[[106,50,55],'FINAL REDUCTION',st.running],
+      [[93,59,48],'TENTHS DRUM',st.running],[[77,59,48],'UNITS DRUM',st.running],[[61,59,48],'TENS DRUM',false],
+      [[98.8,50,55],'DRUM TEETH',st.running],[[51,50,45],'DRUM SHAFT',false],[[85,50,31],'CARRY WHEEL',st.running],
+      [bcAt(87,50,31,4,carryA),'WIDE TOOTH',st.running],[bcAt(83,50,31,4,carryA+Math.PI/4),'NARROW TOOTH',st.running],
+      [bcAt(87.3,50,45,7.3,gap),'DRUM GAP',st.running],[bcAt(86,50,45,9.9,gap+Math.PI/10),'PROJECTION',st.running],
+      [[116,38,35],'FRONT AXLE',false],[[120,38,38],'WHEEL HUB',st.running],[[120,66,35],'RIM',st.running]
+    ];
+    s+=xrCallouts(labels.map(([at,text,active])=>({at,text,on:active})),[48,114,26,62,22,59]);
+  }
+  return s;
+}
+function bcRun(st,ui,target){
+  st.target=Math.max(st.target,target);
+  if(st.running)return ui.flash('The same wheel continues the count');
+  st.running=true;
+  ui.animate(dt=>{
+    const remaining=st.target-st.wheel,rate=st.slow?1.2:8;
+    st.wheel=Math.min(st.target,st.wheel+dt*Math.min(rate,Math.max(1.2,remaining*2)));
+    if(st.wheel>=st.target){st.running=false;return false;}
+    return true;
+  });
+}
+const ui=mountFigure({fig:'38',turn:'full',title:'Bicycle distance counter',size:[130,80,73],palette:'mustard',state:{wheel:450,target:450,slow:false,running:false},scene:bcScene,
+  stats:st=>[{label:'Counted distance',value:(bcMotion(st.wheel).metres/1000).toFixed(3)+' km'},{label:'Wheel circumference',value:'2 m',small:true},{label:'Wheel revolutions',value:st.wheel.toFixed(1),small:true}],
+  buttons:[{label:'Roll',onClick:(st,ui)=>bcRun(st,ui,Math.ceil(st.target+1))},{label:'Run farther',onClick:(st,ui)=>bcRun(st,ui,(Math.floor(st.target/500)+1)*500)},
+  {label:'Slow view',onClick:(st,ui)=>{st.slow=!st.slow;ui.flash(st.slow?'Slow view on. The distance calibration is unchanged':'Normal view. The distance calibration is unchanged');}}],
+  params:(st,q)=>{const w=Number(q.get('wheel'));if(q.has('wheel')&&Number.isFinite(w)&&w>=0&&w<=50000)st.wheel=st.target=w;st.slow=q.get('slow')==='1';}
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
