@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Construction auger</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Page 67 shows a finite auger filling, being lifted and emptied, then lowered again.
+   Drill turns a rigid shaft, its welded helical flights and cutting end together. Only the cutting
+   end advances the workface. Each 12 cm batch leaves the ground and stays on the flights until Empty.
+   Lift preserves the hole and the load. Empty is an external surface operation into the attached tray.
+   The soil box, guide support and operating inputs are declared scale teaching fixtures, not book anatomy.
+   Parts. Mechanism: shaft, helical flights welded to shaft, cutting end fixed to its foot.
+   Structure: external carriage supports shaft at its top and slides on a mast fixed to the base.
+   Specimen: soil box on base, loosened soil on flights, deposited soil on a tray fixed to the box rim.
+   Power and controls: prescribed external torque, downforce, lifting and emptying. No hidden motor or conveyor.
+   Adaptation: illustrative soft-soil batches with a stable hole, not a literal crane reproduction or soil simulation.
+   1988 is inaccessible and unverified. No edition-union claim. */
+const augX=44, augY=44, augTop=82, augClear=94, augBatch=12, augLimit=60, augRadius=10;
+const augSoil=matOf('#bb8c58'), augLoad=matOf('#8f5d34'), augSteel=matOf('#597c91');
+const augState={phase:'idle',tip:augClear,angle:0,depth:0,carried:0,deposited:0,progress:0};
+const augBound=ps=>[[0,1,2].map(k=>Math.min(...ps.map(p=>p[k]))),[0,1,2].map(k=>Math.max(...ps.map(p=>p[k])))];
+const augPoint=(st,r,z,theta=0)=>[augX+r*Math.cos(st.angle+theta),augY+r*Math.sin(st.angle+theta),st.tip+z];
+const augClod=(st,i)=>augPoint(st,6.1,4.1+i/24*27,2*Math.PI*(1+i/24*27)/11.2);
+function augPut(parts,ps,svg){parts.push({box:augBound(ps),svg});}
+function augBlock(parts,a,b,m){augPut(parts,[a,b],box(...a,...b,m,toneI,1));}
+function augRock(parts,p,r,m=augLoad){
+  const lower=on(PZ(p[2]-.65*r),ellUV(p[0],p[1],r*.8,r*.8,5));
+  const upper=on(PZ(p[2]+.6*r),ellUV(p[0]+r*.15,p[1],r*.65,r*.65,5));
+  augPut(parts,[...lower,...upper],loft(lower,upper,n=>toneI(n,m))+shape(upper,m.l,.5)+hullInk([...lower,...upper],.7));
+}
+function augTool(st,m){
+  const parts=[];
+  for(let z=2;z<92;z+=2){const a=augPoint(st,0,z),b=augPoint(st,0,z+2);
+    augPut(parts,[[augX-1.6,augY-1.6,a[2]],[augX+1.6,augY+1.6,b[2]]],cyl(augX,augY,a[2],b[2],1.6,METAL,toneI,0,12));}
+  for(let i=0;i<90;i++){
+    const z0=2+i/90*28,z1=2+(i+1)/90*28;
+    const a0=(z0-2)/11.2*2*Math.PI,a1=(z1-2)/11.2*2*Math.PI;
+    const pts=[augPoint(st,1.55,z0,a0),augPoint(st,9.5,z0,a0),augPoint(st,9.5,z1,a1),augPoint(st,1.55,z1,a1)];
+    const bottom=pts.map(p=>[p[0],p[1],p[2]-.65]);
+    const n=norm(cross(sub(pts[1],pts[0]),sub(pts[3],pts[0])));
+    let svg=shape(pts,toneI(n,augSteel),0)+shape(bottom,toneI(n.map(v=>-v),augSteel),0);
+    svg+=shape([bottom[1],bottom[2],pts[2],pts[1]],augSteel.d,0)+line([pts[1],pts[2]],.85);
+    augPut(parts,[...pts,...bottom],svg);
+  }
+  const coneA=augPoint(st,0,0),coneB=augPoint(st,0,3);
+  augPut(parts,[[augX-2.8,augY-2.8,st.tip],[augX+2.8,augY+2.8,st.tip+3]],rod(coneA,coneB,.25,METAL,toneI,1,2.8,12));
+  for(const t of [0,Math.PI]){
+    const p=[augPoint(st,1.4,2,t),augPoint(st,9.5,.2,t),augPoint(st,9.5,1.5,t+.18),augPoint(st,1.4,3.2,t+.18)];
+    augPut(parts,p,shape(p,m.l,1.1));
+  }
+  for(let i=0;i<24;i++){
+    let p=augClod(st,i),r=1.65*Math.min(1,st.carried/augBatch*24-i);
+    if(st.phase==='empty'){
+      const t=Math.max(0,Math.min(1,(st.progress*1.9-i/24)/.9));
+      if(t>=1)continue;
+      const dest=[84+(i%4-1.5)*3,44+(Math.floor(i/4)-2.5)*2.6,85+Math.floor(st.deposited/12)*2];
+      p=p.map((v,k)=>v+(dest[k]-v)*ease(t));p[2]+=12*Math.sin(Math.PI*t);r=1.65;
+    }
+    if(r>0)augRock(parts,p,r);
+  }
+  return parts;
+}
+function augEarth(st,k){
+  const parts=[],floor=augTop-st.depth,N=32;
+  for(let i=0;i<N;i++){
+    const aa=i/N*2*Math.PI,bb=(i+1)/N*2*Math.PI;
+    const inner=(a,z)=>[augX+augRadius*Math.cos(a),augY+augRadius*Math.sin(a),z];
+    const outer=a=>{const r=28/Math.max(Math.abs(Math.cos(a)),Math.abs(Math.sin(a)));return [augX+r*Math.cos(a),augY+r*Math.sin(a),augTop];};
+    const top=[inner(aa,augTop),outer(aa),outer(bb),inner(bb,augTop)];
+    augPut(parts,top,shape(top,i%4===0?augSoil.l:augSoil.m,0));
+    if(st.depth>0){
+      const n=[-Math.cos((aa+bb)/2),-Math.sin((aa+bb)/2),0];
+      if(vis(n))for(let z=floor;z<augTop;z+=5){
+        const ps=[inner(aa,z),inner(bb,z),inner(bb,Math.min(augTop,z+5)),inner(aa,Math.min(augTop,z+5))];
+        augPut(parts,ps,shape(ps,toneI(n,augSoil),0));
+      }
+    }
+  }
+  for(const [n,edge] of [ [[1,0,0],[[72,16],[72,72]]], [[-1,0,0],[[16,72],[16,16]]], [[0,1,0],[[72,72],[16,72]]], [[0,-1,0],[[16,16],[72,16]]] ]){
+    if(vis(n))for(let z=8;z<augTop;z+=5){
+      const ps=[[...edge[0],z],[...edge[1],z],[...edge[1],Math.min(augTop,z+5)],[...edge[0],Math.min(augTop,z+5)]];
+      augPut(parts,ps,shape(ps,toneI(n,augSoil),0));
+    }
+  }
+  const base=on(PZ(floor),ellUV(augX,augY,augRadius,augRadius,32));
+  augPut(parts,base,shape(base,st.depth?augSoil.d:augSoil.m,st.depth?.5:0));
+  return parts.map(p=>({...p,svg:`<g opacity="${1-.7*k}">${p.svg}</g>`}));
+}
+function augScene(st,m){
+  const k=ease(st.xr||0),parts=[],fixture=[];
+  let svg=castShadow([[6,10,0],[96,10,0],[96,78,0],[6,78,0],[10,44,192],[44,44,186]])+board(4,10,96,78,4,3);
+  augBlock(parts,[14,14,4],[74,74,8],m);
+  for(let z=4;z<192;z+=8)augBlock(parts,[7,41,z],[13,47,Math.min(192,z+8)],m);
+  const top=st.tip+90;
+  augBlock(parts,[6,40,top-3],[14,48,top+3],DARK);
+  for(let x=14;x<44;x+=5)augBlock(parts,[x,42.4,top-1.6],[Math.min(44,x+5),45.6,top+1.6],METAL);
+  augPut(parts,[[40,40,top-2],[48,48,top+2]],cyl(44,44,top-2,top+2,4,m,toneI,1));
+  augBlock(parts,[74,32,80],[96,56,83],METAL);
+  for(const y of [32,55])augBlock(parts,[74,y,83],[96,y+1,88],METAL);
+  augBlock(parts,[95,32,83],[96,56,88],METAL);
+  for(let i=0;i<Math.round(st.deposited/augBatch*24);i++){
+    const layer=Math.floor(i/24),j=i%24;
+    augRock(parts,[79+(j%4)*3.5,36+Math.floor(j/4)*3.1,84+layer*2.8],1.65);
+  }
+  const walls=[[[14,14,8],[74,14,8],[74,14,84],[14,14,84]],[[74,14,8],[74,74,8],[74,74,84],[74,14,84]],[[74,74,8],[14,74,8],[14,74,84],[74,74,84]],[[14,74,8],[14,14,8],[14,14,84],[14,74,84]]];
+  for(const ps of walls)augPut(fixture,ps,fill(pd(ps),'#b9e1e5',`opacity="${.09*(1-k)}"`)+ink(pd(ps),1));
+  for(const [x,y] of [[14,14],[14,74],[74,14],[74,74]])for(let z=8;z<84;z+=8)augBlock(parts,[x-.5,y-.5,z],[x+.5,y+.5,Math.min(84,z+8)],METAL);
+  const tool=augTool(st,m),earth=augEarth(st,k);
+  svg+=byDepth([...parts,...earth,...tool,...fixture]);
+  if(k>.6)svg+=xrCallouts([
+    {at:augPoint(st,1.6,59),text:'SHAFT',on:st.phase==='drill'},
+    {at:augPoint(st,9.5,19,17/11.2*2*Math.PI),text:'HELICAL FLIGHTS',on:st.phase==='drill'||st.phase==='lift'},
+    {at:augPoint(st,8,.7),text:'CUTTING END',on:st.phase==='drill'},
+    {at:[10,44,173],text:'EXTERNAL SUPPORT FIXTURE'},
+    {at:[74,62,43],text:'SOIL BOX FIXTURE'},
+    ...(st.carried>0?[{at:augClod(st,11),text:'CARRIED SOIL',on:st.phase==='lift'}]:[]),
+    ...(st.deposited>0?[{at:[85,44,86],text:'DEPOSITED SOIL'}]:[])
+  ],[14,96,14,74,8,186]);
+  return svg;
+}
+function augAct(st,ui,action){
+  if(st.phase!=='idle')return ui.flash('Wait for this operation to finish');
+  if(action==='drill'&&st.carried>0)return ui.flash('The flights are full. Lift and empty first');
+  if(action==='drill'&&st.depth>=augLimit)return ui.flash('The teaching soil box has reached its depth limit');
+  if(action==='lift'&&st.tip===augClear)return ui.flash('The auger is already clear of the surface');
+  if(action==='empty'&&st.tip<augClear)return ui.flash('Lift the auger clear before emptying');
+  if(action==='empty'&&st.carried===0)return ui.flash('There is no soil on the flights');
+  const from={tip:st.tip,depth:st.depth,carried:st.carried,deposited:st.deposited};
+  st.phase=action;st.progress=0;
+  ui.animate(dt=>{
+    st.progress=Math.min(1,st.progress+dt/(action==='drill'?2.6:1.6));
+    const t=ease(st.progress);
+    if(action==='drill'){
+      const target=augTop-from.depth-augBatch;
+      st.tip=from.tip+(target-from.tip)*t;st.angle+=dt*7;
+      st.depth=Math.max(from.depth,augTop-st.tip);st.carried=st.depth-from.depth;
+    }else if(action==='lift')st.tip=from.tip+(augClear-from.tip)*t;
+    else{
+      const landed=Array.from({length:24},(_,i)=>(st.progress*1.9-i/24)/.9>=1).filter(Boolean).length/24;
+      st.carried=from.carried*(1-landed);st.deposited=from.deposited+from.carried*landed;
+    }
+    if(st.progress===1){
+      if(action==='drill'){st.depth=from.depth+augBatch;st.carried=augBatch;st.tip=augTop-st.depth;}
+      if(action==='empty'){st.carried=0;st.deposited=from.deposited+from.carried;}
+      st.phase='idle';return false;
+    }
+    return true;
+  });
+}
+const augUI=mountFigure({fig:'67',title:'Construction auger',turn:'full',size:[100,88,196],center:[50,44],palette:'mustard',state:augState,scene:augScene,
+  stats:st=>[{label:'Hole depth',value:st.depth.toFixed(0)+' cm'},{label:'On flights',value:(st.carried*Math.PI/10).toFixed(1)+' L',small:true},{label:'Deposited',value:(st.deposited*Math.PI/10).toFixed(1)+' L',small:true}],
+  buttons:[{label:'Drill',onClick:(st,ui)=>augAct(st,ui,'drill')},{label:'Lift',onClick:(st,ui)=>augAct(st,ui,'lift')},{label:'Empty',onClick:(st,ui)=>augAct(st,ui,'empty')}],
+  params:(st,q)=>{
+    const n=Number(q.get('cycles'));if(Number.isFinite(n))st.depth=st.deposited=Math.max(0,Math.min(5,Math.floor(n)))*augBatch;
+    if(q.get('loaded')==='1'&&st.depth<augLimit){st.depth+=augBatch;st.carried=augBatch;st.tip=q.get('raised')==='1'?augClear:augTop-st.depth;}
+  }
+});
+xrMount(()=>augUI,()=> '');
+</script></body></html>
