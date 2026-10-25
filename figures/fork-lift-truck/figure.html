@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fork-lift truck</title><style>@media(max-width:560px){#stats{flex-wrap:wrap;gap:10px 16px}.stat{max-width:100%}}</style></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. This is a static scale teaching adaptation of the named truck on printed page 56.
+   The 2016 page image and the saved 1998 and 2016 page 56-57 text support rear counterweight stability only.
+   1988 remains inaccessible and unverified. No edition union or lift mechanism is certified.
+   1. An 8 kg specimen rests on two fixed forks. Its gravity acts ahead of the front-wheel contact line.
+   2. Add load externally substitutes a same-size 48 kg specimen. Density, not fork height, changes.
+   3. Compare counterweight externally substitutes 8 kg and 24 kg rear ballast. Neither is a truck control.
+   4. Show moments draws force and moment overlays. A negative calculated rear reaction means contact would be lost.
+   The model remains upright as a static diagram even beyond that threshold. It never lifts, tilts or drives.
+   Parts. Structure has chassis rails, crossmembers, axles and wheel hubs supporting four tyres.
+   The chassis holds rear ballast, body cover, footwell, seat pedestal, seat cushion and back.
+   Mast uprights fixed to the chassis hold a crossbeam and fixed backplate. Fork heels meet the blades at x=107.
+   The specimen bottom z=64 meets both blade tops. Rear ballast bottom z=25 meets chassis top.
+   The steering column meets the footwell and the steering wheel. Its unverified internals are omitted.
+   Power and lift internals are deliberately absent. Teaching specimens and overlays are excluded from anatomy.
+   Model units are cm. The selected masses and lumped truck centre at x=52 are illustrative, not rated truck data.
+   shortcut: a longitudinal static balance omits lateral stability and dynamics, source those before adding operation.
+*/
+const fltModel = {front:90, rear:25, truck:{mass:20,x:52}, load:{x:133,light:8,heavy:48}, ballast:{x:19,light:8,heavy:24}};
+function fltBalance(st){
+  const loadMass=fltModel.load[st.load], ballastMass=fltModel.ballast[st.ballast];
+  const loadMoment=loadMass*9.81*(fltModel.load.x-fltModel.front)/100;
+  const truckMoment=fltModel.truck.mass*9.81*(fltModel.front-fltModel.truck.x)/100;
+  const ballastMoment=ballastMass*9.81*(fltModel.front-fltModel.ballast.x)/100;
+  const restoring=truckMoment+ballastMoment, rearReaction=(restoring-loadMoment)/((fltModel.front-fltModel.rear)/100);
+  return {loadMass,ballastMass,loadMoment,truckMoment,ballastMoment,restoring,rearReaction,stable:rearReaction>=0};
+}
+function fltChange(st,ui,key){
+  if(st.exchange) return ui.flash('Finish the external specimen exchange first');
+  st[key]=st[key]==='light'?'heavy':'light';st.exchange=key;st.exchangeT=0;
+  ui.animate(dt=>{st.exchangeT=Math.min(1,st.exchangeT+dt/.8);if(st.exchangeT===1){st.exchange=null;return false;}return true;});
+}
+const fltAnatomy=[
+  {at:[65,14,20],text:'CHASSIS RAILS'}, {at:[90,32,12],text:'FRONT AXLE'},
+  {at:[25,32,10],text:'REAR AXLE'}, {at:[90,59,12],text:'FRONT TYRES'},
+  {at:[25,59,10],text:'REAR TYRES'}, {at:[90,62,12],text:'WHEEL HUBS'},
+  {at:[100,53,78],text:'MAST UPRIGHTS'}, {at:[100,32,96],text:'MAST CROSSBEAM'},
+  {at:[105,32,73],text:'FIXED BACKPLATE'}, {at:[108,48,62],text:'FORK HEELS'},
+  {at:[148,48,62],text:'FORK BLADES'}, {at:[19,32,52],text:'REAR COUNTERWEIGHT'},
+  {at:[56,33,46],text:'SEAT CUSHION'}, {at:[44,33,60],text:'SEAT BACK'},
+  {at:[80,32,56],text:'STEERING WHEEL'}, {at:[84,32,42],text:'STEERING COLUMN'},
+  {at:[76,45,29],text:'FOOTWELL'}
+];
+function fltArrow(a,b,col,width=1.8){
+  const pa=P(...a),pb=P(...b),dx=pb[0]-pa[0],dy=pb[1]-pa[1],len=Math.hypot(dx,dy),ux=dx/len,uy=dy/len;
+  return `<path d="${pd([a,b],false)}" stroke="${col}" stroke-width="${width}" fill="none"/><path d="M${f(pb[0])} ${f(pb[1])}l${f(-ux*5+uy*2.5)} ${f(-uy*5-ux*2.5)}l${f(-uy*5)} ${f(ux*5)}Z" fill="${col}"/>`;
+}
+function fltScene(st,m){
+  const parts=[],shell=[],k=ease(st.xr||0),bal=fltBalance(st);
+  const put=(a,b,svg,cover=false)=>(cover?shell:parts).push({box:[a,b],svg});
+  const bx=(a,b,mat,cover=false,extra='')=>put(a,b,box(...a,...b,mat,tone,1)+extra,cover);
+  const rd=(a,b,r,mat)=>put([0,1,2].map(i=>Math.min(a[i],b[i])-r),[0,1,2].map(i=>Math.max(a[i],b[i])+r),rod(a,b,r,mat,tone,1));
+  for(const y of [12,48]) bx([12,y,16],[103,y+4,25],METAL);
+  for(const x of [25,70,94]) bx([x,12,18],[x+4,52,24],METAL);
+  for(const [x,r] of [[25,10],[90,12]]){
+    rd([x,4,r],[x,60,r],2.4,METAL);
+    for(const y of [0,54]){
+      rd([x,y,r],[x,y+10,r],r,DARK);
+      const near=CAM_V[1]>=0?y+10.1:y-.1;
+      put([x-r,y,r-r],[x+r,y+10,2*r],shape(on(PY(near),ellUV(x,r,r*.53,r*.53,20)),METAL.m,1)+shape(on(PY(near),ellUV(x,r,2.5,2.5,12)),m.l,.8));
+    }
+  }
+  bx([31,10,25],[45,54,44],m,true);
+  bx([43,12,25],[96,52,29],m);
+  bx([49,24,29],[59,42,42],DARK);
+  bx([45,22,42],[65,44,46],DARK);
+  bx([42,22,45],[46,44,65],DARK);
+  rd([88,32,29],[80,32,55],1.5,METAL);
+  const ring=on(PZ(56),ellUV(80,32,7,7,24));
+  put([73,25,55],[87,39,57],`<path d="${pd(ring)}" stroke="${INK}" stroke-width="2.2" fill="none"/>`+line([[73,32,56],[87,32,56]],1.3)+line([[80,25,56],[80,39,56]],1.3));
+  for(const y of [8,50]){
+    for(const [z0,z1] of [[21,60],[60,85],[85,100]]) bx([98,y,z0],[103,y+5,z1],METAL);
+  }
+  bx([98,8,94],[103,55,99],METAL);
+  bx([103,10,60],[107,53,64],DARK);
+  bx([103,10,82],[107,53,85],DARK);
+  for(const y of [11,24,37,50]) bx([104,y,64],[106,y+2,82],METAL);
+  for(const y of [14,44]){
+    bx([104,y,60],[109,y+6,80],METAL);
+    bx([107,y,60],[156,y+6,64],METAL);
+  }
+  const ballastMat=matOf(st.ballast==='heavy'?'#6c85ad':'#a9bbd2');
+  const ballastExtra=(vis([0,1,0])?txY(19,54.1,38,bal.ballastMass+' kg',4):'');
+  bx([8,10,25],[30,54,52],ballastMat,false,ballastExtra);
+  const loadMat=matOf(st.load==='heavy'?'#b87e51':'#e3bf80');
+  let loadExtra=vis([1,0,0])?tx(151.1,31,76,bal.loadMass+' kg',4.8):'';
+  if(vis([0,1,0]))loadExtra+=txY(133,50.1,76,bal.loadMass+' kg',4.8);
+  bx([115,12,64],[151,50,90],loadMat,false,loadExtra);
+  let s=castShadow([[8,0,0],[156,0,0],[156,64,0],[8,64,0],[98,8,100],[103,55,100]]);
+  // The cover fades while the supported structure remains fully drawn over it.
+  const body=byDepth(shell);
+  s+=k>0?`<g opacity="${f(1-.86*k)}">${body}</g>`+byDepth(parts):byDepth([...parts,...shell]);
+  if(st.exchange){
+    const pulse=Math.sin(Math.PI*st.exchangeT),a=st.exchange==='load'?[115,12,64]:[8,10,25],b=st.exchange==='load'?[151,50,90]:[30,54,52];
+    s+=`<g opacity="${pulse}">${hullInk([a,b,[a[0],b[1],b[2]],[b[0],a[1],a[2]],[a[0],a[1],b[2]],[b[0],b[1],a[2]]],3.8)}</g>`;
+  }
+  if(st.momentFade>0){
+    const pulse=st.exchange?Math.sin(st.exchangeT*Math.PI)*2:0;
+    s+=`<g data-overlay="moments" opacity="${st.momentFade}">`;
+    s+=fltArrow([133,32,109],[133,32,92-pulse],'#b84431',2.5)+fltArrow([19,32,76],[19,32,54-pulse],'#365e9b',2.5);
+    s+=fltArrow([52,32,61],[52,32,31],'#365e9b',1.5);
+    s+=`<path d="${pd([[90,-4,.5],[90,68,.5]],false)}" stroke="${INK}" stroke-width="1.5" stroke-dasharray="3 2"/>`;
+    s+=`<path d="${pd([[19,69,2],[90,69,2],[133,69,2]],false)}" stroke="${INK}" stroke-width="1.1" fill="none"/>`;
+    const arcA=arcUV(90,12,23,45,145,24).map(([x,z])=>[x,69,z]);
+    const arcB=arcUV(90,12,18,135,35,24).map(([x,z])=>[x,69,z]);
+    s+=`<path d="${pd(arcA,false)}" stroke="#365e9b" stroke-width="2" fill="none"/>`+fltArrow(arcA.at(-2),arcA.at(-1),'#365e9b');
+    s+=`<path d="${pd(arcB,false)}" stroke="#b84431" stroke-width="2" fill="none"/>`+fltArrow(arcB.at(-2),arcB.at(-1),'#b84431');
+    for(const y of [5,59]){
+      const p=P(25,y,1);s+=`<ellipse cx="${p[0]}" cy="${p[1]}" rx="7" ry="3" fill="none" stroke="${bal.stable?'#365e9b':'#b84431'}" stroke-width="2" stroke-dasharray="2 1"/>`;
+    }
+    s+='</g>';
+  }
+  const labels=k>.6?fltAnatomy:[];
+  if(labels.length)s+=xrCallouts(labels.map(it=>({...it,on:it.text==='REAR COUNTERWEIGHT'&&st.exchange==='ballast'})),[0,160,0,64,0,105]);
+  return s;
+}
+const ui=mountFigure({fig:'56',turn:'full',title:'Fork-lift truck',size:[166,74,114],palette:'mustard',credit:false,
+  state:{load:'light',ballast:'light',exchange:null,exchangeT:1,moments:false,momentFade:0},scene:fltScene,
+  stats:st=>{const b=fltBalance(st);return [
+    {label:'Load specimen',value:b.loadMass+' kg',small:true},
+    {label:'Rear ballast',value:b.ballastMass+' kg',small:true},
+    ...(st.moments?[{label:'Load moment',value:b.loadMoment.toFixed(1)+' Nm',small:true},{label:'Restoring moment',value:b.restoring.toFixed(1)+' Nm',small:true},{label:'Rear contact',value:b.stable?'Maintained':'Would lift',small:true}]:[])
+  ];},
+  buttons:[
+    {label:'Add load',onClick:(st,u)=>{if(st.load==='heavy')return u.flash('Heavy specimen already on fixed forks');fltChange(st,u,'load');}},
+    {label:'Compare counterweight',onClick:(st,u)=>fltChange(st,u,'ballast')},
+    {label:'Show moments',onClick:(st,u)=>{st.moments=!st.moments;if(st.momentAnimating)return;st.momentAnimating=true;u.animate(dt=>{const target=st.moments?1:0;st.momentFade+=Math.sign(target-st.momentFade)*Math.min(Math.abs(target-st.momentFade),dt/.45);if(st.momentFade===target){st.momentAnimating=false;return false;}return true;});}},
+    {label:'Reset specimens',onClick:(st,u)=>{if(st.exchange)return u.flash('Finish the external specimen exchange first');st.load='light';st.ballast='light';u.flash('Teaching specimens reset. Forks stay fixed.');}}
+  ],
+  params:(st,q)=>{for(const key of ['load','ballast'])if(['light','heavy'].includes(q.get(key)))st[key]=q.get(key);if(q.get('moments')==='1'){st.moments=true;st.momentFade=1;}}
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
