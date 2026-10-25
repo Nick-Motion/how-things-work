@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pulleys</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Fixed route. Rope terminates at the load eye, rises to the fixed sheave,
+   wraps over its top and descends to a controlling hand. Rope travel equals load rise.
+   Movable route. Rope is anchored above, descends around the lower sheave,
+   rises over the upper sheave and descends to the hand. Two strands lift the block.
+   Pull draws 20 cm of rope per action. The load rises 20 cm fixed or 10 cm movable.
+   Lower reverses the same rope path under the hand's control. The hand also holds at rest.
+   Compare lowers the load onto the wide teaching support before a manual re-rig.
+   The supported load is repositioned and the lower block installed during that re-rig.
+   Different rope working lengths may be used. This is a principle adaptation of pp. 54-55.
+   Parts. Structure is a board, frame and external support, all teaching fixtures.
+   Upper block has a beam-mounted suspension eye, two cheek plates, axle, sheave,
+   rim flanges and a rope groove. Rope ends in a knot at the load eye in the fixed route.
+   Movable block has two cheek plates on its axle and a bottom crosspiece linked to the load eye.
+   The upper rope anchor is fastened to the frame. All rope tangent coordinates use radius 9.2.
+   Control is a drawn hand at the free end, never an implicit automatic brake.
+   Overlays show ideal forces and travel, and are excluded from anatomy.
+   Ideal sheaves are massless. The 100 N total suspended weight includes the load and block.
+   Bearings and rope friction are omitted. 1988 is inaccessible and unverified.
+*/
+const pulR = 9.2, pulX = 29, pulUpperY = 26, pulUpperZ = 126;
+const pulRoutes = [{name:'Fixed',strands:1,loadY:35.2},{name:'Movable',strands:2,loadY:44.4}];
+const pulState = {route:0,rise:0,phase:'held',clock:0,from:0,target:0,ropeTravel:0};
+const pulBounds = points => [[0,1,2].map(k=>Math.min(...points.map(p=>p[k]))-.8),[0,1,2].map(k=>Math.max(...points.map(p=>p[k]))+.8)];
+function pulGeometry(st){
+  const route=pulRoutes[st.route],loadY=route.loadY,eyeZ=52+st.rise,lowerZ=68+st.rise;
+  const handZ=105-route.strands*st.rise;
+  const upper=arcUV(pulUpperY,pulUpperZ,pulR,0,180,32).map(([y,z])=>[pulX,y,z]);
+  const rope=st.route ? [[pulX,53.6,140],[pulX,53.6,lowerZ],...arcUV(44.4,lowerZ,pulR,0,-180,32).map(([y,z])=>[pulX,y,z]),...upper,[pulX,16.8,handZ]]
+    : [[pulX,35.2,eyeZ],...upper,[pulX,16.8,handZ]];
+  return {route,loadY,eyeZ,lowerZ,handZ,rope};
+}
+function pulMove(st,ui,target,phase){
+  if(st.phase!=='held') return ui.flash('The hand is busy. Wait for this action to finish.');
+  st.from=st.rise;st.target=target;st.clock=0;st.phase=phase;
+  ui.animate(dt=>pulStep(st,dt));
+}
+function pulStep(st,dt){
+  st.clock+=dt;
+  if(st.phase==='rethread'){
+    if(st.clock<1.1)return true;
+    st.route=1-st.route;st.rise=0;st.ropeTravel=0;st.phase='held';return false;
+  }
+  const t=Math.min(1,st.clock/1.35),previous=st.rise;
+  st.rise=st.from+(st.target-st.from)*ease(t);
+  st.ropeTravel+=(st.rise-previous)*pulRoutes[st.route].strands;
+  if(t<1)return true;
+  if(st.phase==='compare') {st.phase='rethread';st.clock=0;return true;}
+  st.phase='held';return false;
+}
+function pulScene(st,m){
+  const g=pulGeometry(st),parts=[],labels=[],kx=ease(st.xr||0),active=st.phase!=='held';
+  const put=(bounds,svg)=>parts.push({box:bounds,svg});
+  const bx=(a,b,material,opacity=1)=>put([a,b],`<g opacity="${opacity}">${box(...a,...b,material,tone,1.1)}</g>`);
+  const rr=(a,b,r,material)=>put(pulBounds([a,b]),rod(a,b,r,material,toneI,.9));
+  const label=(at,text)=>labels.push({at,text,on:active});
+  let svg=board(0,0,58,86,3,5,WOOD);
+  svg+=castShadow([[9,6,3],[48,6,3],[48,72,3],[9,72,3],[15,9,149],[35,65,149]],3,boardTop(0,0,58,86,3,5));
+  for(const y of [8,68])for(const [a,b] of [[3,25],[25,55],[55,95],[95,143]])bx([12,y-2,a],[17,y+2,b],m,1-.58*kx);
+  bx([12,6,143],[35,70,149],m,1-.58*kx);
+  bx([17,24,3],[41,58,20],PALS.cobalt,1-.58*kx);
+  bx([17,24,20],[41,58,24],METAL,1-.58*kx);
+  const loadBottom=24+st.rise;
+  bx([20,g.loadY-7,loadBottom],[38,g.loadY+7,loadBottom+22],PALS.tomato);
+  for(const y of [g.loadY-7,g.loadY+7])rr([25,y,loadBottom+22],[29,g.loadY,loadBottom+26],1,METAL);
+  const eye=on(PX(pulX),ellUV(g.loadY,g.eyeZ-2,2,2,18));
+  put([[28,g.loadY-2,g.eyeZ-4],[30,g.loadY+2,g.eyeZ]],ink(pd(eye),1.8));
+  label([pulX,g.loadY,g.eyeZ-2],'LOAD EYE');
+  function wheel(y,z,movable){
+    const phase=(movable?-st.rise:st.rise*g.route.strands)/pulR;
+    put([[26,y-9.5,z-9.5],[32,y+9.5,z+9.5]],cylX(27,31,y,z,8.5,METAL,toneI,1.2,32));
+    for(const [a,b] of [[26,27],[31,32]]){
+      let disc=cylX(a,b,y,z,9.5,PALS.mustard,toneI,1.1,32);
+      const xx=CAM_V[0]>=0?b+.03:a-.03;
+      for(let j=0;j<4;j++){
+        const angle=phase+j*Math.PI/2;
+        disc+=line([[xx,y+2*Math.cos(angle),z+2*Math.sin(angle)],[xx,y+7.7*Math.cos(angle),z+7.7*Math.sin(angle)]],.65);
+      }
+      put([[a,y-9.5,z-9.5],[b,y+9.5,z+9.5]],disc);
+    }
+    rr([23.8,y,z],[34.2,y,z],1.4,DARK);
+    for(const [a,b] of [[24,25.5],[32.5,34]]) {
+      const top=movable?z+3:142,bottom=movable?g.eyeZ+1:z-3;
+      bx([a,y-2,bottom],[b,y+2,top],m,1-.83*kx);
+    }
+    if(movable){
+      rr([24,g.loadY,g.eyeZ+1],[34,g.loadY,g.eyeZ+1],1.2,METAL);
+      rr([29,g.loadY,g.eyeZ+1],[29,g.loadY,g.eyeZ-1],1.2,METAL);
+      label([29,y-7,z],'LOWER SHEAVE');
+      label([34,y,z],'MOVING AXLE');
+      label([34,y,z-5],'MOVING BLOCK');
+    } else {
+      const suspension=arcUV(y,141,2,0,360,20).map(([yy,zz])=>[29,yy,zz]);
+      for(let j=0;j<suspension.length-1;j++)rr(suspension[j],suspension[j+1],.65,METAL);
+      label([29,y,141],'SUSPENSION EYE');
+      label([26.5,y+7,z+5],'UPPER SHEAVE');
+      label([29,y+pulR,z],'ROPE GROOVE');
+      label([34,y,z],'UPPER AXLE');
+      label([24.5,y,134],'REAR CHEEK');
+      label([33,y,134],'FRONT CHEEK');
+    }
+  }
+  wheel(pulUpperY,pulUpperZ,false);
+  if(st.route){
+    wheel(g.loadY,g.lowerZ,true);
+    bx([27,51.6,138],[31,55.6,144],METAL);
+    label([29,53.6,140],'UPPER ROPE ANCHOR');
+  } else {
+    for(const dz of [-.5,.5])rr([28,34.3,g.eyeZ+dz],[30,36.1,g.eyeZ+dz],1,matOf('#dfb169'));
+    label([29,35.2,g.eyeZ+.5],'END KNOT');
+  }
+  for(let i=0;i<g.rope.length-1;i++){
+    const a=g.rope[i],b=g.rope[i+1],length=Math.hypot(...sub(b,a)),steps=Math.max(1,Math.ceil(length/6));
+    for(let j=0;j<steps;j++){
+      const q=a.map((v,k)=>v+(b[k]-v)*j/steps),r=a.map((v,k)=>v+(b[k]-v)*(j+1)/steps),d=pd([q,r],false);
+      put(pulBounds([q,r]),`<path d="${d}" fill="none" stroke="${INK}" stroke-width="2.3" stroke-linecap="round"/><path d="${d}" fill="none" stroke="#efca7f" stroke-width="1.35" stroke-linecap="round"/>`);
+    }
+  }
+  label([29,16.8,117],'WORKING ROPE');
+  const skin=matOf('#e7b28a');
+  rr([29,16.8,g.handZ],[40,16.8,g.handZ],3,skin);
+  bx([40,13.6,g.handZ-3.2],[48,20,g.handZ+3.2],PALS.cobalt);
+  for(const dy of [-1.8,0,1.8])rr([28,16.8+dy,g.handZ+1.2],[32,16.8+dy,g.handZ-2],1,skin);
+  svg+=byDepth(parts);
+  if(kx>.6){
+    const vb=document.getElementById('fig').viewBox.baseVal,phone=innerWidth<=560;
+    labels.sort((a,b)=>P(...a.at)[1]-P(...b.at)[1]);
+    for(let i=0;i<labels.length;i++){
+      const item=labels[i],p=P(...item.at),x=vb.width*(phone?.12:.2),y=vb.height*((phone?.13:.34)+i*(phone?.057:.041));
+      svg+=tag(item.at,(x-p[0])/INK_K,(y-p[1])/INK_K,item.text,item.on);
+    }
+    const overlayTag=(at,row,text)=>{
+      const p=P(...at),x=vb.width*(phone?.85:.85),y=vb.height*row;
+      return `<g data-overlay="true">${tag(at,(x-p[0])/INK_K,(y-p[1])/INK_K,text)}</g>`;
+    };
+    const overlay=(at,to,text)=>{
+      const a=P(...at),b=P(...to),d=`M${f(a[0])} ${f(a[1])}L${f(b[0])} ${f(b[1])}`;
+      return `<g data-overlay="true"><path d="${d}" fill="none" stroke="#396b9b" stroke-width="1.5" stroke-dasharray="3 2"/>`+line([to,[to[0],to[1]-1.6,to[2]+3]],1.3)+'</g>'+overlayTag(to,.55,text);
+    };
+    svg+=overlay([29,8,g.handZ+12],[29,8,g.handZ-5],`OVERLAY ${100/g.route.strands} N`);
+    if(st.route)svg+=overlayTag([29,53.6,105],.67,'OVERLAY 2 STRANDS');
+  }
+  return svg;
+}
+const pulUI=mountFigure({
+  fig:'57',turn:'full',title:'Pulleys',size:[58,86,153],palette:'mint',state:pulState,scene:pulScene,
+  stats:st=>[{label:'Route',value:pulRoutes[st.route].name,small:true},{label:'Ideal effort for 100 N',value:(100/pulRoutes[st.route].strands)+' N',small:true},{label:'Rope drawn / load rise',value:Math.round(st.ropeTravel)+' / '+Math.round(st.rise)+' cm',small:true}],
+  buttons:[
+    {label:'Pull',onClick(st,ui){if(st.rise>=20)return ui.flash('At the teaching travel limit. The hand holds the rope.');pulMove(st,ui,Math.min(20,st.rise+20/pulRoutes[st.route].strands),'pull');}},
+    {label:'Compare routes',onClick(st,ui){pulMove(st,ui,0,'compare');if(st.phase==='compare')ui.flash('Lower onto the teaching support, then rethread by hand.',2800);}},
+    {label:'Lower',onClick(st,ui){if(st.rise===0&&st.phase==='held')return ui.flash('The load is already on the teaching support.');pulMove(st,ui,0,'lower');}}
+  ],
+  params(st,q){
+    st.route=q.get('route')==='movable'?1:0;
+    const rise=Number(q.get('rise'));st.rise=Number.isFinite(rise)?Math.max(0,Math.min(20,rise)):0;
+    st.ropeTravel=st.rise*pulRoutes[st.route].strands;
+  }
+});
+xrMount(()=>pulUI,()=> '');
+</script></body></html>
