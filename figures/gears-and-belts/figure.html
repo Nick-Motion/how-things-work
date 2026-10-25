@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Gears and belts</title><style>.stage .stat.small .v{font-size:15px}.stage .stats .k{font-size:9px}.stage .stats{gap:7px}</style></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Source is the saved 1998 and 2016 primary scans, printed pages 36 and 37.
+   1988 is inaccessible and unverified. This is a principle rig, not a pictured machine.
+   1. A hand crank turns each input shaft. Its keyed wheel drives only its connected output.
+   2. External spur gears reverse direction. The 20/40, 30/30 and 40/20 pairs all have
+      module 2 mm and 60 teeth in total, so their pitch radii sum to the fixed 60 mm spacing.
+   3. Open flat belts preserve direction. A crossed flat belt reverses it. Crossing is an
+      explicit teaching adaptation beyond the book's open belt. This is not a chain or timing belt.
+   4. Compare ratios exchanges stopped wheel pairs and a correctly sized, taut belt.
+      Cross belt also stops the rig and substitutes the longer crossed belt. No self-changing hardware.
+   5. Output speed is input speed times input teeth / output teeth, or input / output diameter.
+      Ideal output torque is the reciprocal. Friction, belt slip and tooth elasticity are omitted.
+   Parts, held by real supports.
+   Structure: bench board, four bolted bearing pedestals, bearing sleeves in their bores.
+   Mechanism: two spur gears with real counted teeth and hubs; two smooth pulleys with rims;
+      four vertical shafts through bearings and keyed hubs; flat belt wrapped on the pulley faces.
+   Power: two hand cranks fixed to the input shaft ends, with freely held grip pins.
+   Controls: Drive, Compare ratios and Cross belt are teaching controls outside the apparatus.
+   Arrows, speed/direction and ideal torque readouts are overlays, not anatomy.
+   A model unit is 2 mm. Gear wheels occupy z 22..26; pulley faces z 21..27.
+   Crossed spans separate by 3.6 model units at their crossing, clearing the 2.4-unit belt width.
+   shortcut: tooth flanks are a coarse involute polygon, use an engineering profile for manufacturing.
+*/
+const gbPairs = [{teeth:[20,40],r:[10,20]},{teeth:[30,30],r:[15,15]},{teeth:[40,20],r:[20,10]}];
+const gbState = {pair:0,crossed:false,phase:0,running:false,xr:0,xrT:0};
+const gbSteel = matOf('#8c9ba5'), gbBlue = matOf('#6f9ac7'), gbBelt = matOf('#be7854');
+const gbTau = Math.PI*2, gbInputRPM = 30;
+let gbLoop = false;
+const gbBounds = pts => [[0,1,2].map(k=>Math.min(...pts.map(p=>p[k]))),[0,1,2].map(k=>Math.max(...pts.map(p=>p[k])))];
+const gbCirclePoint = (x,y,r,a,z) => [x+r*Math.cos(a),y+r*Math.sin(a),z];
+function gbAngles(st){
+  const [a,b]=gbPairs[st.pair].teeth, ratio=a/b;
+  return {input:st.phase,gear:-st.phase*ratio+Math.PI/b,belt:st.phase*ratio*(st.crossed?-1:1),ratio};
+}
+function gbDrive(st,ui){
+  st.running=!st.running;
+  if(gbLoop || !st.running) return;
+  gbLoop=true;
+  ui.animate(dt=>{
+    if(!st.running){gbLoop=false;return false;}
+    st.phase+=dt*gbTau*gbInputRPM/60;
+    return true;
+  });
+}
+function gbExchange(st,ui,route){
+  st.running=false;st.phase=0;
+  if(route) st.crossed=!st.crossed; else st.pair=(st.pair+1)%gbPairs.length;
+  ui.flash(route?(st.crossed?'Crossed flat belt fitted. Teaching adaptation.':'Open flat belt fitted.'):'Matched wheel pair and belt exchanged. Drive stopped.');
+}
+function gbGear(parts,x,y,n,angle,material,k){
+  const r=n/2, root=r-1.25, base=r*Math.cos(20*Math.PI/180), invPitch=Math.tan(20*Math.PI/180)-20*Math.PI/180;
+  const wheel=[],hub=[];
+  const put=(pts,svg)=>wheel.push({box:gbBounds(pts),svg});
+  const body=cyl(x,y,22,26,root,material,tone,1,48);
+  put([[x-root,y-root,22],[x+root,y+root,26]],`<g opacity="${1-.45*k}">${body}</g>`);
+  for(let i=0;i<n;i++){
+    const a=angle+i*gbTau/n;
+    const radii=[root,Math.max(root,base),r,r+1];
+    for(let j=0;j<radii.length-1;j++){
+      const r0=radii[j],r1=radii[j+1];if(r1-r0<.001)continue;
+      const half=rr=>{const t=rr>base?Math.acos(base/rr):0;return Math.PI/(2*n)+invPitch-(Math.tan(t)-t);};
+      const uv=[[r0,a-half(r0)],[r1,a-half(r1)],[r1,a+half(r1)],[r0,a+half(r0)]];
+      const lo=uv.map(([rr,t])=>gbCirclePoint(x,y,rr,t,22)),hi=uv.map(([rr,t])=>gbCirclePoint(x,y,rr,t,26));
+      let svg=loft(lo,hi,nr=>tone(nr,material))+fill(pd(hi),tone([0,0,1],material));
+      svg+=line([hi[0],hi[1]],.55)+line([hi[2],hi[3]],.55);
+      if(j===radii.length-2)svg+=line([hi[1],hi[2]],.65);
+      put(lo.concat(hi),svg);
+    }
+  }
+  gbHub(hub,x,y,angle,k);
+  const marker=gbCirclePoint(x,y,r*.66,angle,26.08);
+  const mark=shape(on(PZ(26.1),ellUV(marker[0],marker[1],.7,.7,12)),'#fff4d6',.45);
+  parts.push({box:[[x-r-1,y-r-1,21],[x+r+1,y+r+1,27.1]],svg:byDepth(wheel)+byDepth(hub)+mark});
+}
+function gbHub(parts,x,y,angle,k){
+  parts.push({box:[[x-3,y-3,21],[x+3,y+3,27]],svg:`<g opacity="${1-.6*k}">${cyl(x,y,21,27,3,gbSteel,toneI,.8,20)}</g>`});
+  const a=gbCirclePoint(x,y,1.1,angle,21),b=gbCirclePoint(x,y,1.1,angle,27.1);
+  parts.push({box:gbBounds([a.map((v,i)=>v-(i<2?.5:0)),b.map((v,i)=>v+(i<2?.5:0))]),svg:`<g opacity="${k}">${rod(a,b,.5,matOf('#e9b34d'),toneI,.4,.5,6)}</g>`});
+}
+function gbPulley(parts,x,y,r,angle,k){
+  const hub=[];
+  let svg=`<g opacity="${1-.45*k}">${cyl(x,y,21,27,r,gbBlue,tone,1.2,48)}</g>`;
+  for(const z of [27]){
+    const ring=on(PZ(z+.03),ellUV(x,y,r-.6,r-.6,48));
+    svg+=ink(pd(ring),.55);
+  }
+  gbHub(hub,x,y,angle,k);svg+=byDepth(hub);
+  const p=gbCirclePoint(x,y,r*.7,angle,27.09);
+  svg+=shape(on(PZ(27.1),ellUV(p[0],p[1],.7,.7,12)),'#fff4d6',.45);
+  parts.push({box:[[x-r,y-r,21],[x+r,y+r,27.1]],svg});
+}
+function gbBeltPath(st){
+  const [r1,r2]=gbPairs[st.pair].r,D=47,x=117,y1=20,y2=67;
+  const a=Math.asin((st.crossed?r1+r2:r1-r2)/D),out=[];
+  const addLine=(p,q,raise)=>{for(let i=0;i<25;i++){const t=i/24;out.push(p.map((v,k)=>v+(q[k]-v)*t+(k===2?raise*Math.sin(Math.PI*t):0)));}};
+  const addArc=(y,r,from,to)=>{const steps=Math.ceil(Math.abs(to-from)*12);for(let i=1;i<=steps;i++)out.push(gbCirclePoint(x,y,r,from+(to-from)*i/steps,24));};
+  const p=gbCirclePoint(x,y1,r1,a,24),q=gbCirclePoint(x,y2,r2,st.crossed?a+Math.PI:a,24);
+  addLine(p,q,st.crossed?1.8:0);
+  addArc(y2,r2,st.crossed?a+Math.PI:a,st.crossed?-a:Math.PI-a);
+  const p2=gbCirclePoint(x,y2,r2,st.crossed?-a:Math.PI-a,24),q2=gbCirclePoint(x,y1,r1,Math.PI-a,24);
+  addLine(p2,q2,st.crossed?-1.8:0);
+  addArc(y1,r1,Math.PI-a,gbTau+a);
+  return out;
+}
+function gbDrawBelt(parts,st){
+  const route=gbBeltPath(st),width=2.4;
+  let traveled=0;
+  for(let i=0;i<route.length-1;i++){
+    const a=route[i],b=route[i+1],len=Math.hypot(...sub(b,a));if(len<.001)continue;
+    const n=norm([b[1]-a[1],a[0]-b[0],0]),v0=a.map((v,j)=>v+n[j]*.25),v1=b.map((v,j)=>v+n[j]*.25);
+    const facePts=[v0.map((v,j)=>v+(j===2?-width/2:0)),v1.map((v,j)=>v+(j===2?-width/2:0)),v1.map((v,j)=>v+(j===2?width/2:0)),v0.map((v,j)=>v+(j===2?width/2:0))];
+    const back=facePts.map(p=>p.map((v,j)=>v-n[j]*.5));
+    let svg=loft(facePts,back,nr=>toneI(nr,gbBelt))+shape(facePts,toneI(n,gbBelt),0)+line([facePts[0],facePts[1]],.45)+line([facePts[3],facePts[2]],.45);
+    const shift=st.phase*gbPairs[st.pair].r[0];
+    if(Math.floor((traveled-shift)/10)!==Math.floor((traveled+len-shift)/10))svg+=line([facePts[0],facePts[3]],.9).replace(INK,'#fff4d6');
+    parts.push({box:gbBounds(facePts.concat(back)),svg});traveled+=len;
+  }
+}
+function gbShaft(parts,x,y,angle,input,k){
+  const pedestal=box(x-5,y-5,3,x+5,y+5,13,gbSteel,toneI,1);
+  parts.push({box:[[x-5,y-5,3],[x+5,y+5,13]],svg:`<g opacity="${1-.8*k}">${pedestal}</g>`});
+  for(const z of [[3,13],[13,21],[21,27.1],[27.1,30]]){
+    const inner=z[0]<13||z[0]===21;
+    parts.push({box:[[x-1.2,y-1.2,z[0]],[x+1.2,y+1.2,z[1]]],svg:`<g opacity="${inner?k:1}">${cyl(x,y,...z,1.2,METAL,toneI,.65,14)}</g>`});
+  }
+  if(k>.01)parts.push({box:[[x-2.3,y-2.3,11],[x+2.3,y+2.3,13]],svg:`<g opacity="${k}">${cyl(x,y,11,13,2.3,matOf('#d8b25a'),toneI,.6,20)}</g>`});
+  for(const dx of [-3.5,3.5])for(const dy of [-3.5,3.5])parts.push({box:[[x+dx-.5,y+dy-.5,12.9],[x+dx+.5,y+dy+.5,13.4]],svg:cyl(x+dx,y+dy,13,13.4,.5,METAL,toneI,.4,6)});
+  if(input){
+    const p=gbCirclePoint(x,y,6,angle,30),q=[...p];q[2]=35;
+    parts.push({box:gbBounds([[x-1,y-1,29],[x+1,y+1,31],p.map((v,i)=>v-(i<2?1:0)),p.map((v,i)=>v+(i<2?1:0))]),svg:rod([x,y,30],p,1,METAL,toneI,.7)});
+    parts.push({box:[[p[0]-1.2,p[1]-1.2,30],[q[0]+1.2,q[1]+1.2,35]],svg:cyl(p[0],p[1],30,35,1.2,DARK,toneI,.8,14)});
+  }
+}
+function gbLabels(st){
+  const pair=gbPairs[st.pair],a=gbAngles(st),r=pair.r;
+  const key=gbCirclePoint(42,28,1.1,a.input,26.5);
+  return [
+    {at:[42-r[0]*.6,28,26],text:`DRIVER GEAR ${pair.teeth[0]}T`,on:st.running},
+    {at:[42+r[1]*.6,58,26],text:`DRIVEN GEAR ${pair.teeth[1]}T`,on:st.running},
+    {at:[42,28+r[0],24],text:'MESHING TEETH',on:st.running},
+    {at:[42,28,18],text:'GEAR INPUT SHAFT',on:st.running},
+    {at:[42,58,18],text:'GEAR OUTPUT SHAFT',on:st.running},
+    {at:key,text:'HUB KEY',on:st.running},
+    {at:[117-r[0]*.6,20,27],text:`DRIVER PULLEY D${r[0]*4} MM`,on:st.running},
+    {at:[117+r[1]*.6,67,27],text:`DRIVEN PULLEY D${r[1]*4} MM`,on:st.running},
+    {at:gbBeltPath(st)[12],text:'FLAT BELT',on:st.running},
+    {at:[117+r[1],67,26],text:'PULLEY RIM',on:st.running},
+    {at:[117,20,18],text:'BELT INPUT SHAFT',on:st.running},
+    {at:[117,67,18],text:'BELT OUTPUT SHAFT',on:st.running},
+    {at:[117,67,12],text:'BEARING SLEEVE',on:st.running},
+    {at:[117,20,13],text:'BEARING PEDESTAL',on:false}
+  ];
+}
+function gbArrow(x,y,r,sign){
+  const pts=Array.from({length:19},(_,i)=>gbCirclePoint(x,y,r,.1+sign*i/18*4.2,29));
+  const p=pts[pts.length-1],q=pts[pts.length-2],v=norm(sub(p,q)),side=[-v[1],v[0],0];
+  return `<g class="overlay" aria-label="Rotation direction overlay">${line(pts,.9).replace(INK,'#a84c35')}${shape([p,p.map((w,j)=>w-v[j]*2+side[j]),p.map((w,j)=>w-v[j]*2-side[j])],'#a84c35',0)}</g>`;
+}
+function gbScene(st,m){
+  const k=ease(st.xr||0),a=gbAngles(st),pair=gbPairs[st.pair],parts=[];
+  let svg=board(0,0,157,93,3,4,WOOD);
+  svg+=castShadow([[22,7,24],[63,7,24],[63,79,24],[22,79,24],[96,0,24],[138,0,24],[138,88,24],[96,88,24]],3,boardTop(0,0,157,93,3,4));
+  for(const [x,y,ang,input] of [[42,28,a.input,true],[42,58,a.gear,false],[117,20,a.input,true],[117,67,a.belt,false]])gbShaft(parts,x,y,ang,input,k);
+  gbGear(parts,42,28,pair.teeth[0],a.input,m,k);gbGear(parts,42,58,pair.teeth[1],a.gear,m,k);
+  gbPulley(parts,117,20,pair.r[0],a.input,k);gbPulley(parts,117,67,pair.r[1],a.belt,k);gbDrawBelt(parts,st);
+  svg+=byDepth(parts);
+  if(k>.6){
+    svg+=gbArrow(42,28,pair.r[0]*.8,1)+gbArrow(42,58,pair.r[1]*.8,-1)+gbArrow(117,20,pair.r[0]*.8,1)+gbArrow(117,67,pair.r[1]*.8,st.crossed?-1:1);
+    svg+=xrCallouts(gbLabels(st),[12,144,0,90,3,35]);
+  }
+  return svg;
+}
+const gbUI=mountFigure({fig:'40',turn:'full',title:'Gears and belts',size:[157,93,35],palette:'mustard',state:gbState,scene:gbScene,
+  stats:st=>{const a=gbAngles(st),rpm=st.running?gbInputRPM:0;return [
+    {label:'Input speed',value:`${rpm} rpm`,small:true},
+    {label:'Gear output / direction',value:`${rpm*a.ratio} rpm / opposite`,small:true},
+    {label:'Belt output / direction',value:`${rpm*a.ratio} rpm / ${st.crossed?'opposite':'same'}`,small:true},
+    {label:'Ideal output / input torque',value:`${1/a.ratio}x both`,small:true},
+    {label:st.crossed?'Crossed flat belt adaptation':'Open flat belt',value:`D${gbPairs[st.pair].r[0]*4} / D${gbPairs[st.pair].r[1]*4} mm`,small:true}
+  ];},
+  buttons:[{label:'Drive',onClick:gbDrive},{label:'Compare ratios',onClick:(st,ui)=>gbExchange(st,ui,false)},{label:'Cross belt',onClick:(st,ui)=>gbExchange(st,ui,true)}],
+  params:(st,q)=>{
+    const pair=Number(q.get('ratio'));if(Number.isInteger(pair)&&pair>=0&&pair<3)st.pair=pair;
+    st.crossed=q.get('crossed')==='1';
+    const phase=Number(q.get('phase'));if(Number.isFinite(phase))st.phase=Math.max(0,Math.min(gbTau*10,phase));
+  }
+});
+xrMount(()=>gbUI,()=>'');
+</script></body></html>
