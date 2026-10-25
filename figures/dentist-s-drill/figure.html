@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dentist's drill</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Compressed air leaves the external bench supply, follows the blue hose and inlet tube,
+   strikes the turbine tangentially, and leaves by the orange return passage and open outlet.
+   The turbine is fixed directly to the shaft. Two ball-bearing sets seat in the head shell.
+   The chuck grips the bit shank. No electric motor or air-bearing variant is present.
+   Drill moves the whole mounted handpiece down 7 units, then withdraws it. Initial bit tip
+   z22 clears the colored model tooth at z18. The last 3 units remove material permanently.
+   Stop closes the valve and withdraws the fixture. Chips and the bore remain after stopping.
+   Teaching adaptations are the bench fixture, substitute tooth, slowed motion and simplified
+   exhaust route. Source support is the saved 1998 and 2016 page 35 evidence in meta.json.
+   The inaccessible 1988 edition is unverified. There is no edition-union claim.
+   Parts, with their attachments.
+   CASE. Head shell joins the tapered handpiece handle. End caps retain bearing outer races.
+   MECHANISM. Turbine hub and ten blades join the shaft; two bearing inner races surround it;
+   balls lie between the races; chuck grips the bit directly below the lower bearing.
+   POWER. Supply valve holds hose, hose joins inlet, nozzle meets blade rim; outlet joins return.
+   FIXTURE. Base holds post, carriage slides on post, crossarm holds handle. Tooth sits in tray.
+   CONTROLS. Air opens supply; Drill feeds fixture; Stop closes supply and retracts fixture.
+   Simple source-bounded assembly. Declared minimum 6 excludes fixture, specimen and overlays.
+*/
+const ddGold = matOf('#eeb740'), ddBlue = matOf('#5b9fc3'), ddTeal = matOf('#68c9be');
+const ddOrange = matOf('#dc8754');
+const ddBounds = pts => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i])))];
+function ddTube(parts, pts, r, material){
+  for(let i=1;i<pts.length;i++){
+    const a=pts[i-1],b=pts[i];
+    parts.push({box:ddBounds([a.map(v=>v-r),a.map(v=>v+r),b.map(v=>v-r),b.map(v=>v+r)]),svg:rod(a,b,r,material,toneI,.8)});
+  }
+}
+function ddRing(x,y,z0,z1,outer,inner,material){
+  const a=on(PZ(z0),ellUV(x,y,outer,outer,24)),b=on(PZ(z1),ellUV(x,y,outer,outer,24));
+  const ai=on(PZ(z0),ellUV(x,y,inner,inner,24)),bi=on(PZ(z1),ellUV(x,y,inner,inner,24));
+  return loft(a,b,n=>toneI(n,material))+loft(ai,bi,n=>toneI(n,material),true)
+    + `<path d="${pd(b)}${pd(bi)}" fill="${material.l}" fill-rule="evenodd"/>`+ink(pd(b),.8)+ink(pd(bi),.6)+hullInk([...a,...b],1.3);
+}
+function ddTooth(st){
+  const profile=rrUV(55,33,69,47,3,4),a=on(PZ(9),profile),b=on(PZ(18),profile);
+  const bore=on(PZ(18.02),ellUV(62,40,1.8,1.8,24));
+  let s=loft(a,b,n=>toneI(n,ddTeal))+hullInk([...a,...b],1.6);
+  s+=`<path d="${pd(b)}${st.cut>0?pd(bore):''}" fill="${ddTeal.l}" fill-rule="evenodd"/>`+ink(pd(b),.9);
+  if(st.cut>0){
+    const bottom=on(PZ(18-st.cut),ellUV(62,40,1.8,1.8,24));
+    s+=fill(pd(bottom),'#245b61')+loft(bottom,bore,n=>toneI(n,ddTeal),true)+ink(pd(bore),.7);
+  }
+  const cusps=[];
+  for(const x of [58,66])for(const y of [36,44])cusps.push({box:[[x-2,y-2,18],[x+2,y+2,19.5]],svg:rod([x,y,18],[x,y,19.5],2,ddTeal,toneI,.7,1.5)});
+  return s+byDepth(cusps);
+}
+function ddAssembly(st,m){
+  const down=7*st.feed,z=v=>v-down,k=ease(st.xr||0),parts=[];
+  const put=(b,svg)=>parts.push({box:b,svg});
+  const casing=rod([15,40,z(52)],[55,40,z(48)],4,m,tone,1.8,3.5)
+    +rod([62,40,z(40)],[62,40,z(57)],8,m,tone,2.4);
+  const body=k>0?`<g opacity="${f(1-.84*k)}">${casing}</g>`:casing;
+  const mech=[];
+  ddTube(mech,[[15,38,z(52)],[45,38,z(49)],[53,34.5,z(48)],[57.5,34.5,z(48)]],.85,ddBlue);
+  ddTube(mech,[[57.7,44.3,z(45)],[52,43,z(46)],[15,42,z(50)],[10,42,z(50)]],1,ddOrange);
+  const rotor=[];
+  rotor.push({box:[[59.3,37.3,z(47)],[64.7,42.7,z(50)]],svg:rod([62,40,z(47)],[62,40,z(50)],2.7,ddGold,toneI,1)});
+  for(let i=0;i<10;i++){
+    const angle=st.angle+i*Math.PI/5,c=Math.cos(angle),s=Math.sin(angle);
+    const pts=[[2.7,-.65],[6.2,.1],[6.2,1.15],[2.7,.65]].map(([r,t])=>[62+r*c-t*s,40+r*s+t*c]);
+    const a=pts.map(([x,y])=>[x,y,z(47)]),b=pts.map(([x,y])=>[x,y,z(50)]);
+    rotor.push({box:ddBounds([...a,...b]),svg:loft(a,b,n=>toneI(n,ddGold))+shape(b,ddGold.l,.5)+hullInk([...a,...b],.9)});
+  }
+  mech.push({box:[[55.7,33.7,z(47)],[68.3,46.3,z(50)]],svg:byDepth(rotor)});
+  for(const height of [42,54]){
+    const bearing=[];
+    bearing.push({box:[[55.5,33.5,z(height-1)],[68.5,46.5,z(height+1)]],svg:ddRing(62,40,z(height-1),z(height+1),6.5,5.4,METAL)});
+    bearing.push({box:[[59.1,37.1,z(height-1)],[64.9,42.9,z(height+1)]],svg:ddRing(62,40,z(height-1),z(height+1),2.9,1.7,METAL)});
+    for(let i=0;i<8;i++){
+      const a=i*Math.PI/4+st.angle*.35,x=62+4.15*Math.cos(a),y=40+4.15*Math.sin(a);
+      const rings=[-1,-.7,0,.7,1].map(t=>on(PZ(z(height+1.25*t)),ellUV(x,y,1.25*Math.sqrt(1-t*t),1.25*Math.sqrt(1-t*t),12)));
+      bearing.push({box:[[x-1.25,y-1.25,z(height-1.25)],[x+1.25,y+1.25,z(height+1.25)]],svg:rings.slice(1).map((ring,j)=>loft(rings[j],ring,n=>toneI(n,METAL))).join('')+hullInk(rings.flat(),.7)});
+    }
+    mech.push({box:[[55.5,33.5,z(height-1.2)],[68.5,46.5,z(height+1.2)]],svg:byDepth(bearing)});
+  }
+  for(const [a,b]of [[39,41],[41,43],[43,47],[47,50],[50,53],[53,55],[55,56]])mech.push({box:[[60.3,38.3,z(a)],[63.7,41.7,z(b)]],svg:rod([62,40,z(a)],[62,40,z(b)],1.7,METAL,toneI,.6)});
+  put([[11,36,z(40)],[70,48,z(57)]],body+(k>0?`<g opacity="${f(k)}">${byDepth(mech)}</g>`:''));
+  for(const [a,b,r,material]of [[33,40,2.6,METAL],[25,33,1,METAL],[22,25,1.4,ddGold]]){
+    let bit=rod([62,40,z(a)],[62,40,z(b)],r,material,toneI,1);
+    const theta=st.angle,aa=[62+r*Math.cos(theta),40+r*Math.sin(theta),z(a)],bb=[62+r*Math.cos(theta+.6),40+r*Math.sin(theta+.6),z(b)];
+    if(facing([Math.cos(theta),Math.sin(theta),0]))bit+=line([aa,bb],.7);
+    if(z(a)<18){
+      const opening=on(PZ(18.02),ellUV(62,40,1.8,1.8,24));
+      bit=clipTo(opening,bit)+(z(b)>18?rod([62,40,18],[62,40,z(b)],r,material,toneI,1):'');
+    }
+    put([[62-r,40-r,z(a)],[62+r,40+r,z(b)]],bit);
+  }
+  ddTube(parts,[[10,15,28],[10,23,29],[11,30,34],[13,35,z(48)],[15,38,z(52)]],1.4,ddBlue);
+  ddTube(parts,[[15,42,z(50)],[10,42,z(50)]],1.2,ddOrange);
+  if(k>.6&&st.air){
+    const flow=[[15,38,z(52)],[45,38,z(49)],[53,34.5,z(48)],[62,34.5,z(48)],...arcUV(62,40,5.5,-90,135,14).map(([x,y])=>[x,y,z(48)]),[57.7,44.3,z(45)],[52,43,z(46)],[15,42,z(50)],[10,42,z(50)]];
+    parts.push({box:ddBounds(flow),svg:`<path d="${pd(flow,false)}" fill="none" stroke="#3b83c4" stroke-width="2" stroke-dasharray="2 4" stroke-dashoffset="${f(-st.angle*3)}"/>`});
+  }
+  return byDepth(parts);
+}
+function ddScene(st,m){
+  const down=7*st.feed,parts=[],put=(b,svg)=>parts.push({box:b,svg});
+  let s=board(0,0,87,62,3,5,WOOD);
+  s+=castShadow([[8,13,3],[31,13,66],[31,20,66],[70,48,57],[70,48,3],[54,32,3]],3,boardTop(0,0,87,62,3,5));
+  put([[2,7,3],[18,23,26]],rod([10,15,3],[10,15,24],8,ddBlue,toneI,1.8)+rod([10,15,24],[10,15,28],2,METAL,toneI,.9));
+  put([[6,11,27],[14,19,30]],rod([10,15,27],[10,15,28.5],3,st.air?matOf('#71b693'):DARK,toneI,.8)+rod([6,15,29],[14,15,29],1,DARK,toneI,.8));
+  put([[23,10,3],[35,22,6]],box(23,10,3,35,22,6,DARK,toneI,1));
+  for(const [a,b]of [[6,43-down],[43-down,55-down],[55-down,66]])put([[27.5,14.5,a],[30.5,17.5,b]],rod([29,16,a],[29,16,b],1.5,METAL,toneI,.7));
+  put([[25,12,43-down],[33,20,55-down]],box(25,12,43-down,33,20,55-down,m,tone,1));
+  ddTube(parts,[[29,20,50-down],[29,40,50-down]],1.8,METAL);
+  put([[52,30,3],[72,50,5]],box(52,30,3,72,50,5,METAL,toneI,1.1));
+  for(const y of [36,44])put([[59,y-2,5],[65,y+2,9]],rod([62,y,5],[62,y,9],2.4,ddTeal,toneI,.8));
+  put([[55,33,9],[69,47,19.5]],ddTooth(st));
+  if(st.cut>0)for(let i=0;i<8;i++){
+    const a=i*2.4,x=62+(8+i%2)*Math.cos(a),y=40+(8+i%2)*Math.sin(a);
+    put([[x-.6,y-.6,5],[x+.6,y+.6,5.5]],box(x-.6,y-.6,5,x+.6,y+.6,5+.5*st.cut/3,ddTeal,toneI,.4));
+  }
+  put([[5,23,22-down],[70,48,57-down]],ddAssembly(st,m));
+  s+=byDepth(parts);
+  const k=ease(st.xr||0),z=v=>v-down;
+  if(k>.6)s+=xrCallouts([
+    {at:[68,40,z(56)],text:'HEAD SHELL'},
+    {at:[57,34.5,z(48)],text:'AIR INLET',on:st.air},
+    {at:[66,36,z(49)],text:'TURBINE BLADES',on:st.speed>0},
+    {at:[62,40,z(52)],text:'DRILL SHAFT',on:st.speed>0},
+    {at:[66,40,z(54)],text:'UPPER BALL BEARING',on:st.speed>0},
+    {at:[66,40,z(42)],text:'LOWER BALL BEARING',on:st.speed>0},
+    {at:[10,42,z(50)],text:'EXHAUST OUTLET',on:st.air},
+    {at:[62,40,z(36)],text:'CHUCK',on:st.speed>0},
+    {at:[62,40,z(23.5)],text:'DRILL BIT',on:st.speed>0}
+  ],[8,70,30,48,18,57]);
+  return s;
+}
+let ddLoop=false;
+function ddRun(st,ui){
+  if(ddLoop)return;ddLoop=true;
+  ui.animate(dt=>{
+    st.speed=Math.max(0,Math.min(1,st.speed+(st.air?dt*3:-dt*2)));
+    st.angle=(st.angle+dt*st.speed*9)%(2*Math.PI);
+    if(st.stroke==='down'){
+      st.feed=Math.min(1,st.feed+dt/1.1);
+      if(st.speed>.1)st.cut=Math.max(st.cut,Math.max(0,7*st.feed-4));
+      if(st.feed===1)st.stroke='up';
+    }else if(st.stroke==='up'){
+      st.feed=Math.max(0,st.feed-dt/.7);if(st.feed===0)st.stroke='idle';
+    }
+    const active=st.air||st.speed>0||st.stroke!=='idle';if(!active)ddLoop=false;return active;
+  });
+}
+const ddUI=mountFigure({fig:'39',turn:'full',title:"Dentist's drill",palette:'cobalt',size:[87,62,66],scene:ddScene,
+  state:{air:false,speed:0,angle:0,feed:0,cut:0,stroke:'idle'},
+  buttons:[
+    {label:'Air',onClick(st,ui){st.air=true;ddRun(st,ui);}},
+    {label:'Drill',onClick(st,ui){if(!st.air)return ui.flash('Open the air supply first');if(st.stroke!=='idle')return ui.flash('The fixture is moving');if(st.cut>=3)return ui.flash('The model tooth has already been cut');st.stroke='down';ddRun(st,ui);}},
+    {label:'Stop',onClick(st,ui){st.air=false;if(st.feed>0||st.stroke==='down')st.stroke='up';ddRun(st,ui);}}
+  ],
+  params(st,q){
+    const cut=Number(q.get('cut'));if(Number.isFinite(cut))st.cut=Math.max(0,Math.min(3,cut));
+    if(q.get('air')==='1'){st.air=true;st.speed=1;}
+  }
+});
+xrMount(()=>ddUI,()=>'');
+if(ddUI.st.air)ddRun(ddUI.st,ddUI);
+</script></body></html>
