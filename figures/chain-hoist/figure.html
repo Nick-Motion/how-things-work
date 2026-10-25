@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chain hoist</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Page 56, 2016 primary scan and saved 1998 page text support this differential hoist.
+   Pull chain turns the two unequal upper wheels together. Large-wheel take-up is R*angle,
+   small-wheel payout is r*angle. The two load strands shorten by half the difference each.
+   Reverse retraces the same endless chain. Let go stops hand input and holds this pictured hoist.
+   No brake, worm drive or universal self-locking claim is added. 1988 remains unverified.
+   Parts. Structure has a suspension hook, upper stirrup, lower stirrup and load hook.
+   Mechanism has unequal chain wheels on a common axle, endless linked chain, lower wheel and axle.
+   The upper stirrup hangs from its hook and supports the common axle. The lower axle is carried
+   by the chain-supported wheel and carries the stirrup, hook and load eye.
+   Teaching adaptations. The external gantry and weight are props. Dimensions, colours, separated
+   wheel planes and slowed hand motion are illustrative. The lower wheel aligns with the two
+   vertical load strands. The free hand loop sags as the load rises, conserving total chain length.
+   The bounded travel is the teaching model's clearance limit, not an invented hoist stop.
+   Anatomy minimum 8 was declared in the brief. Fixtures and the specimen do not count toward it.
+   State is one axle angle and a hand direction. All positions and chain travel derive from them. */
+const chR = 15, chr = 12, chTop = 146, chBase = 84;
+const chLowR = Math.hypot(10,27)/2, chPitch = 2*Math.PI*chR/20, chLinks = 114;
+const chLength = chPitch*chLinks;
+const chHandBase = (Math.PI*(chR+chr+2*chLowR)+4*chTop-2*chBase-chLength)/2;
+const chU = norm([10,27,0]), chN = [chU[1],-chU[0],0], chHU = norm([-10,27,0]);
+const chSteel = matOf('#b6c7c6'), chChain = '#f0e7d5';
+const chAdd = (a,b,k=1) => a.map((v,i)=>v+b[i]*k);
+const chBounds = (points,pad=.5) => [0,1].map(hi=>[0,1,2].map(i=>(hi?Math.max:Math.min)(...points.map(p=>p[i]))+(hi?pad:-pad)));
+const chRise = st => (chR-chr)*st.angle/2;
+const chHeight = st => chBase+chRise(st);
+function chRoute(st){
+  const low = chHeight(st), hand = chHandBase-chRise(st);
+  return [
+    {length:Math.PI*chR, point:t=>[27,50+chR*Math.cos(t*Math.PI),chTop+chR*Math.sin(t*Math.PI)]},
+    {length:chTop-low, point:t=>[27,35,chTop+(low-chTop)*t]},
+    {length:Math.PI*chLowR, point:t=>[32-chU[0]*chLowR*Math.cos(t*Math.PI),48.5-chU[1]*chLowR*Math.cos(t*Math.PI),low-chLowR*Math.sin(t*Math.PI)]},
+    {length:chTop-low, point:t=>[37,62,low+(chTop-low)*t]},
+    {length:Math.PI*chr, point:t=>[37,50+chr*Math.cos(t*Math.PI),chTop+chr*Math.sin(t*Math.PI)]},
+    {length:chTop-hand, point:t=>[37,38,chTop+(hand-chTop)*t]},
+    {length:Math.PI*chLowR, point:t=>[32-chHU[0]*chLowR*Math.cos(t*Math.PI),51.5-chHU[1]*chLowR*Math.cos(t*Math.PI),hand-chLowR*Math.sin(t*Math.PI)]},
+    {length:chTop-hand, point:t=>[27,65,hand+(chTop-hand)*t]}
+  ];
+}
+function chAt(route,distance){
+  let d = ((distance%chLength)+chLength)%chLength;
+  for (const seg of route){ if (d<=seg.length) return seg.point(d/seg.length); d-=seg.length; }
+  return route[0].point(0);
+}
+function chWheel(parts,centre,axis,u,radius,angle,material,pockets){
+  const a=chAdd(centre,axis,-1.5),b=chAdd(centre,axis,1.5);
+  let svg=rod(a,b,radius-.65,material,tone,1.5,radius-.65,40);
+  const side=vis(axis)?1:-1, cap=chAdd(centre,axis,side*1.55);
+  const ring=rad=>Array.from({length:40},(_,i)=>chAdd(chAdd(cap,u,rad*Math.cos(i*Math.PI/20)),[0,0,1],rad*Math.sin(i*Math.PI/20)));
+  svg+=shape(ring(radius-2.2),tone(chAdd([0,0,0],axis,side),material),.7);
+  for(let i=0;i<5;i++){
+    const t=angle+i*2*Math.PI/5;
+    svg+=line([chAdd(chAdd(cap,u,3*Math.cos(t)),[0,0,1],3*Math.sin(t)),chAdd(chAdd(cap,u,(radius-4)*Math.cos(t)),[0,0,1],(radius-4)*Math.sin(t))],1.3);
+  }
+  svg+=shape(ring(2.5),METAL.l,.8);
+  for(let i=0;i<pockets;i++){
+    const t=angle+i*2*Math.PI/pockets,p=chAdd(chAdd(cap,u,(radius-1.4)*Math.cos(t)),[0,0,1],(radius-1.4)*Math.sin(t));
+    svg+=line([chAdd(p,u,.5*Math.cos(t)),chAdd(p,u,-.5*Math.cos(t))],1);
+  }
+  const corners=[];for(const x of [-1.6,1.6])for(const t of [0,Math.PI/2,Math.PI,Math.PI*1.5])corners.push(chAdd(chAdd(chAdd(centre,axis,x),u,radius*Math.cos(t)),[0,0,1],radius*Math.sin(t)));
+  parts.push({box:chBounds(corners),svg});
+}
+function chScene(st,material){
+  const parts=[], low=chHeight(st),k=ease(st.xr||0),route=chRoute(st);
+  const putRod=(a,b,r,m=chSteel,ghost=false)=>parts.push({box:chBounds([a,b],r),svg:`<g opacity="${ghost?1-.8*k:1}">${rod(a,b,r,m,tone,1)}</g>`});
+  const putBox=(a,b,m)=>parts.push({box:[a,b],svg:box(...a,...b,m,tone,1.3)});
+  for(const x of [8,60]){
+    putBox([x-4,20,0],[x+4,80,4],DARK);
+    for(let z=4;z<184;z+=20)putBox([x-2,48,z],[x+2,52,Math.min(184,z+20)],PALS.cobalt);
+  }
+  putBox([6,48.5,181.5],[62,51.5,184.5],PALS.cobalt);
+  const upperHook=Array.from({length:19},(_,i)=>[32,50+4*Math.cos(-Math.PI/2+i*1.5*Math.PI/18),183+4*Math.sin(-Math.PI/2+i*1.5*Math.PI/18)]);
+  putRod([32,50,173],upperHook[0],1.2);
+  for(let i=1;i<upperHook.length;i++)putRod(upperHook[i-1],upperHook[i],1.2);
+  for(const x of [22,42]){
+    for(let z=146;z<173;z+=9)putRod([x,50,z],[x,50,Math.min(173,z+9)],1.7,chSteel,true);
+  }
+  putRod([22,50,173],[42,50,173],1.7,chSteel,true);
+  for(const [a,b] of [[20,25.5],[25.5,28.5],[28.5,35.5],[35.5,38.5],[38.5,44]])putRod([a,50,chTop],[b,50,chTop],1.6);
+  chWheel(parts,[27,50,chTop],[1,0,0],[0,1,0],chR,-st.angle,material,20);
+  chWheel(parts,[37,50,chTop],[1,0,0],[0,1,0],chr,-st.angle,PALS.mustard,16);
+  const lower=[32,48.5,low];
+  chWheel(parts,lower,chN,chU,chLowR,-(chR+chr)*st.angle/(2*chLowR),material,0);
+  for(const [a,b] of [[-5,-1.5],[-1.5,1.5],[1.5,5]])putRod(chAdd(lower,chN,a),chAdd(lower,chN,b),1.5);
+  for(const side of [-1,1]){
+    const a=chAdd(lower,chN,side*4),b=chAdd(a,[0,0,1],-22);
+    for(let i=0;i<3;i++)putRod(chAdd(a,[0,0,1],-22*i/3),chAdd(a,[0,0,1],-22*(i+1)/3),1.5,chSteel,true);
+    putRod(b,[32,48.5,low-22],1.5,chSteel,true);
+  }
+  putRod([32,48.5,low-22],[32,48.5,low-25],1.2);
+  const loadHook=Array.from({length:19},(_,i)=>[32,48.5+3.5*Math.cos(Math.PI/2+i*1.5*Math.PI/18),low-28.5+3.5*Math.sin(Math.PI/2+i*1.5*Math.PI/18)]);
+  for(let i=1;i<loadHook.length;i++)putRod(loadHook[i-1],loadHook[i],1.2);
+  const eye=Array.from({length:17},(_,i)=>[32+3*Math.cos(i*2*Math.PI/16),48.5,low-33+3*Math.sin(i*2*Math.PI/16)]);
+  for(let i=1;i<eye.length;i++)putRod(eye[i-1],eye[i],.8);
+  putBox([24,40.5,low-47],[40,56.5,low-35],matOf('#d9a46d'));
+  for(let i=0;i<chLinks;i++){
+    const d=i*chPitch-chR*st.angle,p=chAt(route,d),before=chAt(route,d-.1),after=chAt(route,d+.1),t=norm(sub(after,before));
+    const ax=norm(cross(t,Math.abs(t[0])<.9?[1,0,0]:[0,1,0]));
+    const w=i%2?cross(t,ax):ax;
+    const link=Array.from({length:17},(_,j)=>chAdd(chAdd(p,t,2.85*Math.cos(j*Math.PI/8)),w,1.15*Math.sin(j*Math.PI/8)));
+    const svg=`<path d="${pd(link)}" fill="none" stroke="${INK}" style="stroke-width:1.05"/><path d="${pd(link)}" fill="none" stroke="${i===0?'#e65f36':chChain}" style="stroke-width:.52"/>`;
+    parts.push({box:chBounds(link,.3),svg});
+  }
+  let svg=castShadow([[4,20,0],[64,20,0],[64,80,0],[4,80,0],[8,50,187],[60,50,187]])+byDepth(parts);
+  if(k>.6)svg+=xrCallouts([
+    {at:[32,50,187],text:'SUSPENSION HOOK'},
+    {at:[42,50,168],text:'UPPER STIRRUP'},
+    {at:[27,50,160],text:'LARGER CHAIN WHEEL',on:!!st.direction},
+    {at:[37,50,157],text:'SMALLER CHAIN WHEEL',on:!!st.direction},
+    {at:[32,50,146],text:'COMMON AXLE',on:!!st.direction},
+    {at:chAt(route,chLength-50-chR*st.angle),text:'ENDLESS CHAIN',on:!!st.direction},
+    {at:chAdd(lower,chU,-10),text:'LOWER LOAD WHEEL',on:!!st.direction},
+    {at:chAdd(lower,chN,5),text:'LOWER AXLE',on:!!st.direction},
+    {at:[32,48.5,low-22],text:'LOWER STIRRUP',on:!!st.direction},
+    {at:[32,45,low-29],text:'LOAD HOOK',on:!!st.direction}
+  ],[20,44,32,68,18,187]);
+  return svg;
+}
+let chLoop=false;
+function chPull(st,ui,direction){
+  st.direction=direction;
+  if(chLoop)return;
+  chLoop=true;
+  ui.animate(dt=>{
+    if(!st.direction){chLoop=false;return false;}
+    const next=Math.max(-4,Math.min(7,st.angle+st.direction*dt*1.8));
+    if(next===st.angle){st.direction=0;chLoop=false;ui.flash('Teaching model travel limit');return false;}
+    st.angle=next;return true;
+  });
+}
+const chUI=mountFigure({
+  fig:'56',title:'Chain hoist',turn:'full',size:[72,100,190],center:[34,50],palette:'mint',
+  state:{angle:0,direction:0},scene:chScene,
+  stats:st=>[{label:'Load rise',value:chRise(st).toFixed(1)+' cm'},{label:'Net chain take-up',value:((chR-chr)*st.angle).toFixed(1)+' cm',small:true}],
+  buttons:[
+    {label:'Pull chain',onClick:(st,ui)=>chPull(st,ui,1)},
+    {label:'Reverse',onClick:(st,ui)=>chPull(st,ui,-1)},
+    {label:'Let go',onClick:st=>{st.direction=0;}}
+  ],
+  params:(st,q)=>{const a=Number(q.get('angle'));if(Number.isFinite(a))st.angle=Math.max(-4,Math.min(7,a));}
+});
+xrMount(()=>chUI,()=> '');
+</script></body></html>
