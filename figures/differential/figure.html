@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Differential</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Drive pinion -> crown wheel bolted to carrier -> cross pin -> two free planet pinions -> equal side gears -> half-shafts -> wheels.
+   Equal external wheel conditions give equal output speeds, with no planet spin relative to the carrier.
+   Corner is an imposed road-fixture constraint, not a differential decision. Left = 0.5 carrier, right = 1.5 carrier.
+   External left brake gives left = 0, right = 2 carrier. Their average always equals carrier speed.
+   Slow motion and enlarged plain teeth are teaching adaptations. Curved production tooth contact is not reconstructed.
+   Parts and attachments.
+   Structure: bench carries roller cradles, axle pedestals, input pedestal and housing feet. Housing holds axle bearings and pinion bearings.
+   Mechanism: crown wheel and bolts on carrier flange, two carrier journals in bearings, cage ribs joining end rings,
+   cross pin fixed across cage, planet pinions free on cross pin, two side gears splined to half-shafts, wheel hubs and rims on shafts, tyres on rims.
+   Case: split axle housing and cover flange, gasket and cover bolts. See-through fades all covering parts.
+   Teaching apparatus: road rollers on bench cradles, left brake disc fixed to left shaft, caliper mounted on left pedestal.
+   State shape: mode is equal/corner/hold, rpm is maintained carrier speed, c is carrier angle, d is carrier-minus-left angle.
+   Output angles are c-d and c+d. Planet spin is d. No independent output clock exists. */
+const dfModes={equal:0,corner:.5,hold:1};
+const dfSteel=matOf('#89969d'),dfGold=matOf('#e7b74e'),dfBlue=matOf('#6c9fc8'),dfRed=matOf('#e87958');
+const dfOrigin=[50,79,40];
+let dfUI,dfLoop=false;
+function dfStep(st,dt){const a=st.rpm*Math.PI/30*dt;st.c+=a;st.d+=a*dfModes[st.mode];}
+function dfRun(st,ui,mode){st.mode=mode;st.rpm=30;if(dfLoop)return;dfLoop=true;ui.animate(dt=>{dfStep(st,dt);if(!st.rpm){dfLoop=false;return false;}return true;});}
+const dfPoint=(a,r,y=79)=>[50+r*Math.cos(a),y,40+r*Math.sin(a)];
+const dfBounds=(pts,r=0)=>[[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))-r),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i]))+r)];
+function dfLabels(items){
+ const vb=document.getElementById('fig').viewBox.baseVal,u=window.LBL_U?LBL_U():0,k=INK_K,fs=u?10*u:8.6*k,h=u?17*u:15*k;
+ const sorted=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+ const count=u?4:2,half=Math.ceil(sorted.length/count),cols=Array.from({length:count},(_,i)=>sorted.slice(i*half,(i+1)*half));
+ return cols.map((col,side)=>col.sort((a,b)=>a.p[1]-b.p[1]).map((it,i)=>{
+  const n=((window.__ln||(window.__ln={}))[it.text]||(__ln[it.text]=Object.keys(__ln).length+1)),w=u?h*1.3:it.text.length*fs*.62+fs*1.5;
+  const x=u?(side<2?(12+25*side)*u:vb.width-(12+25*(3-side))*u):(side?vb.width-w/2-3*k:w/2+3*k),y=vb.height*(u?.06:.37)+i*(vb.height*(u?.86:.59)/half),ex=side<count/2?x+w/2:x-w/2;
+  return `<g class="tag${it.on?' on':''}" data-n="${n}" data-t="${it.text}"><path d="M${f(it.p[0])} ${f(it.p[1])}L${f(ex)} ${f(y)}" fill="none" stroke="${INK}" stroke-width=".7"/><circle cx="${f(it.p[0])}" cy="${f(it.p[1])}" r="${f(1.2*k)}" fill="${INK}"/><rect x="${f(x-w/2)}" y="${f(y-h/2)}" width="${f(w)}" height="${f(h)}" rx="${f(h/2)}" fill="${it.on?'var(--accent)':'#fff4d6'}" stroke="${INK}" stroke-width="1"/><text x="${f(x)}" y="${f(y+fs*.35)}" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="800" font-size="${f(fs)}">${u?n:it.text}</text></g>`;
+ }).join('')).join('');
+}
+function dfScene(st,m){
+ const k=ease(st.xr||0),parts=[],inside=[],labels=[];
+ const put=(list,pts,svg,r=0)=>list.push({box:dfBounds(pts,r),svg});
+ const label=(text,at,on=false)=>labels.push({text,at,on});
+ const shaft=(list,a,b,r,mat)=>put(list,[a,b],rod(a,b,r,mat,toneI,.9),r);
+ const block=(list,a,b,mat)=>put(list,[a,b],box(...a,...b,mat,toneI,.8));
+ const ring=(list,center,axis,u,v,r0,r1,width,mat,phase=0,n=36)=>{
+  const pt=(r,t,h)=>center.map((q,j)=>q+u[j]*r*Math.cos(t)+v[j]*r*Math.sin(t)+axis[j]*h);
+  for(let i=0;i<n;i++){const a=phase+i*2*Math.PI/n,b=phase+(i+1)*2*Math.PI/n;
+   const A=[pt(r0,a,-width/2),pt(r1,a,-width/2),pt(r1,b,-width/2),pt(r0,b,-width/2)],B=[pt(r0,a,width/2),pt(r1,a,width/2),pt(r1,b,width/2),pt(r0,b,width/2)];
+   let s=loft(A,B,nr=>toneI(nr,mat));const cap=vis(axis)?B:A;s+=shape(cap,toneI(vis(axis)?axis:axis.map(q=>-q),mat),.25);put(list,[...A,...B],s);
+  }
+ };
+ const gear=(center,axis,u,v,radius,width,phase,mat,teeth=24,taper=1)=>{
+  const pt=(r,t,h)=>center.map((q,j)=>q+u[j]*r*Math.cos(t)+v[j]*r*Math.sin(t)+axis[j]*h);
+  const lower=[],upper=[];
+  for(let i=0;i<teeth*4;i++){const r=radius*([.92,1,1,.92][i%4]);lower.push(pt(r,phase+i*2*Math.PI/(teeth*4),-width/2));upper.push(pt(r*taper,phase+i*2*Math.PI/(teeth*4),width/2));}
+  for(let i=0;i<lower.length;i++){
+   const j=(i+1)%lower.length,A=[lower[i],lower[j],upper[j],upper[i]],nr=norm(cross(sub(A[1],A[0]),sub(A[3],A[0])));
+   if(vis(nr))put(inside,A,shape(A,toneI(nr,mat),.35));
+  }
+  const cap=vis(axis)?upper:lower,normal=vis(axis)?axis:axis.map(q=>-q),h=vis(axis)?width/2:-width/2;
+  const hub=pt(0,0,h);
+  for(let i=0;i<cap.length;i++){const A=[hub,cap[i],cap[(i+1)%cap.length]];put(inside,A,shape(A,toneI(normal,mat),0));}
+  const mark=[pt(radius*.25,phase,h+.03*(vis(axis)?1:-1)),pt(radius*.82*(vis(axis)?taper:1),phase,h+.03*(vis(axis)?1:-1))];put(inside,mark,line(mark,1.8));
+ };
+ let s=board(0,0,118,158,3,5)+castShadow([[30,9,62],[72,9,18],[30,149,62],[72,149,18],[21,57,69],[79,102,69]],3,boardTop(0,0,118,158,3,5));
+ label('BENCH',[15,80,3]);
+ for(const [name,y,ang,mat] of [['LEFT',13,st.c-st.d,dfBlue],['RIGHT',145,st.c+st.d,dfRed]]){
+  shaft(parts,[50,y-6,10],[50,y+6,10],8,dfSteel);
+  const rollerAng=-ang*22/8,rollerSide=vis([0,1,0])?y+6.1:y-6.1;
+  put(parts,[[50,rollerSide,10],[50+7*Math.cos(rollerAng),rollerSide,10+7*Math.sin(rollerAng)]],line([[50,rollerSide,10],[50+7*Math.cos(rollerAng),rollerSide,10+7*Math.sin(rollerAng)]],1.8));
+  for(const yy of [y-8,y+8])block(parts,[40,yy-1,3],[60,yy+1,10],dfSteel);
+  label(name+' ROAD ROLLER',[50,y,18],st.mode==='corner'&&!!st.rpm);
+  ring(parts,[50,y,40],[0,1,0],[1,0,0],[0,0,1],15,22,9,DARK,ang,32);
+  ring(parts,[50,y,40],[0,1,0],[1,0,0],[0,0,1],4,15,6,mat,ang,24);
+  shaft(parts,[50,y-5,40],[50,y+5,40],4,METAL);
+  for(let i=0;i<6;i++){
+   const a=ang+i*Math.PI/3,p=dfPoint(a,6,y),q=dfPoint(a,14,y);shaft(parts,p,q,1.1,METAL);
+  }
+  for(const sg of [-1,1]){const yy=y+sg*4.6;if(vis([0,sg,0]))put(parts,[[50,yy,40],dfPoint(ang,21,yy)],line([dfPoint(ang,16,yy),dfPoint(ang,21,yy)],2));}
+  label(name+' TYRE',dfPoint(ang+1,21,y),!!st.rpm);label(name+' RIM',dfPoint(ang+2,13,y),!!st.rpm);label(name+' HUB',[50,y,40],!!st.rpm);
+ }
+ for(const [name,y0,y1,ang] of [['LEFT',13,65,st.c-st.d],['RIGHT',93,145,st.c+st.d]]){
+  for(let y=y0;y<y1;y+=8)shaft(parts,[50,y,40],[50,Math.min(y+8,y1),40],2.4,METAL);
+  const y=name==='LEFT'?35:123;
+  block(parts,[43,y-4,3],[57,y+4,36],m);shaft(parts,[50,y-4,40],[50,y+4,40],6,dfSteel);
+  for(const yy of [y-5,y+5])ring(parts,[50,yy,40],[0,1,0],[1,0,0],[0,0,1],2.5,4.8,1,METAL,0,20);
+  label(name+' HALF SHAFT',[50,(y0+y1)/2,40],!!st.rpm);label(name+' AXLE BEARING',[50,y,45]);label(name+' PEDESTAL',[48,y,20]);
+ }
+ shaft(parts,[50,28,40],[50,30,40],11,dfSteel);
+ block(parts,[59,25,36],[64,33,45],st.mode==='hold'?dfRed:dfSteel);
+ for(const yy of [st.mode==='hold'?27:25,st.mode==='hold'?30:32])block(parts,[57,yy,36],[61,yy+1,44],DARK);
+ block(parts,[61,29,3],[64,35,36],dfSteel);
+ label('EXTERNAL BRAKE DISC',[57,29,46],st.mode==='hold');label('EXTERNAL CALIPER',[62,29,42],st.mode==='hold');
+ shaft(parts,[90,52,40],[113,52,40],2.7,METAL);
+ block(parts,[99,46,3],[109,58,36],m);shaft(parts,[102,52,40],[108,52,40],6,dfSteel);
+ const inputPhase=-3*st.c;
+ for(let i=0;i<3;i++){const a=inputPhase+i*2*Math.PI/3;shaft(parts,[113,52,40],[113,52+9*Math.cos(a),40+9*Math.sin(a)],1,METAL);}
+ label('TRANSMISSION SHAFT',[95,52,40],!!st.rpm);label('INPUT BEARING',[105,52,45]);
+ const shell=rod([50,57,40],[50,101,40],29,m,tone,2,29,40);
+ block(parts,[38,59,3],[62,64,14],m);block(parts,[38,96,3],[62,101,14],m);
+ label('HOUSING FOOT',[42,61,10]);label('AXLE HOUSING',[50,81,69]);
+ for(const yy of [59,99]){
+  ring(inside,[50,yy,40],[0,1,0],[1,0,0],[0,0,1],7.2,10,4,dfSteel,0,24);
+  label(yy===59?'LEFT CARRIER BEARING':'RIGHT CARRIER BEARING',[50,yy,49]);
+ }
+ ring(inside,[50,61,40],[0,1,0],[1,0,0],[0,0,1],19,27,4,dfGold,st.c,36);
+ for(let i=0;i<36;i++){
+  const a=st.c+i*Math.PI/18;
+  const p=dfPoint(a,25,57),q=dfPoint(a,27,57),r=dfPoint(a+.035,27,60),t=dfPoint(a+.035,25,60);
+  put(inside,[p,q,r,t],shape([p,q,r,t],dfGold.l,.6));
+ }
+ label('CROWN WHEEL',dfPoint(st.c+2,25,61),!!st.rpm);label('CROWN TEETH',dfPoint(st.c,27,58),!!st.rpm);
+ gear([78,52,40],[1,0,0],[0,1,0],[0,0,1],8,10,inputPhase,dfGold,12,.55);
+ label('DRIVE PINION',[76,58,40],!!st.rpm);
+ for(const yy of [65,93]){
+  ring(inside,[50,yy,40],[0,1,0],[1,0,0],[0,0,1],16,20,3,dfSteel,st.c,24);
+  shaft(inside,[50,yy===65?59:94,40],[50,yy===65?64:99,40],6,dfSteel);
+ }
+ label('CARRIER FLANGE',dfPoint(st.c+.6,18,65),!!st.rpm);label('CARRIER JOURNAL',[50,97,45],!!st.rpm);
+ for(let i=0;i<4;i++){
+  const a=st.c+i*Math.PI/2;
+  for(let yy=66;yy<93;yy+=5)shaft(inside,dfPoint(a,20,yy),dfPoint(a,20,Math.min(yy+5,93)),1.8,dfSteel);
+ }
+ label('CARRIER CAGE',dfPoint(st.c+Math.PI/2,20,79),!!st.rpm);
+ for(let i=0;i<6;i++){const p=dfPoint(st.c+i*Math.PI/3,18,63);shaft(inside,p,[p[0],66,p[2]],1.3,METAL);}
+ label('CROWN FIXING BOLTS',dfPoint(st.c+Math.PI/3,18,63),!!st.rpm);
+ const radial=[Math.cos(st.c),0,Math.sin(st.c)],tangent=[-Math.sin(st.c),0,Math.cos(st.c)];
+ for(let rr=-20;rr<20;rr+=5)shaft(inside,dfPoint(st.c,rr),dfPoint(st.c,rr+5),1.6,METAL);
+ label('CROSS PIN',dfPoint(st.c,18),!!st.rpm);
+ for(const sg of [-1,1]){
+  const a=radial.map(v=>v*-sg),u=[0,1,0],v=cross(a,u),center=dfPoint(st.c,sg*10.5);
+  gear(center,a,u,v,14,7,sg*st.d,dfGold,24,.5);
+  label(sg===1?'FIRST PLANET PINION':'SECOND PLANET PINION',center,!!st.rpm&&st.mode!=='equal');
+ }
+ for(const [name,yy,axis,ang] of [['LEFT',68.5,[0,1,0],st.c-st.d],['RIGHT',89.5,[0,-1,0],st.c+st.d]]){
+  gear([50,yy,40],axis,[1,0,0],cross(axis,[1,0,0]),14,7,axis[1]*-ang, name==='LEFT'?dfBlue:dfRed,24,.5);
+  label(name+' SIDE GEAR',[50,yy,51],!!st.rpm);
+  ring(inside,[50,yy+(name==='LEFT'?-4:4),40],[0,1,0],[1,0,0],[0,0,1],3,9,.9,METAL,0,24);
+  label(name+' THRUST WASHER',[57,yy+(name==='LEFT'?-4:4),40]);
+ }
+ const housingParts=[];put(housingParts,[[21,57,11],[79,101,69]],shell);
+ shaft(housingParts,[50,45,40],[50,57,40],7,m);shaft(housingParts,[50,101,40],[50,113,40],7,m);
+ shaft(housingParts,[73,52,40],[90,52,40],9,m);
+ let cover='';
+ const flangeParts=[];ring(flangeParts,[50,101,40],[0,1,0],[1,0,0],[0,0,1],25,30,2,m,0,32);cover+=byDepth(flangeParts);
+ const gasketParts=[];ring(gasketParts,[50,99.8,40],[0,1,0],[1,0,0],[0,0,1],28.7,29.3,.4,DARK,0,32);cover+=byDepth(gasketParts);
+ for(let i=0;i<8;i++){const p=dfPoint(i*Math.PI/4,27.5,102);cover+=rod(p,[p[0],103,p[2]],1.2,METAL,toneI,.5);}
+ label('COVER FLANGE',[50,102,69]);label('COVER GASKET',[78,100,40]);label('COVER BOLTS',[50,103,67.5]);
+ put(housingParts,[[20,99.6,10],[80,103,70]],cover);
+ const body=byDepth(housingParts);
+ if(k>0)s+=byDepth(parts)+`<g opacity="${1-.91*k}">${body}</g><g opacity="${k}">${byDepth(inside)}</g>`;
+ else s+=byDepth([...parts,...housingParts]);
+ if(k>.6)s+=dfLabels(labels);
+ return s;
+}
+dfUI=mountFigure({fig:'45',turn:'full',title:'Differential',size:[118,158,74],palette:'mint',state:{mode:'equal',rpm:0,c:0,d:0},scene:dfScene,
+ buttons:[{label:'Drive',onClick:(st,ui)=>dfRun(st,ui,'equal')},{label:'Turn corner',onClick:(st,ui)=>dfRun(st,ui,'corner')},{label:'Hold wheel',onClick:(st,ui)=>dfRun(st,ui,'hold')},{label:'Stop',onClick:st=>{st.rpm=0;}}],
+ stats:st=>[{label:'Carrier',value:st.rpm+' rpm'},{label:'Left wheel',value:st.rpm*(1-dfModes[st.mode])+' rpm'},{label:'Right wheel',value:st.rpm*(1+dfModes[st.mode])+' rpm'},{label:'Output average',value:st.rpm+' rpm',small:true},{label:'External constraint',value:{equal:'Equal wheels',corner:'Road fixture',hold:'Left brake'}[st.mode],small:true}],
+ params:(st,q)=>{if(Object.hasOwn(dfModes,q.get('mode')))st.mode=q.get('mode');for(const a of ['c','d'])if(q.has(a)&&Number.isFinite(+q.get(a)))st[a]=+q.get(a);}
+});
+xrMount(()=>dfUI,()=> '');
+const dfStyle=document.createElement('style');dfStyle.textContent='.stats{gap:4px!important}.stat .v{font-size:16px!important}.stat .k{font-size:9px!important}.stat.small .v{font-size:12px!important}@media(max-width:560px){.stats{position:static!important;display:grid!important;grid-template-columns:repeat(3,1fr);text-align:left!important}.stat .v{font-size:14px!important}}';document.head.appendChild(dfStyle);dfUI.render();
+</script></body></html>
