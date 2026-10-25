@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lawn sprinkler</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Saved 2016 p47 and 1998 p47 text supports water driving a turbine, two worm
+   reductions, then a slow crank that swings the spray tube. 1988 is unverified.
+   Water enters from an external pressurised supply, crosses the turbine chamber,
+   then travels through the outlet pipe and hollow tube to the spray holes.
+   Discharged water falls into a teaching catch tray. There is no return pump.
+   The shaft drives worm 1, wheel 1 and its shaft drive worm 2, and wheel 2 drives
+   the output crank. Its pin holds the connecting rod, which drives a rocker
+   fixed to the spray tube. Bearings on the base hold every rotating shaft.
+   Parts. Structure: skid base, crossbars, bearing pedestals, drive cover.
+   Water: hose coupling, turbine chamber, turbine, outlet pipe, hollow spray tube,
+   spray holes and end cap. Drive: turbine shaft, first worm, first worm wheel,
+   intermediate shaft, second worm, second worm wheel, output shaft, crank arm,
+   crank pin, connecting rod and tube rocker.
+   Adaptation: enlarged teaching geometry, illustrative 12:1 reductions at each
+   stage, visible linkage, external valve and tray. Slow view changes explanatory
+   time only. No arc adjustment or extra source of power is represented.
+   The crank and rocker are joined by a constant-length rod at every phase.
+*/
+const sprBlue = matOf('#5598c4'), sprBrass = matOf('#e6b854'), sprHose = matOf('#6a9b77');
+const sprGray = matOf('#727f80'), sprWater = '#62b8de';
+const sprBody = rrUV(26,4,63,41,5), sprChamber = rrUV(26,19,44,37,5);
+const sprRodLength = Math.sqrt(20*20+6*6);
+const sprBound = (pts,r=0) => [[0,1,2].map(k=>Math.min(...pts.map(p=>p[k]))-r),[0,1,2].map(k=>Math.max(...pts.map(p=>p[k]))+r)];
+function sprLink(phase){
+  const pin=[48,51+3*Math.cos(phase),12+3*Math.sin(phase)];
+  const dy=pin[1]-51,dz=pin[2]-32,d=Math.hypot(dy,dz);
+  const a=(36-sprRodLength*sprRodLength+d*d)/(2*d),h=Math.sqrt(36-a*a);
+  const joint=[48,51+a*dy/d-h*dz/d,32+a*dz/d+h*dy/d];
+  return {pin,joint,tilt:Math.atan2(32-joint[2],joint[1]-51)};
+}
+function sprGear(center,axis,r,phase){
+  const u=axis==='x'?[0,1,0]:[1,0,0],v=[0,0,1],ax=axis==='x'?[1,0,0]:[0,1,0];
+  const ring=side=>Array.from({length:48},(_,i)=>{
+    const t=i*Math.PI/24+phase,rr=r+([1,2].includes(i%4)?0:-.65);
+    return center.map((q,k)=>q+ax[k]*side+rr*(u[k]*Math.cos(t)+v[k]*Math.sin(t)));
+  });
+  const aa=ring(-1),bb=ring(1),cap=vis(ax)?bb:aa;
+  return loft(aa,bb,n=>toneI(n,sprBrass))+shape(cap,sprBrass.l,.8)+hullInk([...aa,...bb],1.2)
+    +line([center,center.map((q,k)=>q+(vis(ax)?1.05:-1.05)*ax[k]+r*.65*(u[k]*Math.cos(phase)+v[k]*Math.sin(phase)))],.9);
+}
+function sprWorm(a,b,phase){
+  const axis=norm(sub(b,a)),uu=Math.abs(axis[0])>.9?[0,1,0]:[1,0,0],vv=[0,0,1],parts=[];
+  const pts=Array.from({length:97},(_,i)=>{
+    const t=i/96,th=t*Math.PI*8+phase;
+    return a.map((q,k)=>q+(b[k]-q)*t+2.65*(uu[k]*Math.cos(th)+vv[k]*Math.sin(th)));
+  });
+  for(let i=0;i<96;i+=4)parts.push({box:sprBound(pts.slice(i,i+5),.3),svg:line(pts.slice(i,i+5),1.4)});
+  return rod(a,b,1.35,sprBrass,toneI,.8)+byDepth(parts);
+}
+function sprCallouts(items){
+  const svg=document.getElementById('fig'),vb=svg.viewBox.baseVal;
+  const phone=innerWidth<=560,unit=phone?LBL_U():INK_K;
+  let top=phone?12*unit:35*unit;
+  if(!phone){
+    const matrix=svg.getScreenCTM().inverse();
+    for(const id of ['btns','stats']){
+      const r=document.getElementById(id).getBoundingClientRect();
+      top=Math.max(top,new DOMPoint(r.right,r.bottom+18).matrixTransform(matrix).y);
+    }
+  }
+  const sorted=items.slice().sort((a,b)=>P(...a.at)[0]-P(...b.at)[0]),half=Math.ceil(items.length/2);
+  return [sorted.slice(0,half),sorted.slice(half)].map((column,side)=>{
+    column.sort((a,b)=>P(...a.at)[1]-P(...b.at)[1]);
+    const x=vb.width*(side?.88:.12),gap=(phone?21:20)*unit;
+    return column.map((item,i)=>{
+      const [px,py]=P(...item.at);
+      return tag(item.at,(x-px)/INK_K,(top+i*gap-py)/INK_K,item.text,item.on);
+    }).join('');
+  }).join('');
+}
+function sprScene(st,m){
+  const k=ease(st.xr||0),g=sprLink(st.phase),parts=[],inside=[],labels=[];
+  const put=(target,pts,r,svg)=>target.push({box:sprBound(pts,r),svg});
+  const stick=(target,a,b,r,material)=>put(target,[a,b],r,rod(a,b,r,material,toneI,1));
+  const block=(target,a,b,material)=>put(target,[a,b],0,box(...a,...b,material,toneI,1));
+  const label=(at,text,on=false)=>labels.push({at,text,on});
+  let svg=board(0,0,146,108,2,7,BOARD);
+  svg+=castShadow([[10,20,3],[133,26,3],[133,72,3],[10,72,3],[126,51,36],[8,28,37]],2,boardTop(0,0,146,108,2,7));
+  svg+=fill(pd(on(PZ(2.1),rrUV(3,3,143,105,6))), '#d3e4e4','opacity=".5"');
+  for(const [a,b] of [[[0,0,2],[146,2,5]],[[0,106,2],[146,108,5]],[[0,2,2],[2,106,5]],[[144,2,2],[146,106,5]]])block(parts,a,b,BOARD);
+  for(const y of [25,73])stick(parts,[18,y,5],[132,y,5],2.3,m);
+  for(const x of [39,125]){
+    stick(parts,[x,25,5],[x,73,5],1.7,m);
+    block(parts,[x-2,47,5],[x+2,55,29],m);
+    stick(parts,[x-2,51,32],[x+2,51,32],3.2,sprGray);
+  }
+  const valveHandle=st.water?[[7,12,15],[17,12,15]]:[[12,7,15],[12,17,15]];
+  stick(parts,[0,12,8],[22,12,8],2.5,sprHose);
+  stick(parts,[12,12,8],[12,12,15],1.2,METAL);
+  stick(parts,...valveHandle,1.4,matOf('#d86f4e'));
+  for(const [a,b] of [[[22,12,8],[25,16,10]],[[25,16,10],[25,22,20]],[[25,22,20],[13,22,28]],[[13,22,28],[13,26,28]]])stick(parts,a,b,2,sprHose);
+  stick(parts,[13,24.5,28],[13,27.5,28],2.8,sprBrass);
+  for(const [a,b] of [[[17,42,28],[17,67,28]],[[17,67,28],[39,67,28]],[[39,67,28],[41,60,32]],[[41,60,32],[41,51,32]]])stick(parts,a,b,1.8,sprBlue);
+  const cover=extrude(sprBody,20,40,m)+shape(on(PX(vis([1,0,0])?40:20),sprBody),tone(vis([1,0,0])?[1,0,0]:[-1,0,0],m),1.2)+hullInk([...on(PX(20),sprBody),...on(PX(40),sprBody)],2.4);
+  const chamber=extrude(sprChamber,7,20,sprBlue)+shape(on(PX(vis([1,0,0])?20:7),sprChamber),sprBlue.m,1.1)+hullInk([...on(PX(7),sprChamber),...on(PX(20),sprChamber)],2);
+  put(parts,[[7,26,19],[20,44,37]],0,k?xrGhost(chamber,'',k,sprChamber,7,20,sprBlue):chamber);
+  put(parts,[[20,26,4],[40,63,41]],0,k?xrGhost(cover,'',k,sprBody,20,40,m):cover);
+  const tilt=g.tilt;
+  const tubePoint=(x,y,z)=>[x,51+y*Math.cos(tilt)+z*Math.sin(tilt),32-y*Math.sin(tilt)+z*Math.cos(tilt)];
+  for(let x=40;x<127;x+=7)stick(parts,[x,51,32],[Math.min(x+7,127),51,32],2.2,METAL);
+  stick(parts,[127,51,32],[129,51,32],2.5,sprBrass);
+  for(let x=48;x<=118;x+=7){
+    const start=tubePoint(x,0,2),end=tubePoint(x,0,3.2);
+    stick(parts,start,end,.65,sprBrass);
+    put(parts,[end],.5,shape(on(PX(x),ellUV(end[1],end[2],.5,.5,8)),DARK.d,.4));
+    if(st.water){
+      const jet=Array.from({length:25},(_,i)=>{
+        const t=i/24,travel=24*t;
+        return [x,end[1]+travel*Math.sin(tilt),end[2]+travel*Math.cos(tilt)-(end[2]-2+24*Math.cos(tilt))*t*t];
+      });
+      for(let i=0;i<24;i+=3){
+        const pts=jet.slice(i,i+4);
+        put(parts,pts,.2,`<path d="${pd(pts,false)}" fill="none" stroke="${sprWater}" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="2.2 1" stroke-dashoffset="${f(-st.phase*8)}"/>`);
+      }
+    }
+  }
+  stick(inside,[11,35,28],[35,35,28],.8,METAL);
+  const turbine=[];
+  for(let i=0;i<8;i++){
+    const t=st.phase*144+i*Math.PI/4;
+    const aa=[13,35+2*Math.cos(t),28+2*Math.sin(t)],bb=[13,35+5.6*Math.cos(t+.2),28+5.6*Math.sin(t+.2)];
+    put(turbine,[aa,bb],.7,rod(aa,bb,.75,sprBlue,toneI,.7));
+  }
+  turbine.push({box:[[12,33.4,26.4],[14,36.6,29.6]],svg:cylX(12,14,35,28,1.6,sprBrass,toneI,.9)});
+  put(inside,[[12,29,22],[14,41,34]],0,byDepth(turbine));
+  put(inside,[[20,32.35,25.35],[34,37.65,30.65]],0,sprWorm([20,35,28],[34,35,28],st.phase*144));
+  stick(inside,[27,28,20],[27,60,20],.8,METAL);
+  put(inside,[[21,34,14],[33,36,26]],0,sprGear([27,35,20],'y',6,-st.phase*12));
+  put(inside,[[24.35,45,17.35],[29.65,57,22.65]],0,sprWorm([27,45,20],[27,57,20],-st.phase*12));
+  stick(inside,[24,51,12],[48,51,12],.9,METAL);
+  put(inside,[[26,45,6],[28,57,18]],0,sprGear([27,51,12],'x',6,st.phase));
+  for(const [a,b] of [[[20,32,4],[22,38,28]],[[33,32,4],[35,38,28]],[[24,28,4],[30,30,20]],[[24,58,4],[30,60,20]],[[36,48,4],[39,54,12]]])block(inside,a,b,sprGray);
+  stick(parts,[40,51,12],[48,51,12],.9,METAL);
+  stick(parts,[48,51,12],g.pin,1.1,sprBrass);
+  stick(parts,[48,51,32],g.joint,1.2,sprBrass);
+  stick(parts,g.pin,g.joint,.8,METAL);
+  for(const pt of [g.pin,g.joint])stick(parts,[pt[0]-1,pt[1],pt[2]],[pt[0]+1,pt[1],pt[2]],1.5,sprGray);
+  if(k>0){
+    svg+=byDepth(parts)+`<g opacity="${f(k)}">${byDepth(inside)}</g>`;
+    const route=[[13,25,28],[13,29,28],[13,35,28],[17,42,28],[17,67,28],[39,67,28],[41,60,32],[41,51,32],[126,51,32]];
+    svg+=`<path d="${pd(route,false)}" fill="none" stroke="${sprWater}" stroke-width="1.5" stroke-dasharray="2 2" stroke-dashoffset="${f(-st.phase*8)}" opacity="${st.water?.9:.35}"/>`;
+  }else svg+=byDepth(parts);
+  if(k>.6){
+    label([21,73,5],'SKID BASE');label([125,51,30],'TUBE BEARING');
+    label([91,51,32],'SPRAY TUBE',st.water);label(tubePoint(97,0,3.2),'SPRAY HOLES',st.water);
+    label([129,51,32],'END CAP');label([13,26,28],'HOSE COUPLING',st.water);
+    label([8,35,35],'TURBINE CHAMBER',st.water);label([13,39,28],'TURBINE',st.water);
+    label([18,35,28],'TURBINE SHAFT',st.water);label([25,35,30],'FIRST WORM',st.water);
+    label([27,35,24],'FIRST WORM WHEEL',st.water);label([27,41,20],'INTERMEDIATE SHAFT',st.water);
+    label([27,52,22],'SECOND WORM',st.water);label([27,55,12],'SECOND WORM WHEEL',st.water);
+    label([43,51,12],'OUTPUT SHAFT',st.water);label([48,(51+g.pin[1])/2,(12+g.pin[2])/2],'CRANK',st.water);
+    label(g.pin,'CRANK PIN',st.water);label(avg([g.pin,g.joint]),'CONNECTING ROD',st.water);
+    label(g.joint,'TUBE ROCKER',st.water);label([28,67,28],'OUTLET PIPE',st.water);
+    svg+=sprCallouts(labels);
+  }
+  return svg;
+}
+let sprLoop=false;
+function sprStart(st,ui){
+  st.water=true;
+  if(sprLoop)return;
+  sprLoop=true;
+  ui.animate(dt=>{
+    if(!st.water){sprLoop=false;return false;}
+    st.phase+=dt*.7*(st.slow?.08:1);
+    return true;
+  });
+}
+const ui=mountFigure({fig:'47',turn:'full',title:'Lawn sprinkler',size:[146,108,65],palette:'mint',
+  state:{water:false,slow:false,phase:0,xr:0,xrT:0},scene:sprScene,
+  stats:st=>[{label:'Supply',value:st.water?'Open':'Closed'},{label:'Teaching speed',value:st.slow?'0.08x':'1x',small:true}],
+  buttons:[
+    {label:'Water',onClick:sprStart},
+    {label:'Slow view',onClick:(st,ui)=>{st.slow=!st.slow;ui.flash(st.slow?'Teaching animation slowed. Supply unchanged.':'Teaching animation at normal speed.');}},
+    {label:'Stop',onClick:st=>{st.water=false;}}
+  ],
+  params:(st,q)=>{
+    const phase=Number(q.get('phase'));if(q.has('phase')&&Number.isFinite(phase))st.phase=phase;
+    st.slow=q.get('slow')==='1';
+  }
+});
+xrMount(()=>ui,()=>'');
+</script></body></html>
