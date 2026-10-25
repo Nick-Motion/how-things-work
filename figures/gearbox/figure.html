@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Gearbox</title><style>@media(min-width:561px){html body .actions{flex-direction:row;max-width:100%}html body #stats{top:44px!important;flex-direction:row;gap:20px}}</style></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Teaching adaptation of The Gearbox, printed pages 40 and 41.
+   The saved 1998 and 2016 page text supports the constant-mesh input pair, three
+   free upper wheels, two dog collars, selector rods and forks, direct fourth and
+   a sliding reverse idler. The 1988 edition remains inaccessible and unverified.
+   The visible hand crank replaces the engine. No clutch or synchromesh internals
+   are claimed. Selection stops the hand input, withdraws the old engagement to
+   neutral, then moves one collar or the reverse idler. Drive requires selection
+   to finish. Forward gear centers never move. Neutral drives the layshaft and
+   free gears but leaves the output still. Top locks input directly to output.
+   Parts. Housing, lid, flange, mounting feet, mounting bolts, drain plug and
+   board hold the end bearing seats. Input and output bearings hold coaxial
+   shafts. A nose bearing in the input shaft holds the output tip. The two end
+   bearings hold the layshaft. Its four forward wheels are fixed to it. Upper
+   first, second and third wheels run on bushes on the output shaft. Splined
+   hubs carry sliding collars. Axial dogs on upper wheels and input engage those
+   collars. Rods slide in lid guides and carry forks in the collar grooves.
+   A third rod and fork slide the reverse idler on a fixed housing-supported
+   spindle. The reverse output wheel is fixed to the output shaft. The crank
+   arm and grip are fixed to the input; the output flange is fixed to the output.
+   Dimensions are schematic bench proportions. Module-one pitch radii sum to 26
+   for each forward pair. Input pair 20/32, first 14/38, second 22/30, third 28/24.
+   Reverse has 18 lower, 14 idler, 24 upper teeth. Idler distances are 16 and 19.
+   Tooth flanks and dogs are illustrative, not manufacture-ready involutes.
+   Torque is shown by warm component colour, not by invented hardware. */
+const gbRatios={neutral:0,first:20/32*14/38,second:20/32*22/30,third:20/32*28/24,top:1,reverse:-20/32*18/24};
+const gbNames={neutral:'Neutral',first:'First',second:'Second',third:'Third',top:'Top',reverse:'Reverse'};
+const gbForward=[{key:'third',x:49,upper:24,lower:28},{key:'second',x:85,upper:30,lower:22},{key:'first',x:111,upper:38,lower:14}];
+const gbInitial=()=>({gear:'neutral',phase:'idle',shift:null,c13:0,c12:0,idler:0,a:0,out:0,rpm:0,run:false,xr:0,xrT:0});
+const gbTargets=gear=>({c13:gear==='top'?-5:gear==='third'?5:0,c12:gear==='second'?-8:gear==='first'?8:0,idler:gear==='reverse'?1:0});
+function gbStep(st,dt){
+  if(st.shift){
+    st.shift.t=Math.min(1,st.shift.t+dt/1.5);
+    const t=st.shift.t, old=st.shift.from, goal=gbTargets(st.shift.to);
+    const release=1-ease(Math.min(1,t/.35)), engage=ease(Math.max(0,Math.min(1,(t-.6)/.4)));
+    for(const key of ['c13','c12','idler'])st[key]=old[key]*release+goal[key]*engage;
+    st.phase=t<.35?'Releasing dogs':t<.6?'Neutral':'Selecting';
+    if(t>=1){st.gear=st.shift.to;st.shift=null;st.phase='idle';}
+  }
+  const delta=st.rpm*2*Math.PI/60*dt;
+  st.a+=delta;st.out+=delta*gbRatios[st.gear];
+}
+function gbShift(st,ui,to){
+  if(st.shift)return ui.flash('Wait for the selector to finish');
+  if(to==='reverse'&&st.rpm!==0)return ui.flash('Stop input before selecting reverse');
+  if(st.gear===to)return ui.flash(gbNames[to]+' is already selected');
+  st.rpm=0;st.shift={to,t:0,from:{c13:st.c13,c12:st.c12,idler:st.idler}};
+  st.gear='neutral';st.phase='Releasing dogs';gbKick(st,ui);
+}
+function gbKick(st,ui){
+  if(st.run)return;st.run=true;
+  ui.animate(dt=>{gbStep(st,dt);const more=st.rpm!==0||!!st.shift;st.run=more;return more;});
+}
+const gbUpperAngle=(key,a)=>{const g=gbForward.find(g=>g.key===key),b=-20/32*a+5*Math.PI/32;return -g.lower/g.upper*b+((g.lower-g.upper)*Math.PI/2-Math.PI)/g.upper;};
+function gbCallouts(items){
+  const svg=document.getElementById('fig'),vb=svg.viewBox.baseVal,u=window.LBL_U?LBL_U():0;
+  const fs=u?8*u:6.5*INK_K,h=u?12*u:fs*1.7,gap=u?1.3*u:1.4*INK_K;
+  const sorted=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  const halves=[sorted.slice(0,Math.ceil(sorted.length/2)),sorted.slice(Math.ceil(sorted.length/2))];
+  let out='';
+  halves.forEach((column,side)=>{
+    column.sort((a,b)=>a.p[1]-b.p[1]);
+    const top=u?16*u:Math.max(95*INK_K,(vb.height-column.length*(h+gap))/2);
+    column.forEach((it,i)=>{
+      const n=((window.__ln||(window.__ln={}))[it.text]||(__ln[it.text]=Object.keys(__ln).length+1));
+      const w=u?18*u:it.text.length*fs*.58+fs*1.5;
+      const x=side?vb.width-w/2-3*INK_K:w/2+3*INK_K,y=top+i*(h+gap),edge=x+(side?-w/2:w/2);
+      out+='<g class="tag'+(it.on?' on':'')+'" data-n="'+n+'" data-t="'+it.text+'">'+
+        '<path d="M'+f(it.p[0])+' '+f(it.p[1])+'L'+f(edge)+' '+f(y)+'" fill="none" stroke="'+INK+'" stroke-width=".7"/>'+
+        '<rect x="'+f(x-w/2)+'" y="'+f(y-h/2)+'" width="'+f(w)+'" height="'+f(h)+'" rx="'+f(h/2)+'" fill="'+(it.on?'var(--accent)':'#fff4d6')+'" stroke="'+INK+'" stroke-width="1"/>'+
+        '<text x="'+f(x)+'" y="'+f(y+fs*.35)+'" text-anchor="middle" font-family="ui-monospace,monospace" font-weight="700" font-size="'+f(fs)+'">'+(u?n:it.text)+'</text></g>';
+    });
+  });
+  return out;
+}
+const gbSteel=matOf('#b7c2ca'),gbBrass=matOf('#d9ad58'),gbHot=matOf('#ed8950');
+const gbBounds=points=>[[0,1,2].map(i=>Math.min(...points.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...points.map(p=>p[i])))];
+function gbWheel(x,y,z,teeth,angle,material,width=5){
+  const radius=teeth/2,root=radius-.85,items=[];
+  const disk=cylX(x-width/2,x+width/2,y,z,root,material,toneI,.9,32);
+  items.push({box:[[x-width/2,y-root,z-root],[x+width/2,y+root,z+root]],svg:disk});
+  for(let i=0;i<teeth;i++){
+    const t=angle+i*2*Math.PI/teeth,d=2*Math.PI/teeth;
+    const profile=[[-.34,root],[-.20,radius+.75],[.20,radius+.75],[.34,root]].map(([a,r])=>[y+r*Math.cos(t+a*d),z+r*Math.sin(t+a*d)]);
+    const a=on(PX(x-width/2),profile),b=on(PX(x+width/2),profile),cap=vis([1,0,0])?b:a;
+    items.push({box:gbBounds(a.concat(b)),svg:loft(a,b,n=>toneI(n,material))+shape(cap,toneI([vis([1,0,0])?1:-1,0,0],material),.35)});
+  }
+  const end=x+(vis([1,0,0])?1:-1)*(width/2+.03);
+  items.push({box:[[end,y-root,z-root],[end,y+root,z+root]],svg:line([[end,y+3*Math.cos(angle),z+3*Math.sin(angle)],[end,y+(root-1)*Math.cos(angle),z+(root-1)*Math.sin(angle)]],1.4)});
+  return byDepth(items);
+}
+function gbScene(st,m){
+  const parts=[],labels=[],internals=[],k=ease(st.xr||0),live=st.rpm!==0;
+  const put=(collection,bounds,svg,name,at,on=false)=>{collection.push({box:bounds,svg});if(name)labels.push({at:at||boxMid(bounds),text:name,on});};
+  const bx=(collection,a,b,material,name,on=false)=>put(collection,[a,b],box(...a,...b,material,toneI,.9),name,null,on);
+  const ax=(collection,x0,x1,y,z,r,material,name,on=false)=>put(collection,[[x0,y-r,z-r],[x1,y+r,z+r]],cylX(x0,x1,y,z,r,material,toneI,.9,20),name,null,on);
+  const link=(collection,a,b,r,material,name,on=false)=>{const bounds=gbBounds([a,b]);bounds[0]=bounds[0].map(v=>v-r);bounds[1]=bounds[1].map(v=>v+r);put(collection,bounds,rod(a,b,r,material,toneI,.8),name,null,on);};
+  const active=key=>live&&(st.gear===key||key==='input');
+  const layAngle=-20/32*st.a+5*Math.PI/32;
+  const idlerX=146-10*st.idler,idlerY=32+Math.sqrt(256-(571/52)**2),idlerZ=26+571/52;
+  let s=board(0,0,174,78,3,5,WOOD)+castShadow([[10,8,6],[151,8,6],[151,66,6],[10,66,6],[10,8,70],[151,66,70]],3,boardTop(0,0,174,78,3,5));
+  for(const x of [18,140])for(const y of [9,59]){
+    bx(parts,[x-6,y-4,3],[x+6,y+4,8],m);
+    put(parts,[[x-1.2,y-1.2,8],[x+1.2,y+1.2,9]],cyl(x,y,8,9,1.2,METAL,toneI,.7,6));
+  }
+  labels.push({at:[18,9,5],text:'MOUNTING FOOT'},{at:[140,59,9],text:'MOUNTING BOLT'});
+  const shell=rrUV(7,6,65,81,5),a=on(PX(12),shell),b=on(PX(151),shell);
+  let shellSvg=extrude(shell,12,151,m)+shape(vis([1,0,0])?b:a,tone([vis([1,0,0])?1:-1,0,0],m),1.4)+hullInk(a.concat(b),2.8);
+  shellSvg=byDepth([{box:[[12,7,6],[151,65,81]],svg:shellSvg},
+    ...[[[11,6,43],[152,8,46]],[[11,64,43],[152,66,46]],[[11,8,43],[13,64,46]],[[150,8,43],[152,64,46]]].map(bounds=>({box:bounds,svg:box(...bounds[0],...bounds[1],m,tone,1)}))]);
+  shellSvg+=box(34,15,81,130,58,83,m,tone,1.1);
+  if(k===0)put(parts,[[12,6,6],[151,66,83]],shellSvg);
+  labels.push({at:[80,7,30],text:'HOUSING'},{at:[80,63,44],text:'CASE FLANGE'},{at:[80,24,83],text:'SELECTOR LID'});
+  put(parts,[[107,64,13],[112,67,18]],rod([109,64,15],[109,67,15],2,METAL,toneI,.7,2,6),'DRAIN PLUG',[109,67,15]);
+  ax(parts,4,15,32,52,3,live?gbHot:gbSteel,'HAND INPUT',live);
+  ax(parts,149,166,32,52,3,active(st.gear)&&st.gear!=='neutral'?gbHot:gbSteel,'OUTPUT SHAFT',live&&st.gear!=='neutral');
+  const crankTip=[4,32+14*Math.cos(st.a),52+14*Math.sin(st.a)];
+  link(parts,[4,32,52],crankTip,1.8,gbBrass,'CRANK ARM',live);
+  link(parts,crankTip,[0,crankTip[1],crankTip[2]],2.2,DARK,'HAND GRIP',live);
+  ax(parts,160,163,32,52,7,gbSteel,'OUTPUT FLANGE',live&&st.gear!=='neutral');
+  for(let i=0;i<4;i++){
+    const t=st.out+i*Math.PI/2,yy=32+5*Math.cos(t),zz=52+5*Math.sin(t);
+    ax(parts,163,164,yy,zz,1,gbBrass);
+  }
+  const selectorTilt=st.shift?Math.sin(st.shift.t*Math.PI)*5:st.gear==='neutral'?0:st.gear==='top'?-5:5;
+  link(internals,[80,20,77],[80,20,83],1.2,gbSteel);
+  link(parts,[80,20,83],[80+selectorTilt,20,96],1.2,gbSteel,'GEAR LEVER',!!st.shift);
+  put(parts,[[77+selectorTilt,17,93],[83+selectorTilt,23,99]],cyl(80+selectorTilt,20,93,99,3,DARK,toneI,1));
+  for(const [x,z,name] of [[15,52,'INPUT BEARING'],[148,52,'OUTPUT BEARING'],[15,26,'FRONT LAY BEARING'],[148,26,'REAR LAY BEARING']]){
+    ax(internals,x-2,x+2,32,z,5,gbBrass,name);
+    for(const yy of [26,38])bx(internals,[x-2,yy-1,6],[x+2,yy+1,z+2],gbSteel);
+
+  }
+  for(const [x0,x1] of [[17,19],[25,29]])ax(internals,x0,x1,32,52,3,live?gbHot:gbSteel);
+  ax(internals,29,32,32,52,3.8,gbBrass,'NOSE BEARING');
+  for(const [x0,x1] of [[32,45],[52,81],[89,107],[115,133],[139,146]])ax(internals,x0,x1,32,52,2.6,live&&st.gear!=='neutral'?gbHot:gbSteel);
+  for(const [x0,x1] of [[17,19],[25,45],[52,81],[89,107],[115,133],[139,146]])ax(internals,x0,x1,32,26,2.8,live?gbHot:gbSteel);
+  labels.push({at:[77,32,26],text:'LAYSHAFT',on:live},{at:[68,32,52],text:'TRANSMISSION SHAFT',on:live&&st.gear!=='neutral'});
+  const wheel=(x,y,z,n,angle,material,name,on=false)=>put(internals,[[x-2.5,y-n/2-.8,z-n/2-.8],[x+2.5,y+n/2+.8,z+n/2+.8]],gbWheel(x,y,z,n,angle,material),name,[x,y,z+n/2],on);
+  wheel(22,32,52,20,st.a,live?gbHot:gbSteel,'INPUT CONSTANT GEAR',live);
+  wheel(22,32,26,32,layAngle,live?gbHot:gbSteel,'CONSTANT LAY GEAR',live);
+  for(const g of gbForward){
+    const upperAngle=-g.lower/g.upper*layAngle+((g.lower-g.upper)*Math.PI/2-Math.PI)/g.upper;
+    wheel(g.x,32,52,g.upper,upperAngle,active(g.key)?gbHot:gbSteel,g.key.toUpperCase()+' FREE GEAR',active(g.key));
+    wheel(g.x,32,26,g.lower,layAngle,active(g.key)?gbHot:gbSteel,g.key.toUpperCase()+' LAY GEAR',active(g.key));
+    ax(internals,g.x-2.7,g.x+2.7,32,52,3.8,gbBrass,g.key.toUpperCase()+' GEAR BUSH');
+  }
+  const dogs=(x0,x1,angle,name,working)=>{
+    for(let i=0;i<8;i++){
+      const t=angle+i*Math.PI/4,pts=[[-.2,4.1],[-.2,5.7],[.2,5.7],[.2,4.1]].map(([d,r])=>[32+r*Math.cos(t+d),52+r*Math.sin(t+d)]);
+      const aa=on(PX(x0),pts),bb=on(PX(x1),pts);
+      put(internals,gbBounds(aa.concat(bb)),loft(aa,bb,n=>toneI(n,working?gbHot:gbBrass))+shape(vis([1,0,0])?bb:aa,gbBrass.l,.5));
+    }
+    labels.push({at:[(x0+x1)/2,37,52],text:name,on:working});
+  };
+  ax(internals,24.5,29,32,52,4.1,gbSteel);
+  ax(internals,42,46.5,32,52,4.1,gbSteel);
+  ax(internals,87.5,92,32,52,4.1,gbSteel);
+  ax(internals,104,108.5,32,52,4.1,gbSteel);
+  dogs(27,31,st.a,'DIRECT INPUT DOGS',active('top'));
+  dogs(42,46,gbUpperAngle('third',st.a),'THIRD GEAR DOGS',active('third'));
+  dogs(88,92,gbUpperAngle('second',st.a),'SECOND GEAR DOGS',active('second'));
+  dogs(104,108,gbUpperAngle('first',st.a),'FIRST GEAR DOGS',active('first'));
+  for(const [center,shift,rodY,name] of [[36,st.c13,12,'3 / TOP'],[98,st.c12,20,'1 / 2']]){
+    ax(internals,center-7,center+7,32,52,4.1,gbSteel,name+' SPLINED HUB');
+    for(let j=0;j<8;j++){
+      const t=st.out+j*Math.PI/4;
+      link(internals,[center-7,32+4.1*Math.cos(t),52+4.1*Math.sin(t)],[center+7,32+4.1*Math.cos(t),52+4.1*Math.sin(t)],.32,gbBrass);
+    }
+    const xx=center+shift;
+    ax(internals,xx-3,xx+3,32,52,6.4,Math.abs(shift)>0?gbHot:gbSteel,name+' COLLAR',live&&Math.abs(shift)>0);
+    ax(internals,xx-.7,xx+.7,32,52,6.7,DARK,name+' FORK GROOVE');
+    for(let j=0;j<8;j++){
+      const t=st.out+j*Math.PI/4;
+      link(internals,[xx-3,32+5.9*Math.cos(t),52+5.9*Math.sin(t)],[xx+3,32+5.9*Math.cos(t),52+5.9*Math.sin(t)],.5,gbBrass);
+    }
+    const forkPts=Array.from({length:13},(_,i)=>[xx,32+7*Math.cos(i*Math.PI/12),52+7*Math.sin(i*Math.PI/12)]);
+    for(let j=0;j<12;j++)link(internals,forkPts[j],forkPts[j+1],.7,gbBrass);
+    link(internals,[xx,32,59],[xx,32,77],.8,gbBrass,name+' FORK',!!st.shift);
+    link(internals,[xx,32,77],[xx,rodY,77],.8,gbBrass);
+    ax(internals,10+shift,163+shift,rodY,77,.8,gbSteel,name+' SELECTOR ROD',!!st.shift);
+  }
+  wheel(136,32,26,18,layAngle,active('reverse')?gbHot:gbSteel,'REVERSE LAY GEAR',active('reverse'));
+  wheel(136,32,52,24,st.out,active('reverse')?gbHot:gbSteel,'REVERSE OUTPUT GEAR',active('reverse'));
+  ax(internals,128,151,idlerY,idlerZ,1.9,gbSteel,'IDLER SPINDLE');
+  bx(internals,[149,idlerY-3,6],[151,idlerY+3,idlerZ+3],gbSteel,'IDLER SUPPORT');
+  wheel(idlerX,idlerY,idlerZ,14,-layAngle*18/14,active('reverse')?gbHot:gbSteel,'REVERSE IDLER',active('reverse'));
+  link(internals,[idlerX+3,idlerY+4,idlerZ],[idlerX+3,58,77],.8,gbBrass,'REVERSE FORK',!!st.shift);
+  ax(internals,10-10*st.idler,163-10*st.idler,58,77,.8,gbSteel,'REVERSE SELECTOR ROD',!!st.shift);
+  for(const yy of [12,20,58])for(const xx of [19,145])ax(internals,xx-2,xx+2,yy,77,2,gbBrass);
+  labels.push({at:[19,20,77],text:'ROD GUIDE'});
+  if(k>0)s+=xrGhost(shellSvg,'',k,shell,12,151,m)+byDepth(parts.concat(internals.map(p=>({...p,svg:`<g opacity="${k}">${p.svg}</g>`}))));
+  else s+=byDepth(parts);
+  if(k>.6)s+=gbCallouts(labels);
+  else if(!document.documentElement.classList.contains('nolabels'))s+=xrCallouts(labels.filter(t=>['HAND INPUT','OUTPUT SHAFT','GEAR LEVER'].includes(t.text)),[20,145,18,57,12,77]);
+  return s;
+}
+const gbUI=mountFigure({fig:'40',title:'Gearbox',turn:'full',size:[174,78,101],palette:'mustard',state:gbInitial(),scene:gbScene,
+  stats:st=>[{label:'Selected',value:st.shift?st.phase:gbNames[st.gear],small:true},{label:'Output / input',value:gbRatios[st.gear].toFixed(3),small:true},{label:'Input / output rpm',value:st.rpm+' / '+(st.rpm*gbRatios[st.gear]).toFixed(1),small:true}],
+  buttons:[
+    {label:'Drive',onClick:(st,ui)=>{if(st.shift)return ui.flash('Wait for the selector to finish');st.rpm=30;gbKick(st,ui);}},
+    {label:'Stop input',onClick:st=>{st.rpm=0;}},
+    {label:'Shift',choices:st=>['neutral','first','second','third','top'].map(gear=>({label:gbNames[gear],current:st.gear===gear&&!st.shift,onClick:(st,ui)=>gbShift(st,ui,gear)}))},
+    {label:'Reverse',onClick:(st,ui)=>gbShift(st,ui,'reverse')}
+  ],
+  params:(st,q)=>{const gear=q.get('gear');if(Object.hasOwn(gbRatios,gear)){st.gear=gear;Object.assign(st,gbTargets(gear));}for(const key of ['a','out']){const v=Number(q.get(key));if(q.has(key)&&Number.isFinite(v))st[key]=v;} }
+});
+xrMount(()=>gbUI,()=> '');
+addEventListener('resize',()=>gbUI.invalidate());
+</script></body></html>
