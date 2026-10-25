@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bathroom scales</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Source is the saved primary OCR of Macaulay, 1998 and 2016, printed pages 24-25.
+   The 1988 edition is inaccessible and unverified. No edition union is claimed.
+   1. Weigh transfers a test mass from the floor onto the platform.
+   2. Four third-class levers pivot on the case. Platform contacts lie between
+      each fixed pivot and its calibrating-plate contact. The plate moves down
+      four times as far as the platform and stretches the main spring.
+   3. The plate releases the first-class crank to follow under the dial spring.
+      Its opposite arm takes up the rack, meshing with the pinion on the dial spindle.
+   4. Adding another mass increases extension and rotation. Moving a load changes
+      corner reactions, not the total load. Unload returns all masses to the floor.
+      The main spring retracts and raises the plate and platform; the dial returns.
+   Teaching adaptation is an enlarged mechanism with three removable 20 kg masses.
+   Dimensions, spring rate and calibration are illustrative, not book measurements.
+   The dial spring maintains contact at the crank and rack. No motor, electronics
+   or manual zero control is fitted.
+   Parts and attachment.
+   CASE. Base pan and rolled rim hold four pivot seats and the spring anchor.
+   PLATFORM. Pressed platform, rubber tread, window and fixed index; four shoes
+   under the platform bear on the levers at one quarter of each lever length.
+   MECHANISM. Four levers on four pivots end on one calibrating plate. Main spring
+   top hook is fixed to the case bridge, bottom hook to the plate. Crank pivots on
+   the base, input under the plate, output across the pivot connected by the dial
+   spring to the sliding rack. Rack teeth touch the pinion teeth. Spindle and dial
+   are held by a base-mounted bearing. Window exposes the rotating graduations.
+   POWER. Gravity loads the platform. Stored spring energy provides return.
+   CONTROLS. Weigh, Add weight, Move load and Unload are teaching actions.
+   Label ledger includes real repeated pivot/contact features, not force overlays.
+   State shape is {count:0..3, load:0..60, position:0..2, weights:[{x,y,z}]}.
+*/
+addEventListener('unhandledrejection', e => { document.documentElement.dataset.errors += ' ' + String(e.reason) + ';'; });
+const bsCorners = [[14,14],[14,66],[66,14],[66,66]];
+const bsPlaces = [[52,40],[49,24],[61,57]];
+const bsSteel = matOf('#8dabb0'), bsGold = matOf('#dfad53');
+const bsPosName = ['Centre','Left corner','Right corner'];
+const bsHome = i => [99,15+i*25,0];
+const bsWeightTarget = (st,i) => i < st.count ? [...bsPlaces[st.position],16-st.load*.0075+i*9] : bsHome(i);
+function bsGeo(load){
+  const travel = load*.0075, extension = travel*4, angle = Math.asin(extension/13);
+  const input = [27+13*Math.cos(angle),40,6.5-extension];
+  const output = [27-Math.cos(angle)+6*Math.sin(angle),40,6.5+Math.sin(angle)+6*Math.cos(angle)];
+  const rack = output[0]-26;
+  return {travel,extension,angle,input,output,rack,dial:rack/.5};
+}
+const bsBounds = (pts,r=0) => [[0,1,2].map(j=>Math.min(...pts.map(p=>p[j]))-r),[0,1,2].map(j=>Math.max(...pts.map(p=>p[j]))+r)];
+function bsSpring(a,b,r,turns){
+  const axis = norm(sub(b,a)), u = norm(cross(axis,Math.abs(axis[2])>.9?[1,0,0]:[0,0,1])), v = cross(axis,u);
+  const pts = [a];
+  for(let i=0;i<=turns*12;i++){
+    const t=.1+.8*i/(turns*12), th=i*Math.PI/6;
+    pts.push(a.map((x,j)=>x+(b[j]-x)*t+r*(u[j]*Math.cos(th)+v[j]*Math.sin(th))));
+  }
+  pts.push(b);
+  return `<path d="${pd(pts,false)}" fill="none" stroke="${INK}" stroke-width="2.5" stroke-linecap="round"/><path d="${pd(pts,false)}" fill="none" stroke="${METAL.l}" stroke-width="1.1" stroke-linecap="round"/>`;
+}
+function bsDial(g,z,whole){
+  let svg = cyl(12,40,z-.65,z,10.5,CERAMIC,toneI,1.2,48);
+  for(let n=0;n<=100;n+=2){
+    const th = Math.PI+bsGeo(n).dial-g.dial;
+    const a = [12+9.8*Math.cos(th),40+9.8*Math.sin(th),z+.02];
+    const b = [12+(n%10?8.9:8)*Math.cos(th),40+(n%10?8.9:8)*Math.sin(th),z+.02];
+    svg+=line([a,b],n%10?.5:1);
+    if(n%20===0){const p=P(12+6.8*Math.cos(th),40+6.8*Math.sin(th),z+.04);
+      svg+=`<text transform="${txM(p,Dv(-Math.sin(th),Math.cos(th),0),Dv(-Math.cos(th),-Math.sin(th),0))}" font-size="2.1" text-anchor="middle" fill="${INK}" font-family="monospace" font-weight="800">${n}</text>`;}
+  }
+  if(whole) svg += cyl(12,40,z,z+.4,1,bsGold);
+  return svg;
+}
+function bsScene(st,m){
+  const g=bsGeo(st.load), top=16-g.travel, parts=[], labels=[];
+  const put=(bounds,svg)=>parts.push({box:bounds,svg});
+  const name=(at,text,on=false)=>labels.push({at,text,on});
+  const bx=(a,b,mat=METAL)=>put([a,b],box(...a,...b,mat,toneI,.8));
+  const rr=(a,b,r,mat=METAL)=>put(bsBounds([a,b],r),rod(a,b,r,mat,toneI,.8));
+  const moving=st.moving, k=ease(st.xr||0);
+  let svg=castShadow(on(PZ(16),rrUV(0,0,80,80,7)));
+  const outline=rrUV(0,0,80,80,7), bottom=on(PZ(1),outline), upper=on(PZ(14.9),outline);
+  let shell=loft(bottom,upper,n=>tone(n,m))+shape(bottom,m.d,1)+hullInk([...bottom,...upper],2.8);
+  const plat=on(PZ(top),rrUV(1,1,79,79,6)), platUnder=on(PZ(top-1),rrUV(1,1,79,79,6));
+  const hole=on(PZ(top+.03),rrUV(1.8,29,15.5,51,2));
+  const windowFrame=on(PZ(top+.01),rrUV(1,27,17,53,3));
+  let platform=loft(platUnder,plat,n=>tone(n,m))+`<path d="${pd(plat)}${pd(hole)}" fill="${m.l}" fill-rule="evenodd"/>`+ink(pd(plat),2.2);
+  platform+=`<path d="${pd(windowFrame)}${pd(hole)}" fill="${METAL.l}" fill-rule="evenodd"/>`+ink(pd(hole),1.5);
+  platform+=shape(on(PZ(top+.1),rrUV(23,6,74,74,4)),DARK.l,1.1);
+  for(let x=27;x<=70;x+=4) platform+=line([[x,9,top+.12],[x,71,top+.12]],.65);
+  const dialZ=13.7;
+  const index=shape([[2.8,39.2,top+.18],[5,40,top+.18],[2.8,40.8,top+.18]],'#db5039',.7);
+  const dialOutside=clipTo(hole,bsDial(g,dialZ,false))+index+fill(pd(hole),'#cfe9f0','opacity=".1"');
+  shell+=platform+dialOutside;
+  if(k){
+    svg+=xrGhostRings(shell,'',k,bottom,upper,m);
+    bx([2,2,1],[78,78,1.7],bsSteel);
+    name([70,70,1.7],'BASE PAN');
+    name([79,60,7],'CASE RIM');
+    name([61,68,top],'PLATFORM'); name([65,61,top+.12],'RUBBER TREAD');
+    name([6,30,top],'DIAL WINDOW'); name([4,40,top+.18],'FIXED INDEX');
+    bsCorners.forEach(([x,y],i)=>{
+      const end=[40+(x<40?-2:2),40+(y<40?-2:2),6.5-g.extension];
+      const pivot=[x,y,6.5], contact=pivot.map((n,j)=>n+(end[j]-n)*.25);
+      bx([x-2,y-2,1.7],[x+2,y+2,5.8],bsSteel);
+      rr([x-1.5,y,6.5],[x+1.5,y,6.5],.7,bsGold);
+      rr(pivot,end,.85,bsSteel);
+      rr(contact,[contact[0],contact[1],top-1],.7,METAL);
+      bx([contact[0]-1.7,contact[1]-1.7,top-1.6],[contact[0]+1.7,contact[1]+1.7,top-1],bsGold);
+      name(pivot,'PIVOT '+(i+1));
+      name(pivot.map((n,j)=>n+(end[j]-n)*.6),'THIRD-CLASS LEVER '+(i+1),moving);
+      name([contact[0],contact[1],top-1],'PLATFORM CONTACT '+(i+1),moving);
+    });
+    bx([37.5,37.5,6.1-g.extension],[42.5,42.5,6.5-g.extension],bsGold);
+    name([41,41,6.5-g.extension],'CALIBRATING PLATE',moving);
+    bx([37,35.5,1.7],[38,36.5,14.1],bsSteel);
+    bx([42,43.5,1.7],[43,44.5,14.1],bsSteel);
+    bx([37,35.5,14.1],[43,44.5,14.6],bsSteel);
+    name([41,44,14.6],'SPRING ANCHOR');
+    const sa=[40,40,14.1], sb=[40,40,6.5-g.extension];
+    put(bsBounds([sa,sb],1.3),bsSpring(sa,sb,1.3,10));
+    name([40,40,10-g.extension*.5],'MAIN SPRING',moving);
+    name(sa,'TOP SPRING HOOK'); name(sb,'BOTTOM SPRING HOOK',moving);
+    bx([25,37.5,1.7],[29,38.2,6.5],bsSteel);
+    bx([25,41.8,1.7],[29,42.5,6.5],bsSteel);
+    rr([27,37.5,6.5],[27,42.5,6.5],.7,bsGold);
+    const cp=[27,40,6.5];
+    rr(cp,g.input,.6,bsGold); rr(cp,g.output,.6,bsGold);
+    name(cp,'CRANK FULCRUM'); name([31,40,6.5-g.extension*.3],'FIRST-CLASS CRANK',moving);
+    name(g.input,'CRANK INPUT',moving); name(g.output,'CRANK OUTPUT',moving);
+    const rt=[23+g.rack,40.8,11];
+    put(bsBounds([g.output,rt],.55),bsSpring(g.output,rt,.55,7));
+    name(g.output.map((v,j)=>(v+rt[j])/2),'DIAL SPRING',moving);
+    bx([5+g.rack,40.65,10.6],[23+g.rack,41.6,11.4],bsSteel);
+    for(let x=5+g.rack;x<23+g.rack;x+=Math.PI/12) bx([x,40.25,10.6],[x+.12,40.65,11.4],bsGold);
+    name([18+g.rack,41,11],'RACK',moving); name([12+g.rack,40.4,11.3],'RACK TEETH',moving);
+    for(const x of [7,21]){
+      bx([x-.8,40.6,1.7],[x+.8,42.5,10.5],bsSteel);
+      bx([x-.8,41.6,10.5],[x+.8,42.5,11.8],bsSteel);
+    }
+    name([21,42,11.5],'RACK GUIDE');
+    bx([10.5,38.5,1.7],[13.5,40,3],bsSteel);
+    rr([12,40,3],[12,40,dialZ],.28,METAL);
+    name([12,40,6],'DIAL SPINDLE'); name([12,39.2,3],'SPINDLE BEARING');
+    let pinion=cyl(12,40,10.6,11.4,.43,bsGold,toneI,.6,20);
+    for(let i=0;i<12;i++){
+      const th=i*Math.PI/6-g.dial, a=[12+.36*Math.cos(th),40+.36*Math.sin(th),11], b=[12+.62*Math.cos(th),40+.62*Math.sin(th),11];
+      pinion+=rod(a,b,.13,bsGold,toneI,.3);
+    }
+    put([[11.38,39.38,10.6],[12.62,40.62,11.4]],pinion);
+    name([12,39.7,11],'PINION',moving); name([12,40.55,11],'PINION TEETH',moving);
+    put([[1.5,29.5,dialZ-.65],[22.5,50.5,dialZ+.4]],`<g opacity=".2">${bsDial(g,dialZ,true)}</g>`);
+    name([12,32,dialZ],'ROTATING DIAL',moving); name([4,44,dialZ],'DIAL GRADUATIONS',moving);
+    svg+=`<g opacity="${k}">${byDepth(parts)}</g>`+index;
+  }
+  const weights=st.weights.map((p,i)=>{
+    const [x,y,z]=[p.x,p.y,p.z], r=7.5;
+    let body=cyl(x,y,z,z+8,r,bsGold,toneI,1.3,28)+cyl(x,y,z+8,z+9,2.4,bsSteel,toneI,.8);
+    if(vis([1,0,0])) body+=tx(x+r+.02,y,z+3,'20 kg',2,INK);
+    return {box:[[x-r,y-r,z],[x+r,y+r,z+9]],svg:body};
+  });
+  svg+=byDepth(k ? weights : [{box:[[0,0,1],[80,80,top+.2]],svg:shell},...weights]);
+  if(k>.6) svg+=bsLabels(labels);
+  return svg;
+}
+function bsLabels(labels){
+  const vb=document.getElementById('fig').viewBox.baseVal, scale=innerWidth<=560?1:.8;
+  const ordered=labels.slice().sort((a,b)=>P(...a.at)[0]-P(...b.at)[0]);
+  const half=Math.ceil(ordered.length/2);
+  return [ordered.slice(0,half),ordered.slice(half)].map((column,side)=>{
+    column.sort((a,b)=>P(...a.at)[1]-P(...b.at)[1]);
+    return column.map((item,i)=>{
+      const [x,y]=P(...item.at), px=vb.width*(side?.86:.16), py=vb.height*(.34+(innerWidth<=560?.52:.6)*i/(half-1));
+      return `<g transform="translate(${x} ${y}) scale(${scale}) translate(${-x} ${-y})">`+tag(item.at,(px-x)/(INK_K*scale),(py-y)/(INK_K*scale),item.text,item.on)+'</g>';
+    }).join('');
+  }).join('');
+}
+function bsMove(st,ui){
+  if(st.moving)return;
+  st.moving=true;
+  ui.animate(dt=>{
+    let distance=0;
+    st.weights.forEach((p,i)=>{
+      const to=bsWeightTarget(st,i);
+      const crossing=Math.abs(to[0]-p.x)+Math.abs(to[1]-p.y)>.01;
+      const raised=42+i*10;
+      const next=crossing && st.action!=='slide' ? (p.z<raised-.01 ? [p.x,p.y,raised] : [to[0],to[1],raised]) : to;
+      for(let j=0;j<3;j++){
+        const key=['x','y','z'][j], diff=next[j]-p[key];
+        p[key]+=Math.sign(diff)*Math.min(Math.abs(diff),dt*100);
+        distance+=Math.abs(to[j]-p[key]);
+      }
+    });
+    const contact=st.weights.reduce((sum,p,i)=>{
+      const position=bsPlaces[st.position], landed=Math.hypot(p.x-position[0],p.y-position[1])<.05;
+      const gap=p.z-(16-st.load*.0075+i*9);
+      return sum+(landed?20*Math.max(0,Math.min(1,1-gap/.2)):0);
+    },0);
+    const target=st.action==='slide'?st.count*20:Math.min(st.count*20,contact);
+    st.load+=Math.sign(target-st.load)*Math.min(Math.abs(target-st.load),dt*100);
+    distance+=Math.abs(st.count*20-st.load);
+    if(distance<.001){st.load=st.count*20;st.moving=false;return false;}
+    return true;
+  });
+}
+const ui=mountFigure({
+  fig:'24',turn:'full',title:'Bathroom scales',size:[112,80,72],center:[52,40],palette:'mint',
+  state:{count:0,load:0,position:0,moving:false,weights:[0,1,2].map(i=>{const [x,y,z]=bsHome(i);return {x,y,z};})},
+  scene:bsScene,
+  stats:st=>[{label:'Dial reading',value:Math.round(st.load)+' kg'},{label:'Spring extension',value:(bsGeo(st.load).extension*4).toFixed(1)+' mm',small:true},{label:'Platform travel',value:(bsGeo(st.load).travel*4).toFixed(1)+' mm',small:true}],
+  buttons:[
+    {label:'Weigh',onClick:(st,ui)=>{if(st.moving)return ui.flash('Wait for the mass to settle');if(st.count)return ui.flash('A mass is already on the platform');st.count=1;st.action='transfer';bsMove(st,ui);}},
+    {label:'Add weight',onClick:(st,ui)=>{if(st.moving)return ui.flash('Wait for the mass to settle');if(st.count===3)return ui.flash('All three test masses are on the platform');st.count++;st.action='transfer';bsMove(st,ui);}},
+    {label:'Move load',onClick:(st,ui)=>{if(st.moving)return ui.flash('Wait for the mass to settle');if(!st.count)return ui.flash('Weigh a mass first');st.position=(st.position+1)%3;st.action='slide';bsMove(st,ui);}},
+    {label:'Unload',onClick:(st,ui)=>{if(st.moving)return ui.flash('Wait for the mass to settle');st.count=0;st.action='transfer';bsMove(st,ui);}}
+  ],
+  params:(st,q)=>{
+    const n=Number(q.get('load')), p=Number(q.get('position'));
+    if(Number.isFinite(n))st.count=Math.max(0,Math.min(3,Math.round(n/20)));
+    if(Number.isInteger(p)&&p>=0&&p<3)st.position=p;
+    st.load=st.count*20;
+    st.weights.forEach((w,i)=>{const [x,y,z]=bsWeightTarget(st,i);Object.assign(w,{x,y,z});});
+  }
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
