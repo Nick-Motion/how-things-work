@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cams and cranks</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. This is a principle teaching adaptation of the 1998 and 2016 pages 48-49.
+   The inaccessible 1988 edition is unverified. This is neither the mammoth machine nor an engine.
+   Rotate turns two independent hand-driven shafts. A convex cam lifts a flat shoe; the compressed
+   spring presses the shoe against its exact support point. A bored bridge guides the attached stem.
+   The separate crank disk carries an offset pin, a rigid rod, a second pin and a guided slider.
+   Drive slider imposes external reciprocation. Inverse crank geometry selects the continuous branch;
+   the disk's inertia carries dead centres, where slider force alone supplies no starting torque.
+   Swap cam stops both shafts and represents a manual, instantaneous exchange of removable keyed
+   profiles. The unused profile lies on the bench. It is not a shape-changing working cam.
+   Slow motion, guards, supports, interchangeable profiles and external-input arrows are teaching
+   fixtures or overlays. Arrows and the spare cam do not count as anatomy.
+   Parts. Structure: bench, bearing pedestals, guide posts and bridges, transparent guards on feet.
+   Cam: camshaft in pedestal bearing, removable cam and keyed hub clamped on shaft, flat follower shoe,
+   stem fixed to shoe, spring collar fixed to stem, compression spring between collar and fixed seat,
+   bored follower guide on posts. Crank: crankshaft in pedestal bearing, disk keyed to shaft,
+   offset pin in disk, rod hinged on offset pin and slider pin, slider running between two guides.
+   All dimensions are illustrative centimetres. Cam r14 eccentric6 or ellipse14x22; crank r12, rod38.
+   State shape: profile 0|1, camAngle, crankAngle, and motion null|{kind,startCam,startCrank,progress}.
+   Geometry derives every contact and joint from that state; the scene stores no independent positions. */
+const rigProfiles = [{name:'Eccentric',a:14,b:14,e:6,lift:12},{name:'Oval',a:14,b:22,e:0,lift:8}];
+const rigTau = Math.PI*2, rigCamY = 126, rigCrankY = 44, rigZ = 34;
+const rigBounds = [0,66,0,166,0,102];
+function rigContact(profile, angle){
+  const p=rigProfiles[profile], sn=Math.sin(angle), cs=Math.cos(angle);
+  const h=Math.hypot(p.a*sn,p.b*cs);
+  return [rigCamY+p.e*cs+(p.a*p.a-p.b*p.b)*sn*cs/h,rigZ+p.e*sn+h];
+}
+function rigCrank(angle){
+  const y=rigCrankY+12*Math.sin(angle), z=rigZ+12*Math.cos(angle);
+  return {pin:[38,y,z],slider:[38,rigCrankY,z+Math.sqrt(38*38-(y-rigCrankY)**2)]};
+}
+function rigInverse(height, secondHalf){
+  const d=height-rigZ, c=(d*d+12*12-38*38)/(24*d);
+  const a=Math.acos(Math.min(1,Math.max(-1,c)));
+  return secondHalf ? rigTau-a : a;
+}
+function rigCamMesh(profile, angle, x0, x1, cy, cz, material){
+  const p=rigProfiles[profile], sn=Math.sin(angle),cs=Math.cos(angle);
+  const uv=Array.from({length:72},(_,i)=>{const t=i/72*rigTau,y=p.a*Math.cos(t)+p.e,z=p.b*Math.sin(t);return [cy+y*cs-z*sn,cz+y*sn+z*cs];});
+  const aa=on(PX(x0),uv),bb=on(PX(x1),uv), cap=vis([1,0,0])?bb:aa;
+  return loft(aa,bb,n=>tone(n,material))+fill(pd(cap),tone(vis([1,0,0])?[1,0,0]:[-1,0,0],material))+ink(pd(cap),.7)+hullInk([...aa,...bb],1.9);
+}
+function rigScene(st,m){
+  const k=ease(st.xr||0), parts=[],labels=[], contact=rigContact(st.profile,st.camAngle), top=contact[1],g=rigCrank(st.crankAngle);
+  const active=!!st.motion;
+  const put=(bounds,svg)=>parts.push({box:bounds,svg});
+  const bx=(a,b,material,ghost=false)=>put([a,b],`<g opacity="${ghost?1-.86*k:1}">${box(...a,...b,material,tone,.8)}</g>`);
+  const rr=(a,b,r,material)=>put([[0,1,2].map(i=>Math.min(a[i],b[i])-r),[0,1,2].map(i=>Math.max(a[i],b[i])+r)],rod(a,b,r,material,tone,.7));
+  const cx=(x0,x1,y,z,r,material)=>put([[x0,y-r,z-r],[x1,y+r,z+r]],cylX(x0,x1,y,z,r,material,tone,.8,28));
+  const lab=(text,at,on=active)=>labels.push({text,at,on});
+  let result=board(0,0,66,166,3,5,BOARD);
+  result+=castShadow([[15,20,3],[45,20,96],[45,151,96],[15,151,3]],3,boardTop(0,0,66,166,3,5));
+  for(const cy of [rigCrankY,rigCamY]){
+    bx([14,cy-7,3],[24,cy+7,rigZ-5],m);
+    cx(14,24,cy,rigZ,6,METAL);
+    cx(9,28,cy,rigZ,2.2,METAL);
+    cx(32,35,cy,rigZ,4.2,DARK);
+    // The shaft is split at the solid disk so the painter cannot expose it through the disk face.
+    cx(28,32,cy,rigZ,2.2,METAL);
+  }
+  for(const yy of [rigCamY-28,rigCamY+28]){
+    bx([22,yy-2,3],[36,yy+2,43],m,true);
+    bx([22,yy-2,43],[36,yy+2,76],m,true);
+  }
+  for(const [a,b] of [ [[22,rigCamY-30,76],[28,rigCamY+30,80]],[[32,rigCamY-30,76],[36,rigCamY+30,80]],[[28,rigCamY-30,76],[32,rigCamY-2,80]],[[28,rigCamY+2,76],[32,rigCamY+30,80]] ]) bx(a,b,METAL,true);
+  const camMat=st.profile?PALS.tomato:m;
+  put([[28,rigCamY-23,rigZ-23],[32,rigCamY+23,rigZ+23]],rigCamMesh(st.profile,st.camAngle,28,32,rigCamY,rigZ,camMat));
+  bx([32,rigCamY-1.4,rigZ+1.5],[34,rigCamY+1.4,rigZ+3],METAL);
+  bx([27,rigCamY-24,top],[33,rigCamY+24,top+2],METAL);
+  rr([30,rigCamY,top+2],[30,rigCamY,top+36],1.4,METAL);
+  put([[26,rigCamY-4,top+4],[34,rigCamY+4,top+6]],cyl(30,rigCamY,top+4,top+6,4,METAL,tone,.7,20));
+  const coil=Array.from({length:97},(_,i)=>{const t=i/96,a=t*rigTau*8;return [30+4*Math.cos(a),rigCamY+4*Math.sin(a),top+6+(76-top-6)*t];});
+  for(let i=0;i<96;i+=4){const pts=coil.slice(i,i+5);put([[25,rigCamY-5,pts[0][2]],[35,rigCamY+5,pts[4][2]]],`<path d="${pd(pts,false)}" fill="none" stroke="${INK}" stroke-width="1.5"/><path d="${pd(pts,false)}" fill="none" stroke="${METAL.l}" stroke-width=".6"/>`);}
+  lab('CAM PROFILE',[32,rigCamY-10,rigZ]); lab('CAMSHAFT',[10,rigCamY,rigZ]);
+  lab('KEYED HUB',[34,rigCamY,rigZ+2]); lab('FOLLOWER SHOE',[33,contact[0],top+1]);
+  lab('FOLLOWER STEM',[30,rigCamY,top+32]); lab('RETURN SPRING',[34,rigCamY,(top+6+76)/2]);
+  lab('SPRING COLLAR',[30,rigCamY+4,top+5]);lab('FOLLOWER GUIDE',[32,rigCamY+3,78],false);
+  cx(28,32,rigCrankY,rigZ,16,PALS.cobalt);
+  // A radial spoke painted on each disk face makes a full revolution visible from both sides.
+  const diskFace=vis([1,0,0])?32.02:27.98;
+  const spokeEnd=[diskFace,rigCrankY+13*Math.sin(st.crankAngle),rigZ+13*Math.cos(st.crankAngle)];
+  put([[diskFace,rigCrankY-16,rigZ-16],[diskFace,rigCrankY+16,rigZ+16]],line([[diskFace,rigCrankY,rigZ],spokeEnd],1.2));
+  for(const yy of [rigCrankY-8,rigCrankY+8]){
+    bx([32,yy-2,3],[44,yy+2,57],m,true);
+    bx([32,yy-2,57],[44,yy+2,96],METAL,true);
+  }
+  bx([32,rigCrankY-10,94],[44,rigCrankY+10,97],m,true);
+  bx([34,rigCrankY-6,g.slider[2]-5],[42,rigCrankY+6,g.slider[2]+5],PALS.tomato);
+  rr(g.pin,g.slider,2,METAL);
+  cx(32,41,g.pin[1],g.pin[2],2.3,PALS.mustard);
+  cx(33,43,g.slider[1],g.slider[2],2.3,PALS.mustard);
+  lab('CRANK DISK',[32,rigCrankY-10,rigZ-7]);lab('CRANKSHAFT',[10,rigCrankY,rigZ]);
+  lab('OFFSET PIN',[41,g.pin[1],g.pin[2]]); lab('CONNECTING ROD',g.pin.map((v,i)=>(v+g.slider[i])/2));
+  lab('SLIDER PIN',[43,g.slider[1],g.slider[2]]);lab('SLIDER',[42,rigCrankY-5,g.slider[2]+4]);
+  lab('SLIDER GUIDE',[44,rigCrankY+8,88],false);
+  // The spare rests flat on the bench, supported over its whole face.
+  const spare=rigProfiles[1-st.profile];
+  const spareUV=ellUV(0,0,spare.a,spare.b,72).map(([y,z])=>[(spare.e?20:24)+spare.e+(spare.e?y:z),80+(spare.e?z:y)]);
+  const spareA=on(PZ(3),spareUV),spareB=on(PZ(5),spareUV);
+  put([[2,66,3],[46,94,5]],loft(spareA,spareB,n=>tone(n,PALS.tomato))+shape(spareB,PALS.tomato.l,.8)+shape(on(PZ(5.02),ellUV(spare.e?20:24,80,2.2,2.2,16)),DARK.m,.6));
+  for(const cy of [rigCrankY,rigCamY]){
+    for(const yy of [cy-30,cy+30]) bx([45,yy-1,3],[49,yy+1,8],DARK);
+    put([[46,cy-30,8],[47,cy+30,96]],`<g opacity="${.27*(1-k)+.035*k}">${box(46,cy-30,8,47,cy+30,96,CLEAR,tone,.8)}</g>`);
+  }
+  result+=byDepth(parts);
+  if(st.motion?.kind==='slider'){
+    const a=[51,rigCrankY,g.slider[2]-9],b=[51,rigCrankY,g.slider[2]+9];
+    result+=`<g data-overlay="external-input">${line([a,b],1.8)}${line([[51,rigCrankY-3,b[2]-4],b,[51,rigCrankY+3,b[2]-4]],1.8)}${line([[51,rigCrankY-3,a[2]+4],a,[51,rigCrankY+3,a[2]+4]],1.8)}</g>`;
+  }
+  if(k>.6) result+=xrCallouts(labels,rigBounds);
+  return result;
+}
+function rigRun(st,ui,kind){
+  if(st.motion) return ui.flash('The rig is moving. Swap cam stops it.');
+  if(kind==='slider' && Math.abs(Math.sin(st.crankAngle))<.0001) return ui.flash('Dead centre. Rotate first to give the disk momentum.');
+  const token={kind,startCam:st.camAngle,startCrank:st.crankAngle,progress:0};st.motion=token;
+  const startPhase=Math.acos(Math.max(-1,Math.min(1,(rigCrank(st.crankAngle).slider[2]-72)/12)));
+  const phase=Math.sin(st.crankAngle)<0?rigTau-startPhase:startPhase;
+  ui.animate(dt=>{
+    if(st.motion!==token)return false;
+    token.progress=Math.min(1,token.progress+dt/5);
+    const travel=token.progress*rigTau*2;
+    if(kind==='rotate'){st.camAngle=token.startCam+travel;st.crankAngle=token.startCrank+travel;}
+    else{
+      const q=phase+travel,wrapped=((q%rigTau)+rigTau)%rigTau;
+      st.crankAngle=Math.floor(token.startCrank/rigTau)*rigTau+Math.floor(q/rigTau)*rigTau+rigInverse(72+12*Math.cos(q),wrapped>Math.PI);
+    }
+    if(token.progress===1){st.motion=null;return false;}return true;
+  });
+}
+const ui=mountFigure({fig:'48',title:'Cams and cranks',turn:'full',size:[66,166,102],palette:'mustard',
+ state:{profile:0,camAngle:.5,crankAngle:.55,motion:null},scene:rigScene,
+ stats:st=>[{label:'Cam lift',value:(rigContact(st.profile,st.camAngle)[1]-(st.profile?48:42)).toFixed(1)+' cm'},{label:'Slider stroke',value:'24 cm'},{label:'Profile',value:rigProfiles[st.profile].name}],
+ buttons:[{label:'Rotate',onClick:(st,ui)=>rigRun(st,ui,'rotate')},
+ {label:'Swap cam',onClick:(st,ui)=>{st.motion=null;st.profile=1-st.profile;ui.flash('Stopped. Removable cam exchanged by hand.');}},
+ {label:'Drive slider',onClick:(st,ui)=>rigRun(st,ui,'slider')}],
+ params:(st,q)=>{for(const key of ['camAngle','crankAngle']){const v=Number(q.get(key));if(q.has(key)&&Number.isFinite(v))st[key]=v%rigTau;}if(q.get('profile')==='1')st.profile=1;}
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
