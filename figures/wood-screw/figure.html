@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wood screw</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   The driver blade seats in the head slot. Applied hand torque turns the entire screw.
+   A right-hand helical ridge is integral with the screw. Clockwise rotation viewed from
+   above advances it into one wood specimen. Reverse follows the same damaged thread path.
+   A modest axial pull is resisted at the embedded thread flanks by wood contact and friction.
+   The wood never heals. Fresh specimen explicitly replaces the specimen externally.
+   Teaching adaptation of the 2016 and 1998 pages 63-64. The 1988 edition is unverified.
+   Slow motion, enlarged geometry, ghosted wood and force arrows are teaching devices.
+   The applied hand and specimen restraint are external. No two-board joint is claimed.
+   Anatomy, minimum five before building.
+   SCREW head, head slot, plain shank, integral helical thread, tapered point.
+   INPUT screwdriver blade seated in slot, shaft fixed into handle.
+   SPECIMEN wood surrounding thread. Specimen and arrows do not count as screw anatomy.
+   Data shape is one state object. depth controls both axial position and rotation.
+   maxDepth retains the cut path. motion is null or a single drive/reverse/pull record.
+   Dimensions are enlarged by two model units per illustrative mm. Pitch is 2 mm.
+   Pull is qualitative, not a rated holding-strength calculation. */
+const wsX=28, wsY=25, wsTop=46, wsPitch=4, wsMax=39;
+const wsClamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const wsZ=st=>wsTop-st.depth;
+const wsAngle=st=>-st.depth/wsPitch*2*Math.PI;
+const wsAt=(st,x,y,z)=>{const a=wsAngle(st);return [wsX+x*Math.cos(a)-y*Math.sin(a),wsY+x*Math.sin(a)+y*Math.cos(a),wsZ(st)+z];};
+const wsContact=(st,h)=>{const a=(h-4)/wsPitch*2*Math.PI;return wsAt(st,3.85*Math.cos(a),3.85*Math.sin(a),h);};
+const wsBounds=pts=>[[0,1,2].map(k=>Math.min(...pts.map(p=>p[k]))),[0,1,2].map(k=>Math.max(...pts.map(p=>p[k])))];
+function wsClip(pts,z){
+  const out=[];
+  for(let i=0;i<pts.length;i++){
+    const a=pts[i],b=pts[(i+1)%pts.length],aa=a[2]>=z,bb=b[2]>=z;
+    if(aa) out.push(a);
+    if(aa!==bb){const t=(z-a[2])/(b[2]-a[2]);out.push(a.map((v,k)=>v+(b[k]-v)*t));}
+  }
+  return out;
+}
+function wsScrew(st,m,through){
+  const parts=[];
+  function put(local,n,material=METAL){
+    const a=wsAngle(st),normal=[n[0]*Math.cos(a)-n[1]*Math.sin(a),n[0]*Math.sin(a)+n[1]*Math.cos(a),n[2]];
+    if(!vis(normal))return;
+    let pts=local.map(p=>wsAt(st,...p));
+    if(!through)pts=wsClip(pts,wsTop+.015);
+    if(pts.length<3)return;
+    parts.push({box:wsBounds(pts),at:avg(pts),svg:shape(pts,tone(norm(normal),material),.12)});
+  }
+  function ring(z,r){return ellUV(0,0,r,r,32).map(([x,y])=>[x,y,z]);}
+  function sleeve(z0,z1,r0,r1,mat,cap=true){
+    // Short surface patches sort with the helical ridge and seated blade at every yaw.
+    const count=Math.ceil(z1-z0);
+    for(let h=0;h<count;h++){
+      const t0=h/count,t1=(h+1)/count,a=ring(z0+(z1-z0)*t0,r0+(r1-r0)*t0),b=ring(z0+(z1-z0)*t1,r0+(r1-r0)*t1);
+      for(let i=0;i<32;i++){const j=(i+1)%32,t=(i+.5)/32*2*Math.PI;put([a[i],a[j],b[j],b[i]],[Math.cos(t),Math.sin(t),(r0-r1)/(z1-z0)],mat);}
+    }
+    if(cap)put(ring(z1,r1),[0,0,1],mat);
+    put(ring(z0,r0).reverse(),[0,0,-1],mat);
+  }
+  sleeve(0,5,.08,2.2,METAL);
+  sleeve(5,33,2.2,2.2,METAL);
+  sleeve(33,36,2.2,2.2,METAL);
+  for(let i=0;i<224;i++){
+    const h=4+i/8,h1=4+(i+1)/8,t=i/8*2*Math.PI/wsPitch,t1=(i+1)/8*2*Math.PI/wsPitch;
+    const r=h=>2.2+1.65*Math.min(1,(h-3)/5);
+    const q=(z,t,r)=>[r*Math.cos(t),r*Math.sin(t),z];
+    const a=q(h-.65,t,2.18),b=q(h,t,r(h)),c=q(h+.65,t,2.18);
+    const d=q(h1-.65,t1,2.18),e=q(h1,t1,r(h1)),g=q(h1+.65,t1,2.18);
+    const nr=[Math.cos((t+t1)/2),Math.sin((t+t1)/2),0];
+    put([a,d,e,b],[...nr.slice(0,2),-1.8]);put([b,e,g,c],[...nr.slice(0,2),1.8]);
+  }
+  sleeve(36,39,2.2,6,METAL);sleeve(39,41,6,6,METAL,false);
+  for(const sign of [-1,1]){
+    const edge=Math.asin(.7/6),cap=[];
+    for(let i=0;i<=24;i++){const t=edge+(Math.PI-2*edge)*i/24;cap.push([6*Math.cos(t),sign*6*Math.sin(t),41]);}
+    put(cap,[0,0,1],METAL);
+  }
+  const slotMat=matOf('#534e45');
+  put([[-5.8,-.7,39.7],[5.8,-.7,39.7],[5.8,.7,39.7],[-5.8,.7,39.7]],[0,0,1],slotMat);
+  // The blade's bottom is in the slot, and its sides turn with the screw head.
+  const blade=[[-4.5,-.55,40], [4.5,-.55,40], [4.5,.55,40], [-4.5,.55,40]];
+  const bladeTop=blade.map(([x,y])=>[x*.3,y*1.5,48]);
+  for(let i=0;i<4;i++){const j=(i+1)%4;put([blade[i],blade[j],bladeTop[j],bladeTop[i]],i===0?[0,-1,0]:i===1?[1,0,0]:i===2?[0,1,0]:[-1,0,0]);}
+  sleeve(48,61,1.3,1.3,METAL);
+  sleeve(61,64,1.3,4.5,m);sleeve(64,79,4.5,4.5,m);sleeve(79,81,4.5,3.4,m);
+  for(let i=0;i<6;i++){
+    const t=i*Math.PI/3,dt=.055,r=4.53;
+    put([[r*Math.cos(t-dt),r*Math.sin(t-dt),65],[r*Math.cos(t+dt),r*Math.sin(t+dt),65],[r*Math.cos(t+dt),r*Math.sin(t+dt),78],[r*Math.cos(t-dt),r*Math.sin(t-dt),78]],[Math.cos(t),Math.sin(t),0],matOf('#f5e6c7'));
+  }
+  return byDepth(parts);
+}
+function wsArrow(a,b,col){
+  const d=sub(b,a),unit=norm(d),side=norm(cross(unit,CAM_V)),tip=b;
+  const p=b.map((v,k)=>v-unit[k]*2.8+side[k]*1.5),q=b.map((v,k)=>v-unit[k]*2.8-side[k]*1.5);
+  return `<path d="${pd([a,b],false)}" fill="none" stroke="${col}" stroke-width="2.4"/>`+shape([tip,p,q],col,.6);
+}
+function wsScene(st,m){
+  const k=ease(st.xr||0),base=wsZ(st),woodM=WOOD;
+  let timber=box(0,0,0,56,50,wsTop,woodM,tone,1.5);
+  for(const y of [6,12,18,32,39,45])timber+=line([[2,y,wsTop+.02],[14,y+.7,wsTop+.02],[22,y+.3,wsTop+.02],[40,y+1,wsTop+.02],[54,y,wsTop+.02]],.5).replaceAll(INK,'#92633a');
+  for(const x of [0,56])if(vis([x?1:-1,0,0]))for(const z of [6,13,20,27,32])timber+=line([[x,1,z],[x,18,z+1],[x,35,z],[x,49,z+.7]],.5).replaceAll(INK,'#92633a');
+  const bore=on(PZ(wsTop+.05),ellUV(wsX,wsY,2.4,2.4,32));
+  timber+=shape(bore,'#6c492a',.5);
+  let out=castShadow([[0,0,0],[56,0,0],[56,50,0],[0,50,0],...on(PZ(base+81),ellUV(wsX,wsY,4.5,4.5,16))]);
+  out+=`<g opacity="${1-.86*k}">${timber}</g>`;
+  if(k>0&&st.maxDepth>0){
+    let trace=[];
+    for(let i=0;i<=120;i++){const z=wsTop-st.maxDepth+4+i/120*(st.maxDepth-4),a=(z-wsTop)/wsPitch*2*Math.PI;trace.push([wsX+4*Math.cos(a),wsY+4*Math.sin(a),z]);}
+    if(st.maxDepth>4)out+=`<path d="${pd(trace,false)}" fill="none" stroke="#a97543" stroke-width="1" stroke-dasharray="1.5 1.3" opacity="${k*.7}"/>`;
+  }
+  if(k<1)out+=`<g opacity="${1-k}">${wsScrew(st,m,false)}</g>`;
+  if(k>0)out+=`<g opacity="${k}">${wsScrew(st,m,true)}</g>`;
+  if(st.pull>0){
+    out+=wsArrow([wsX+7,wsY,base+39],[wsX+7,wsY,base+54],'#d54e36');
+    for(const h of [Math.min(24,st.depth-2),Math.min(24,st.depth-2)-2]){const p=wsContact(st,h);out+=wsArrow([p[0],p[1],p[2]+5],p,'#44799f');}
+  }
+  if(k>.6){
+    const moving=!!st.motion&&st.motion.kind!=='pull';
+    const labels=[['HEAD',[5,0,39.5]],['HEAD SLOT',[5.4,0,41.1]],['PLAIN SHANK',[2.2,0,34.5]],['HELICAL THREAD',[3.8,0,23]],['TAPERED POINT',[.5,0,1]],['DRIVER BLADE',[3,0,44]],['DRIVER SHAFT',[1.3,0,55]],['HANDLE',[4.5,0,72]]].map(([text,p])=>({text,at:wsAt(st,...p),on:moving}));
+    if(st.depth>7)labels.push({text:'WOOD CONTACT',at:wsContact(st,Math.min(24,st.depth-2)),on:st.pull>0||moving});
+    out+=xrCallouts(labels,[18,38,15,35,base,base+81]);
+    if(st.pull>0)out+=tag([wsX+7,wsY,base+51],35,-4,'PULL OVERLAY',true)+tag(wsContact(st,Math.min(24,st.depth-2)),45,25,'REACTION OVERLAY',true);
+  }
+  return out;
+}
+function wsMove(st,ui,target){
+  st.pull=0;
+  if(st.depth===target&&!st.motion)return ui.flash(target===wsMax?'Head seated. Reverse to withdraw.':'Already withdrawn. The wood path remains.');
+  st.motion={kind:target>st.depth?'drive':'reverse',from:st.depth,to:target,t:0};wsRun(st,ui);
+}
+function wsRun(st,ui){
+  if(st.running)return;st.running=true;
+  ui.animate(dt=>{
+    const motion=st.motion;
+    if(!motion){st.running=false;return false;}
+    motion.t=Math.min(1,motion.t+dt/(motion.kind==='pull'?2:2.6));
+    if(motion.kind==='pull')st.pull=Math.sin(Math.PI*motion.t);
+    else {st.depth=motion.from+(motion.to-motion.from)*ease(motion.t);st.maxDepth=Math.max(st.maxDepth,st.depth);}
+    if(motion.t===1){st.motion=null;st.pull=0;st.running=false;return false;}
+    return true;
+  });
+}
+const ui=mountFigure({fig:'65',turn:'full',title:'Wood screw',size:[56,50,128],palette:'tomato',
+  state:{depth:0,maxDepth:0,motion:null,pull:0,running:false,specimen:1},scene:wsScene,
+  buttons:[
+    {label:'Drive',onClick:(st,ui)=>wsMove(st,ui,wsMax)},
+    {label:'Reverse',onClick:(st,ui)=>wsMove(st,ui,0)},
+    {label:'Test pull',onClick:(st,ui)=>{
+      if(st.motion)return ui.flash('Finish turning before the pull test.');
+      if(st.depth<12)return ui.flash('Drive farther in before testing the hold.');
+      st.motion={kind:'pull',t:0};ui.flash('Thread contact and friction resist this modest pull.',2100);wsRun(st,ui);
+    }},
+    {label:'Fresh specimen',onClick:(st,ui)=>{st.motion=null;st.depth=st.maxDepth=0;st.pull=0;st.specimen++;ui.flash('External reset. A new wood specimen replaces the used one.');}}
+  ],
+  stats:st=>[{label:'Insertion',value:(st.depth/2).toFixed(1)+' mm'},{label:'Pull test',value:st.pull>0?'Holding':'Idle',small:true},{label:'Specimen',value:String(st.specimen),small:true}],
+  params:(st,q)=>{const n=Number(q.get('depth'));if(q.has('depth')&&Number.isFinite(n))st.depth=st.maxDepth=wsClamp(n,0,wsMax);if(q.get('pull')==='1'&&st.depth>=12)st.pull=1;}
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
