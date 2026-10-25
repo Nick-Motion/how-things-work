@@ -1,0 +1,78 @@
+{
+  "slug": "platform-scales",
+  "title": "Platform scales",
+  "prompt": "A bench teaching model of the page 25 platform scales has a crate, three connected levers and a calibrated bar with a sliding weight. Load places a crate on the platform and unbalances the bar. Slide moves the weight until the three-lever system balances, then displays the mass reading. Add load adds a second crate and unbalances the bar. The user must Slide again before reading the increased mass. See-through shows first- and third-class levers, connecting bars, pivots, load path and sliding weight. Do not show an automatic spring or electronic reading.",
+  "source": "book",
+  "sourceUrl": "https://archive.org/details/the-way-things-work-now-david-macaulay-neil-ardley-z-library/page/n26/mode/1up",
+  "category": "science",
+  "buttons": [
+    "Load",
+    "Slide",
+    "Add load",
+    "Reset"
+  ],
+  "blurb": "A bench teaching model passes crate weight through three connected levers to a bar balanced by a sliding poise.",
+  "expectedAnatomyMinimum": 12,
+  "anatomyLabels": 15,
+  "sourceEvidence": {
+    "printedPage": 25,
+    "editions": {
+      "1998": "direct saved primary page OCR read at index 28",
+      "2016": "direct saved primary page OCR read at index 26",
+      "1988": "access restricted and unverified"
+    },
+    "pageTextSha256": {
+      "1998": "89bc80a36ad713b30704f0bc3e0114c4d4c23a5d2105dce45046b050a71aea88",
+      "2016": "5c0bfe4218742655d6d3fc1273ac950104d445459e232e6a18a3ed6d1d0c1347"
+    },
+    "editionUnionClaim": false
+  },
+  "truthNotes": [
+    "Three levers total, including the calibrated first-class bar. Two third-class stages have neutral travel ratios 3 and 4.",
+    "The load path is platform, stem, lever 1, connecting bar, lever 2, connecting bar, calibrated beam, poise.",
+    "A 1 kg poise at 20 cm balances one 20 kg specimen, and at 40 cm balances two. Readings are hidden during motion and whenever torque is not balanced.",
+    "The beam rises under added load while the existing poise position stays fixed. Slide represents manual adjustment. There is no spring or electronic transducer.",
+    "The base, cover, guides, supports, travel rest, colors and specimen staging are teaching fixtures. The isolated linkage is not an exact reconstruction of the page illustration.",
+    "Link lengths are maintained geometrically. Tare is idealized away; tilt is exaggerated and bounded. This is not a certified weighing instrument.",
+    "Force path overlays and specimens do not count as anatomy."
+  ],
+  "verification": {
+    "telemetry": "n/a, standalone static figure has no production telemetry",
+    "liveVerification": "untested",
+    "localVerdict": "pass",
+    "repairRounds": 2,
+    "anatomyLabelsRendered": 15,
+    "minimumDeclaredBeforeBuild": 12,
+    "browserErrors": [],
+    "renderedNaN": false,
+    "shotsPixels": [
+      1800,
+      1600
+    ],
+    "yawViews": [
+      45,
+      110,
+      170,
+      230,
+      300,
+      {
+        "yaw": 20,
+        "pitch": 62
+      },
+      {
+        "yaw": 200,
+        "pitch": 70
+      }
+    ],
+    "closedAndSeeThroughReviewed": true,
+    "interactionVideo": "evidence/video/interaction.webm",
+    "videoReview": "Frames 0 through 19 seconds reviewed at one frame per second. Initial state, Load, Slide to 20 kg, Add load invalidation, See-through and Slide to 40 kg are visible.",
+    "commands": [
+      "python3 /home/nm/.claude/skills/colorfigures/scripts/build.py figures/platform-scales/figure.html figures/platform-scales/index.html",
+      "timeout --kill-after=5s 90s node figures/platform-scales/evidence/verify.cjs",
+      "timeout --kill-after=5s 150s /home/nm/workspaces/how-things-work/verify_figure.sh platform-scales 12"
+    ],
+    "fullCommandRecord": "evidence/verify.sh",
+    "independentVerification": "pending coordinator assignment"
+  }
+}

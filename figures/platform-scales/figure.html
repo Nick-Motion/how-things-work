@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Platform scales</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   The 1998 and 2016 printed page 25 describe three connected first- and third-class
+   levers. Platform travel is small; successive levers increase travel and reduce
+   force. A sliding weight balances the calibrated bar. Only then is mass read.
+   The saved primary OCR was read for both editions. 1988 is inaccessible and unverified.
+   This is an isolated bench teaching linkage, not the book's exact frame geometry.
+   Two third-class levers feed the first-class calibrated beam. Ratios at balance
+   are 3 and 4. With a 12 cm input arm, 20 kg produces 20 kg cm at the beam.
+   A 1 kg poise at 20 cm balances one crate; 40 cm balances two. Gravity cancels.
+   The tare of the empty platform and bars is zeroed in this idealized lesson.
+   Parts and attachments.
+   Structure: board, base frame and cover; pivot pedestals bolted to the base;
+   beam support fixed to the base; two platform guides fixed to the cover.
+   Mechanism: first lever on its pivot, platform stem bearing on its effort pad;
+   first connecting bar pinned to lever one and lever two; second connecting bar
+   pinned to lever two and the beam; calibrated beam on its support pivot;
+   poise sleeve rides the beam, with an index aligned to engraved graduations.
+   Controls and specimens: Load transfers a staged 20 kg crate onto the platform.
+   Add load transfers the second crate. Slide represents the operator moving
+   the poise, not a motor. Reset returns specimens and poise as a teaching control.
+   The cover, guides, fixtures, colors, masses, dimensions, staging and animations
+   are adaptations. Force overlays are not hardware and do not count as anatomy.
+   Pin-to-pin rods keep exact lengths through the travel. Motion is quasi-static,
+   with exaggerated tilt and bounded travel, not a dynamic or certified scale model.
+*/
+const psBounds = [0,148,0,90,0,92];
+const psSteel = matOf('#587b91'), psBrass = matOf('#e4b747');
+const psOrange = matOf('#e57c4b'), psBlue = matOf('#688ed2');
+const psState = {load:0, poise:0, deflection:0, motion:null, animating:false};
+const psBalanced = st => !st.motion && Math.abs(st.poise - st.load*20) < .001;
+const psTilt = (count, poise) => Math.max(-.024, Math.min(.024, (poise-count*20)*.0012));
+const psBoxOf = (pts,r=0) => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))-r),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i]))+r)];
+// The selected circle intersection is the joint nearest its neutral position.
+function psJoint(c, radius, a, length, neutral){
+  const dx=a[0]-c[0], dz=a[2]-c[2], d=Math.hypot(dx,dz);
+  const along=(radius*radius-length*length+d*d)/(2*d);
+  const across=Math.sqrt(Math.max(0,radius*radius-along*along));
+  const p=[c[0]+along*dx/d,32,c[2]+along*dz/d];
+  const candidates=[-1,1].map(s=>[p[0]-s*across*dz/d,32,p[2]+s*across*dx/d]);
+  return candidates.sort((u,v)=>Math.hypot(u[0]-neutral[0],u[2]-neutral[2])-Math.hypot(v[0]-neutral[0],v[2]-neutral[2]))[0];
+}
+function psGeo(st){
+  const a=st.deflection, p1=[12,32,13], p2=[40,32,30], p3=[84,32,78];
+  const effort=[12+12*Math.cos(a),32,13+12*Math.sin(a)];
+  const end1=[12+36*Math.cos(a),32,13+36*Math.sin(a)];
+  const in2=psJoint(p2,8,end1,17,[48,32,30]);
+  const end2=[40+4*(in2[0]-40),32,30+4*(in2[2]-30)];
+  const in3=psJoint(p3,12,end2,48,[72,32,78]);
+  const ca=(84-in3[0])/12, sa=(78-in3[2])/12;
+  const beam=d=>[84+d*ca,32,78+d*sa];
+  return {p1,p2,p3,effort,end1,in2,end2,in3,beam,top:effort[2]+27,ca,sa};
+}
+function psBeam(a,b,width,height,material){
+  const d=norm(sub(b,a)), up=[-d[2]*height/2,0,d[0]*height/2];
+  const ring=p=>[[p[0]+up[0],p[1]-width/2,p[2]+up[2]],[p[0]+up[0],p[1]+width/2,p[2]+up[2]],
+    [p[0]-up[0],p[1]+width/2,p[2]-up[2]],[p[0]-up[0],p[1]-width/2,p[2]-up[2]]];
+  const ra=ring(a),rb=ring(b),cap=vis(d)?rb:ra;
+  return loft(ra,rb,n=>toneI(n,material))+shape(cap,toneI(vis(d)?d:d.map(v=>-v),material),.7)+hullInk([...ra,...rb],1.9);
+}
+function psScene(st,m){
+  const g=psGeo(st),k=ease(st.xr||0),parts=[],labels=[];
+  const put=(bounds,svg)=>parts.push({box:bounds,svg});
+  const bx=(a,b,material,extra='')=>put([a,b],box(...a,...b,material,toneI,1.1)+extra);
+  const bar=(a,b,r,material)=>put(psBoxOf([a,b],r),rod(a,b,r,material,toneI,1));
+  const lever=(a,b,width,height,material)=>put(psBoxOf([a,b],Math.max(width,height)/2),psBeam(a,b,width,height,material));
+  const label=(at,text,on=false)=>labels.push({at,text,on});
+  let s=board(0,0,148,90,3,5,BOARD);
+  s+=castShadow([[7,20,3],[94,20,3],[94,44,3],[7,44,3],g.beam(54),[84,32,78],[15,14,g.top],[39,57,g.top]],3,boardTop(0,0,148,90,3,5));
+  const body=box(6,22,3,96,42,8,m,tone,1.4)+box(8,24,8,77,40,35,m,tone,1.5);
+  if(k>0)s+=`<g opacity="${1-.88*k}">${body}</g>`;
+  else parts.push({box:[[8,24,8],[77,40,35]],svg:box(8,24,8,77,40,35,m,tone,1.5),shell:true});
+  bx([6,22,3],[96,42,8],psSteel);
+  for(const [p,z0] of [[g.p1,8],[g.p2,8]]){
+    for(const y of [28,35])bx([p[0]-2,y,z0],[p[0]+2,y+1,p[2]],psSteel);
+    bar([p[0],27,p[2]],[p[0],37,p[2]],1.3,METAL);
+  }
+  for(const y of [27,36]){
+    for(const [z0,z1] of [[8,30],[30,55],[55,78]])bx([82,y,z0],[86,y+1,z1],psSteel);
+  }
+  bar([84,26,78],[84,38,78],1.6,METAL);
+  const active=st.load>0;
+  lever(g.p1,g.end1,4,2.6,psOrange);
+  lever(g.p2,g.end2,4,2.6,psBlue);
+  bar(g.end1,g.in2,.95,METAL);
+  const linkStart=k>0?g.end2:g.end2.map((v,i)=>v+(g.in3[i]-v)*Math.max(0,(35-g.end2[2])/(g.in3[2]-g.end2[2])));
+  bar(linkStart,g.in3,.95,METAL);
+  for(const p of [g.end1,g.in2,g.end2,g.in3,g.effort])bar([p[0],29.5,p[2]],[p[0],34.5,p[2]],1.2,psBrass);
+  const stem=[g.effort[0],32,g.top-2];
+  bar(k>0?g.effort:[g.effort[0],32,35],stem,1.6,METAL);
+  for(const y of [27,34]){
+    bx([22,y,33],[26,y+3,g.top-2],METAL);
+    bx([21,y-1,32],[27,y+4,35],psSteel);
+  }
+  let platform=box(9,10,g.top-2,40,57,g.top,m,tone,1.5);
+  for(const y of [13,20,27,34,41,48,54])platform+=line([[11,y,g.top+.06],[38,y,g.top+.06]],.5);
+  if(k>0)s+=`<g opacity="${1-.8*k}">${platform}</g>`;
+  else put([[9,10,g.top-2],[40,57,g.top]],platform);
+  lever(g.in3,g.beam(54),4,3,psBrass);
+  for(let d=0;d<=50;d+=2){
+    const p=g.beam(d),len=d%10===0?3.7:2;
+    bar([p[0],34.05,p[2]-1.25],[p[0],34.05,p[2]-1.25+len*.5],.09,DARK);
+    if(d%10===0){
+      const txt=txY(p[0],34.12,p[2]+3.6,String(d),2.3,INK,800);
+      put(psBoxOf([[p[0]-1,34.1,p[2]],[p[0]+1,34.2,p[2]+4]]),txt);
+    }
+  }
+  const weight=g.beam(st.poise),wa=g.beam(st.poise-2.6),wb=g.beam(st.poise+2.6);
+  lever(wa,wb,8,9,DARK);
+  const index=[weight[0],36.1,weight[2]+4.5];
+  bar([index[0],index[1],index[2]],[index[0],index[1],index[2]-9],.18,psOrange);
+  bx([137,29,3],[141,35,68],psSteel);
+  bx([136,28,68],[142,36,69],METAL);
+  for(let i=0;i<2;i++){
+    let x=25+i*24,y=76,z=3;
+    if(i<st.load){x=25;y=23+i*23;z=g.top;}
+    if(st.motion&&st.motion.kind==='load'&&st.motion.index===i){
+      const t=Math.min(1,st.motion.t/1.05),e=ease(t);
+      x=25+i*24+(25-(25+i*24))*e;y=76+(23+i*23-76)*e;
+      z=3+(g.top-3)*e+28*Math.sin(Math.PI*t);
+    }
+    let crate=box(x-8,y-8,z,x+8,y+8,z+16,WOOD,toneI,1.4);
+    if(vis([1,0,0]))crate+=line([[x+8.1,y-7,z+2],[x+8.1,y+7,z+14]],1.1)+tx(x+8.2,y,z+7,'20 kg',2.8,INK,800);
+    if(vis([0,1,0]))crate+=line([[x-7,y+8.1,z+2],[x+7,y+8.1,z+14]],1.1);
+    crate+=line([[x-7,y-7,z+16.1],[x+7,y+7,z+16.1]],.8);
+    if(k>0&&i<st.load)s+=`<g opacity="${1-.7*k}">${crate}</g>`;
+    else put([[x-8,y-8,z],[x+8,y+8,z+16]],crate);
+  }
+  let content=byDepth(parts);
+  if(k===0){
+    // The complete solid cover occludes the low linkage in the normal view.
+    const visible=parts.filter(p=>p.shell||p.box[1][2]>35||p.box[1][2]<=8||p.box[0][1]>=40);
+    content=byDepth(visible);
+  }
+  s+=content;
+  if(k>.6){
+    label([24,12,g.top],'PLATFORM',active);
+    label([24,32,24+g.effort[2]-13],'LOAD STEM',active);
+    label([28,32,13+16*Math.sin(st.deflection)],'LEVER 1 / THIRD CLASS',active);
+    label(g.p1,'FIRST FULCRUM',active);
+    label(avg([g.end1,g.in2]),'FIRST CONNECTING BAR',active);
+    label(avg([g.p2,g.end2]),'LEVER 2 / THIRD CLASS',active);
+    label(g.p2,'SECOND FULCRUM',active);
+    label(avg([g.end2,g.in3]),'SECOND CONNECTING BAR',active);
+    label(g.beam(28),'BEAM / FIRST CLASS',active);
+    label(g.p3,'BEAM FULCRUM',active);
+    label([84,36,55],'BEAM SUPPORT');
+    label(weight,'SLIDING WEIGHT',st.motion?.kind==='slide');
+    label(index,'POISE INDEX',st.motion?.kind==='slide');
+    label(g.beam(48),'GRADUATIONS');
+    label([9,22,5],'BASE FRAME');
+    if(active){
+      const route=[[24,32,g.top+7],g.effort,g.end1,g.in2,g.end2,g.in3,g.p3,g.beam(st.poise)];
+      s+=`<path d="${pd(route,false)}" fill="none" stroke="#cb4b2a" stroke-width="1.2" stroke-dasharray="2 2" opacity=".8"/>`;
+      const tip=[24,32,g.top+2];
+      s+=shape([[22.5,32,tip[2]+3],tip,[25.5,32,tip[2]+3]],'#cb4b2a',.4);
+    }
+    s+=xrCallouts(labels,psBounds);
+  }
+  return s;
+}
+function psKick(st,ui){
+  if(st.animating)return;st.animating=true;
+  ui.animate(dt=>{
+    const move=st.motion;
+    if(!move){st.animating=false;return false;}
+    move.t+=dt;
+    if(move.kind==='slide'){
+      const e=ease(Math.min(1,move.t/1.3));
+      st.poise=move.from+(st.load*20-move.from)*e;
+      st.deflection=psTilt(st.load,st.poise);
+    }else{
+      const e=ease(Math.max(0,Math.min(1,(move.t-.7)/.8)));
+      st.deflection=move.from+(psTilt(st.load,st.poise)-move.from)*e;
+    }
+    if(move.t>=(move.kind==='slide'?1.3:1.5)){
+      if(move.kind==='slide')st.poise=st.load*20;
+      st.deflection=psTilt(st.load,st.poise);st.motion=null;st.animating=false;return false;
+    }
+    return true;
+  });
+}
+function psLoad(st,ui,extra){
+  if(st.motion)return ui.flash('Wait for the movement to finish');
+  if(extra&&st.load===0)return ui.flash('Load the first crate');
+  if(st.load===(extra?2:1)||st.load===2)return ui.flash(extra?'Both crates are on the platform':'The first crate is already loaded');
+  const index=st.load;st.load++;st.motion={kind:'load',index,t:0,from:st.deflection};psKick(st,ui);
+}
+const psUi=mountFigure({
+  fig:'25',turn:'full',title:'Platform scales',size:[148,90,92],palette:'mint',state:psState,
+  scene:psScene,
+  stats:st=>[{label:'Mass reading',value:psBalanced(st)?`${st.load*20} kg`:'Balance first'},
+    {label:'Bar',value:st.motion?'Moving':psBalanced(st)?'Balanced':'Unbalanced',small:true}],
+  buttons:[
+    {label:'Load',onClick:(st,ui)=>psLoad(st,ui,false)},
+    {label:'Slide',onClick:(st,ui)=>{
+      if(st.motion)return ui.flash('Wait for the movement to finish');
+      if(!st.load)return ui.flash('Load a crate first');
+      if(psBalanced(st))return ui.flash('The bar is already balanced');
+      st.motion={kind:'slide',t:0,from:st.poise};psKick(st,ui);
+    }},
+    {label:'Add load',onClick:(st,ui)=>psLoad(st,ui,true)},
+    {label:'Reset',onClick:st=>{st.load=0;st.poise=0;st.deflection=0;st.motion=null;}}
+  ],
+  params:(st,q)=>{
+    const count=Number(q.get('load')||0),poise=Number(q.get('poise')||0);
+    st.load=Number.isInteger(count)?Math.max(0,Math.min(2,count)):0;
+    st.poise=Number.isFinite(poise)?Math.max(0,Math.min(40,poise)):0;
+    st.deflection=psTilt(st.load,st.poise);
+  }
+});
+xrMount(()=>psUi,()=> '');
+</script></body></html>
