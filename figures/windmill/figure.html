@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Windmill</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   The 2016 page 34 drawing combines a four-sail wind-shaft, brake wheel, wallower,
+   upright shaft, great spur wheel and two stone sets. Its post-mill inset turns the
+   complete body about the fixed post. This scale teaching adaptation combines them.
+   Rectangular cloth-covered lattice sails are used. Neither jib rigging nor spring
+   shutters are added. The external blower and specimen feed fixture are teaching aids.
+   Wind turns the sail stocks and their attached shaft and brake wheel. The 48-cog
+   brake wheel drives a 16-tooth wallower at a right angle. The same upright carries
+   the 40-tooth spur wheel, driving two 12-tooth stone nuts and the upper stones.
+   These illustrative counts make the runner turn ten times per sail revolution.
+   They are chosen model dimensions, not tooth counts measured from the book.
+   Grain leaves the hopper through its shoe, falls down the runner's open eye, meets
+   the stationary bedstone at z=76.5, then travels radially through the real 0.8 gap
+   to the stone edge. It remains there as a visible crushed specimen. With no wind
+   it waits in the gap. Feed again replaces that specimen, a teaching operation.
+   Structure. Board supports cross trees and quarter bars, which support the main
+   post. The saddle pivots on its top. Floor beams, body corners and roof frame
+   belong to the saddle. Tailpole and stair stringers attach to the body floor.
+   Power. Sail cloth, lattice bars and stocks attach to the poll end of the wind
+   shaft. Neck and tail bearings attach to body beams. Brake wheel rim, spokes,
+   cogs and hub attach to the shaft. The wallower and spur wheel share the upright,
+   supported by upper and lower bearing beams. Stone nuts share the spindles, held
+   by floor bearings. Bedstones rest on stone bearers, runners rest on their rynds.
+   Features. Runner eye and grinding gap are actual voids. Furrows are surface cuts.
+   Apparatus. Blower foot supports its column, motor housing, hub, blades and guard.
+   Feed stand bolts to the stone bearer and carries the hopper and specimen shoe.
+   Expected anatomy exceeds 30 meaningful labels. Air lines are a force overlay.
+*/
+const wmWood = matOf('#be854e'), wmSail = matOf('#fff0c8'), wmStone = matOf('#c9c4b6');
+const wmGearMat = matOf('#dfb155'), wmRoof = matOf('#6c8593');
+const wmTrain = {brake:48, wallower:16, spur:40, pinion:12, brakeRadius:18, wallowerRadius:6, spurRadius:13.5, pinionRadius:4.05, uprightX:-2.5, stoneY:17.55};
+const wmState = {wind:false, heading:.55, target:.55, angle:0, speed:0, fan:0, grain:null};
+const wmAngles = st => {const upright=st.angle*wmTrain.brake/wmTrain.wallower;return {brake:st.angle,upright,stone:-upright*wmTrain.spur/wmTrain.pinion};};
+const wmPoint = (st,p,fixed=false) => {const a=fixed?0:st.heading,c=Math.cos(a),s=Math.sin(a);return[70+p[0]*c-p[1]*s,65+p[0]*s+p[1]*c,p[2]];};
+const wmBounds = pts => [0,1].map(side=>[0,1,2].map(i=>(side?Math.max:Math.min)(...pts.map(p=>p[i]))));
+function wmCallouts(items){
+ const svg=document.getElementById('fig'),vb=svg.viewBox.baseVal,scale=svg.clientWidth/vb.width,phone=innerWidth<=560;
+ const savedInk=INK_K;if(!phone)INK_K=7.2/(8.6*scale);
+ const sorted=items.slice().sort((a,b)=>P(...a.at)[0]-P(...b.at)[0]),columns=phone?4:2,rows=Math.ceil(sorted.length/columns);
+ let result='';
+ for(let col=0;col<columns;col++){
+  const group=sorted.slice(col*rows,(col+1)*rows).sort((a,b)=>P(...a.at)[1]-P(...b.at)[1]);
+  const x=vb.width*(phone?[.04,.12,.88,.96][col]:[.25,.69][col]);
+  const gap=Math.min((vb.height-24/scale)/rows,(phone?20:16)/scale);
+  group.forEach((it,i)=>{const p=P(...it.at),y=vb.y+14/scale+(i+.5)*gap;result+=tag(it.at,(x-p[0])/INK_K,(y-p[1])/INK_K,it.text,it.on);});
+ }
+ INK_K=savedInk;return result;
+}
+function wmScene(st,m){
+ const outer=[],inside=[],shell=[],labels=[],drive=wmAngles(st),run=st.speed>.01;
+ const add=(list,pts,svg,name,anchor,on=false)=>{list.push({box:wmBounds(pts),svg});if(name&&!labels.some(l=>l.text===name))labels.push({at:anchor||avg(pts),text:name,on});};
+ const mesh=(list,pts,faces,material,name,anchor,on=false)=>{
+  const center=avg(pts);let svg='';
+  for(const ids of faces){const ps=ids.map(i=>pts[i]);let normal=norm(cross(sub(ps[1],ps[0]),sub(ps[2],ps[0])));if(dot(normal,sub(avg(ps),center))<0)normal=normal.map(v=>-v);if(vis(normal))svg+=shape(ps,tone(normal,material),.65);}
+  add(list,pts,svg,name,anchor,on);
+ };
+ const block=(list,lo,hi,material,name,anchor,fixed=false)=>{
+  const pts=[[lo[0],lo[1],lo[2]],[hi[0],lo[1],lo[2]],[hi[0],hi[1],lo[2]],[lo[0],hi[1],lo[2]],[lo[0],lo[1],hi[2]],[hi[0],lo[1],hi[2]],[hi[0],hi[1],hi[2]],[lo[0],hi[1],hi[2]]].map(p=>wmPoint(st,p,fixed));
+  mesh(list,pts,[[0,1,2,3],[0,4,5,1],[1,5,6,2],[2,6,7,3],[3,7,4,0],[4,7,6,5]],material,name,anchor&&wmPoint(st,anchor,fixed));
+ };
+ const bar=(list,a,b,r,material,name,on=false,fixed=false)=>{
+  a=wmPoint(st,a,fixed);b=wmPoint(st,b,fixed);const ps=[a,b].flatMap(p=>[p.map(v=>v-r),p.map(v=>v+r)]);add(list,ps,rod(a,b,r,material,tone,.8),name,avg([a,b]),on);
+ };
+ const ring=(list,center,axis,r,inner,t,material,name,phase=0,on=false,fixed=false,teeth=0)=>{
+  const uv=(rad,a,z)=>axis==='x'?[center[0]+z,center[1]+rad*Math.cos(a),center[2]+rad*Math.sin(a)]:[center[0]+rad*Math.cos(a),center[1]+rad*Math.sin(a),center[2]+z];
+  const n=teeth?teeth*4:40,profile=Array.from({length:n},(_,i)=>{const a=phase+i/n*Math.PI*2,rr=teeth?r+([-.55,.65,.65,-.55][i%4]):r;return[rr,a];});
+  const A=profile.map(([rr,a])=>wmPoint(st,uv(rr,a,-t/2),fixed)),B=profile.map(([rr,a])=>wmPoint(st,uv(rr,a,t/2),fixed));
+  const Ai=profile.map(([,a])=>wmPoint(st,uv(inner,a,-t/2),fixed)),Bi=profile.map(([,a])=>wmPoint(st,uv(inner,a,t/2),fixed));
+  const dir=axis==='x'?sub(wmPoint(st,[1,0,0],fixed),wmPoint(st,[0,0,0],fixed)):[0,0,1],cap=vis(dir)?B:A,ic=vis(dir)?Bi:Ai;
+  let svg=loft(A,B,nr=>tone(nr,material))+loft(Ai,Bi,nr=>tone(nr,material),true);
+  svg+=fill(pd(cap)+pd(ic),tone(vis(dir)?dir:dir.map(v=>-v),material),'fill-rule="evenodd"')+ink(pd(cap),.8)+ink(pd(ic),.65);
+  add(list,A.concat(B),svg,name,wmPoint(st,uv(r,phase+.6,t/2),fixed),on);
+ };
+ block(outer,[-30,-3,3],[30,3,8],wmWood,'CROSS TREES',null,true);
+ block(outer,[-3,-31,8],[3,31,12],wmWood,null,null,true);
+ bar(outer,[0,0,11],[0,0,49],4.2,wmWood,'MAIN POST',false,true);
+ for(const [x,y] of [[25,0],[-25,0],[0,25],[0,-25]])bar(outer,[x,y,10],[0,0,39],1.9,wmWood,'QUARTER BARS',false,true);
+ block(outer,[-13,-8,44],[13,8,49],wmWood,'PIVOT SADDLE');
+ for(const y of [-20,20])block(inside,[-24,y-1.6,48],[24,y+1.6,52],wmWood,'FLOOR BEAMS');
+ block(shell,[-24,-25,52],[24,25,54],wmWood,'FLOOR');
+ for(const x of [-23,23])for(const y of [-24,24])block(inside,[x-1.4,y-1.4,54],[x+1.4,y+1.4,115],wmWood,'CORNER POSTS');
+ const walls=[ [[-24,-25,54],[24,-24,115]], [[-24,24,54],[24,25,115]], [[-24,-24,54],[-23,24,115]], [[23,-24,54],[24,24,115]] ];
+ for(const [lo,hi] of walls)block(shell,lo,hi,m,'WEATHERBOARDS');
+ for(let z=61;z<114;z+=7){
+  for(const y of [-25.05,25.05]){const pts=[wmPoint(st,[-24,y,z]),wmPoint(st,[24,y,z])];add(shell,pts,line(pts,.45));}
+  for(const x of [-24.05,24.05]){const pts=[wmPoint(st,[x,-24,z]),wmPoint(st,[x,24,z])];add(shell,pts,line(pts,.45));}
+ }
+ const roofPoints=[[-27,-28,114],[27,-28,114],[27,0,133],[-27,0,133],[-27,28,114],[27,28,114]].map(p=>wmPoint(st,p));
+ mesh(shell,roofPoints,[[0,1,2,3],[3,2,5,4],[0,3,4],[1,5,2],[0,4,5,1]],wmRoof,'GABLED ROOF');
+ bar(shell,[-27,0,133],[27,0,133],.8,wmRoof,'RIDGE');
+ block(shell,[-24.5,-9,54],[-24,9,83],wmWood,'REAR DOOR');
+ for(const y of [-9,9])bar(outer,[-24,y,54],[-53,y,6],1.3,wmWood,'STAIR STRINGERS');
+ for(let i=0;i<8;i++){const t=i/8;block(outer,[-52+28*t,-10,6+46*t],[-47+28*t,10,8+46*t],wmWood,'STAIR TREADS');}
+ bar(outer,[-21,17,52],[-57,17,11],1.4,wmWood,'TAILPOLE');
+ bar(outer,[24,0,103],[43,0,103],2.5,wmWood,'WIND-SHAFT',run);
+ bar(inside,[-19,0,103],[24,0,103],2.5,wmWood,null,run);
+ ring(outer,[42,0,103],'x',4.1,.8,4,wmWood,'POLL END',st.angle,run);
+ for(const x of [-19,22]){
+  block(inside,[x-2.5,-23,97],[x+2.5,23,100],wmWood,'BEARING BEAMS');
+  bar(inside,[x,0,99],[x,0,103],3.5,METAL,x>0?'NECK BEARING':'TAIL BEARING');
+ }
+ const sailPoint=(u,v,x=44)=>[x,u*Math.cos(st.angle)-v*Math.sin(st.angle),103+u*Math.sin(st.angle)+v*Math.cos(st.angle)];
+ for(let i=0;i<4;i++){
+  const a=i*Math.PI/2,sp=(r,w,x=44)=>sailPoint(r*Math.cos(a)-w*Math.sin(a),r*Math.sin(a)+w*Math.cos(a),x);
+  bar(outer,sp(0,0),sp(48,0),1.05,wmWood,'SAIL STOCKS',run);
+  const pts=[sp(12,.6),sp(48,.6),sp(48,10),sp(12,10)].map(p=>wmPoint(st,p));
+  const cloth=shape(pts,wmSail.l,.7);add(outer,pts,cloth,'SAIL CLOTH',avg(pts),run);
+  for(const w of [0,5,10])bar(outer,sp(11,w,44.3),sp(48,w,44.3),.38,wmWood,'LATTICE LONGITUDINALS',run);
+  for(let r=12;r<=48;r+=6)bar(outer,sp(r,0,44.6),sp(r,10,44.6),.4,wmWood,'LATTICE CROSSBARS',run);
+ }
+ ring(inside,[5,0,103],'x',16.3,13.7,2.8,wmWood,'BRAKE WHEEL RIM',drive.brake,run);
+ for(let i=0;i<4;i++){const a=drive.brake+i*Math.PI/2;bar(inside,[5,0,103],[5,14*Math.cos(a),103+14*Math.sin(a)],1,wmWood,'BRAKE WHEEL SPOKES',run);}
+ ring(inside,[3.5,0,103],'x',wmTrain.brakeRadius,16.3,2.5,wmGearMat,'BRAKE WHEEL COGS',drive.brake,run,false,wmTrain.brake);
+ ring(inside,[-2.5,0,85],'z',wmTrain.wallowerRadius,1.9,2.6,wmGearMat,'WALLOWER',drive.upright+Math.PI/wmTrain.wallower,run,false,wmTrain.wallower);
+ for(const [z0,z1] of [[54,58],[61,83],[86,91]])bar(inside,[-2.5,0,z0],[-2.5,0,z1],1.8,wmWood,'UPRIGHT SHAFT',run);
+ for(const z of [54,90]){block(inside,[-7,-24,z-2],[2,24,z],wmWood,'UPRIGHT BEARING BEAM');ring(inside,[-2.5,0,z],'z',3.2,1.9,2,METAL,'UPRIGHT BEARINGS');}
+ ring(inside,[-2.5,0,59.5],'z',wmTrain.spurRadius,1.8,3,wmGearMat,'GREAT SPUR WHEEL',drive.upright,run,false,wmTrain.spur);
+ for(const y of [-wmTrain.stoneY,wmTrain.stoneY]){
+  const side=y<0?'LEFT':'RIGHT';
+  ring(inside,[-2.5,y,59.5],'z',wmTrain.pinionRadius,1,3,wmGearMat,side+' STONE NUT',drive.stone+Math.PI/12,run,false,wmTrain.pinion);
+  bar(inside,[-2.5,y,61],[-2.5,y,79],.9,METAL,side+' STONE SPINDLE',run);
+  block(inside,[-14,y-9,69],[10,y+9,71],wmWood,'STONE BEARERS');
+  for(const x of [-12,8])block(inside,[x-1,y-7,52],[x+1,y+7,69],wmWood,'STONE SUPPORTS');
+  ring(inside,[-2.5,y,72],'z',2.1,1,2,METAL,'SPINDLE BEARING');
+  ring(inside,[-2.5,y,73.8],'z',8.4,1,5.4,wmStone,side+' BEDSTONE');
+  ring(inside,[-2.5,y,79.6],'z',8.4,2.1,4.6,wmStone,side+' RUNNER STONE',drive.stone,run);
+  const ra=drive.stone;bar(inside,[-2.5-2.3*Math.cos(ra),y-2.3*Math.sin(ra),78.2],[-2.5+2.3*Math.cos(ra),y+2.3*Math.sin(ra),78.2],.38,METAL,'STONE RYND',run);
+  labels.push({at:wmPoint(st,[-2.5,y,81.9]),text:side+' RUNNER EYE',on:!!st.grain});
+  labels.push({at:wmPoint(st,[5.9,y,76.9]),text:side+' GRINDING GAP',on:!!st.grain&&run});
+  for(let i=0;i<8;i++){const a=i*Math.PI/4,pts=[wmPoint(st,[-2.5+1.4*Math.cos(a),y+1.4*Math.sin(a),76.51]),wmPoint(st,[-2.5+8.3*Math.cos(a+.18),y+8.3*Math.sin(a+.18),76.51])];add(inside,pts,line(pts,.55),'BEDSTONE FURROWS',avg(pts),run);}
+ }
+ const feedY=wmTrain.stoneY;
+ bar(inside,[-13,feedY+5,71],[-13,feedY+5,96],.7,METAL,'FEED STAND - AID');
+ bar(inside,[-13,feedY+5,96],[-2.5,feedY,96],.7,METAL,null);
+ const funnelA=on(PZ(88),ellUV(-1,feedY,.7,.7,20)).map(p=>wmPoint(st,p)),funnelB=on(PZ(96),ellUV(-2.5,feedY,4,4,20)).map(p=>wmPoint(st,p));
+ add(inside,funnelA.concat(funnelB),loft(funnelA,funnelB,n=>tone(n,METAL))+ink(pd(funnelB),.8),'HOPPER - AID',avg(funnelB));
+ ring(inside,[-1,feedY,86],'z',.7,.55,4,METAL,'FEED SHOE - AID');
+ if(!st.grain||st.grain.stage==='done')ring(inside,[-2.5,feedY,94.5],'z',2.7,.01,.7,matOf('#d8a543'),'GRAIN SPECIMEN');
+ if(st.grain){const g=wmGrainPosition(st);bar(inside,g,[g[0],g[1],g[2]+.1],.23,matOf(st.grain.stage==='done'?'#efdab1':'#d99c32'),'GRAIN SPECIMEN',run);}
+ const fanFixed=true;
+ block(outer,[75,-10,3],[98,10,6],m,'BLOWER FOOT - AID',null,fanFixed);
+ bar(outer,[87,0,6],[87,0,96],1.7,METAL,'BLOWER COLUMN - AID',false,fanFixed);
+ bar(outer,[86,0,103],[97,0,103],5,m,'BLOWER MOTOR - AID',st.wind,fanFixed);
+ ring(outer,[85,0,103],'x',17,15.7,3,METAL,'BLOWER GUARD - AID',0,false,fanFixed);
+ for(let i=0;i<8;i++){const a=i*Math.PI/4;bar(outer,[83,2*Math.cos(a),103+2*Math.sin(a)],[83,16*Math.cos(a),103+16*Math.sin(a)],.35,METAL,null,false,fanFixed);}
+ for(let i=0;i<4;i++){const a=st.fan+i*Math.PI/2;bar(outer,[85,2*Math.cos(a),103+2*Math.sin(a)],[85,13*Math.cos(a+.3),103+13*Math.sin(a+.3)],2.1,m,'BLOWER BLADES - AID',st.wind,fanFixed);}
+ bar(outer,[83,0,103],[89,0,103],2.3,METAL,'BLOWER HUB - AID',st.wind,fanFixed);
+ const k=ease(st.xr||0);let result=board(5,5,175,125,3,5);
+ result+=castShadow([wmPoint(st,[0,0,3]),wmPoint(st,[-25,-25,115]),wmPoint(st,[25,25,115]),wmPoint(st,[0,0,133])],3,boardTop(5,5,175,125,3,5));
+ result+=k>0?`<g opacity="${1-.9*k}">${byDepth(shell)}</g>`+byDepth(outer.concat(inside.map(p=>({...p,svg:`<g opacity="${k}">${p.svg}</g>`})))):byDepth(shell.concat(outer));
+ if(st.wind){let flow='';for(const y of [-10,0,10]){const pts=[[79,y,103],[67,y,103],[55,y,103]].map(p=>wmPoint(st,p,true));flow+=`<path d="${pd(pts,false)}" fill="none" stroke="#598cad" stroke-width=".9" stroke-dasharray="3 3" stroke-dashoffset="${-st.fan*2}"/>`;}result+=`<g aria-label="Airflow force overlay" opacity=".7">${flow}</g>`;}
+ if(k>.6)result+=wmCallouts(labels);
+ return result;
+}
+function wmGrainPosition(st){
+ const g=st.grain,y=wmTrain.stoneY;
+ if(g.stage==='fall')return[-1,y,94-17.1*g.progress];
+ return[-1+7*g.progress,y,76.9];
+}
+function wmUpdate(st,dt){
+ const delta=st.target-st.heading;st.heading+=Math.sign(delta)*Math.min(Math.abs(delta),dt*.6);
+ const goal=st.wind?.43*Math.max(0,Math.cos(st.heading)):0;st.speed+=Math.sign(goal-st.speed)*Math.min(Math.abs(goal-st.speed),dt*.4);
+ st.angle+=st.speed*dt;if(st.wind)st.fan+=dt*5;
+ if(st.grain){const g=st.grain;if(g.stage==='fall'){g.progress=Math.min(1,g.progress+dt/1.2);if(g.progress===1){g.stage='gap';g.progress=0;}}
+ else if(g.stage==='gap'&&st.speed>.01){g.progress=Math.min(1,g.progress+st.speed*dt*1.2);if(g.progress===1)g.stage='done';}}
+}
+let wmUI,wmLoop=false;
+function wmKick(){if(wmLoop)return;wmLoop=true;wmUI.animate(dt=>{wmUpdate(wmState,dt);const more=wmState.wind||wmState.speed>0||wmState.heading!==wmState.target||(wmState.grain&&wmState.grain.stage==='fall');if(!more)wmLoop=false;return !!more;});}
+wmUI=mountFigure({fig:'34',title:'Windmill',turn:'full',size:[180,130,154],center:[85,65],palette:'tomato',state:wmState,scene:wmScene,
+ stats:st=>[{label:'Sails',value:(st.speed*60/(2*Math.PI)).toFixed(1)+' rpm'},{label:'Runner',value:(st.speed*600/(2*Math.PI)).toFixed(1)+' rpm'},{label:'Wind angle',value:Math.round(Math.abs(st.heading)*180/Math.PI)+' deg',small:true}],
+ buttons:[
+  {label:'Wind',onClick:(st,ui)=>{st.wind=!st.wind;wmKick();ui.flash(st.wind?'Bench blower on':'Bench blower off');}},
+  {label:'Face wind',onClick:(st,ui)=>{if(st.target===0)return ui.flash('The sails already face the blower');st.target=0;wmKick();}},
+  {label:'Feed grain',onClick:(st,ui)=>{if(st.grain&&st.grain.stage!=='done')return ui.flash('The specimen is still at the stones');st.grain={stage:'fall',progress:0};wmKick();}},
+ ],
+ params:(st,q)=>{const h=Number(q.get('heading'));if(q.has('heading')&&Number.isFinite(h))st.heading=st.target=Math.max(-Math.PI/2,Math.min(Math.PI/2,h));if(q.get('wind')==='1'){st.wind=true;st.speed=.43*Math.max(0,Math.cos(st.heading));}if(q.get('grain')==='1')st.grain={stage:'gap',progress:0};}
+});
+xrMount(()=>wmUI,()=> '');
+if(wmState.wind)wmKick();
+</script></body></html>
