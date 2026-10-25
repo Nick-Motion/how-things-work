@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tower crane</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Source-cleared teaching adaptation of Macaulay, pages 56, 58 and 59.
+   Saved primary text supports 1998 and 2016. The 1988 edition is inaccessible and unverified.
+   Hoist winds a two-fall rope from its drum, over lifting guides, around the trolley and hook sheaves,
+   to the jib-tip anchorage. Raising the hook by d takes up 2d of rope. A separate trolley loop rolls
+   the trolley on the jib rails. Counterweight balances the jib and load, as with the shadoof.
+   Climb lowers the ordinary payload to the ground and detaches it. Move the empty hook to the waiting
+   complete section. The ram pushes against a mast-supported crosshead and lifts the rigid climbing
+   cage and entire top assembly. Hoist the section, trolley it into the gap, seat it and fasten bolts.
+   The lower tower never stretches. This slowed scale sequence is not a construction procedure.
+   It omits rigging labour, balance calculations, repeated ram strokes, temporary locks and frame removal.
+   Reset replaces the teaching setup. Blue hoist and coral trolley ropes are real ropes recoloured in xray.
+   Parts and attachment. Foundation, base plates and anchors hold mast chords, ties, braces, splice
+   lugs and ladder. A mast crosshead holds the ram barrel. Its rod bears on the cage top crossbeam.
+   Cage posts, guide shoes and platform move together. Slewing bearing and ring carry the deck.
+   Motor pinion touches the ring. Deck holds cab, jib roots and A-frame. Jib webs and chords carry
+   rails, trolley wheels, stops and rope anchor. A-frame stays support both jibs. Counter-jib carries
+   counterweight, hoist bearings, drum, shaft, brake, motor and independent trolley winch and motor.
+   Hook sheave, axle, cheeks, swivel, hook and slings support the payload or complete mast section.
+   State is one action and clock. The pose derives cable, drum, sheave and attached load positions.
+*/
+const tcSteel=matOf('#89979d'),tcBlue=matOf('#5c91b3'),tcRed=matOf('#db7056');
+const tcClamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const tcMix=(a,b,t)=>a+(b-a)*t;
+const tcArc=(x,y,z,r,a,b,n=12)=>Array.from({length:n+1},(_,i)=>{const th=tcMix(a,b,i/n)*Math.PI/180;return[x+r*Math.cos(th),y,z+r*Math.sin(th)];});
+function tcPose(st){
+ const lift=st.lift,jib=164+lift,tx=st.trolley,hz=st.hook;
+ const hoistRoute=[[64,50,jib+8],[80,50,jib+8],...tcArc(80,50,jib+5,3,90,0),[83,50,jib+1],...tcArc(86,50,jib+1,3,180,270),[tx-6,50,jib-2],...tcArc(tx-6,50,jib-5,3,90,0),[tx-3,50,hz],...tcArc(tx,50,hz,3,180,360),[tx+3,50,jib-5],...tcArc(tx+6,50,jib-5,3,180,90),[244,50,jib-2]];
+ const ropeLength=hoistRoute.slice(1).reduce((sum,p,i)=>sum+Math.hypot(...sub(p,hoistRoute[i])),0);
+ return {lift,jib,tx,hz,section:st.section,hoistRoute,ropeLength,drumAngle:(ropeLength-350)/5,
+  trolleyAngle:(tx-156)/1.5,sectionTop:st.section.z+30,
+  ramFoot:[80,50,78],ramMouth:[80,50,121],ramHead:[80,50,130+lift]};
+}
+function tcScene(st,m){
+ const g=tcPose(st),parts=[],labels=[],k=ease(st.xr||0),j=g.jib,t=g.tx,h=g.hz;
+ const bounds=pts=>[0,1].map(side=>[0,1,2].map(axis=>(side?Math.max:Math.min)(...pts.map(p=>p[axis]))+(side?.3:-.3)));
+ const put=(pts,svg,ghost=false)=>parts.push({box:bounds(pts),svg:ghost?`<g opacity="${1-.77*k}">${svg}</g>`:svg});
+ const label=(at,text,on=false)=>labels.push({at,text,on});
+ const bx=(a,b,mat=m,ghost=false)=>put([a,b],box(...a,...b,mat,toneI,.7),ghost);
+ const bar=(a,b,r=1,mat=m,ghost=false)=>{
+  const n=Math.max(1,Math.ceil(Math.hypot(...sub(b,a))/18));
+  for(let i=0;i<n;i++){
+   const p=a.map((v,q)=>tcMix(v,b[q],i/n)),e=a.map((v,q)=>tcMix(v,b[q],(i+1)/n));
+   put([p,e].flatMap(v=>[v.map(d=>d-r),v.map(d=>d+r)]),rod(p,e,r,mat,toneI,.65,r,8),ghost);
+  }
+ };
+ const cable=(pts,col)=>{for(let i=1;i<pts.length;i++){
+  const a=pts[i-1],b=pts[i],n=Math.max(1,Math.ceil(Math.hypot(...sub(b,a))/12));
+  for(let q=0;q<n;q++){
+   const u=a.map((v,d)=>tcMix(v,b[d],q/n)),v=a.map((v,d)=>tcMix(v,b[d],(q+1)/n));
+   put([u,v],`<path d="${pd([u,v],false)}" fill="none" stroke="${INK}" stroke-width="1.7"/><path d="${pd([u,v],false)}" fill="none" stroke="${col}" stroke-width=".85"/>`);
+  }
+ }};
+ const arc=(x,y,z,r,a,b,n=12)=>Array.from({length:n+1},(_,i)=>{const th=tcMix(a,b,i/n)*Math.PI/180;return[x+r*Math.cos(th),y,z+r*Math.sin(th)];});
+ const wheel=(x,y,z,r,ang,mat=tcSteel)=>{
+  const at=[x,y+(CAM_V[1]>0?1.05:-1.05),z];
+  put([[x-r,y-1,z-r],[x+r,y+1,z+r]],rod([x,y-1,z],[x,y+1,z],r,mat,toneI,.7,r,16)+line([at,[x+r*.8*Math.cos(ang),at[1],z+r*.8*Math.sin(ang)]],.9));
+ };
+ const mast=(cx,cy,z0,z1,mat,bolted)=>{
+  for(const x of [cx-10,cx+10])for(const y of [cy-10,cy+10])bar([x,y,z0],[x,y,z1],1.25,mat);
+  const n=Math.max(1,Math.round((z1-z0)/30));
+  for(let q=0;q<n;q++){
+   const a=tcMix(z0,z1,q/n),b=tcMix(z0,z1,(q+1)/n);
+   for(const z of [a,b])for(const y of [cy-10,cy+10])bar([cx-10,y,z],[cx+10,y,z],.85,mat);
+   for(const z of [a,b])for(const x of [cx-10,cx+10])bar([x,cy-10,z],[x,cy+10,z],.85,mat);
+   for(const y of [cy-10,cy+10])bar([cx-10,y,a],[cx+10,y,b],.65,mat);
+   for(const x of [cx-10,cx+10])bar([x,cy-10,a],[x,cy+10,b],.65,mat);
+  }
+  if(bolted>0)for(const x of [cx-10,cx+10])for(const y of [cy-10,cy+10])for(const z of [z0,z1]){
+   bx([x-2,y-2,z-2],[x+2,y+2,z+2],tcSteel);
+   bar([x,y-3-4*(1-bolted),z],[x,y+3,z],.8,METAL);
+  }
+ };
+ const shadow=castShadow([[65,15,0],[132,15,0],[132,85,0],[65,85,0],[100,50,j+33],[244,50,j],[32,50,j]]);
+ bx([65,15,0],[132,85,7],matOf('#c7c4b7'));
+ for(const x of [90,110])for(const y of [40,60]){
+  bx([x-4,y-4,7],[x+4,y+4,9],tcSteel);bar([x,y,5],[x,y,12],.8,METAL);
+ }
+ mast(100,50,9,130,m,1);
+ for(let z=12;z<=126;z+=6)bar([95,47,z],[95,53,z],.4,tcSteel);
+ for(const y of [47,53])bar([95,y,9],[95,y,130],.5,tcSteel);
+ label([73,24,6],'FOUNDATION');
+ label([110,40,80],'MAST CHORD');label([90,50,54],'DIAGONAL BRACE');
+ label([95,47,95],'ACCESS LADDER');
+ const cageTop=130+g.lift,cageBase=cageTop-40;
+ for(const x of [82,118])for(const y of [32,68])bar([x,y,cageBase],[x,y,cageTop],1,tcRed,true);
+ for(const z of [cageBase,cageTop]){
+  for(const y of [32,68])bar([82,y,z],[118,y,z],1.1,tcRed,true);
+  for(const x of [82,118])bar([x,32,z],[x,68,z],1.1,tcRed,true);
+ }
+ for(const y of [32,68])bar([82,y,cageBase],[118,y,cageTop],.65,tcRed,true);
+ for(const z of [cageBase+4,cageTop-4])for(const y of [39,61]){
+  bx([87,y-1,z-2],[91,y+1,z+2],tcSteel);bar([82,y<50?32:68,z],[89,y,z],.8,tcSteel);
+ }
+ bx([76,38,76],[90,62,79],tcSteel);
+ bar(g.ramFoot,g.ramMouth,2.8,tcBlue);bar(g.ramMouth,g.ramHead,1.25,METAL);
+ bar([80,50,cageTop],[100,50,cageTop],2,tcRed);
+ for(const y of [29,68])bx([77,y,cageBase-2],[123,y+3,cageBase],tcSteel,true);
+ for(const x of [77,120])bx([x,32,cageBase-2],[x+3,68,cageBase],tcSteel,true);
+ label([82,32,cageBase+15],'CLIMBING FRAME',st.action==='climb');label([80,50,100],'HYDRAULIC CYLINDER',st.action==='climb');
+ label([80,50,(121+cageTop)/2],'PISTON ROD',st.action==='climb');
+ label([89,39,cageTop-4],'GUIDE SHOE');
+ put([[86,36,cageTop],[114,64,cageTop+4]],cyl(100,50,cageTop,cageTop+4,14,tcSteel,toneI,.9,40));
+ for(let i=0;i<36;i++){const a=i*Math.PI/18;bar([100+14*Math.cos(a),50+14*Math.sin(a),cageTop+2],[100+15*Math.cos(a),50+15*Math.sin(a),cageTop+2],.55,tcSteel);}
+ bx([85,35,cageTop+4],[121,65,cageTop+8],tcSteel);
+ put([[115,48,cageTop],[123,56,cageTop+7]],cyl(119,52,cageTop,cageTop+4,4,tcSteel)+cyl(119,52,cageTop+4,cageTop+7,2,tcBlue));
+ label([100,36,cageTop+1],'SLEWING BEARING');label([109,62,cageTop+2],'RING GEAR');label([119,52,cageTop+6],'SLEW MOTOR');
+ for(const x of [92,108])bar([x,50,cageTop+8],[x,50,j],2,m,true);
+ bx([106,21,cageTop+8],[124,38,cageTop+24],m,true);
+ bx([107,20.8,cageTop+13],[123,21,cageTop+22],CLEAR,true);
+ bx([110,24,cageTop+10],[116,30,cageTop+14],DARK);
+ label([122,27,cageTop+18],'CAB');
+ for(const [x0,x1] of [[32,100],[100,244]])for(let x=x0;x<x1;x+=18){
+  const e=Math.min(x+18,x1);
+  for(const y of [44,56]){
+   bar([x,y,j],[e,y,j],1,m,true);bar([x,y,j+12],[e,y,j+12],.85,m,true);
+   bar([x,y,j],[e,y,j+12],.65,m,true);bar([e,y,j],[e,y,j+12],.6,m,true);
+  }
+  bar([x,44,j],[x,56,j],.8,m,true);
+ }
+ for(const y of [44,56])bar([90,y,j+1],[244,y,j+1],.7,tcSteel);
+ for(const x of [90,241])for(const y of [44,56])bx([x-1,y-1,j+1],[x+1,y+1,j+4],tcSteel);
+ for(const x of [92,108])for(const y of [44,56])bar([x,y,j],[100,50,j+33],1.25,m,true);
+ for(const y of [44,56]){
+  cable([[100,50,j+33],[213,y,j+12]],k?'#567b8d':'#454c50');
+  cable([[100,50,j+33],[34,y,j+12]],k?'#567b8d':'#454c50');
+ }
+ bx([32,41,j+1],[49,59,j+20],matOf('#a7aaa5'),true);
+ label([200,44,j+12],'MAIN JIB');label([61,56,j+12],'COUNTER JIB');label([40,50,j+17],'COUNTERWEIGHT');label([100,50,j+33],'A FRAME');
+ label([155,47,j+26],'CANTILEVER STAY');
+ bx([t-9,42,j-7],[t+9,58,j-4],tcRed);
+ for(const x of [t-7,t+7])for(const y of [44,56])wheel(x,y,j+2,1,x,tcSteel);
+ for(const x of [t-6,t+6]){bar([x,43,j-4],[x,57,j-4],.8,tcSteel);wheel(x,50,j-5,3,(t-156)/3+(x<t?2*(h-j)/3:0));}
+ label([t,54,j-5],'TROLLEY',st.action==='trolley');label([t+7,56,j+2],'TROLLEY WHEEL',st.action==='trolley');label([t+6,50,j-5],'TROLLEY SHEAVE',!!st.action);
+ for(const y of [43,57])bx([60,y-1,j],[68,y+1,j+4],tcSteel);
+ bar([64,43,j+3],[64,57,j+3],5,tcBlue);
+ for(const y of [43,57])wheel(64,y,j+3,5.7,g.drumAngle,tcSteel);
+ bar([64,57,j+3],[64,65,j+3],1,METAL);bar([64,65,j+3],[64,72,j+3],3,tcBlue);
+ wheel(64,62,j+3,3.2,g.drumAngle,tcRed);
+ for(const [x,z]of [[80,j+5],[86,j+1]]){
+  bar([x,44,z],[x,56,z],.6,tcSteel);for(const y of [44,56])bar([x,y,j],[x,y,z],.8,tcSteel);
+ }
+ wheel(80,50,j+5,3,g.drumAngle*5/3);wheel(86,50,j+1,3,-g.drumAngle*5/3);
+ cable(g.hoistRoute,k?'#2386bc':'#515b60');bx([242,48,j-3],[245,52,j],tcSteel);
+ label([64,51,j+7],'HOIST DRUM',st.action==='hoist'||st.action==='lower'||st.action==='climb');label([64,69,j+3],'HOIST MOTOR',!!st.action);
+ label([86,50,j+1],'LIFTING PULLEY');label([t-3,50,(h+j)/2],'LIFTING CABLE',!!st.action);label([244,50,j-2],'ROPE ANCHOR');
+ bar([80,56,j],[80,68,j],.8,tcSteel);
+ wheel(80,62,j+3,1.5,g.trolleyAngle,tcRed);bar([80,63,j+3],[80,68,j+3],1.8,tcBlue);
+ bar([242,56,j+3],[242,62,j+3],.7,tcSteel);bar([80,62,j],[80,62,j+3],.7,tcSteel);
+ wheel(242,62,j+3,1.5,g.trolleyAngle);
+ cable([[t,62,j+1.5],[80,62,j+1.5],...arc(80,62,j+3,1.5,270,90),[242,62,j+4.5],...arc(242,62,j+3,1.5,90,-90),[t,62,j+1.5]],k?'#d45c43':'#555b5a');
+ bar([t,56,j-5],[t,62,j+1.5],.7,tcSteel);
+ label([80,62,j+3],'TROLLEY WINCH',st.action==='trolley');label([202,62,j+4.5],'TROLLEY CABLE',st.action==='trolley');label([242,62,j+3],'TIP RETURN SHEAVE',st.action==='trolley');
+ wheel(t,50,h,3,(h-j-(t-156))/3);
+ for(const y of [48.5,51.5])bar([t,y,h-4],[t,y,h+1],.8,tcRed);
+ bar([t,48,h],[t,52,h],.65,METAL);bar([t,50,h-4],[t,50,h-7],1,METAL);
+ cable([[t,50,h-7],...arc(t+1.5,50,h-8.5,2,180,460,14)],METAL.m);
+ label([t,50,h],'HOOK SHEAVE',!!st.action);label([t+1.5,50,h-10],'LOAD HOOK');
+ const load=st.payload;
+ bx([load.x-7,43,load.z],[load.x+7,57,load.z+10],matOf('#a07b52'));
+ for(const y of [44,56])bar([load.x-6,y,load.z],[load.x-6,y,load.z+10],.35,tcSteel);
+ if(st.attached==='payload')for(const x of [load.x-6,load.x+6])cable([[t,50,h-9],[x,50,load.z+10]],'#6c6558');
+ mast(g.section.x,50,g.section.z,g.section.z+30,tcBlue,st.bolts);
+ if(st.attached==='section')for(const x of [g.section.x-9,g.section.x+9])cable([[t,50,h-9],[x,50,g.section.z+30]],'#6c6558');
+ label([g.section.x+10,40,g.section.z+15],'NEW MAST SECTION',st.action==='climb');
+ if(st.bolts>0)label([110,60,130],'SECTION BOLTS',st.action==='climb');
+ const lab=k>.6?labels:labels.filter(it=>['COUNTERWEIGHT','TROLLEY','LOAD HOOK'].includes(it.text));
+ let callouts='';
+ if(k>.6){
+  const vb=document.getElementById('fig').viewBox.baseVal,fs=INK_K,phone=!!(window.LBL_U&&LBL_U());
+  const ordered=lab.slice().sort((a,b)=>P(...a.at)[1]-P(...b.at)[1]),cols=[[],[]];
+  ordered.forEach((it,i)=>cols[i%2].push(it));
+  cols.forEach((col,side)=>col.forEach((it,i)=>{
+   const p=P(...it.at),x=side?vb.width-78*fs:78*fs,y=(phone?100:156)*fs+i*(phone?29:16.5)*fs;
+   callouts+=tag(it.at,(x-p[0])/fs,(y-p[1])/fs,it.text,it.on);
+  }));
+ }else callouts=xrCallouts(lab,[80,125,32,68,0,230]);
+ return shadow+byDepth(parts)+callouts;
+}
+function tcMove(st,ui,action,seconds,step){
+ if(st.action)return ui.flash('Wait for the current movement');
+ st.action=action;let elapsed=0;
+ ui.animate(dt=>{elapsed=Math.min(seconds,elapsed+dt);step(ease(elapsed/seconds));if(elapsed>=seconds){st.action='';return false;}return true;});
+}
+function tcHoist(st,ui,up){
+ if(st.climbed||st.attached!=='payload')return ui.flash('Reset the teaching setup for an ordinary lift');
+ const from=st.hook,to=up?100:40;
+ tcMove(st,ui,up?'hoist':'lower',1.8,q=>{st.hook=tcMix(from,to,q);st.payload.z=st.hook-30;});
+}
+function tcTrolley(st,ui){
+ if(st.climbed||st.attached!=='payload')return ui.flash('Reset the teaching setup before trolley travel');
+ const from=st.trolley,to=from>180?156:214;
+ tcMove(st,ui,'trolley',1.8,q=>{st.trolley=tcMix(from,to,q);st.payload.x=st.trolley;});
+}
+function tcClimb(st,ui){
+ if(st.action)return ui.flash('Wait for the current movement');
+ if(st.climbed)return ui.flash('One complete section is fitted. Reset to repeat the teaching sequence');
+ const start={hook:st.hook,trolley:st.trolley};st.action='climb';st.stage='Unload';let elapsed=0;
+ ui.animate(dt=>{
+  elapsed=Math.min(13,elapsed+dt/2);
+  if(elapsed<2){st.stage='Unload';st.hook=tcMix(start.hook,30,ease(elapsed/2));st.payload.z=st.hook-30;}
+  else if(elapsed<3.5){st.stage='Remove payload';st.payload.z=0;st.attached='';const q=ease((elapsed-2)/1.5);st.hook=tcMix(30,75,q);st.trolley=tcMix(start.trolley,156,q);}
+  else if(elapsed<5.5){st.stage='Hydraulic frame lift';st.hook=75;st.trolley=156;st.lift=32*ease((elapsed-3.5)/2);}
+  else if(elapsed<7){st.stage='Attach mast section';st.lift=32;st.hook=tcMix(75,50,ease((elapsed-5.5)/1.5));}
+  else if(elapsed<9.5){st.stage='Hoist complete section';st.attached='section';st.hook=tcMix(50,181,ease((elapsed-7)/2.5));st.section.z=st.hook-50;}
+  else if(elapsed<11){st.stage='Place in frame';const q=ease((elapsed-9.5)/1.5);st.hook=181;st.section.z=131;st.trolley=tcMix(156,100,q);st.section.x=st.trolley;}
+  else if(elapsed<12){st.stage='Seat section';st.trolley=100;st.section.x=100;const q=ease(elapsed-11);st.section.z=tcMix(131,130,q);st.lift=32-2*q;st.hook=st.section.z+50;}
+  else{st.stage='Fasten section';st.lift=30;st.section={x:100,z:130};st.hook=180;st.bolts=ease(elapsed-12);}
+  if(elapsed>=13){st.action='';st.stage='Section bolted';st.bolts=1;st.attached='';st.climbed=true;return false;}return true;
+ });
+}
+const tcInitial=()=>({action:'',stage:'Ready',hook:40,trolley:190,lift:0,payload:{x:190,z:10},section:{x:156,z:0},attached:'payload',bolts:0,climbed:false});
+const ui=mountFigure({fig:'63',title:'Tower crane',turn:'full',size:[255,100,245],center:[128,50],palette:'mustard',state:tcInitial(),scene:tcScene,
+ stats:st=>[{label:'Hook axle',value:Math.round(st.hook)+' cm',small:true},{label:'Top height',value:Math.round(130+st.lift)+' cm',small:true},{label:'Setup',value:st.stage,small:true}],
+ buttons:[{label:'Hoist',onClick:(st,u)=>tcHoist(st,u,true)},{label:'Lower',onClick:(st,u)=>tcHoist(st,u,false)},{label:'Trolley',onClick:tcTrolley},{label:'Climb',onClick:tcClimb},{label:'Reset',onClick:(st,u)=>{if(st.action)return u.flash('Wait for the current movement');Object.assign(st,tcInitial());}}],
+ params:(st,q)=>{for(const [key,min,max]of [['hook',40,100],['trolley',156,214]]){const v=Number(q.get(key));if(q.has(key)&&Number.isFinite(v))st[key]=tcClamp(v,min,max);}st.payload={x:st.trolley,z:st.hook-30};}
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
