@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tap</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Teaching adaptation of the screw-operated tap on printed page 65 of the 2016 book.
+   The saved page image and text show a handle driving a threaded spindle and washer onto a seat.
+   Open turns the handle anticlockwise from above. A right-handed screw rises in its fixed female thread.
+   Close reverses the same motion until the washer bottom touches the seat at z=37.
+   Water starts in the external raised reservoir, descends to the inlet below the seat, rises through
+   its bore, crosses the washer gap, enters the outlet above the partition, and falls into the basin.
+   Parts. Body and its inlet/outlet passages are one casting, supported by the inlet pipe on the stand.
+   The seat and partition are fixed to that body. The threaded bonnet is fixed to its top.
+   The spindle engages the bonnet, carries the washer at its foot and the handle at its head.
+   Anatomy labels name eight real components or features. The reservoir, stand, board and basin are fixtures.
+   Closing-force and water-route arrows are overlays, never anatomy.
+   The fixture is enlarged and its screw pitch and flow speed are illustrative, not measured dimensions.
+   The finite two-litre supply transfers to the basin. Reloading replenishes this teaching fixture.
+   The 1988 edition is inaccessible and unverified. No edition-union or literal reproduction claim. */
+const tapBrass = matOf('#d9ad54'), tapWater = matOf('#55b7db');
+const tapAxis = [63,35], tapPitch = 6, tapTravel = 12;
+const tapBox = (pts,r=0) => [0,1].map(end => [0,1,2].map(i => (end ? Math.max : Math.min)(...pts.map(p => p[i])) + (end ? r : -r)));
+const tapPart = (pts,r,svg) => ({box:tapBox(pts,r),svg});
+const tapRing = (x,y,z,r) => on(PZ(z),ellUV(x,y,r,r,32));
+function tapAnnulus(x,y,z0,z1,outer,inner,m){
+  const a=tapRing(x,y,z0,outer),b=tapRing(x,y,z1,outer),c=tapRing(x,y,z0,inner),d=tapRing(x,y,z1,inner);
+  return loft(a,b,n=>toneI(n,m))+loft(c,d,n=>toneI(n,m),true)
+    +`<path d="${pd(b)}${pd(d)}" fill="${m.l}" fill-rule="evenodd"/>`+ink(pd(b),1)+ink(pd(d),.8)+hullInk([...a,...b],1.5);
+}
+function tapTube(a,b,r,m){
+  const axis=norm(sub(b,a)),u=norm(cross(axis,Math.abs(axis[2])<.9?[0,0,1]:[1,0,0])),v=cross(axis,u);
+  const ring=(p,rr)=>Array.from({length:20},(_,i)=>{const t=i*Math.PI/10;return p.map((q,j)=>q+rr*(u[j]*Math.cos(t)+v[j]*Math.sin(t)));});
+  const ra=ring(a,r),rb=ring(b,r),ia=ring(a,r*.7),ib=ring(b,r*.7),near=vis(axis),cap=near?rb:ra,hole=near?ib:ia;
+  return loft(ra,rb,n=>tone(n,m))+loft(ia,ib,n=>toneI(n,DARK),true)
+    +`<path d="${pd(cap)}${pd(hole)}" fill="${m.l}" fill-rule="evenodd"/>`+ink(pd(cap),1.1)+ink(pd(hole),.7)+hullInk([...ra,...rb],1.5);
+}
+function tapRoute(parts,pts,r,m,opacity=1){
+  for(let i=1;i<pts.length;i++) parts.push(tapPart([pts[i-1],pts[i]],r,`<g opacity="${opacity}">${rod(pts[i-1],pts[i],r,m,toneI,.7)}</g>`));
+}
+function tapThread(parts,z0,z1,r,angle,m,female=false){
+  const count=Math.ceil((z1-z0)*5);
+  const pts=Array.from({length:count+1},(_,i)=>{const z=z0+(z1-z0)*i/count,t=(z-z0)/tapPitch*2*Math.PI+angle;return [63+r*Math.cos(t),35+r*Math.sin(t),z];});
+  for(let i=1;i<pts.length;i++){
+    const p=pts[i-1],q=pts[i],out=[(p[0]+q[0])/2-63,(p[1]+q[1])/2-35,0];
+    if(female && vis(out)) continue;
+    parts.push(tapPart([p,q],.3,line([p,q],1.1).replace(INK,m.m)));
+  }
+}
+function tapHandle(parts,st,m){
+  const z=79+tapTravel*st.opening,t=4*Math.PI*st.opening;
+  const tip=sg=>[63+sg*17*Math.cos(t),35+sg*17*Math.sin(t),z];
+  parts.push(tapPart([[63,35,z-3],[63,35,z+3]],4,cyl(63,35,z-3,z+3,4,m,tone,1.5)));
+  for(const sg of [-1,1]){
+    const p=tip(sg),q=[63+sg*3*Math.cos(t),35+sg*3*Math.sin(t),z];
+    parts.push(tapPart([p,q],2.7,rod(q,p,2.5,m,tone,1.5)));
+    parts.push(tapPart([p],3.3,cyl(p[0],p[1],z-2.8,z+2.8,3.3,sg===1?matOf('#e16f4d'):m,tone,1.5)));
+  }
+}
+function tapFixture(st){
+  const parts=[],waterZ=70+24*(2-st.collected)/2;
+  for(const x of [11,33]) for(const y of [24,46]) parts.push(tapPart([[x,y,3],[x,y,69]],1.5,rod([x,y,3],[x,y,69],1.5,METAL,toneI,1.1)));
+  parts.push(tapPart([[8,21,67],[36,49,69]],0,box(8,21,67,36,49,69,METAL)));
+  const water=st.collected<2?`<g opacity=".7">${box(11,24,70,33,46,waterZ,tapWater,toneI,.3)}</g>`:'';
+  const walls=[[[10,23,69],[34,23,97],[0,-1,0]],[[10,47,69],[34,47,97],[0,1,0]],[[10,23,69],[10,47,97],[-1,0,0]],[[34,23,69],[34,47,97],[1,0,0]]];
+  let far='',near='';
+  for(const [a,b,n] of walls){const q=n[0]?[[a[0],a[1],69],[b[0],b[1],69],[b[0],b[1],97],[a[0],a[1],97]]:[[a[0],a[1],69],[b[0],b[1],69],[b[0],b[1],97],[a[0],a[1],97]];
+    const wall=fill(pd(q),'#cfe9f0','opacity=".18"')+ink(pd(q),1.1);if(vis(n))near+=wall;else far+=wall;}
+  parts.push(tapPart([[10,23,69],[34,47,97]],0,shape(on(PZ(69),rectUV(10,23,34,47)),METAL.l,.9)+far+water+near));
+  const pipe=[[22,35,69],[22,35,29],[51,35,29]];
+  for(let i=1;i<pipe.length;i++) parts.push(tapPart([pipe[i-1],pipe[i]],4,`<g opacity="${1-.85*ease(st.xr||0)}">${tapTube(pipe[i-1],pipe[i],4,tapBrass)}</g>`));
+  const basinA=tapRing(103,35,3,12),basinB=tapRing(103,35,13,16),level=3.6+st.collected*2;
+  const basin=shape(tapRing(103,35,3.5,11),CERAMIC.d,.8)+openShell(basinA,basinB,n=>toneI(n,CERAMIC),st.collected>0?shape(tapRing(103,35,level,12+(level-3)*.4),tapWater.l,.6):'')+ink(pd(basinB),1.4)+hullInk([...basinA,...basinB],1.5);
+  parts.push(tapPart([[87,19,3],[119,51,13]],0,basin));
+  return parts;
+}
+function tapScene(st,m){
+  const k=ease(st.xr||0),lift=tapTravel*st.opening,active=st.opening!==st.target,parts=tapFixture(st),shell=[],mechanism=[],outer=[];
+  const put=(dest,a,b,r,svg)=>dest.push(tapPart([a,b],r,svg));
+  put(shell,[63,35,24],[63,35,55],12,cyl(63,35,24,55,12,m,tone,2.6));
+  put(shell,[63,35,55],[63,35,58],12,loft(tapRing(63,35,55,12),tapRing(63,35,58,7),n=>tone(n,m))+hullInk([...tapRing(63,35,55,12),...tapRing(63,35,58,7)],1.5));
+  put(shell,[63,35,58],[63,35,68],7,cyl(63,35,58,68,7,tapBrass,tone,1.7));
+  const outlet=[[74,35,43],[94,35,43],[101,35,39],[103,35,33],[103,35,26]];
+  for(let i=1;i<outlet.length;i++)put(shell,outlet[i-1],outlet[i],4.2,tapTube(outlet[i-1],outlet[i],4.2,m));
+  put(shell,[51,35,29],[56,35,29],4,tapTube([51,35,29],[56,35,29],4,m));
+  put(outer,[63,35,68],[63,35,79+lift],2.2,cyl(63,35,68,79+lift,2.2,METAL,toneI,1.2));
+  tapThread(outer,68,73+lift,3.3,(68-43)/tapPitch*2*Math.PI,METAL);
+  tapHandle(outer,st,m);
+  if(k>0){
+    put(mechanism,[63,35,32],[63,35,34],11,tapAnnulus(63,35,32,34,11,3.4,tapBrass));
+    put(mechanism,[63,35,34],[63,35,37],7,tapAnnulus(63,35,34,37,7,3.4,tapBrass));
+    put(mechanism,[63,35,37+lift],[63,35,40+lift],6.8,cyl(63,35,37+lift,40+lift,6.8,DARK,toneI,1.5));
+    put(mechanism,[63,35,40+lift],[63,35,68],2.2,cyl(63,35,40+lift,68,2.2,METAL,toneI,1.1));
+    tapThread(mechanism,43+lift,68,3.3,4*Math.PI*st.opening,METAL);
+    const farBody=Array.from({length:16},(_,i)=>{const a=(YAW+90+i*180/16)*Math.PI/180,b=a+Math.PI/16;
+      const pts=r=>[[63+r*Math.cos(a),35+r*Math.sin(a),58],[63+r*Math.cos(b),35+r*Math.sin(b),58],[63+r*Math.cos(b),35+r*Math.sin(b),68],[63+r*Math.cos(a),35+r*Math.sin(a),68]];
+      return shape(pts(3.5),tapBrass.d,.3);}).join('');
+    put(mechanism,[63,35,58],[63,35,68],7,farBody);
+    tapThread(mechanism,58,68,3.5,(58-43)/tapPitch*2*Math.PI,tapBrass,true);
+    const supply=[[22,35,69],[22,35,29],[63,35,29],[63,35,36.8]];
+    if(st.collected<2)tapRoute(mechanism,supply,1.4,tapWater,.8);
+    if(st.opening>0 && st.collected<2){
+      const gapZ=37+lift/2,route=[[63,35,36.8],[63,35,gapZ],[72,35,gapZ],[72,35,43],...outlet.slice(1)];
+      tapRoute(mechanism,route,Math.min(1.4,lift/3),tapWater,.85);
+    }
+  }
+  let tap=byDepth(shell);
+  if(k>0) tap=`<g opacity="${1-.85*k}">${tap}</g><g opacity="${k}">${byDepth(mechanism)}</g>`;
+  tap+=byDepth(outer);
+  parts.push(tapPart([[50,22,24],[108,48,95]],0,tap));
+  if(st.opening>0 && st.collected<2){
+    const streamR=Math.min(1.8,st.opening*2),basinZ=3.6+st.collected*2;
+    const stream=rod([103,35,basinZ],[103,35,26],streamR,tapWater,toneI,.4)
+      +Array.from({length:6},(_,i)=>{const z=26-((st.waterPhase*18+i*4)%(26-basinZ));return line([[103+streamR,35,z],[103+streamR,35,Math.min(26,z+1.7)]],.8).replace(INK,'#e6f8ff');}).join('');
+    parts.push(tapPart([[103,35,basinZ],[103,35,26]],streamR,stream));
+  }
+  let svg=board(4,12,123,59,3,5,WOOD)+castShadow([[10,23,69],[34,47,97],[63,35,91],[103,35,26]],3,boardTop(4,12,123,59,3,5))+byDepth(parts);
+  if(k>.6){
+    const arrow=(pts,col)=>`<path d="${pd(pts,false)}" fill="none" stroke="${col}" stroke-width="1.7" marker-end="url(#tapArrow)"/>`;
+    svg+='<defs><marker id="tapArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="context-stroke"/></marker></defs>';
+    if(st.opening===0 || st.target===0)svg+=`<g data-overlay="closing-force">${arrow([[74,42,55+lift],[74,42,42+lift]],'#db7839')}</g>`;
+    if(st.opening>0 && st.collected<2)svg+=`<g data-overlay="water-flow">${arrow([[42,35,29],[54,35,29]],'#1689b4')}${arrow([[82,35,43],[92,35,43]],'#1689b4')}</g>`;
+    svg+=xrCallouts([
+      {at:[63+17*Math.cos(4*Math.PI*st.opening),35+17*Math.sin(4*Math.PI*st.opening),79+lift],text:'HANDLE',on:active},
+      {at:[67,35,63],text:'FIXED THREADED BODY',on:active},
+      {at:[63,35,52+lift],text:'SPINDLE',on:active},
+      {at:[68,35,38.5+lift],text:'WASHER',on:active||st.opening===0},
+      {at:[69,35,37],text:'SEAT',on:st.opening===0},
+      {at:[54,35,29],text:'INLET PASSAGE',on:st.opening>0},
+      {at:[91,35,43],text:'OUTLET PASSAGE',on:st.opening>0},
+      {at:[63,46,46],text:'VALVE BODY',on:false}
+    ],[48,108,20,50,24,95]);
+  }
+  return svg;
+}
+function tapStep(st,dt){
+  st.opening+=Math.sign(st.target-st.opening)*Math.min(Math.abs(st.target-st.opening),dt/2.4);
+  const water=Math.min(2-st.collected,.08*st.opening*dt);
+  st.collected+=water;st.waterPhase+=dt;
+  return st.opening!==st.target || st.opening>0 && st.collected<2;
+}
+function tapTurn(st,ui,target){
+  if(st.target===target && st.opening===target){ui.flash(target?'The tap is already open':'The washer is already on its seat');return;}
+  st.target=target;
+  if(st.running)return;
+  st.running=true;
+  ui.animate(dt=>{const more=tapStep(st,dt);if(!more)st.running=false;return more;});
+}
+const tapUI=mountFigure({fig:'65',turn:'full',title:'Tap',size:[128,72,100],center:[64,35],palette:'mint',
+  state:{opening:0,target:0,collected:0,waterPhase:0,running:false},scene:tapScene,
+  buttons:[{label:'Open',onClick:(st,ui)=>tapTurn(st,ui,1)},{label:'Close',onClick:(st,ui)=>tapTurn(st,ui,0)}],
+  stats:st=>[{label:'Handle turns',value:(2*st.opening).toFixed(2),small:true},{label:'Collected',value:Math.round(st.collected*1000)+' mL',small:true}],
+  params:(st,q)=>{if(q.get('open')==='1')st.opening=st.target=1;},
+});
+xrMount(()=>tapUI,()=> '');
+</script></body></html>
