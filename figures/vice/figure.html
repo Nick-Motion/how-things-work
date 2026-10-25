@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Vice</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Page 64, saved 2016 scan and 1998 page text in the accepted brief.
+   This is a scale teaching adaptation of the wooden parallel-plate vice, not a literal reproduction.
+   Close turns the screw through the fixed plate's threaded support and carries the moving plate inward.
+   One guide rod is fixed to the fixed plate and passes through the moving plate to prevent its rotation.
+   The screw is retained in the moving plate by a captive collar, allowing rotation and axial push/pull.
+   The specimen rests on the work surface at x48..66, y51..63, clear of both shafts.
+   Contact is at moving face x66. Tighten stops translation and rotation at contact, then shows applied effort.
+   Force is a normalized illustrative overlay, not a measurement or a force sensor. Elastic strain is not drawn.
+   The board and fixed-plate bench attachment are teaching fixtures. Motion is slowed and thread enlarged.
+   No quick release, swivel base, extra guide, electric drive or invented internal hardware.
+   1988 is inaccessible and unverified. No edition-union claim.
+   Parts. Structure: fixed plate attached to bench, moving plate, their two contact faces.
+   Mechanism: screw with helical thread, fixed threaded support, captive screw-to-jaw collar,
+   single guide rod and its sliding bore in the moving plate.
+   Controls: handle hub and cross handle, rigidly rotating with the screw. Power: hand effort.
+   Anatomy minimum 8 declared in the brief. Specimen, board and force overlay are not anatomy.
+   State shape: closure 0..25. 0..24 is axial travel, 24..25 is illustrative applied effort at contact.
+   One target and one animation driver allow safe reversal without competing motion loops. */
+const vicePitch = 6;
+const viceGeo = st => {
+  const travel = Math.min(24, st.closure), jaw = 90 - travel;
+  return { travel, jaw, gap:24-travel, load:Math.max(0,st.closure-24), angle:-travel/vicePitch*2*Math.PI,
+    hub:jaw+14, tail:jaw-62 };
+};
+function viceMove(st, ui, target){
+  st.target = target;
+  if (st.running) return;
+  if (Math.abs(st.closure-target)<1e-7) return ui.flash(target===0?'Already open':target===25?'Already gripping':'Ready to tighten');
+  st.running = true;
+  ui.animate(dt => {
+    const distance=st.target-st.closure;
+    const speed=st.closure>=24 && distance>0 ? .85 : 15;
+    st.closure += Math.sign(distance)*Math.min(Math.abs(distance),dt*speed);
+    if (Math.abs(st.target-st.closure)<1e-7){st.closure=st.target;st.running=false;return false;}
+    return true;
+  });
+}
+function viceScene(st, m){
+  const g=viceGeo(st), k=ease(st.xr||0), parts=[], interior=[];
+  const put=(bounds,svg,inside=false)=> (inside?interior:parts).push({box:bounds,svg});
+  const brick=(a,b,material,ghost=false)=>put([a,b],`<g opacity="${ghost?1-.82*k:1}">${box(...a,...b,material,tone,1.3)}</g>`);
+  const shaft=(a,b,r,material,inside=false)=>{
+    const bounds=[[0,1,2].map(i=>Math.min(a[i],b[i])-r),[0,1,2].map(i=>Math.max(a[i],b[i])+r)];
+    put(bounds,rod(a,b,r,material,toneI,1),inside);
+  };
+  let svg=board(0,0,122,80,6,4);
+  svg+=castShadow([[40,12,6],[48,66,47],[g.jaw,12,47],[g.jaw+7,66,6],[g.hub,24,46]],6,boardTop(0,0,122,80,6,4));
+  brick([37,10,6],[48,68,10],m,true);
+  brick([42,12,10],[48,66,47],m,true);
+  brick([g.jaw,12,6],[g.jaw+7,66,47],m,true);
+  brick([48,12,29],[48.7,66,47],WOOD,true);
+  brick([g.jaw-.7,12,29],[g.jaw,66,47],WOOD,true);
+  let specimen=box(48.7,51,6,66-.7,63,54,WOOD,toneI,1.3);
+  if(facing([0,1,0]))for(const z of [13,21,34,43]) specimen+=line([[49,63.03,z],[65,63.03,z+1]],.55);
+  put([[48.7,51,6],[65.3,63,54]],specimen);
+  // Short shaft sections sort on either side of the two plates instead of one spanning solid.
+  const cuts=[g.tail,42,48,g.jaw,g.jaw+7,g.hub].filter((x,i,a)=>i===0||x>a[i-1]+.01);
+  for(let j=0;j<cuts.length-1;j++){
+    const x0=cuts[j],x1=cuts[j+1], hidden=(x0>=42&&x1<=48)||(x0>=g.jaw&&x1<=g.jaw+7);
+    let screw=cylX(x0,x1,24,30,2.15,METAL,toneI,.8,20),thread='';
+    const count=Math.ceil((x1-x0)/vicePitch*36);
+    let run=[];
+    for(let i=0;i<=count;i++){
+      const x=x0+(x1-x0)*i/count, a=(x-g.tail)/vicePitch*2*Math.PI+g.angle;
+      const pt=[x,24+2.45*Math.cos(a),30+2.45*Math.sin(a)];
+      if(facing([0,Math.cos(a),Math.sin(a)]))run.push(pt);
+      else if(run.length){if(run.length>1)thread+=line(run,.65);run=[];}
+    }
+    if(run.length>1)thread+=line(run,.65);
+    put([[x0,21.5,27.5],[x1,26.5,32.5]],screw+thread,hidden);
+  }
+  // Threaded support surrounds the screw and remains fixed to the fixed plate.
+  const support=cylX(41,49,24,30,4.1,matOf('#cba45c'),toneI,1,24);
+  put([[41,19.9,25.9],[49,28.1,34.1]],`<g opacity="${1-.8*k}">${support}</g>`);
+  if(k>0){
+    const groove=[];
+    for(let x=41;x<49;x+=.25){const a=x/vicePitch*2*Math.PI;groove.push([x,24+2.65*Math.cos(a),30+2.65*Math.sin(a)]);}
+    put([[41,21.3,27.3],[49,26.7,32.7]],`<g opacity="${k}">${line(groove,.8).replaceAll(INK,'#b87a29')}</g>`,true);
+  }
+  for(const [a,b] of [[48,g.jaw],[g.jaw+7,115]]) if(b>a)shaft([a,46,17],[b,46,17],1.65,METAL);
+  shaft([42,46,17],[48,46,17],1.65,METAL,true);
+  shaft([g.jaw,46,17],[g.jaw+7,46,17],1.65,METAL,true);
+  put([[g.jaw-1,42.5,13.5],[g.jaw+8,49.5,20.5]],`<g opacity="${1-.8*k}">${cylX(g.jaw-1,g.jaw+8,46,17,3.5,DARK,toneI,.8)}</g>`);
+  put([[g.jaw-1,20.3,26.3],[g.jaw+8,27.7,33.7]],`<g opacity="${1-.8*k}">${cylX(g.jaw-1,g.jaw+8,24,30,3.7,DARK,toneI,1)}</g>`);
+  shaft([g.jaw+2,24,30],[g.jaw+5,24,30],3.2,matOf('#cba45c'),true);
+  shaft([g.hub-2,24,30],[g.hub+2,24,30],3.8,DARK);
+  const handleAt=t=>[g.hub,24+t*Math.cos(g.angle),30+t*Math.sin(g.angle)];
+  shaft(handleAt(-17),handleAt(-3.6),1.05,METAL);
+  shaft(handleAt(3.6),handleAt(17),1.05,METAL);
+  for(const t of [-17,17])shaft(handleAt(t-.7),handleAt(t+.7),1.8,DARK);
+  svg+=byDepth(parts.concat(interior));
+  if(g.load>.001){
+    const red='#df6047',length=4+8*g.load;
+    for(const [start,dir] of [[48.7,1],[65.3,-1]]){
+      const end=start+dir*length,pts=[[start,58,58],[end,58,58]];
+      svg+=`<g data-overlay="illustrative-force" opacity="${.4+.6*g.load}">${line(pts,2.2).replaceAll(INK,red)}${shape([[end,58,58],[end-dir*3,56.5,58],[end-dir*3,59.5,58]],red,0)}</g>`;
+    }
+  }
+  if(k>.6)svg+=xrCallouts([
+    {at:[43,60,43],text:'FIXED PLATE'},
+    {at:[g.jaw+7,60,43],text:'MOVING PLATE',on:st.running},
+    {at:[48.5,55,38],text:'FIXED CONTACT FACE',on:g.load>0},
+    {at:[g.jaw-.4,55,38],text:'MOVING CONTACT FACE',on:g.load>0},
+    {at:[42,24,30],text:'FIXED THREADED SUPPORT',on:st.running},
+    {at:[(48+g.jaw)/2,24,32.4],text:'SCREW THREAD',on:st.running},
+    {at:[g.jaw+3,24,30],text:'CAPTIVE JAW CONNECTION',on:st.running},
+    {at:[(48+g.jaw)/2,46,17],text:'SINGLE GUIDE ROD',on:st.running},
+    {at:[g.jaw+7,46,17],text:'SLIDING GUIDE BORE',on:st.running},
+    {at:handleAt(14),text:'CROSS HANDLE',on:st.running},
+    {at:[g.hub+2,24,30],text:'HANDLE HUB',on:st.running}
+  ],[37,115,7,68,6,54]);
+  return svg;
+}
+const viceUI=mountFigure({
+  fig:'64',turn:'full',title:'Vice',size:[122,80,60],palette:'cobalt',
+  state:{closure:0,target:0,running:false},scene:viceScene,
+  stats:st=>{const g=viceGeo(st);return [
+    {label:'Clearance',value:g.gap.toFixed(1)+' mm'},
+    {label:'Force illustration',value:Math.round(g.load*100)+'%',small:true}
+  ];},
+  buttons:[
+    {label:'Close',onClick:(st,ui)=>viceMove(st,ui,Math.max(18,st.closure))},
+    {label:'Tighten',onClick:(st,ui)=>viceMove(st,ui,25)},
+    {label:'Open',onClick:(st,ui)=>viceMove(st,ui,0)}
+  ],
+  params:(st,q)=>{
+    const v=Number(q.get('closure'));
+    if(q.has('closure')&&Number.isFinite(v))st.closure=st.target=Math.max(0,Math.min(25,v));
+  }
+});
+xrMount(()=>viceUI,()=> '');
+</script></body></html>
