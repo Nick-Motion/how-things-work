@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Micrometer</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Primary evidence is the 2016 and 1998 printed page 64 micrometer.
+   An external operator inserts the rod into the open gap. Turning the ratchet drives
+   the thimble and spindle through the frame's fixed threaded sleeve. At contact the
+   coupling slips, so the rod stays rigid and the screw and thimble stop advancing.
+   The ratchet is a force-limiting contact aid, not a perfect calibration.
+   Read adds whole screw turns and fractional-turn graduations from the same gap.
+   Structure: U frame holds the anvil and fixed sleeve. Measuring faces are the
+   polished ends of anvil and spindle. Sleeve carries the datum and sleeve scale.
+   Mechanism: spindle includes the precision screw, screwed into the fixed sleeve.
+   Thimble is fixed to the spindle. Ratchet knob drives a spring-loaded toothed
+   coupling at the spindle tail; its axial spring is captive between knob and hub.
+   Features: sleeve graduations, thimble graduations, datum line, knurled grips.
+   Adaptation: enlarged tool, 0.5 mm lead, 50 divisions, rigid 3.26 mm example rod,
+   slowed operator motion and a simplified axial toothed coupling. The table board
+   and specimen exchange are teaching fixtures, not tool anatomy. Stats are overlays,
+   not a digital sensor. Internal thread depth and small coupling teeth are enlarged
+   for visibility. No claim of manufacturing tolerance or exact measuring force.
+   State shape: opening in screw turns, external rod placement, action phase, ratchet
+   slip turns and read highlight. All translation and scale values derive from turns.
+   The brief declares minimum 8 anatomy labels before any model is drawn. */
+const micLead = .5, micDivisions = 50, micScale = 4, micRodDiameter = 3.26;
+const micAxisY = 28, micAxisZ = 37, micZero = 22, micSleeveZero = 86;
+const micBounds = [7,171,4,53,3,46];
+const micBrass = matOf('#d2aa63');
+const micGap = st => st.turns * micLead;
+function micReading(st){
+  const whole = Math.floor(st.turns + 1e-8);
+  const divisions = Math.round((st.turns - whole) * micDivisions);
+  return {whole, divisions, sleeve:whole*micLead, fraction:divisions*micLead/micDivisions,
+    total:whole*micLead + divisions*micLead/micDivisions};
+}
+function micLabels(st){
+  const edge = micSleeveZero + micGap(st)*micScale;
+  return [
+    {at:[40,33,9],text:'FRAME'},
+    {at:[17,28,37],text:'FIXED ANVIL'},
+    {at:[22,28,37],text:'ANVIL FACE',on:st.phase==='slip'},
+    {at:[22+micGap(st)*4,28,37],text:'SPINDLE FACE',on:st.phase==='slip'},
+    {at:[60,28,37],text:'SPINDLE',on:st.phase==='turn'},
+    {at:[77,28,39],text:'PRECISION SCREW',on:st.phase==='turn'},
+    {at:[74,28,42],text:'FIXED THREADED SLEEVE'},
+    {at:[90,32.4,37],text:'SLEEVE SCALE',on:st.read},
+    {at:[88,32.4,37],text:'DATUM LINE',on:st.read},
+    {at:[edge+14,28,43],text:'THIMBLE',on:st.phase==='turn'},
+    {at:[edge+2,34,37],text:'THIMBLE SCALE',on:st.read},
+    {at:[edge+28,28,37],text:'RATCHET COUPLING',on:st.phase==='slip'},
+    {at:[edge+33,28,39],text:'COUPLING SPRING',on:st.phase==='slip'},
+    {at:[edge+38,28,42],text:'RATCHET KNOB',on:st.phase==='turn'||st.phase==='slip'}
+  ];
+}
+function micScene(st,m){
+  const gap=micGap(st), edge=micSleeveZero+gap*micScale;
+  const angle=st.turns*2*Math.PI, k=ease(st.xr||0), parts=[];
+  const put=(bounds,svg)=>parts.push({box:bounds,svg});
+  const axial=(a,b,r,mat,extra='',opacity=1)=>put([[a,28-r,37-r],[b,28+r,37+r]],
+    `<g opacity="${opacity}">${cylX(a,b,28,37,r,mat,tone,1.25,32)+extra}</g>`);
+  const surface=(x,r,t)=>[x,28+r*Math.cos(t),37+r*Math.sin(t)];
+  const visible=t=>vis([0,Math.cos(t),Math.sin(t)]);
+  let s=board(0,0,177,58,3,3,WOOD);
+  s+=castShadow([[10,23,37],[10,33,37],[42,23,5],[70,33,37],[edge+42,28,43]],3,boardTop(0,0,177,58,3,3));
+  for(let i=0;i<16;i++){
+    const a=Math.PI+i*Math.PI/16,b=Math.PI+(i+1)*Math.PI/16;
+    const profile=[[40+28*Math.cos(a),37+34*Math.sin(a)],[40+28*Math.cos(b),37+34*Math.sin(b)],
+      [40+20*Math.cos(b),37+26*Math.sin(b)],[40+20*Math.cos(a),37+26*Math.sin(a)]];
+    const rings=[23,33].map(y=>profile.map(([x,z])=>[x,y,z]));
+    let svg=loft(rings[0],rings[1],n=>tone(n,m));
+    for(const [j,n] of [[0,[0,-1,0]],[1,[0,1,0]]])if(vis(n)){
+      svg+=fill(pd(rings[j]),tone(n,m))+line(rings[j].slice(0,2),1.5)+line(rings[j].slice(2),1.5);
+    }
+    put([[Math.min(...profile.map(p=>p[0])),23,Math.min(...profile.map(p=>p[1]))],
+      [Math.max(...profile.map(p=>p[0])),33,Math.max(...profile.map(p=>p[1]))]],svg);
+  }
+  axial(11,22,3.5,METAL);
+  axial(22+gap*4,67,2.7,METAL);
+  let fixedScale='';
+  for(let j=0;j<=16;j++){
+    const x=micSleeveZero+j*2;
+    if(x>=edge-.05)continue;
+    const t=.05, end=j%2?-.5:.65;
+    const pts=Array.from({length:7},(_,i)=>surface(x,4.55,t+(end-t)*i/6));
+    if(visible(.05))fixedScale+=line(pts,st.read?1.15:.65);
+    if(j%2===0&&visible(.85)){
+      const p=surface(x,4.6,.9);
+      fixedScale+=`<text transform="${txM(P(...p),Dv(1,0,0),Dv(0,Math.sin(.9),-Math.cos(.9)))}" font-size="2.2" text-anchor="middle" font-weight="800">${j/2}</text>`;
+    }
+  }
+  if(visible(0))fixedScale+=line([[micSleeveZero,32.57,37],[edge,32.57,37]],st.read?1.4:.65);
+  axial(67,edge,4.5,METAL,fixedScale,1-.8*k);
+  let thimble='';
+  for(let i=0;i<50;i++){
+    const t=angle-i*2*Math.PI/50;
+    if(!visible(t))continue;
+    thimble+=line([surface(edge+.2,6.05,t),surface(edge+(i%5?2:3.6),6.05,t)],st.read?1.15:.6);
+    if(i%5===0){
+      const p=surface(edge+5.6,6.1,t);
+      thimble+=`<text transform="${txM(P(...p),Dv(1,0,0),Dv(0,Math.sin(t),-Math.cos(t)))}" font-size="2" text-anchor="middle" font-weight="800">${i}</text>`;
+    }
+  }
+  for(let i=0;i<20;i++){
+    const t=angle+i*2*Math.PI/20;
+    if(visible(t))thimble+=line([surface(edge+11,6.05,t),surface(edge+23,6.05,t)],.6);
+  }
+  axial(edge,edge+25,6,METAL,thimble,1-.83*k);
+  let knob='';
+  for(let i=0;i<18;i++){
+    const t=angle+st.slipTurns*2*Math.PI+i*2*Math.PI/18;
+    if(visible(t))knob+=line([surface(edge+35,4.9,t),surface(edge+42,4.9,t)],.75);
+  }
+  axial(edge+25,edge+34,2.2,METAL,'',1-.75*k);
+  axial(edge+34,edge+43,4.8,m,knob,1-.75*k);
+  const rodX=micZero+micRodDiameter*micScale/2;
+  const rodY=28;
+  const rodZ=st.rod==='absent'?3+micRodDiameter*2:3+micRodDiameter*2+(37-(3+micRodDiameter*2))*ease(st.insert);
+  put([[rodX-6.52,rodY-16,rodZ-6.52],[rodX+6.52,rodY+16,rodZ+6.52]],
+    rod([rodX,rodY-16,rodZ],[rodX,rodY+16,rodZ],6.52,micBrass,tone,1.1));
+  if(k>0){
+    const inside=[];
+    const add=(b,svg)=>inside.push({box:b,svg});
+    add([[22+gap*4,25.3,34.3],[68,30.7,39.7]],cylX(22+gap*4,68,28,37,2.7,METAL,toneI,.9,24));
+    for(let x=68;x<edge+22;x+=2){
+      const end=Math.min(x+2,edge+22),pts=[];
+      let thread=cylX(x,end,28,37,2.7,METAL,toneI,.6,24);
+      for(let j=0;j<=16;j++){
+        const t=angle+(x-(22+gap*4))/2*2*Math.PI+j*(end-x)/2*2*Math.PI/16;
+        if(visible(t))pts.push([x+j*(end-x)/16,28+2.85*Math.cos(t),37+2.85*Math.sin(t)]);
+        else if(pts.length){if(pts.length>1)thread+=line(pts,.6);pts.length=0;}
+      }
+      if(pts.length>1)thread+=line(pts,.6);
+      add([[x,25.1,34.1],[end,30.9,39.9]],thread);
+    }
+    add([[edge+22,25.3,34.3],[edge+27,30.7,39.7]],cylX(edge+22,edge+27,28,37,2.7,METAL,toneI,.7,24));
+    for(const y of [24.65,31.35]){
+      add([[68,y-.65,33.5],[81,y+.65,40.5]],box(68,y-.65,33.5,81,y+.65,40.5,micBrass,toneI,.6));
+      for(let x=68;x<81;x+=2)add([[x,y-.7,34.3],[x+1,y+.7,39.7]],line([[x,y,34.3],[x+1,y,35],[x,y,36],[x+1,y,37],[x,y,38],[x+1,y,39.7]],.65));
+    }
+    const rise=.5*(1-Math.cos(st.slipTurns*24*Math.PI));
+    for(const [x,t] of [[edge+26,angle],[edge+28+rise,angle+st.slipTurns*2*Math.PI]]){
+      let teeth=cylX(x,x+1.8,28,37,3.7,micBrass,toneI,.8,24);
+      for(let j=0;j<12;j++){
+        const a=t+j*Math.PI/6;
+        const tooth=[surface(x,3.8,a),surface(x,3.8,a+.38),surface(x-.4,3.8,a+.38)];
+        if(visible(a))teeth+=shape(tooth,micBrass.l,.55);
+      }
+      add([[x,24.2,33.2],[x+1.8,31.8,40.8]],teeth);
+    }
+    const spring=[];
+    for(let i=0;i<=100;i++){const t=i/100;spring.push([edge+29.8+rise+(4.2-rise)*t,28+2.4*Math.cos(t*12*Math.PI),37+2.4*Math.sin(t*12*Math.PI)]);}
+    add([[edge+29.8,25.5,34.5],[edge+34,30.5,39.5]],line(spring,.8));
+    add([[edge+34,25.3,34.3],[edge+35,30.7,39.7]],cylX(edge+34,edge+35,28,37,2.7,METAL,toneI,.7,20));
+    add([[edge+29.8,27,36],[edge+43,29,38]],cylX(edge+29.8,edge+43,28,37,1,METAL,toneI,.5,16));
+    for(const p of inside)parts.push({...p,svg:`<g opacity="${k}">${p.svg}</g>`});
+  }
+  s+=byDepth(parts);
+  if(k>.6)s+=xrCallouts(micLabels(st),micBounds);
+  return s;
+}
+function micInsert(st,ui){
+  if(st.phase!=='idle')return ui.flash('Wait for the current action.');
+  if(st.rod==='inserted')return ui.flash('The rod is already between the faces.');
+  if(micGap(st)<micRodDiameter)return ui.flash('The opening is too narrow for this rod.');
+  st.rod='inserting';st.phase='insert';st.read=false;
+  ui.animate(dt=>{st.insert=Math.min(1,st.insert+dt/.9);if(st.insert===1){st.rod='inserted';st.phase='idle';return false;}return true;});
+}
+function micTurn(st,ui){
+  if(st.phase!=='idle')return ui.flash('Wait for the current action.');
+  if(st.rod!=='inserted')return ui.flash('Insert the rod first.');
+  st.phase='turn';st.read=false;
+  const target=micRodDiameter/micLead;
+  ui.animate(dt=>{
+    if(st.phase==='turn'){
+      st.turns=Math.max(target,st.turns-dt*4);
+      if(st.turns===target)st.phase='slip';
+    }else{
+      st.slipTurns=Math.min(st.slipTarget,st.slipTurns+dt*1.5);
+      if(st.slipTurns===st.slipTarget){st.phase='idle';return false;}
+    }
+    return true;
+  });
+  st.slipTarget=st.slipTurns+1.5;
+}
+function micRead(st,ui){
+  if(st.phase!=='idle')return ui.flash('Wait until the spindle stops.');
+  if(st.rod!=='inserted'||Math.abs(micGap(st)-micRodDiameter)>1e-7)return ui.flash('Turn until the spindle touches the rod.');
+  st.read=true;
+}
+const micUI=mountFigure({fig:'64',title:'Micrometer',turn:'full',size:[177,58,48],palette:'cobalt',
+  state:{turns:16,rod:'absent',insert:0,phase:'idle',slipTurns:0,slipTarget:0,read:false},scene:micScene,
+  stats:st=>{
+    const r=micReading(st);
+    return [{label:'Opening',value:micGap(st).toFixed(2)+' mm'},
+      {label:'Screw lead',value:'0.5 mm / turn',small:true},
+      {label:'Thimble',value:'50 div / turn',small:true},
+      ...(st.read?[{label:'Sleeve + thimble',value:r.sleeve.toFixed(2)+' + '+r.fraction.toFixed(2)+' mm',small:true},
+        {label:'Scale reading',value:r.total.toFixed(2)+' mm'}]:[])];
+  },
+  readout:()=>'',buttons:[{label:'Insert',onClick:micInsert},{label:'Turn',onClick:micTurn},{label:'Read',onClick:micRead}],
+  params:(st,q)=>{
+    const n=Number(q.get('turns'));
+    if(q.has('turns')&&Number.isFinite(n))st.turns=Math.max(0,Math.min(16,n));
+    if(q.get('rod')==='1'&&micGap(st)>=micRodDiameter){st.rod='inserted';st.insert=1;}
+    if(q.get('read')==='1'&&st.rod==='inserted'&&Math.abs(micGap(st)-micRodDiameter)<1e-7)st.read=true;
+  }
+});
+xrMount(()=>micUI,()=> '');
+</script>
+<style>
+.stage{display:flex;flex-direction:column}
+.stage #btns{position:static;flex-direction:row;max-width:none;order:0;margin-bottom:12px}
+#stats{position:static;order:1;flex-direction:row;justify-content:space-between;gap:12px;margin-bottom:20px}
+#stats .stat .v{font-size:22px}
+#stats .stat.small .v{font-size:16px}
+.stage .zwrap{order:2}
+.stage .vset{position:static;order:3;margin:6px 0 12px}
+.stage .lgd{order:4}
+@media(max-width:560px){#stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}#stats .stat{text-align:left}#stats .stat .v{overflow-wrap:anywhere}}
+</style></body></html>
