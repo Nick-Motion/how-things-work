@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Steering wheel</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Sources are Macaulay and Ardley, 2016, printed pages 32 and 43, and the accepted
+   1998 page evidence in the individual brief. The 1988 edition is unverified.
+   Hand effort at the rim turns the hub, column and coaxial pinion. The pinion
+   shifts the rack by pitch radius times column angle. Two fixed-length track
+   rods swivel the arms about fixed kingpins. The tyres pivot without rolling.
+   The two complete rims are exchanged, never telescoped. Both use the same
+   6 N m column torque and prescribed 100 N rack resistance at a 6 cm pitch radius.
+   F = torque / rim radius gives 40 N at 30 cm diameter and 30 N at 40 cm diameter.
+   This is an enlarged bench combination of the two book diagrams. Its board,
+   supports, exchanged rims and ideal quasi-static load are teaching fixtures.
+   No pump, motor, power assistance, suspension or road dynamics is implied.
+   Parts, with supports.
+   Structure. Board supports crossmember, rack-guide feet and column-bearing post.
+   Crossmember holds both kingpins. Each kingpin supports a swivel and stub axle.
+   Case. Pinion housing and two rack guides attach to the board on feet.
+   Input. Rim and three spokes attach to the hub on the column. The bearing post
+   and pinion housing support that column. Pinion is keyed to the same shaft.
+   Linkage. Rack teeth mesh with the pinion. Its ends carry inner ball joints.
+   Track rods end at outer ball joints on the steering arms, fixed to the swivels.
+   Wheels. Each stub axle holds a hub, metal wheel rim and tyre.
+   Labels name actual drawn parts or features. Force marks are separate overlays.
+   shortcut: ideal rigid linkage and stylized tooth flanks, use compliant geometry
+   and involute flanks only for an engineering design rather than this book model.
+*/
+const swPitchRadius = 6, swTorque = 6, swRackLoad = 100;
+const swRims = [15,20], swToothPitch = 2*Math.PI*swPitchRadius/12;
+const swBounds = [5,91,0,128,3,50];
+const swBox = (points, r=0) => [
+  [0,1,2].map(i => Math.min(...points.map(p => p[i]))-r),
+  [0,1,2].map(i => Math.max(...points.map(p => p[i]))+r)
+];
+const swMixPoint = (a,b,t) => a.map((v,i) => v+(b[i]-v)*t);
+
+function swLabels(items){
+  const svg=document.getElementById('fig'),vb=svg.viewBox.baseVal,k=INK_K,u=window.LBL_U?LBL_U():0;
+  const projected=items.map(item=>({...item,point:P(...item.at)})).sort((a,b)=>a.point[0]-b.point[0]);
+  const columns=[projected.slice(0,Math.ceil(items.length/2)),projected.slice(Math.ceil(items.length/2))];
+  return columns.map((column,side)=>{
+    column.sort((a,b)=>a.point[1]-b.point[1]);
+    const fs=u?10*u:8.6*k, width=u?23*u:Math.max(...column.map(item=>item.text.length))*fs*.62+fs*1.5;
+    const panel=document.getElementById(side?'stats':'btns'),matrix=svg.getScreenCTM();
+    const top=panel&&matrix?new DOMPoint(0,panel.getBoundingClientRect().bottom+14).matrixTransform(matrix.inverse()).y:0;
+    const gap=u?19*u:19*k, bottom=vb.y+vb.height-(u?42*u:12*k);
+    const first=Math.max(12*k,top,Math.min(column[0].point[1],bottom-(column.length-1)*gap));
+    const x=side?vb.x+vb.width-width/2-4*k:vb.x+width/2+4*k;
+    return column.map((item,i)=>tag(item.at,(x-item.point[0])/k,(first+i*gap-item.point[1])/k,item.text,item.on)).join('');
+  }).join('');
+}
+
+function swLinkage(angle){
+  const travel = swPitchRadius*angle;
+  return {travel, sides:[-1,1].map(side => {
+    const pivot = [20,64+50*side,18], inner = [34,64+26*side+travel,18];
+    const endpoint = a => [20+14*Math.cos(a),pivot[1]+14*Math.sin(a),18];
+    let low=-.65, high=.65;
+    for(let i=0;i<45;i++){
+      const mid=(low+high)/2, end=endpoint(mid);
+      const residual=Math.hypot(end[0]-inner[0],end[1]-inner[1])-24;
+      if(residual*side<0) low=mid; else high=mid;
+    }
+    const yaw=(low+high)/2;
+    return {side,pivot,inner,yaw,outer:endpoint(yaw)};
+  })};
+}
+
+function swPrism(parts, a, b, material, width=.8, opacity=1){
+  const axis=norm(sub(avg(b),avg(a))), toward=vis(axis), cap=toward?b:a;
+  const svg=loft(a,b,n=>toneI(n,material))+shape(cap,toneI(toward?axis:axis.map(v=>-v),material),width)+hullInk([...a,...b],width);
+  parts.push({box:swBox([...a,...b]),svg:`<g opacity="${opacity}">${svg}</g>`});
+}
+
+function swDraw(st, material){
+  const parts=[], labels=[], rig=swLinkage(st.angle), radius=swRims[st.rim], ghost=ease(st.xr||0);
+  const put=(points,svg,r=0)=>parts.push({box:swBox(points,r),svg});
+  const bar=(a,b,r,m=METAL)=>put([a,b],rod(a,b,r,m,toneI,.9,r,12),r);
+  const segmented=(a,b,r,m=METAL)=>{
+    const n=Math.ceil(Math.hypot(...sub(b,a))/8);
+    for(let i=0;i<n;i++) bar(swMixPoint(a,b,i/n),swMixPoint(a,b,(i+1)/n),r,m);
+  };
+  const block=(a,b,m=METAL,fade=1)=>put([a,b],`<g opacity="${fade}">${box(...a,...b,m,toneI,.9)}</g>`);
+  const label=(at,text,on=false)=>labels.push({at,text,on});
+  const ball=at=>bar([at[0],at[1],at[2]-1],[at[0],at[1],at[2]+1],1.8,matOf('#c89548'));
+  block([17,12,9],[23,116,12],material);
+  for(const y of [18,110]) block([16,y-3,3],[24,y+3,9],material);
+  label([20,64,12],'CROSSMEMBER');
+
+  for(const side of rig.sides){
+    const {pivot,inner,outer,yaw}=side, sign=side.side;
+    const axis=[-Math.sin(yaw),Math.cos(yaw),0], forward=[Math.cos(yaw),Math.sin(yaw),0];
+    const wheelCenter=pivot.map((v,i)=>v+sign*6*axis[i]);
+    bar([20,pivot[1],12],[20,pivot[1],24],1.3);
+    bar(pivot,wheelCenter,1.8);
+    const wheelAt=(a,r,offset)=>wheelCenter.map((v,i)=>v+r*Math.cos(a)*forward[i]+(i===2?r*Math.sin(a):0)+offset*axis[i]);
+    for(let j=0;j<24;j++){
+      const t0=j/24*2*Math.PI,t1=(j+1)/24*2*Math.PI;
+      const profile=offset=>[wheelAt(t0,9,offset),wheelAt(t0,14,offset),wheelAt(t1,14,offset),wheelAt(t1,9,offset)];
+      swPrism(parts,profile(-3.5),profile(3.5),DARK,.45);
+      const rimProfile=offset=>[wheelAt(t0,0,offset),wheelAt(t0,9,offset),wheelAt(t1,9,offset),wheelAt(t1,0,offset)];
+      swPrism(parts,rimProfile(-2.8),rimProfile(2.8),METAL,.25);
+    }
+    bar(wheelAt(0,0,-3.8),wheelAt(0,0,3.8),3.4,material);
+    bar([pivot[0],pivot[1],16],[pivot[0],pivot[1],21],3,material);
+    segmented(pivot,outer,1.3,material);
+    segmented(inner,outer,1);
+    ball(inner); ball(outer);
+    const prefix=sign<0?'LEFT ':'RIGHT ';
+    label(pivot,prefix+'KINGPIN',st.moving);
+    label(swMixPoint(pivot,outer,.55),prefix+'STEERING ARM',st.moving);
+    label(outer,prefix+'OUTER BALL JOINT',st.moving);
+    label(swMixPoint(inner,outer,.5),prefix+'TRACK ROD',st.moving);
+    label(wheelAt(Math.PI/2,13,3),prefix+'TYRE',st.moving);
+    label(wheelAt(0,7,3),prefix+'WHEEL RIM');
+    label(wheelCenter,prefix+'HUB');
+  }
+
+  const shift=rig.travel;
+  block([31,38+shift,18.5],[35,90+shift,21.2],METAL);
+  for(let j=-8;j<=8;j++){
+    const cy=64+(j+.5)*swToothPitch+shift, p=swToothPitch;
+    const profile=[[cy-p*.43,21.2],[cy+p*.43,21.2],[cy+p*.17,22.8],[cy-p*.17,22.8]];
+    swPrism(parts,on(PX(31),profile),on(PX(35),profile),METAL,.35);
+  }
+  const gearProfile=[];
+  for(let j=0;j<12;j++) for(const [fraction,r] of [[-.5,5.1],[-.25,5.1],[-.13,6.8],[.13,6.8],[.25,5.1]]){
+    const a=st.angle+(j+fraction)*2*Math.PI/12;
+    gearProfile.push([64+r*Math.sin(a),28-r*Math.cos(a)]);
+  }
+  const gearA=on(PX(31),gearProfile),gearB=on(PX(35),gearProfile);
+  const gearCap=vis([1,0,0])?gearB:gearA;
+  if(ghost>0) put([...gearA,...gearB],`<g opacity="${ghost}">${loft(gearA,gearB,n=>toneI(n,matOf('#dfa341')))+shape(gearCap,'#e5b459',.7)+hullInk([...gearA,...gearB],1)}</g>`);
+  segmented([35,64,28],[80,64,28],1.3);
+  for(const y of [44,84]){
+    block([29,y-3,3],[37,y+3,16],material,1-.8*ghost);
+    block([29,y-3,16],[37,y+3,18.5],material,1-.9*ghost);
+    block([29,y-3,18.5],[31,y+3,24.5],material,1-.9*ghost);
+    block([35,y-3,18.5],[37,y+3,24.5],material,1-.9*ghost);
+  }
+  block([28,55,3],[38,73,17],material,1-.8*ghost);
+  block([28,55,17],[38,73,37],material,1-.93*ghost);
+  block([67,60,3],[73,68,24],material,1-.8*ghost);
+  put([[67,60,24],[73,68,32]],`<g opacity="${1-.85*ghost}">${cylX(67,73,64,28,4,material,toneI,.8)}</g>`);
+  label([33,64,22],'RACK TEETH',st.moving);
+  label([33,76+shift,20],'RACK',st.moving);
+  label([35,64,33],'PINION',st.moving);
+  label([54,64,28],'STEERING COLUMN',st.moving);
+  label([70,64,32],'COLUMN BEARING');
+  label([36,84,24],'RACK GUIDE');
+  label([28,56,34],'PINION HOUSING');
+
+  const rimPoint=a=>[82,64+radius*Math.sin(a),28-radius*Math.cos(a)];
+  for(let i=0;i<48;i++) bar(rimPoint(i/48*2*Math.PI),rimPoint((i+1)/48*2*Math.PI),1.4,material);
+  for(let i=0;i<3;i++){
+    const a=st.angle+i/3*2*Math.PI;
+    segmented([82,64,28],rimPoint(a),1.1,METAL);
+  }
+  bar([79,64,28],[85,64,28],3.4,material);
+  label([85,64,28],'STEERING HUB',st.moving);
+  label(rimPoint(st.angle),'STEERING RIM',st.moving);
+  label(swMixPoint([82,64,28],rimPoint(st.angle+2*Math.PI/3),.6),'SPOKE',st.moving);
+  const ground=boardTop(0,0,96,128,3,5);
+  let svg=board(0,0,96,128,3,5)+castShadow([[20,8,32],[20,120,32],[82,64-radius,28],[82,64+radius,28],[82,64,28+radius]],3,ground);
+  svg+=byDepth(parts);
+  if(ghost>.6){
+    svg+=swLabels(labels);
+  } else {
+    svg+=xrCallouts(labels.filter(p=>['STEERING RIM','STEERING HUB','LEFT TYRE','RIGHT TYRE'].includes(p.text)),swBounds);
+  }
+  return svg;
+}
+
+function swTurn(st,ui,target){
+  if(st.target===target && !st.moving) return ui.flash('Steering stop reached');
+  st.from=st.angle; st.target=target; st.elapsed=0;
+  if(st.moving) return;
+  st.moving=true;
+  ui.animate(dt=>{
+    st.elapsed=Math.min(1,st.elapsed+dt/1.1);
+    st.angle=st.from+(st.target-st.from)*ease(st.elapsed);
+    if(st.elapsed===1){st.moving=false;return false;}
+    return true;
+  });
+}
+const swUI=mountFigure({
+  fig:'34',turn:'full',title:'Steering wheel',size:[96,128,51],palette:'tomato',
+  state:{angle:0,target:0,from:0,elapsed:0,moving:false,rim:0},
+  scene:swDraw,
+  buttons:[
+    {label:'Turn left',onClick:(st,ui)=>swTurn(st,ui,1)},
+    {label:'Turn right',onClick:(st,ui)=>swTurn(st,ui,-1)},
+    {label:'Compare wheel sizes',onClick:st=>{st.rim=1-st.rim;}}
+  ],
+  stats:st=>[
+    {label:'Tangential hand force',value:(swTorque/(swRims[st.rim]/100)).toFixed(0)+' N'},
+    {label:'Rim diameter',value:swRims[st.rim]*2+' cm',small:true},
+    {label:'Column torque',value:swTorque.toFixed(1)+' N m',small:true},
+    {label:'Teaching rack resistance',value:swRackLoad+' N',small:true}
+  ],
+  params:(st,q)=>{
+    const a=Number(q.get('angle'));
+    st.angle=st.target=Number.isFinite(a)?Math.max(-1,Math.min(1,a)):0;
+    st.rim=q.get('large')==='1'?1:0;
+  }
+});
+xrMount(()=>swUI,()=>'');
+</script></body></html>
