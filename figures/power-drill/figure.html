@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Power drill</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Primary evidence is the inspected 2016 printed page 66 and the accepted brief.
+   A cord supplies a brushed motor. Its rotor shaft carries the cooling fan and input pinion.
+   The pinion drives the countershaft. Two constant-mesh pairs offer mechanical ratios.
+   A sliding dog sleeve locks one driven gear to the spindle. Chuck jaws grip the bit shank.
+   The external hand feeds the entire drill down the external bench guide. Cutting lips remove
+   wood at the point; waste travels upward through the flutes and remains beside the hole.
+   Withdrawal is axial feed reversal while rotation continues, then the switch opens.
+   This is an enlarged teaching adaptation, not a literal reproduction or an edition union.
+   The 1988 edition is inaccessible and unverified. No impact unit or electronic control is shown.
+   Parts grouped by support.
+   Case holds motor housing, grip, gearcase, vents, screws, trigger and cord relief.
+   Motor housing holds stator poles and field coils, two bearings and brush holders.
+   Shaft holds armature, windings, commutator, cooling fan and pinion.
+   Gearcase holds the countershaft bearings, spindle bearings and selector fork.
+   Countershaft carries its input wheel and two pinions. Driven gears turn on the spindle.
+   Spindle splines hold the dog sleeve and chuck. Chuck holds its sleeve, jaws and bit.
+   Bit has shank, web, two helical lands/flutes, cutting lips and point.
+   Power cable conductors follow the grip wall to the trigger contacts and motor coils.
+   The guide and wood block are external teaching fixtures, never counted as drill anatomy.
+   Gear centers are 12 apart. Pitch radii 3+9, 4+8 and 6+6 all equal 12.
+   Low gear turns at motor/6 and high gear at motor/3. Both turn in the same direction.
+   shortcut: gear and motor detail is enlarged for teaching, use a measured assembly for engineering work. */
+addEventListener('error',e=>{document.documentElement.dataset.errors += e.message+';';});
+addEventListener('unhandledrejection',e=>{document.documentElement.dataset.errors += String(e.reason)+';';});
+const drillState={phase:'idle',feed:0,maxCut:0,angle:0,gear:'Low',xr:0};
+const drillCopper=matOf('#df9259'),drillSteel=matOf('#8999a0'),drillSkin=matOf('#eeb38b');
+const drillAxis=[39,38],drillCounter=[27,38];
+const drillRunning=st=>st.phase!=='idle';
+const drillOutput=st=>st.angle/(st.gear==='Low'?6:3);
+const drillPoint=st=>22-st.feed;
+function drillStep(st,dt){
+  if(!drillRunning(st))return false;
+  st.angle+=dt*9;
+  if(st.phase==='drilling'){
+    st.feed=Math.min(12,st.feed+dt*4);
+    st.maxCut=Math.max(st.maxCut,Math.max(0,st.feed-6));
+    if(st.feed===12)st.phase='running';
+  }else if(st.phase==='withdraw'){
+    st.feed=Math.max(0,st.feed-dt*7);
+    if(st.feed===0)st.phase='idle';
+  }
+  return drillRunning(st);
+}
+function drillStart(st,u){
+  if(drillRunning(st))return u.flash('The motor is already running');
+  st.phase='running';u.animate(dt=>drillStep(st,dt));
+}
+function drillFeed(st,u){
+  if(st.phase==='idle')return u.flash('Start the motor first');
+  if(st.phase==='withdraw')return u.flash('Wait until the drill is clear');
+  if(st.feed===12)return u.flash('The depth stop is reached. Withdraw the drill');
+  st.phase='drilling';
+}
+function drillWithdraw(st,u){
+  if(st.phase==='idle')return u.flash('The bit is already clear');
+  st.phase='withdraw';
+}
+function drillGear(st,u,name){
+  if(drillRunning(st))return u.flash('Withdraw and stop before changing gear');
+  st.gear=name;
+}
+const drillBounds=pts=>[[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i])))];
+function drillWheel(cx,cy,z,r,teeth,angle,m){
+  const profile=Array.from({length:teeth*4},(_,i)=>{
+    const a=angle+i/(teeth*4)*Math.PI*2,rr=r+((i%4===1||i%4===2)?.45:-.45);
+    return [cx+rr*Math.cos(a),cy+rr*Math.sin(a)];
+  });
+  const a=on(PZ(z-.75),profile),b=on(PZ(z+.75),profile);
+  return loft(a,b,n=>toneI(n,m))+shape(b,toneI([0,0,1],m),.65)+hullInk(a.concat(b),1.1)
+    +line([[cx,cy,z+.8],[cx+(r-1)*Math.cos(angle),cy+(r-1)*Math.sin(angle),z+.8]],.8);
+}
+function drillCallouts(items){
+  const vb=document.getElementById('fig').viewBox.baseVal;
+  const ordered=items.slice().sort((a,b)=>P(...a.at)[0]-P(...b.at)[0]);
+  const half=Math.ceil(ordered.length/2);
+  return [ordered.slice(0,half),ordered.slice(half)].map((col,side)=>{
+    col.sort((a,b)=>P(...a.at)[1]-P(...b.at)[1]);
+    return col.map((it,i)=>{
+      const p=P(...it.at),x=vb.width*(side?.86:.22),y=vb.height*(.08+.83*i/Math.max(1,col.length-1));
+      return tag(it.at,(x-p[0])/INK_K,(y-p[1])/INK_K,it.text,it.on);
+    }).join('');
+  }).join('');
+}
+function drillScene(st,m){
+  const k=ease(st.xr||0),parts=[],labels=[],feed=st.feed,theta=drillOutput(st),running=drillRunning(st);
+  const move=p=>[p[0],p[1],p[2]+12-feed];
+  const put=(pts,svg,text,anchor,on=false)=>{
+    parts.push({box:drillBounds(pts),svg});
+    if(text)labels.push({at:anchor||avg(pts),text,on});
+  };
+  const bx=(a,b,material,text,on=false,ghost=false)=>{
+    const aa=move(a),bb=move(b);put([aa,bb],`<g opacity="${ghost?1-.86*k:1}">${box(...aa,...bb,material,tone,1)}</g>`,text,avg([aa,bb]),on);
+  };
+  const rr=(a,b,r,material,text,on=false,r1=r)=>{
+    const aa=move(a),bb=move(b),bounds=[aa.map(v=>v-r),bb.map(v=>v+r)];
+    put(bounds,rod(aa,bb,r,material,toneI,.85,r1),text,avg([aa,bb]),on);
+  };
+  const gear=(cx,z,r,n,a,text,on)=>{
+    const zz=z+12-feed;put([[cx-r-.5,38-r-.5,zz-1],[cx+r+.5,38+r+.5,zz+1]],drillWheel(cx,38,zz,r,n,a,drillSteel),text,[cx,38+r,zz],on);
+  };
+  let svg=board(2,3,92,72,3,4);
+  svg+=castShadow([[12,15,3],[15,15,126],[39,38,109-feed],[77,38,102-feed],[39,38,22-feed]],3,boardTop(2,3,92,72,3,4));
+  for(const [lo,hi] of [[3,34],[34,68],[68,126]])put([[12,12,lo],[18,18,hi]],cyl(15,15,lo,hi,3,METAL));
+  put([[8,8,3],[23,23,7]],box(8,8,3,23,23,7,DARK));
+  const carriageZ=92-feed;
+  put([[10,10,carriageZ-4],[20,20,carriageZ+4]],box(10,10,carriageZ-4,20,20,carriageZ+4,drillSteel));
+  put([[15,15,carriageZ-2],[39,28,carriageZ+2]],box(15,15,carriageZ-2,39,28,carriageZ+2,drillSteel));
+  put([[31,27,carriageZ-3],[46,30,carriageZ+3]],box(31,27,carriageZ-3,46,30,carriageZ+3,DARK));
+  let wood=box(24,24,3,58,56,16,WOOD,toneI,1.4);
+  if(st.maxCut>0)wood+=shape(on(PZ(16.05),ellUV(39,38,2.25,2.25,24)),'#3e2c1e',.6);
+  for(const y of [28,32,46,51])wood+=line([[25,y,16.08],[35,y+.5,16.08],[44,y-.6,16.08],[57,y,16.08]],.3);
+  put([[24,24,3],[58,56,16.1]],wood);
+  if(st.maxCut>0)for(let i=0;i<12;i++){
+    const a=i*2.4,r=5+(i%4)*2.2,x=39+r*Math.cos(a),y=38+r*Math.sin(a);
+    put([[x-.7,y-.7,16.1],[x+.7,y+.7,16.8]],rod([x-.6,y-.4,16.4],[x+.6,y+.4,16.5],.35,WOOD));
+  }
+  const shellA=on(PZ(75-feed),ellUV(36,38,14,11,24)),shellB=on(PZ(109-feed),ellUV(36,38,14,11,24));
+  let shell=loft(shellA,shellB,n=>tone(n,m))+shape(shellB,tone([0,0,1],m),1)+hullInk(shellA.concat(shellB),2.7);
+  for(const a of [0,.65,1.3,2,2.7,3.4,4.1,4.8,5.5]){
+    const nx=Math.cos(a),ny=Math.sin(a);
+    if(vis([nx,ny,0]))shell+=line([[36+14.06*nx,38+11.06*ny,101-feed],[36+14.06*nx,38+11.06*ny,106-feed]],1.2);
+  }
+  put([[22,27,75-feed],[50,49,109-feed]],`<g opacity="${1-.9*k}">${shell}</g>`,'MOTOR HOUSING',move([26,45,84]));
+  const gearA=on(PZ(49-feed),ellUV(34,38,17,12,24)),gearB=on(PZ(75-feed),ellUV(36,38,15,12,24));
+  const gearShell=loft(gearA,gearB,n=>tone(n,drillSteel))+fill(pd(gearB)+pd(shellA),tone([0,0,1],drillSteel),'fill-rule="evenodd"')+hullInk(gearA.concat(gearB),2);
+  put([[17,26,49-feed],[51,50,75-feed]],`<g opacity="${1-.92*k}">${gearShell}</g>`,'GEARCASE',move([21,44,54]));
+  bx([44,31,87],[76,45,99],m,'PISTOL GRIP',false,true);
+  bx([56,34,83],[65,42,87],DARK,'TRIGGER',running);
+  if(k>0)bx([57,35,88],[63,41,90],METAL,'SWITCH CONTACTS',running,false);
+  rr([76,38,93],[81,38,93],2,DARK,'CORD RELIEF');
+  const cordPts=[[81,38,93],[86,39,88],[88,45,72],[88,60,28],[83,67,4],[72,68,4]];
+  for(let i=0;i<cordPts.length-1;i++){
+    const tether=(p,j)=>[p[0],p[1],p[2]+(12-feed)*(1-j/(cordPts.length-1))];
+    const a=tether(cordPts[i],i),b=tether(cordPts[i+1],i+1);
+    put([a.map(v=>v-.85),b.map(v=>v+.85)],rod(a,b,.85,DARK),i===1?'POWER CABLE':null,avg([a,b]));
+  }
+  for(const y of [35,41]){
+    const wire=[[77,y,93],[66,y,93],[60,y,89],[50,y,90],[44,y,87]];
+    for(let i=0;i<wire.length-1;i++){
+      const a=move(wire[i]),b=move(wire[i+1]);put([a,b],`<g opacity="${k}">${line([a,b],1.5)}</g>`);
+    }
+  }
+  if(k>0)for(const z of [67,93])rr([24,38,z],[48,38,z],.7,METAL,z===67?'CASE SCREWS':null);
+  const mech=[];const startMech=parts.length;
+  for(const y of [30,46]){
+    bx([35,y-2,72],[43,y+2,85],drillSteel,y===30?'STATOR POLES':null);
+    for(let z=74;z<85;z+=2)rr([34,y,z],[44,y,z],.65,drillCopper,z===74&&y===46?'FIELD WINDING':null,running);
+  }
+  rr([39,38,55],[39,38,95],1.2,METAL,'MOTOR SHAFT',running);
+  for(const z of [64,94]){
+    rr([39,38,z-1],[39,38,z+1],3,drillSteel,z===94?'MOTOR BEARINGS':null);
+    bx([24,36.8,z-.8],[36,39.2,z+.8],drillSteel);
+    bx([42,36.8,z-.8],[48,39.2,z+.8],drillSteel);
+  }
+  rr([39,38,73],[39,38,84],4.5,drillSteel,'ARMATURE CORE',running);
+  for(let i=0;i<6;i++){
+    const a=st.angle+i*Math.PI/3,x=39+4.7*Math.cos(a),y=38+4.7*Math.sin(a);
+    rr([x,y,72],[x,y,85],.65,drillCopper,i===0?'ARMATURE WINDING':null,running);
+  }
+  rr([39,38,87],[39,38,91],2.6,drillCopper,'COMMUTATOR',running);
+  for(let i=0;i<8;i++){
+    const a=st.angle+i*Math.PI/4;
+    const aa=move([39+2.65*Math.cos(a),38+2.65*Math.sin(a),87]),bb=move([39+2.65*Math.cos(a),38+2.65*Math.sin(a),91]);
+    put([aa,bb],line([aa,bb],.4));
+  }
+  for(const side of [-1,1]){
+    bx([37,38+side*5-1,87.5],[41,38+side*5+1,90.5],DARK,side===1?'BRUSH HOLDERS':null);
+    rr([39,38+side*2.6,89],[39,38+side*5,89],.9,DARK,side===1?'CARBON BRUSHES':null,running);
+  }
+  rr([39,38,59],[39,38,62],2,drillSteel,'FAN HUB',running);
+  for(let i=0;i<8;i++){
+    const a=st.angle+i*Math.PI/4,pts=[[1.5,-.7],[7,-1],[7,1],[1.5,.7]].map(([r,t])=>move([39+r*Math.cos(a)-t*Math.sin(a),38+r*Math.sin(a)+t*Math.cos(a),60]));
+    put(pts,shape(pts,toneI([0,0,1],METAL),.6),i===0?'COOLING FAN':null,pts[1],running);
+  }
+  gear(39,56,3,12,st.angle,'MOTOR PINION',running);
+  gear(27,56,9,36,-st.angle/3+Math.PI/36,'COUNTERSHAFT WHEEL',running);
+  rr([27,38,39],[27,38,59],1.25,METAL,'COUNTERSHAFT',running);
+  for(const z of [39,59]){
+    rr([27,38,z-.7],[27,38,z+.7],2.4,drillSteel);
+    bx([19,36.8,z-.7],[24.6,39.2,z+.7],drillSteel);
+  }
+  gear(27,49,4,16,-st.angle/3,'LOW PINION',running);
+  gear(39,49,8,32,st.angle/6+Math.PI/32,'LOW GEAR',running&&st.gear==='Low');
+  gear(27,42,6,24,-st.angle/3,'HIGH PINION',running);
+  gear(39,42,6,24,st.angle/3+Math.PI/24,'HIGH GEAR',running&&st.gear==='High');
+  rr([39,38,32],[39,38,51],1.5,METAL,'DRILL SPINDLE',running);
+  rr([39,38,35],[39,38,38],3.5,drillSteel,'SPINDLE BEARING');
+  const clutchZ=st.gear==='Low'?47:44;
+  rr([39,38,clutchZ-1],[39,38,clutchZ+1],3.2,drillCopper,'DOG SLEEVE',running);
+  for(let i=0;i<4;i++){
+    const a=theta+i*Math.PI/2,x=39+2.7*Math.cos(a),y=38+2.7*Math.sin(a);
+    rr([x,y,clutchZ],[x,y,st.gear==='Low'?48.3:42.7],.65,drillCopper);
+  }
+  rr([46,38,clutchZ],[42,38,clutchZ],.65,METAL,'SELECTOR FORK');
+  rr([46,38,clutchZ],[48,38,53],.65,METAL);
+  bx([47,36,52],[52,40,55],DARK,'GEAR SELECTOR');
+  mech.push(...parts.splice(startMech));
+  parts.push(...mech.map(p=>({...p,svg:`<g opacity="${k}">${p.svg}</g>`})));
+  rr([39,38,31],[39,38,36],4,drillSteel,'CHUCK BODY',running);
+  rr([39,38,26],[39,38,32],5,DARK,'CHUCK SLEEVE',running);
+  for(let i=0;i<12;i++){
+    const a=theta+i*Math.PI/6,x=39+5.05*Math.cos(a),y=38+5.05*Math.sin(a);
+    if(vis([Math.cos(a),Math.sin(a),0])){
+      const a1=move([x,y,27]),b1=move([x,y,31]);put([a1,b1],line([a1,b1],.7));
+    }
+  }
+  for(let i=0;i<3;i++){
+    const a=theta+i*Math.PI*2/3;
+    rr([39+2*Math.cos(a),38+2*Math.sin(a),26],[39+1.3*Math.cos(a),38+1.3*Math.sin(a),23.8],.7,METAL,i===0?'CHUCK JAWS':null,running);
+  }
+  rr([39,38,22],[39,38,27],1.25,METAL,'BIT SHANK',running);
+  const bitBottom=drillPoint(st),bitTop=35.8-feed;
+  // The teaching bit is lengthened below its shank so the flutes and material path remain visible.
+  const fluteBottom=bitBottom,fluteTop=bitTop;
+  const bitParts=[];
+  for(let j=0;j<18;j++){
+    const z0=fluteBottom+(fluteTop-fluteBottom)*j/18,z1=fluteBottom+(fluteTop-fluteBottom)*(j+1)/18;
+    let piece=rod([39,38,z0],[39,38,z1],.55,drillSteel,toneI,.3);
+    for(let i=0;i<2;i++){
+      const pts=[];for(let t=0;t<=3;t++){
+        const z=z0+(z1-z0)*t/3,a=theta+(z-fluteBottom)*.9+i*Math.PI;
+        pts.push([39+1.4*Math.cos(a),38+1.4*Math.sin(a),z]);
+      }
+      piece+=`<path d="${pd(pts,false)}" fill="none" stroke="${METAL.m}" stroke-width="1.3" stroke-linecap="round"/>`+line(pts,.3);
+    }
+    bitParts.push({box:[[37.5,36.5,z0],[40.5,39.5,z1]],svg:piece});
+  }
+  put([[37.4,36.4,fluteBottom],[40.6,39.6,fluteTop]],byDepth(bitParts),'TWIST FLUTES',[40.4,38,fluteBottom+(fluteTop-fluteBottom)*.6],running);
+  put([[38.4,37.4,fluteBottom],[39.6,38.6,fluteTop]],'','BIT WEB',[39,38,(fluteBottom+fluteTop)/2],running);
+  put([[37.5,36.5,fluteBottom-.8],[40.5,39.5,fluteBottom+.8]],rod([39,38,fluteBottom-.8],[39,38,fluteBottom+.8],0,METAL,toneI,.7,1.4),'CUTTING POINT',[39,38,fluteBottom-.8],st.phase==='drilling');
+  for(let i=0;i<2;i++){
+    const a=theta+i*Math.PI;
+    const lip=[[39,38,fluteBottom-.8],[39+1.4*Math.cos(a),38+1.4*Math.sin(a),fluteBottom+.6]];
+    put(lip,line(lip,.9),i===0?'CUTTING LIPS':null,lip[1],st.phase==='drilling');
+  }
+  if(st.phase==='drilling'&&st.feed>6)for(let i=0;i<7;i++){
+    const travel=(st.angle*.5+i/7)%1,z=drillPoint(st)+travel*10,a=theta+travel*9;
+    const pos=[39+1.7*Math.cos(a),38+1.7*Math.sin(a),z];
+    put([pos.map(v=>v-.4),pos.map(v=>v+.4)],rod(pos,[pos[0]+.3,pos[1]+.2,pos[2]+.6],.3,WOOD));
+  }
+  rr([79,38,108],[69,38,102],3,drillSkin);
+  bx([61,33,99],[71,43,104],drillSkin);
+  for(let i=0;i<4;i++){
+    const x=62+i*2.3;
+    rr([x,34,100],[x,31,96],.9,drillSkin);
+    rr([x,31,96],[x,32,91],.9,drillSkin);
+  }
+  rr([69,42,101],[64,46,96],1.2,drillSkin);
+  svg+=byDepth(parts);
+  if(k>.6)svg+=drillCallouts(labels);
+  return svg;
+}
+const drillUI=mountFigure({fig:'66',title:'Power drill',size:[94,75,132],turn:'full',palette:'cobalt',state:drillState,scene:drillScene,
+  stats:st=>[{label:'Gear',value:st.gear},{label:'Cut depth',value:st.maxCut.toFixed(1)+' mm'}],
+  buttons:[{label:'Start',onClick:drillStart},{label:'Drill',onClick:drillFeed},{label:'Withdraw',onClick:drillWithdraw},
+    {label:'Gear',choices:st=>['Low','High'].map(name=>({label:name,current:st.gear===name,disabled:drillRunning(st),why:'Withdraw and stop before changing gear',onClick:(s,u)=>drillGear(s,u,name)}))}],
+  params:(st,q)=>{if(q.has('gear')&&q.get('gear')==='High')st.gear='High';if(q.has('feed'))st.feed=Math.max(0,Math.min(12,Number(q.get('feed'))||0));st.maxCut=Math.max(0,st.feed-6);}
+});
+xrMount(()=>drillUI,()=> '');
+const drillStyle=document.createElement('style');
+drillStyle.textContent='html:not(.nolabels):has(#xrb[aria-pressed=true]) #stats{visibility:hidden}';
+document.head.appendChild(drillStyle);
+</script></body></html>
