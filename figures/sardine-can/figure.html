@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sardine can</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Source is the named Sardine Can diagram on printed page 32 of the 2016 primary scan.
+   The accepted brief also records direct 1998 support. The 1988 edition is inaccessible and unverified.
+   Fit key slides the sealing band's tab into the split lower shaft. The handle and shaft are one key.
+   Turn key pulls a sacrificial band off the perimeter. The key follows the peel point and the same shaft
+   accumulates every removed length. Coil area grows by thickness times removed length.
+   The band joins the body at z=27 to the lid at z=32. Until the last length tears free the lid stays there.
+   Lift lid raises only the freed lid. The removed band stays on the key. There is no resealing action.
+   Replace specimen exchanges the opened can for a new sealed can and clears the waste as a teaching reset.
+   Hand placement and slow staged opening are teaching adaptations. The operator's hands are omitted.
+   Parts. Can body and base, rolled base seam, lid and its rolled edge, perimeter band with its tab.
+   Key handle attached to shaft, split slot at shaft's lower end, wound band held by that same shaft.
+   No cutter, motor, gear, hidden hinge or self-repair mechanism is added.
+   Scale is enlarged for teaching. The metal thickness and tab are exaggerated for legibility.
+   Expected minimum anatomy is 6, declared in the individual brief before this build.
+*/
+const scOutline = [ [86,70], [86,106], ...arcUV(76,106,10,0,90,8), [34,116],
+  ...arcUV(34,106,10,90,180,8), [24,36], ...arcUV(34,36,10,180,270,8),
+  [76,26], ...arcUV(76,36,10,270,360,8), [86,70] ].filter((p,i,a)=>!i||Math.hypot(p[0]-a[i-1][0],p[1]-a[i-1][1])>.001);
+const scSegments = []; let scPerimeter = 0;
+for(let i=0;i<scOutline.length-1;i++){
+  const a=scOutline[i], b=scOutline[i+1], len=Math.hypot(b[0]-a[0],b[1]-a[1]);
+  scSegments.push({a,b,len,start:scPerimeter,t:[(b[0]-a[0])/len,(b[1]-a[1])/len]}); scPerimeter+=len;
+}
+const scThick=.30, scShaftR=1.2;
+const scBounds=pts=>[[0,1,2].map(k=>Math.min(...pts.map(p=>p[k]))),[0,1,2].map(k=>Math.max(...pts.map(p=>p[k])))];
+const scAt = distance => {
+  const d=Math.max(0,Math.min(scPerimeter-.000001,distance));
+  const seg=scSegments.find(s=>d<s.start+s.len)||scSegments[scSegments.length-1];
+  const u=(d-seg.start)/seg.len, n=[seg.t[1],-seg.t[0]];
+  return {p:seg.a.map((v,i)=>v+(seg.b[i]-v)*u),n,t:seg.t};
+};
+function scGeometry(st){
+  const removed=st.wound*scPerimeter, radius=Math.sqrt(scShaftR**2+scThick*removed/Math.PI);
+  const peel=scAt(removed), shaft=peel.p.map((v,i)=>v+peel.n[i]*(radius+.15));
+  const angle=(radius-scShaftR)/scThick*2*Math.PI;
+  return {removed,radius,peel,shaft,angle};
+}
+function scPlate(profile,z0,z1,material){
+  const a=on(PZ(z0),profile),b=on(PZ(z1),profile);
+  return loft(a,b,n=>tone(n,material))+shape(b,tone([0,0,1],material),.8)+hullInk([...a,...b],2);
+}
+function scScene(st,m){
+  const g=scGeometry(st), k=ease(st.xr||0), parts=[], labels=[];
+  const put=(pts,svg)=>parts.push({box:scBounds(pts),svg});
+  const ring=z=>on(PZ(z),scOutline.slice(0,-1));
+  const ghost=svg=>`<g opacity="${f(1-.78*k)}">${svg}</g>`;
+  let result=board(4,8,132,132,3,7)+castShadow([...ring(3),...ring(34)],3,boardTop(4,8,132,132,3,7));
+  put([...ring(3),...ring(4)],ghost(scPlate(scOutline.slice(0,-1),3,4,METAL)));
+  for(const seg of scSegments){
+    const a=seg.a,b=seg.b,n=[seg.t[1],-seg.t[0],0];
+    const ai=[a[0]-n[0]*1.1,a[1]-n[1]*1.1],bi=[b[0]-n[0]*1.1,b[1]-n[1]*1.1];
+    const outer=[[...a,4],[...b,4],[...b,27],[...a,27]],inner=[[...ai,4],[...bi,4],[...bi,27],[...ai,27]];
+    let wall=vis(n)?shape(outer,tone(n,m),.5):shape(inner,METAL.d,.5);
+    wall+=shape([[...a,27],[...b,27],[...bi,27],[...ai,27]],METAL.l,.4);
+    wall+=line([[...a,5],[...b,5]],.9);
+    put([...outer,...inner],ghost(wall));
+    if(seg.start+seg.len>g.removed+.001){
+      const u=Math.max(0,(g.removed-seg.start)/seg.len),a0=a.map((v,i)=>v+(b[i]-v)*u);
+      const band=[[...a0,27],[...b,27],[...b,32],[...a0,32]];
+      let bandSvg=shape(band,tone(n,METAL),.65);
+      bandSvg+=line([[...a0,29.5],[...b,29.5]],.35);
+      put(band,bandSvg);
+    }
+  }
+  const lift=ease(st.lift), lidShift=[-9*lift,-8*lift,34*lift];
+  const lidProfile=rrUV(22.8+lidShift[0],24.8+lidShift[1],87.2+lidShift[0],117.2+lidShift[1],10.8,8);
+  let lid=scPlate(lidProfile,32+lidShift[2],34+lidShift[2],m);
+  lid+=ink(pd(on(PZ(34.05+lidShift[2]),rrUV(26+lidShift[0],28+lidShift[1],84+lidShift[0],114+lidShift[1],9,8))),.8);
+  const fish=[[48,57],[58,63],[61,76],[57,88],[48,94],[51,81],[47,75],[48,64],[48,57]].map(([x,y])=>[x+lidShift[0],y+lidShift[1],34.1+lidShift[2]]);
+  lid+=shape(fish,mix(m.l,'#ffffff',.3),.8)+line([[49+lidShift[0],58+lidShift[1],34.2+lidShift[2]],[55+lidShift[0],50+lidShift[1],34.2+lidShift[2]],[58+lidShift[0],62+lidShift[1],34.2+lidShift[2]]],.8);
+  put([...on(PZ(32+lidShift[2]),lidProfile),...on(PZ(34+lidShift[2]),lidProfile)],ghost(lid));
+  const fit=ease(st.fit), tilt=fit*Math.PI/2, ca=Math.cos(g.angle),sa=Math.sin(g.angle);
+  const origin=[110+(g.shaft[0]-110)*fit,52+(g.shaft[1]-52)*fit,4+22*fit];
+  const keyPoint=([u,v,h])=>{
+    const a=u*ca-v*sa,b=u*sa+v*ca;
+    return [origin[0]+a,origin[1]+b*Math.sin(tilt)+h*Math.cos(tilt),origin[2]-b*Math.cos(tilt)+h*Math.sin(tilt)];
+  };
+  const keyRod=(a,b,r)=>{const aa=keyPoint(a),bb=keyPoint(b);put([aa.map(v=>v-r),aa.map(v=>v+r),bb.map(v=>v-r),bb.map(v=>v+r)],rod(aa,bb,r,METAL,toneI,.9));};
+  keyRod([0,0,8],[0,0,30],scShaftR);
+  for(const side of [-1,1]) keyRod([0,side*.82,0],[0,side*.82,8],.36);
+  const handle=[ [0,0,30],[-11,4,32],[-12,7,32],[-9,9,32],[9,9,32],[12,7,32],[11,4,32],[0,0,30] ];
+  for(let i=0;i<handle.length-1;i++)keyRod(handle[i],handle[i+1],.85);
+  if(st.wound>0){
+    const [x,y]=g.shaft,r=g.radius;
+    let coil=cyl(x,y,27,32,r,METAL,toneI,1,48);
+    const spiral=[];
+    const turns=(r-scShaftR)/scThick;
+    for(let i=0;i<=Math.ceil(turns*36);i++){
+      const a=Math.min(turns*2*Math.PI,i/36*2*Math.PI),rr=scShaftR+scThick*a/(2*Math.PI);
+      const phase=a+Math.atan2(-g.peel.n[1],-g.peel.n[0])-turns*2*Math.PI;
+      spiral.push([x+rr*Math.cos(phase),y+rr*Math.sin(phase),32.05]);
+    }
+    coil+=line(spiral,.45);
+    put([[x-r,y-r,27],[x+r,y+r,32.1]],`<g opacity="${f(1-.65*k)}">${coil}</g>`);
+    labels.push({at:[x+g.peel.n[0]*r,y+g.peel.n[1]*r,30],text:'WOUND BAND',on:st.motion==='wind'});
+  }
+  const tabAnchor=st.wound>0?keyPoint([.4,0,3.5]):[87.3,70,29.5];
+  if(st.wound===0){
+    const tab=[[86,69.75,27],[89,69.75,27],[89,69.75,32],[86,69.75,32]];
+    put(tab,shape(tab,METAL.l,.65));
+  }else{
+    const tab=[[-1,0,1],[1,0,1],[1,0,6],[-1,0,6]].map(keyPoint);
+    put(tab,shape(tab,METAL.l,.65));
+  }
+  result+=byDepth(parts);
+  if(k>.6){
+    labels.push({at:keyPoint([0,8,32]),text:'KEY HANDLE',on:st.motion==='wind'},
+      {at:keyPoint([0,0,19]),text:'KEY SHAFT',on:st.motion==='wind'},
+      {at:keyPoint([0,0,3]),text:'SHAFT SLOT',on:st.motion==='fit'},
+      {at:tabAnchor,text:'BAND TAB',on:st.motion==='fit'},
+      {at:[24,76,17],text:'CAN BODY'},
+      {at:[55+lidShift[0],72+lidShift[1],34+lidShift[2]],text:'LID',on:st.motion==='lift'},
+      {at:[34,116,5],text:'ROLLED BASE SEAM'});
+    if(st.wound<1){const b=scAt((g.removed+scPerimeter)/2);labels.push({at:[...b.p,29.5],text:'REMAINING BAND',on:st.motion==='wind'});}
+    result+=xrCallouts(labels,[22,125,24,118,3,69]);
+  }
+  return result;
+}
+function scAnimate(st,ui,motion,field,target,seconds){
+  if(st.motion)return ui.flash('Wait for this action to finish');
+  st.motion=motion; const start=st[field];let elapsed=0;
+  ui.animate(dt=>{elapsed=Math.min(seconds,elapsed+dt);st[field]=start+(target-start)*elapsed/seconds;
+    if(elapsed===seconds){st[field]=target;st.motion=null;return false;}return true;});
+}
+function scFit(st,ui){
+  if(st.fit===1)return ui.flash('The tab is already captured by the key');
+  scAnimate(st,ui,'fit','fit',1,.8);
+}
+function scWind(st,ui){
+  if(st.fit<1)return ui.flash('Fit the key to the band tab first');
+  if(st.wound===1)return ui.flash('The band is removed. The can cannot reseal');
+  scAnimate(st,ui,'wind','wound',Math.min(1,st.wound+.25),1.65);
+}
+function scLift(st,ui){
+  if(st.wound<1)return ui.flash('The remaining band still holds the lid');
+  if(st.lift===1)return ui.flash('The lid is already removed');
+  scAnimate(st,ui,'lift','lift',1,1.1);
+}
+const scUI=mountFigure({fig:'32',title:'Sardine can',turn:'full',size:[136,140,74],palette:'mint',
+  state:{fit:0,wound:0,lift:0,motion:null},scene:scScene,
+  stats:st=>[{label:'Band remaining',value:Math.round((1-st.wound)*100)+'%'},{label:'Band wound',value:Math.round(st.wound*100)+'%'}],
+  buttons:[{label:'Fit key',onClick:scFit},{label:'Turn key',onClick:scWind},{label:'Lift lid',onClick:scLift},
+    {label:'Replace specimen',onClick:(st,ui)=>{if(st.motion)return ui.flash('Wait for this action to finish');Object.assign(st,{fit:0,wound:0,lift:0});ui.flash('New sealed can. The opened specimen is replaced');}}],
+  params:(st,q)=>{
+    const wound=Number(q.get('wound'));if(Number.isFinite(wound))st.wound=Math.max(0,Math.min(1,wound));
+    st.fit=q.get('fit')==='1'||st.wound>0?1:0;
+    st.lift=q.get('lid')==='1'&&st.wound===1?1:0;
+  }
+});
+xrMount(()=>scUI,()=>'');
+</script></body></html>
