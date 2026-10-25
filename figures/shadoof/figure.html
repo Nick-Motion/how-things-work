@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shadoof</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Book page 56 names a water-lifting lever, not a pulley.
+   Lower. An external hand pushes the long arm down, raising the counterweight.
+   Fill. The hand holds the beam down while water enters the immersed open bucket.
+   Raise. A light human input plus the falling counterweight raises the filled bucket.
+   Empty bucket. The person tips the suspended bucket and returns its water to the tray.
+   Refill tray. An external jug supplies water to the teaching tray. It is not shadoof hardware.
+   Structure. Two uprights fixed into the teaching base support the pivot axle through the beam.
+   Mechanism. One beam, pivot axle, suspension rope tied to the long end, bail attached at both bucket sides,
+   open bucket with a bottom, counterweight tied by a sling to the short end.
+   Power and control. Human hand and gravity only. No motor, valve train, pulley or automatic cycle.
+   Fixtures. Base, water tray and refill jug are scale teaching adaptations, not literal book reconstruction.
+   Overlays. Dashed lever arms and arrows show opposing moments, not physical anatomy.
+   The six-part anatomy minimum is declared in the individual brief. Eight real components are labelled.
+   Motion is slowed and prescribed by the hand; this is a kinematic model, not a free dynamics simulation.
+   2016 and 1998 support the mechanism. The 1988 edition remains inaccessible and unverified. */
+const shPivot=[57,32,69], shLow=-34, shHigh=22, shCapacity=1.2;
+const shRopeMat=matOf('#b69761'), shWater=matOf('#6cb8dd'), shSkin=matOf('#e7ad85');
+const shAt=(angle,d,y=32)=>{const a=angle*Math.PI/180;return [57+d*Math.cos(a),y,69+d*Math.sin(a)];};
+function shGeometry(st){
+  const end=shAt(st.angle,48), weight=shAt(st.angle,-26), bail=[end[0],32,end[2]-20];
+  const rim=bail[2]-6, base=rim-10;
+  const tip=st.tip*Math.PI/180;
+  const bucket=(dx,dy,dz)=>[end[0]+dx*Math.cos(tip)+dz*Math.sin(tip),32+dy,rim-dx*Math.sin(tip)+dz*Math.cos(tip)];
+  return {end,weight,bail,rim,base,bucket,pour:bucket(6,0,0)};
+}
+const shBounds=(points,r=0)=>[[0,1,2].map(i=>Math.min(...points.map(p=>p[i]))-r),[0,1,2].map(i=>Math.max(...points.map(p=>p[i]))+r)];
+function shScene(st,m){
+  const g=shGeometry(st), k=ease(st.xr||0), parts=[], labels=[];
+  const put=(points,r,svg)=>parts.push({box:shBounds(points,r),svg});
+  const rr=(a,b,r,material=WOOD,opacity=1)=>put([a,b],r,`<g opacity="${opacity}">${rod(a,b,r,material,tone,1.3)}</g>`);
+  const bx=(a,b,material,opacity=1)=>put([a,b],0,`<g opacity="${opacity}">${box(...a,...b,material,tone,1.2)}</g>`);
+  const lab=(at,text,active=false)=>labels.push({at,text,on:active});
+  const moving=['lowering','raising'].includes(st.phase), waterZ=5+14*st.tray/6;
+  let svg=board(10,8,123,57,3,3);
+  svg+=castShadow([[53,24,3],[61,40,3],[57,32,69],g.end,g.weight,[g.end[0],32,g.base]],3,boardTop(10,8,123,57,3,3));
+  for(const y of [26,38]){
+    bx([51,y-5,3],[63,y+5,6],WOOD);
+    for(let z=6;z<69;z+=9) rr([57,y,z],[57,y,Math.min(69,z+9)],2.3,WOOD,1-.75*k);
+  }
+  for(const y of [26,38]) rr([57,y,69],[57,y,73],2.3,WOOD,1-.75*k);
+  for(const [a,b] of [[23,26],[26,29.5],[29.5,34.5],[34.5,38],[38,41]])rr([57,a,69],[57,b,69],1.3,METAL);
+  for(let d=-26;d<48;d+=6)rr(shAt(st.angle,d),shAt(st.angle,Math.min(48,d+6)),2.4,m,1-.64*k);
+  rr(g.end,g.bail,.55,shRopeMat);
+  const sling=[g.weight[0],32,g.weight[2]-6];
+  rr(g.weight,sling,.65,shRopeMat);
+  put([[sling[0]-7,25,sling[2]-12],[sling[0]+7,39,sling[2]]],0,cyl(sling[0],32,sling[2]-12,sling[2],6.8,matOf('#c4aa72'),tone,1.8));
+  rr([sling[0]-6.5,32,sling[2]-6],sling,.5,shRopeMat);
+  rr(sling,[sling[0]+6.5,32,sling[2]-6],.5,shRopeMat);
+  for(const side of [-1,1])rr(g.bail,g.bucket(0,side*6,0),.55,METAL);
+  const bottom=ellUV(0,0,4.7,4.7,32).map(([x,y])=>g.bucket(x,y,-10));
+  const top=ellUV(0,0,6,6,32).map(([x,y])=>g.bucket(x,y,0));
+  const floor=shape(bottom,CERAMIC.d,.8);
+  let water='';
+  if(st.water>0.001){
+    const z=-9+8*st.water/shCapacity, ring=ellUV(0,0,4.8+st.water/shCapacity*.8,4.8+st.water/shCapacity*.8,32).map(([x,y])=>g.bucket(x,y,z));
+    water=shape(ring,shWater.l,.7);
+  }
+  const bucketBody=openShell(bottom,top,n=>tone(n,CERAMIC),floor+water)+ink(pd(top),1.4)+hullInk([...bottom,...top],2);
+  put([...bottom,...top],0,`<g opacity="${1-.78*k}">${bucketBody}</g>`);
+  if(k>0)put([...bottom,...top],0,`<g opacity="${k}">${floor}${water}${ink(pd(top),1.2)}${ink(pd(bottom),.8)}</g>`);
+  bx([83,16,3],[119,48,5],PALS.cobalt);
+  for(const [a,b] of [[[83,16,5],[85,48,22]],[[117,16,5],[119,48,22]],[[85,16,5],[117,18,22]],[[85,46,5],[117,48,22]]])bx(a,b,PALS.cobalt,1-.8*k);
+  put([[85,18,waterZ],[117,46,waterZ]],0,fill(pd([[85,18,waterZ],[117,18,waterZ],[117,46,waterZ],[85,46,waterZ]]),shWater.l,'opacity=".45"'));
+  const grip=shAt(st.angle,39), palm=[grip[0]+1,39,grip[2]+2];
+  rr([palm[0]+1,49,palm[2]+2],palm,2.3,shSkin);
+  for(const dx of [-2.4,-.8,.8,2.4]){
+    rr([palm[0]+dx,39,palm[2]],[grip[0]+dx,33,grip[2]+2.8],.65,shSkin);
+    rr([grip[0]+dx,33,grip[2]+2.8],[grip[0]+dx,31,grip[2]+.5],.65,shSkin);
+  }
+  rr(palm,[grip[0]+3,35,grip[2]-1],.95,shSkin);
+  const jt=st.refillT||0, lift=jt<.2?ease(jt/.2):jt>.8?1-ease((jt-.8)/.2):1;
+  const tilt=(jt<.2?0:jt<.35?ease((jt-.2)/.15):jt<.65?1:jt<.8?1-ease((jt-.65)/.15):0)*Math.PI/3;
+  const jugY=14+42*Math.min(1,lift*4)-13*Math.max(0,(lift-.9)/.1);
+  const jugAt=(x,y,z)=>[23+82*lift+x,jugY+y*Math.cos(tilt)-z*Math.sin(tilt),17+31*lift+y*Math.sin(tilt)+z*Math.cos(tilt)];
+  const jugBottom=ellUV(0,0,5,5,24).map(([x,y])=>jugAt(x,y,-14)),jugTop=ellUV(0,0,6,6,24).map(([x,y])=>jugAt(x,y,0));
+  const jugWater=ellUV(0,0,5.4,5.4,24).map(([x,y])=>jugAt(x,y,-13+10*st.jugWater/2));
+  put([...jugBottom,...jugTop],0,openShell(jugBottom,jugTop,n=>tone(n,PALS.mint),shape(jugWater,shWater.l,.6))+ink(pd(jugTop),1.2));
+  for(const [a,b] of [[[0,5,-1],[0,9,-3]],[[0,9,-3],[0,9,-10]],[[0,9,-10],[0,5,-12]]])rr(jugAt(...a),jugAt(...b),.8,METAL);
+  if(st.phase==='refilling'){
+    rr(jugAt(0,18,-7),jugAt(0,10,-6),2,shSkin);
+    rr(jugAt(0,10,-6),jugAt(0,8,-5),1.1,shSkin);
+    if(jt>=.35&&jt<=.65){const lip=jugAt(0,-6,0);rr(lip,[lip[0],lip[1],waterZ],.65,shWater);}
+  }
+  if(st.phase==='emptying'){
+    rr(g.bucket(-15,0,-6),g.bucket(-6,0,-6),2,shSkin);
+    for(const y of [-2,0,2])rr(g.bucket(-6,y,-6),g.bucket(-4.5,y,-5),.7,shSkin);
+    if(st.tip>35&&st.water>.01)rr(g.pour,[g.pour[0],32,waterZ],.65,shWater);
+  }
+  svg+=byDepth(parts);
+  if(k>.6){
+    const overlayA=shAt(st.angle,-26,22),overlayB=shAt(st.angle,48,22),overlayP=[57,22,69];
+    const dashed=pts=>`<path d="${pd(pts,false)}" fill="none" stroke="#bb6146" stroke-width="1.3" stroke-dasharray="3 2"/>`;
+    svg+=dashed([overlayA,overlayP,overlayB]);
+    for(const [p,len] of [[overlayA,11],[overlayB,14]])svg+=dashed([p,[p[0],p[1],p[2]-len]])+line([[p[0]-2,p[1],p[2]-len+3],[p[0],p[1],p[2]-len],[p[0]+2,p[1],p[2]-len+3]],1.2).replaceAll(INK,'#bb6146');
+    lab([57,38,48],'UPRIGHTS');lab(shPivot,'PIVOT AXLE',moving);lab(shAt(st.angle,16),'BEAM',moving);
+    lab([g.end[0],32,g.end[2]-10],'SUSPENSION ROPE',moving);lab(g.bucket(0,6,0),'BUCKET BAIL',moving);
+    lab(g.bucket(4,0,-6),'BUCKET',st.phase==='filling'||st.phase==='emptying');lab([sling[0],32,sling[2]-7],'COUNTERWEIGHT',moving);lab(sling,'WEIGHT SLING',moving);
+    lab(palm,'EXTERNAL HAND',moving);lab([117,46,12],'TRAY - FIXTURE');lab(jugAt(0,0,0),'REFILL - FIXTURE',st.phase==='refilling');
+    lab(overlayP,'LEVER ARMS - OVERLAY');lab([overlayB[0],22,overlayB[2]-10],'MOMENTS - OVERLAY');
+    svg+=xrCallouts(labels,[20,118,16,48,3,92]);
+  }
+  return svg;
+}
+function shAction(st,ui,action){
+  if(['lowering','filling','raising','emptying','refilling'].includes(st.phase))return ui.flash('The hand is busy. Wait for this action.');
+  if(action==='lower'){
+    if(st.phase==='lowered')return ui.flash('The hand is already holding the bucket in the tray.');
+    if(st.water>0)return ui.flash('Empty the raised bucket before lowering again.');
+    return shRun(st,ui,'lowering',1.6);
+  }
+  if(action==='fill'){
+    if(st.phase!=='lowered')return ui.flash('Lower the bucket into the water first.');
+    if(st.water>=shCapacity-.001)return ui.flash('The bucket is full. Raise it with a light hand input.');
+    if(st.tray<shCapacity)return ui.flash('Refill the teaching tray first.');
+    return shRun(st,ui,'filling',1.2);
+  }
+  if(action==='raise'){
+    if(st.phase!=='lowered')return ui.flash('Lower and fill the bucket first.');
+    return shRun(st,ui,'raising',1.6);
+  }
+  if(action==='empty'){
+    if(st.phase!=='raised')return ui.flash('Raise the bucket clear of the tray first.');
+    if(st.water<=0)return ui.flash('The bucket is empty.');
+    return shRun(st,ui,'emptying',2);
+  }
+  if(action==='refill'){
+    if(st.tray>=6)return ui.flash('The teaching tray is already full.');
+    return shRun(st,ui,'refilling',2.4);
+  }
+}
+function shRun(st,ui,phase,duration){
+  st.phase=phase;const startAngle=st.angle,startWater=st.water,startTray=st.tray,startJug=st.jugWater;let elapsed=0;
+  ui.animate(dt=>{
+    elapsed=Math.min(duration,elapsed+dt);const t=elapsed/duration,e=ease(t);
+    if(phase==='lowering')st.angle=startAngle+(shLow-startAngle)*e;
+    if(phase==='raising')st.angle=startAngle+(shHigh-startAngle)*e;
+    if(phase==='filling'){st.water=startWater+(shCapacity-startWater)*e;st.tray=startTray-(st.water-startWater);}
+    if(phase==='emptying'){
+      st.tip=t<.3?60*ease(t/.3):t<.75?60:60*(1-ease((t-.75)/.25));
+      const poured=Math.max(0,Math.min(1,(t-.3)/.45));st.water=startWater*(1-poured);st.tray=startTray+startWater-st.water;
+    }
+    if(phase==='refilling'){st.refillT=t;st.tray=startTray+(6-startTray)*Math.max(0,Math.min(1,(t-.35)/.3));st.jugWater=startJug-(st.tray-startTray);}
+    if(t<1)return true;
+    st.tip=0;st.refillT=0;st.phase=st.angle===shLow?'lowered':'raised';return false;
+  });
+}
+const ui=mountFigure({fig:'56',title:'Shadoof',turn:'full',size:[125,60,100],palette:'tomato',
+  state:{phase:'raised',angle:shHigh,water:0,tray:6,tip:0,refillT:0,jugWater:2},scene:shScene,
+  stats:st=>[{label:'Bucket',value:st.water.toFixed(1)+' L'},{label:'Tray',value:st.tray.toFixed(1)+' L',small:true}],
+  buttons:[{label:'Lower',onClick:(s,u)=>shAction(s,u,'lower')},{label:'Fill',onClick:(s,u)=>shAction(s,u,'fill')},{label:'Raise',onClick:(s,u)=>shAction(s,u,'raise')},{label:'Empty bucket',onClick:(s,u)=>shAction(s,u,'empty')},{label:'Refill tray',onClick:(s,u)=>shAction(s,u,'refill')}],
+  params:(s,q)=>{if(q.get('lowered')==='1'){s.angle=shLow;s.phase='lowered';}if(q.get('filled')==='1'){s.water=shCapacity;s.tray=4.8;}}
+});
+xrMount(()=>ui,()=> '');
+</script></body></html>
