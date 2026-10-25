@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Speedometer</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. The saved 2016 page 46 image and 1998 page text support this teaching adaptation.
+   A hand-driven bench wheel replaces the car transmission. Its rotating wire ends in the input shaft.
+   The shaft rotates a magnet inside an aluminium drag cup. Eddy-current drag deflects the cup and
+   pointer against the anchored hairspring. There is no gear connection from the counter to the pointer.
+   The same input shaft carries a worm touching a twelve-tooth worm wheel. Its eccentric pin runs in
+   the long slot of a rocking drive arm. A sprung drive pawl advances the ratchet on the forward stroke;
+   a fixed sprung holding pawl prevents reversal. Decimal carry pinions connect adjacent numeral drums.
+   The dial, casing and bearing brackets hold the mechanism. The cable is supported at both unions.
+   Parts grouped by support.
+   CASE. Casing, rear plate, bezel, glass, dial and graduations, counter window, mounting feet on a bench.
+   SPEED. Rear shaft bearing in rear plate, shaft, magnet, drag cup and rim, cup spindle, spindle bearings
+   in the bridge and dial, hairspring on spindle and anchor, zero stop fixed to dial, pointer on spindle.
+   DISTANCE. Worm on shaft, worm wheel and eccentric axle in bracket, eccentric pin in slotted drive arm,
+   drive pawl and spring on arm, ratchet and holding pawl with spring on bracket, counter axle and bearing
+   brackets, units, tens, hundreds and thousands drums with adjacent decimal carry pinions.
+   INPUT. Test wheel and axle in two bench supports, sheath and rotating wire between wheel and cable union.
+   Adaptation limits. Enlarged, schematic gear teeth and separated supports expose the principle.
+   Twelve shaft turns advance one counter digit by one metre on this illustrative bench calibration.
+   Initial reading is nine metres already travelled. The four-digit counter has no reset control.
+   The lowest drum advances with the ratchet; the higher drums carry during the last unit of each decade.
+   No claim is made about exact production ratios, magnetic calibration or a verified 1988 edition.
+*/
+const spdTau = Math.PI*2, spdPitch = spdTau/10;
+const spdPivot = [59,75,31];
+const spdDist = Math.hypot(22,9), spdAmp = Math.PI/10, spdEcc = spdDist*Math.sin(spdAmp);
+const spdBeta = Math.atan2(9,-22), spdPeak = 2*Math.acos(-spdEcc/spdDist);
+const spdOutline = ellUV(55,51,29,29,48);
+const spdBrass = matOf('#d8b35c'), spdCopper = matOf('#d38863'), spdSteel = matOf('#71858d');
+const spdBounds = pts => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i])))];
+function spdMotion(turns){
+  const cycle = turns/12, whole = Math.floor(cycle), phase = (cycle-whole)*spdTau;
+  const phi = spdBeta-Math.acos(-spdEcc/spdDist)+phase;
+  const pin = [37+spdEcc*Math.cos(phi),75,40+spdEcc*Math.sin(phi)];
+  const arm = Math.atan2(pin[2]-31,pin[0]-59);
+  const advance = phase <= spdPeak ? Math.max(0,Math.min(1,(arm-(spdBeta-spdAmp))/(2*spdAmp))) : 1;
+  const count = whole+advance;
+  const drums = [count,...[10,100,1000].map(d=>Math.floor(count/d)+Math.max(0,count%d-(d-1)))];
+  return {phase,phi,pin,arm,count,drums,forward:phase<spdPeak};
+}
+function spdStep(st,dt){
+  st.rpm += (st.target-st.rpm)*Math.min(1,dt*5);
+  let travel = st.rpm/60*dt;
+  if(st.target){ travel = Math.min(travel,st.remaining); st.remaining-=travel; if(st.remaining<1e-8){st.remaining=0;st.target=0;} }
+  st.turns += travel;
+  st.indicator += (st.rpm-st.indicator)*Math.min(1,dt*6);
+  if(!st.target&&st.rpm<.05&&st.indicator<.05){st.rpm=st.indicator=0;return false;}
+  return true;
+}
+let spdUI, spdLoop=false;
+function spdRun(st){
+  if(spdLoop)return; spdLoop=true;
+  spdUI.animate(dt=>{const more=spdStep(st,dt);if(!more)spdLoop=false;return more;});
+}
+function spdDrive(st,rpm,turns,add=false){st.target=rpm;st.remaining=add?st.remaining+turns:Math.max(st.remaining,turns);spdRun(st);}
+function spdRod(parts,a,b,r,mat=METAL){parts.push({box:spdBounds([a.map(v=>v-r),a.map(v=>v+r),b.map(v=>v-r),b.map(v=>v+r)]),svg:rod(a,b,r,mat,toneI,.85)});}
+function spdBox(parts,b,mat=METAL){parts.push({box:[b.slice(0,3),b.slice(3)],svg:box(...b,mat,toneI,.8)});}
+function spdWheelY(y0,y1,x,z,r,n,angle,mat){
+  const profile=Array.from({length:n*4},(_,i)=>{const a=angle+i/(n*4)*spdTau,rr=i%4<2?r:r-.75;return [x+rr*Math.cos(a),z+rr*Math.sin(a)];});
+  const aa=on(PY(y0),profile),bb=on(PY(y1),profile),cap=facing([0,1,0])?bb:aa;
+  return loft(aa,bb,nr=>toneI(nr,mat))+shape(cap,mat.l,.7)+hullInk([...aa,...bb],1.2);
+}
+function spdDrum(y0,y1,value){
+  const aa=on(PY(y0),ellUV(59,31,6,6,40)),bb=on(PY(y1),ellUV(59,31,6,6,40));
+  let svg=loft(aa,bb,n=>toneI(n,CERAMIC));
+  const near=facing([0,1,0])?bb:aa;
+  svg+=shape(near,CERAMIC.m,.65)+hullInk([...aa,...bb],1);
+  for(let digit=0;digit<10;digit++){
+    const a=(value-digit)*spdTau/10,normal=[Math.cos(a),0,Math.sin(a)];
+    if(!facing(normal))continue;
+    const origin=P(59+6.08*Math.cos(a),(y0+y1)/2,31+6.08*Math.sin(a));
+    svg+=`<text transform="${txM(origin,Dv(0,-1,0),Dv(Math.sin(a),0,-Math.cos(a)))}" font-size="3.2" font-family="ui-monospace,monospace" font-weight="800" text-anchor="middle" dominant-baseline="middle" fill="${INK}">${digit}</text>`;
+  }
+  return svg;
+}
+function spdMechanism(st){
+  const mo=spdMotion(st.turns),parts=[],labels=[],moving=st.rpm>.1;
+  const label=(at,text,on=false)=>labels.push({at,text,on});
+  const rr=(a,b,r,mat)=>spdRod(parts,a,b,r,mat);
+  const bx=(b,mat)=>spdBox(parts,b,mat);
+  bx([30,37,27,33,73,29],spdSteel);label([32,63,28],'BEARING BRIDGE');
+  for(const y of [39,70]){bx([33,y-1,28,60,y+1,29.5],spdSteel);bx([57,y-1,29,61,y+1,33],spdSteel);}
+  label([59,70,31],'COUNTER BEARINGS');
+  rr([59,38,31],[59,77,31],.9);label([59,39,31],'COUNTER AXLE',moving);
+  const ys=[43.5,50,56.5,63];
+  ys.forEach((y,i)=>{parts.push({box:[[53,y,25],[65,y+5.5,37]],svg:spdDrum(y,y+5.5,mo.drums[i])});label([65,y+2.75,31],['UNITS DRUM','TENS DRUM','HUNDREDS DRUM','THOUSANDS DRUM'][i],moving&&(i===0||mo.count%(10**i)>10**i-1));});
+  for(let i=0;i<3;i++){
+    const y=ys[i]+6,previous=mo.drums[i],carry=Math.floor(previous/10)+Math.max(0,previous%10-9);
+    parts.push({box:[[48.8,y-1,24],[54,y+1,30]],svg:spdWheelY(y-.7,y+.7,51.4,27,2.6,10,-carry*spdTau,spdBrass)});
+    rr([51.4,y-1.2,27],[51.4,y+1.2,27],.45);
+    bx([49,y-1.6,26,51,y+1.6,28],spdSteel);
+    // shortcut: carry tooth profiles are schematic, replace for a dimensional reconstruction.
+    for(const offset of [0,.55]){const a=Math.atan2(-4,-7.6)+(previous-9)*spdTau/10+offset-.55;rr([59+4.9*Math.cos(a),y-.6,31+4.9*Math.sin(a)],[59+6*Math.cos(a),y-.6,31+6*Math.sin(a)],.5,spdBrass);}
+  }
+  label([51.4,49.5,27],'DECIMAL CARRY PINIONS',moving);
+  bx([30,51,47,34,59,55],spdSteel);label([31,55,54],'REAR SHAFT BEARING');
+  rr([28,55,51],[48,55,51],1.1);label([42,55,51],'INPUT SHAFT',moving);
+  const worm=[];
+  for(let i=0;i<=84;i++){const t=i/84,a=t*spdTau*4+st.turns*spdTau;worm.push([34+t*6,55+3*Math.cos(a),51+3*Math.sin(a)]);}
+  parts.push({box:[[34,52,48],[40,58,54]],svg:rod([34,55,51],[40,55,51],2.2,spdBrass,toneI,.6)+line(worm,1.5).replace(INK,spdBrass.l)});label([37,55,54],'WORM',moving);
+  parts.push({box:[[29,53,32],[45,57,48]],svg:spdWheelY(53,57,37,40,8,12,mo.phi,spdBrass)});label([37,54,47],'WORM WHEEL',moving);
+  for(const y of [52,71]){bx([34,y-1,28,40,y+1,40],spdSteel);rr([37,y-1,40],[37,y+1,40],2,spdBrass);}
+  rr([37,52,40],[37,75,40],1);label([37,67,40],'ECCENTRIC AXLE',moving);
+  rr([37,74.6,40],mo.pin,.8,spdCopper);
+  rr([mo.pin[0],73,mo.pin[2]],[mo.pin[0],77,mo.pin[2]],1,spdCopper);label(mo.pin,'ECCENTRIC PIN',moving);
+  const u=[Math.cos(mo.arm),0,Math.sin(mo.arm)],v=[-u[2],0,u[0]],p=spdPivot;
+  const armPoint=(t,w,y=75.7)=>[p[0]+t*u[0]+w*v[0],y,p[2]+t*u[2]+w*v[2]];
+  rr(armPoint(0,0),armPoint(14,0),1.4,spdCopper);
+  for(const side of [-1,1])rr(armPoint(14,side*1.65),armPoint(33,side*1.65),.6,spdCopper);
+  rr(armPoint(14,-1.65),armPoint(14,1.65),.6,spdCopper);rr(armPoint(33,-1.65),armPoint(33,1.65),.6,spdCopper);
+  label(armPoint(23,1.65),'SLOTTED DRIVE ARM',moving);
+  parts.push({box:[[52,73.2,24],[66,74.6,38]],svg:spdWheelY(73.2,74.6,59,31,7,10,spdBeta-spdAmp+mo.count*spdPitch,spdBrass)});label([59,74,24],'RATCHET',moving&&mo.forward);
+  const tip=armPoint(7,0,74.5),pawlBack=armPoint(7,-3,75.7);
+  rr(armPoint(4,-3),pawlBack,.55,spdSteel);rr(pawlBack,tip,.6,spdSteel);label(tip,'DRIVE PAWL',moving&&mo.forward);
+  rr(armPoint(3,-1.5),armPoint(7,-2.7),.22,spdSteel);label(armPoint(5,-2.1),'PAWL SPRING');
+  const hold=[59,74,24];bx([56,72,20,62,76,22],spdSteel);rr([61,74,21],hold,.6,spdSteel);label(hold,'HOLDING PAWL');rr([57,74,21],[60,74,22],.22,spdSteel);
+  const magneticAngle=st.turns*spdTau;
+  const pole=t=>[48.8,55+t*Math.cos(magneticAngle),51+t*Math.sin(magneticAngle)];
+  rr(pole(-8),pole(0),2.9,matOf('#d97157'));rr(pole(0),pole(8),2.9,matOf('#6b94c9'));label(pole(5),'ROTATING MAGNET',moving);
+  for(let i=0;i<32;i++){
+    const a=i/32*spdTau,b=(i+1)/32*spdTau,ring=x=>[[x,55+13*Math.cos(a),51+13*Math.sin(a)],[x,55+13*Math.cos(b),51+13*Math.sin(b)]];
+    const pts=[...ring(44),...ring(56).reverse()],normal=[0,Math.cos((a+b)/2),Math.sin((a+b)/2)];
+    if(facing(normal))parts.push({box:spdBounds(pts),svg:`<g opacity=".36">${shape(pts,toneI(normal,METAL),.55)}</g>`});
+  }
+  const cupcap=on(PX(56),ellUV(55,51,13,13,32));
+  parts.push({box:[[55.8,42,38],[56.1,68,64]],svg:`<g opacity=".35">${shape(cupcap,METAL.l,.8)}</g>`});
+  label([50,55,64],'DRAG CUP',moving);label([44,68,51],'CUP RIM');
+  const deflect=st.indicator/360*240*Math.PI/180;
+  rr([56,55,51],[56,55+12*Math.cos(deflect),51+12*Math.sin(deflect)],.5,spdCopper);
+  rr([56,55,51],[69,55,51],.75);label([61,55,51],'POINTER SPINDLE',st.indicator>.1);
+  for(const x of [59,66]){bx([x-.6,52,48,x+.6,58,49],spdSteel);rr([x,55,49],[x,55,51],1.4,spdBrass);}
+  bx([58.4,27,48,59.6,55,49],spdSteel);bx([65.4,55,48,66.6,83,49],spdSteel);
+  label([59,55,50],'SPINDLE BEARINGS');
+  const spring=Array.from({length:110},(_,i)=>{const t=i/109,a=Math.PI/2+t*(spdTau*2+deflect),r=5-4.3*t;return [64,55+r*Math.cos(a),51+r*Math.sin(a)];});
+  parts.push({box:[[63.8,50,46],[64.2,60,56]],svg:line([...spring,[64,55,51]],.7)});label(spring[32],'HAIRSPRING',st.indicator>.1);
+  bx([62.5,54,56,65.5,56,57],spdSteel);label([64,55,56],'SPRING ANCHOR');
+  rr([64,55,57],[64,55,79],.8,spdSteel);
+  label([68.5,74,40],'ZERO STOP');
+  return {svg:byDepth(parts),labels,mo};
+}
+function spdInput(st,xray){
+  const parts=[],route=[[13,86,16],[20,86,16],[25,84,19],[25,79,25],[25,65,37],[26,56,48],[28,55,51]];
+  for(const x of [6,13])spdBox(parts,[x-1,82,3,x+1,90,16],spdSteel);
+  spdRod(parts,[5,86,16],[20,86,16],1.2);
+  let wheel=cylX(7.5,11,86,16,10,PALS.tomato,toneI,1.3,32);
+  const fx=facing([1,0,0])?11.05:7.45;
+  for(let i=0;i<5;i++){const a=st.turns*spdTau+i*spdTau/5;wheel+=line([[fx,86+3*Math.cos(a),16+3*Math.sin(a)],[fx,86+9*Math.cos(a),16+9*Math.sin(a)]],1);}
+  parts.push({box:[[7.5,76,6],[11,96,26]],svg:act('drive',wheel)});
+  for(let i=0;i<route.length-1;i++){
+    const a=route[i],b=route[i+1];
+    spdRod(parts,a,b,xray?.6:1.8,xray?spdBrass:DARK);
+    if(xray){const bounds=spdBounds([a.map(v=>v-1.8),a.map(v=>v+1.8),b.map(v=>v-1.8),b.map(v=>v+1.8)]);parts.push({box:bounds,svg:`<g opacity=".15">${rod(a,b,1.8,DARK,toneI,.8)}</g>`});}
+  }
+  spdRod(parts,[26,55,51],[30,55,51],2.8,spdBrass);
+  return byDepth(parts);
+}
+function spdDial(st){
+  if(!facing([1,0,0]))return '';
+  const outline=on(PX(68),spdOutline),windowPts=on(PX(68.1),rectUV(40,28,73,35));
+  let svg=`<path d="${pd(outline)}${pd(windowPts)}" fill="#fff4d6" fill-rule="evenodd"/>`+ink(pd(windowPts),1.3);
+  const drums=spdMotion(st.turns).drums;
+  svg+=clipTo(windowPts,byDepth([43.5,50,56.5,63].map((y,i)=>({box:[[53,y,25],[65,y+5.5,37]],svg:spdDrum(y,y+5.5,drums[i])}))));
+  for(let i=0;i<=18;i++){
+    const a=(-120+240*i/18)*Math.PI/180,r0=i%3?24:22;
+    svg+=line([[68.2,55-r0*Math.sin(a),51+r0*Math.cos(a)],[68.2,55-26*Math.sin(a),51+26*Math.cos(a)]],i%3?.65:1.1);
+    if(i%3===0)svg+=tx(68.3,55-18.5*Math.sin(a),50+18.5*Math.cos(a),String(i*20),3);
+  }
+  svg+=tx(68.3,55,40.5,'RPM',3)+tx(68.3,55,21,'METRES',2.5);
+  svg+=cylX(68,69,74,40,1,spdBrass,toneI,.7,12);
+  return svg;
+}
+function spdPointer(st){
+  const a=(-120+240*st.indicator/360)*Math.PI/180;
+  return rod([69.5,55,51],[69.5,55-21*Math.sin(a),51+21*Math.cos(a)],.65,PALS.tomato,toneI,.9)+cylX(68.8,70,55,51,2,spdBrass,toneI,.8,16);
+}
+function spdScene(st,mat){
+  const k=ease(st.xr||0),mechanism=spdMechanism(st),parts=[];
+  let svg=board(0,0,78,100,3,5,WOOD)+castShadow([...on(PX(28),spdOutline),...on(PX(68),spdOutline)],3,boardTop(0,0,78,100,3,5));
+  for(const y of [35,73])spdBox(parts,[42,y-3,3,60,y+3,25],mat);
+  parts.push({box:[[5,55,3],[30,96,54]],svg:spdInput(st,k>.5)});
+  let shell=cylX(28,68,55,51,29,mat,tone,2.4,48);
+  shell+=spdDial(st);
+  if(facing([-1,0,0]))for(const a of [45,135,225,315]){const t=a*Math.PI/180;shell+=cylX(27.3,28,55+23*Math.cos(t),51+23*Math.sin(t),1.2,METAL,toneI,.8,12);}
+  const bezel=loft(on(PX(68),ellUV(55,51,29,29,48)),on(PX(70),ellUV(55,51,28,28,48)),n=>toneI(n,spdBrass))+hullInk([...on(PX(68),spdOutline),...on(PX(70),ellUV(55,51,28,28,48))],1.6);
+  shell+=bezel;
+  if(k>0)shell=xrGhost(shell,'',k,spdOutline,28,68,mat)+`<g opacity="${f(k)}">${mechanism.svg}</g>`;
+  if(facing([1,0,0])||k>.5)shell+=spdPointer(st);
+  if(facing([1,0,0]))shell+=`<g opacity="${f(.13*(1-k))}">${fill(pd(on(PX(70.4),ellUV(55,51,27,27,48))),'#cfe9f0')}${fill(pd(on(PX(70.5),[[40,62],[42,65],[64,42],[62,39]])),'#ffffff')}</g>`;
+  parts.push({box:[[29,26,22],[70.5,84,80]],svg:shell});
+  svg+=byDepth(parts);
+  if(k>.6){
+    const more=[[[40,77,66],'CASING'],[[27.4,55,74],'REAR PLATE'],[[70,55,79],'BEZEL'],[[70.4,55,72],'DIAL GLASS'],[[68.2,50,72],'DIAL GRADUATIONS'],[[69.5,55,51],'POINTER'],[[68,68,30],'COUNTER WINDOW'],[[26,55,51],'CABLE UNION'],[[25,79,25],'CABLE SHEATH'],[[25,65,37],'ROTATING WIRE'],[[11,86,24],'TEST DRIVE WHEEL'],[[52,73,6],'MOUNTING FEET']];
+    const items=[...mechanism.labels,...more.map(([at,text])=>({at,text,on:false}))];
+    const xs=items.map(it=>P(...it.at)[0]).sort((a,b)=>a-b),median=xs[Math.floor(xs.length/2)],base=[49.5,55.5,50];
+    const shift=(median-P(...base)[0])/Math.sqrt(1.5),center=base.map((v,i)=>v+CAM_R[i]*shift);
+    svg+=xrCallouts(items,[center[0]-15.5,center[0]+15.5,center[1]-17.5,center[1]+17.5,center[2]-25,center[2]+25]);
+  }else if(facing([1,0,0]))svg+=tag([69.5,55,51],50,-15,'POINTER',st.rpm>0)+tag([65,55,31],35,35,'DISTANCE DRUMS',st.rpm>0);
+  return svg;
+}
+spdUI=mountFigure({fig:'54',turn:'full',title:'Speedometer',size:[78,100,80],palette:'mint',
+  state:{rpm:0,target:0,remaining:0,turns:108,indicator:0},scene:spdScene,
+  stats:st=>[{label:'Shaft speed',value:Math.round(st.rpm)+' rpm'},{label:'Distance',value:Math.floor(spdMotion(st.turns).count+1e-8)+' m',small:true}],
+  buttons:[{label:'Drive',onClick:st=>spdDrive(st,120,12)},{label:'Accelerate',onClick:st=>spdDrive(st,240,12)},{label:'Roll distance',onClick:st=>spdDrive(st,st.target||120,24,true)},{label:'Stop',onClick:st=>{st.target=0;st.remaining=0;spdRun(st);}}],
+  acts:{drive:st=>spdDrive(st,120,12)},
+  params:(st,q)=>{for(const key of ['turns','rpm'])if(q.has(key)){const value=Number(q.get(key));if(Number.isFinite(value)&&value>=0&&value<=1e6)st[key]=key==='rpm'?Math.min(360,value):value;}st.indicator=st.rpm;}
+});
+xrMount(()=>spdUI,()=> '');
+const spdLayout=document.createElement('style');
+spdLayout.textContent='@media(min-width:561px){body .actions{flex-direction:row;flex-wrap:wrap;max-width:calc(100% - 250px);gap:6px}}';
+document.head.appendChild(spdLayout);
+addEventListener('load',()=>{
+  const svg=document.getElementById('fig'),wrap=svg.closest('.zwrap');if(!wrap)return;
+  let pending=false;
+  const fitLabels=()=>{pending=false;const visible=!document.documentElement.classList.contains('nolabels');
+    const bottom=visible?Math.max(svg.getBoundingClientRect().bottom,...[...svg.querySelectorAll('.tag rect')].map(el=>el.getBoundingClientRect().bottom)):svg.getBoundingClientRect().bottom;
+    const gap=Math.max(0,Math.ceil(bottom-svg.getBoundingClientRect().bottom))+(visible?12:0);
+    if(wrap.style.marginBottom!==gap+'px')wrap.style.marginBottom=gap+'px';};
+  const queue=()=>{if(!pending){pending=true;requestAnimationFrame(fitLabels);}};
+  new MutationObserver(queue).observe(document.getElementById('art'),{childList:true});
+  new MutationObserver(queue).observe(document.documentElement,{attributes:true,attributeFilter:['class']});
+  new ResizeObserver(queue).observe(svg);queue();
+});
+</script></body></html>
