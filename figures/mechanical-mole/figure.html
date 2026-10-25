@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mechanical mole</title></head><body>
+<script>
+addEventListener('error', e => { document.documentElement.dataset.errors += String(e.message) + ';'; });
+addEventListener('unhandledrejection', e => { document.documentElement.dataset.errors += String(e.reason) + ';'; });
+</script>
+<script src="core.js"></script>
+<script>
+/* Truth first. Scale teaching adaptation of the page 67 diagram, not a literal machine replica.
+   Bore rotates the attached blades against the workface. External model feed advances the head 18 units.
+   Each advance loosens exactly 18 visible spoil pieces. The cylindrical opening remains after removal.
+   Remove spoil rotates the screw in its casing. Pieces move up and back, drop onto the conveyor,
+   travel on its carrying belt, then fall outside the tunnel into a persistent pile.
+   Line tunnel externally lowers one full supporting ring into the newly opened interval behind the head.
+   No thrust rams, powered installer, shield erection system, motors or transmission are inferred.
+   The external teaching inputs supply rotation, feed and ring placement. They are not machine anatomy.
+   This horizontal auger conveys spoil continuously. The construction auger on the same page lifts a batch
+   vertically; a mincer's screw feeds separate cutting blades. This head does the cutting at the workface.
+   Parts and attachment. Cutter face, rim and radial cutting blades form one thick head.
+   Screw shaft and helical flight lie inside the casing connected to the head's lower spoil opening.
+   The casing outlet stays above the conveyor. Belt runs wrap around end rollers on the conveyor frame;
+   intermediate rollers support the carrying run, and frame feet stand on the tunnel invert.
+   Lining rings bear against the tunnel wall. Crown, sidewall, invert and workface are ground features.
+   Clear specimen walls and external input overlays are teaching fixtures and excluded from anatomy.
+   shortcut: power and cutter transmission are omitted because the source does not detail them, add only with new evidence.
+*/
+const moleSoil = matOf('#c9a979'), moleLining = matOf('#d9ddd3'), moleSpoil = matOf('#9a6c42');
+const moleY = 46, moleZ = 37, moleRadius = 26, moleBatch = 18;
+const moleState = { phase:'idle', progress:0, advance:0, lined:0, head:150, angle:0, screw:0, belt:0, spoil:[], removed:[], ringLift:0 };
+const moleHead = st => st.head;
+const moleAuger = st => ({ a:[moleHead(st)-4,moleY,26], b:[moleHead(st)-90,moleY,41] });
+const moleMixPoint = (a,b,t) => a.map((v,i) => v+(b[i]-v)*t);
+const moleRingPoint = (x,r,a) => [x,moleY+r*Math.cos(a),moleZ+r*Math.sin(a)];
+function moleRing(parts,x0,x1,r0,r1,material,opacity=1,lift=0){
+  const count=32;
+  for(let j=0;j<count;j++){
+    const a=j/count*2*Math.PI,b=(j+1)/count*2*Math.PI;
+    const p=(x,r,t)=>{const q=moleRingPoint(x,r,t);q[2]+=lift;return q;};
+    const surfaces=[
+      [p(x0,r1,a),p(x0,r1,b),p(x1,r1,b),p(x1,r1,a)],
+      [p(x0,r0,a),p(x1,r0,a),p(x1,r0,b),p(x0,r0,b)],
+      [p(x0,r0,a),p(x0,r0,b),p(x0,r1,b),p(x0,r1,a)],
+      [p(x1,r0,a),p(x1,r1,a),p(x1,r1,b),p(x1,r0,b)]
+    ];
+    for(const q of surfaces){const n=norm(cross(sub(q[1],q[0]),sub(q[2],q[0])));
+      if(!vis(n))continue;
+      parts.push({at:avg(q),box:[[0,1,2].map(i=>Math.min(...q.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...q.map(p=>p[i])))],svg:`<g opacity="${opacity}">${shape(q,toneI(n,material),.45)}</g>`});}
+  }
+}
+function moleChunkPosition(st,p){
+  const {a,b}=moleAuger(st),t=p.route;
+  if(t<.48){const q=moleMixPoint(a,b,t/.48);q[1]+=(p.id%3-1)*1.1;q[2]-=2.4;return q;}
+  if(t<.58)return [b[0],moleY+(p.id%3-1)*1.1,b[2]-2.4-(t-.48)/.1*(b[2]-2.4-23)];
+  if(t<.9)return [b[0]+(16-b[0])*(t-.58)/.32,moleY+(p.id%3-1)*2,23];
+  return [16-8*(t-.9)/.1,moleY+(p.id%5-2)*2,23-15*(t-.9)/.1];
+}
+function moleScene(st,m){
+  const parts=[],head=moleHead(st),xr=ease(st.xr||0),{a,b}=moleAuger(st);
+  const add=(at,svg,bounds)=>parts.push({at,svg,...(bounds?{box:bounds}:{})});
+  const bx=(x0,y0,z0,x1,y1,z1,mat)=>add([(x0+x1)/2,(y0+y1)/2,(z0+z1)/2],box(x0,y0,z0,x1,y1,z1,mat,toneI,.7),[[x0,y0,z0],[x1,y1,z1]]);
+  let out=board(0,5,242,87,3,4,WOOD);
+  out+=castShadow([[15,35,14],[head+4,20,12],[head+4,72,63],[30,72,63]],3,boardTop(0,5,242,87,3,4));
+  // The specimen is transparent so the teaching cutaway remains visible in its closed view.
+  for(let x=34;x<238;x+=6){
+    const end=Math.min(238,x+6),cut=Math.min(end,head+4);
+    if(x<cut){moleRing(parts,x,cut,moleRadius+2,37,moleSoil,.14*(1-.65*xr));}
+    if(end>head+4){
+      const start=Math.max(x,head+4);
+      add([(start+end)/2,moleY,moleZ],`<g opacity="${.27*(1-.72*xr)}">${cylX(start,end,moleY,moleZ,37,moleSoil,toneI,.35,32)}</g>`);
+    }
+  }
+  for(const y of [8,84])add([136,y,37],`<g opacity="${.15*(1-xr)}">${box(32,y,3,240,y+.6,76,CLEAR,toneI,.55)}</g>`);
+  const lineEnd=132+st.lined*18;
+  for(let x=34;x<lineEnd;x+=14)moleRing(parts,x,Math.min(x+14,lineEnd),24,28,moleLining,1-.88*xr);
+  if(st.phase==='line')moleRing(parts,lineEnd,lineEnd+18,24,28,moleLining,1-.88*xr,st.ringLift);
+  // Conveyor end rollers and both continuous belt runs occupy the same frame.
+  bx(15,37,16,127,39,18,DARK);bx(15,53,16,127,55,18,DARK);
+  for(const x of [18,52,88,124]){
+    for(const y of [38,54])bx(x-1,y-1,14.5,x+1,y+1,17,DARK);
+    const roller=rod([x,39,19.5],[x,53,19.5],2,METAL,toneI,.65);
+    const mark=-st.belt/2;
+    add([x,46,19.5],roller+line([[x+1.9*Math.cos(mark),53.1,19.5+1.9*Math.sin(mark)],[x-1.9*Math.cos(mark),53.1,19.5-1.9*Math.sin(mark)]],.65));
+  }
+  bx(18,39,21.5,124,53,22.2,DARK);bx(18,39,16.8,124,53,17.5,DARK);
+  for(let j=0;j<14;j++){const x=18+((j*8+st.belt)%106+106)%106;add([x,46,22.3],line([[x,39,22.3],[x,53,22.3]],.65));}
+  // A single solid cutter carries blades on its workface side, sorted with their thick edges.
+  add([head+2,moleY,moleZ],cylX(head,head+4,moleY,moleZ,moleRadius,m,tone,1.6,40),[[head,20,11],[head+4,72,63]]);
+  for(let j=0;j<6;j++){
+    const ang=st.angle+j*Math.PI/3;
+    const q=(x,r,t)=>moleRingPoint(x,r,t);
+    const front=[q(head+4.8,5,ang-.12),q(head+4.8,23,ang-.12),q(head+4.8,23,ang+.08),q(head+4.8,5,ang+.08)];
+    const back=front.map(p=>[head+4,p[1],p[2]]);
+    let blade=loft(back,front,n=>toneI(n,METAL));
+    const cap=facing([1,0,0])?front:back;
+    blade+=shape(cap,METAL.m,.65);
+    blade+=line([q(head+4.85,5,ang-.12),q(head+4.85,23,ang-.12)],1.15);
+    add(avg(front),blade,[[head+4,Math.min(...front.map(p=>p[1])),Math.min(...front.map(p=>p[2]))],[head+4.85,Math.max(...front.map(p=>p[1])),Math.max(...front.map(p=>p[2]))]]);
+  }
+  // The screw's radial flight touches its shaft. Its phase advances toward the rear outlet.
+  const axis=norm(sub(b,a)),u=[0,1,0],v=cross(axis,u);
+  const flightPoint=(t,r)=>{const q=moleMixPoint(a,b,t),ang=t*2*Math.PI*6-st.screw;return q.map((n,i)=>n+r*(u[i]*Math.cos(ang)+v[i]*Math.sin(ang)));};
+  for(let j=0;j<96;j++){
+    const t=j/96,t1=(j+1)/96,q=[flightPoint(t,1),flightPoint(t,4.6),flightPoint(t1,4.6),flightPoint(t1,1)];
+    add(avg(q),shape(q,toneI(norm(cross(sub(q[1],q[0]),sub(q[2],q[0]))),METAL),.45));
+    add(moleMixPoint(a,b,(t+t1)/2),rod(moleMixPoint(a,b,t),moleMixPoint(a,b,t1),1,METAL,toneI,.4));
+  }
+  for(let j=0;j<20;j++){
+    const c0=moleMixPoint(a,b,.10+j*.043),c1=moleMixPoint(a,b,.10+(j+1)*.043);
+    const d=norm(sub(c1,c0)),ru=norm(cross(d,[0,0,1])),rv=cross(d,ru);
+    const ring=(c,r)=>Array.from({length:20},(_,k)=>{const t=k/20*2*Math.PI;return c.map((n,i)=>n+r*(ru[i]*Math.cos(t)+rv[i]*Math.sin(t)));});
+    const A=ring(c0,5.4),B=ring(c1,5.4);
+    add(avg([c0,c1]),`<g opacity="${1-.94*xr}">${loft(A,B,n=>toneI(n,m))}${hullInk([...A,...B],.7)}</g>`);
+  }
+  // The inlet casing meets the head and the outlet stays over the fixed belt throughout all three advances.
+  add(a,rod([head,moleY,26],moleMixPoint(a,b,.10),5.4,m,toneI,.8));
+  for(const p of st.spoil){const q=moleChunkPosition(st,p);add(q,box(q[0]-1.3,q[1]-1.2,q[2]-1.1,q[0]+1.3,q[1]+1.2,q[2]+1.1,moleSpoil,toneI,.5));}
+  for(let i=0;i<st.removed.length;i++){
+    const q=[8-(i%3)*1.8,38+(i%8)*2,4+Math.floor(i/8)*1.8];
+    add(q,box(q[0]-1.2,q[1]-1.1,q[2],q[0]+1.2,q[1]+1.1,q[2]+1.7,moleSpoil,toneI,.45));
+  }
+  out+=byDepth(parts);
+  if(st.phase==='bore')out+=tag([head+3,moleY,70],0,-22,'EXTERNAL MODEL FEED',true);
+  if(st.phase==='line')out+=tag([lineEnd+9,moleY,65+st.ringLift],0,-20,'EXTERNAL RING PLACEMENT',true);
+  if(xr>.6)out+=moleCallouts(moleLabels(st));
+  return out;
+}
+function moleCallouts(items){
+  const svg=document.getElementById('fig'),vb=svg.viewBox.baseVal,ctm=svg.getScreenCTM();
+  const mobile=innerWidth<=560,k=INK_K,u=mobile?LBL_U():k,fs=(mobile?10:8.6)*u;
+  const height=mobile?17*u:fs*1.8,gap=height+(mobile?3*u:3*k);
+  const ordered=items.map(it=>({...it,point:P(...it.at)})).sort((a,b)=>a.point[0]-b.point[0]);
+  let result='';
+  for(const side of [0,1]){
+    const column=ordered.slice(side*14,(side+1)*14).sort((a,b)=>a.point[1]-b.point[1]);
+    const controls=document.getElementById(side?'stats':'btns');
+    const bottom=controls?new DOMPoint(0,controls.getBoundingClientRect().bottom+12).matrixTransform(ctm.inverse()).y:0;
+    const top=Math.max(height,Math.min(bottom,vb.height-gap*14));
+    for(let j=0;j<column.length;j++){
+      const it=column[j],width=mobile?height*1.3:it.text.length*fs*.62+fs*1.5;
+      const x=side?vb.width-width/2-3*k:width/2+3*k,y=top+j*gap;
+      const [px,py]=it.point;
+      result+=tag(it.at,(x-px)/k,(y-py)/k,it.text,it.on);
+    }
+  }
+  return result;
+}
+function moleLabels(st){
+  const h=moleHead(st),{a,b}=moleAuger(st),cut=st.phase==='bore',carry=st.phase==='remove';
+  const l=(text,at,on=false)=>({text,at,on});
+  const augAxis=norm(sub(b,a)),augV=cross(augAxis,[0,1,0]),flightAngle=.6*2*Math.PI*6-st.screw;
+  const flightAnchor=moleMixPoint(a,b,.6).map((n,i)=>n+4.6*((i===1?1:0)*Math.cos(flightAngle)+augV[i]*Math.sin(flightAngle)));
+  const blade=moleRingPoint(h+4.8,16,st.angle),edge=moleRingPoint(h+4.85,23,st.angle-.12);
+  return [
+    l('CUTTER HEAD',[h+2,46,37],cut),l('HEAD FACE',[h+4,56,47],cut),l('HEAD RIM',[h+2,46,63],cut),
+    l('CUTTING BLADES',blade,cut),l('CUTTING EDGE',edge,cut),
+    l('SPOIL AUGER',moleMixPoint(a,b,.45),carry),l('AUGER SHAFT',moleMixPoint(a,b,.7),carry),
+    l('HELICAL FLIGHT',flightAnchor,carry),
+    l('AUGER CASING',moleMixPoint(a,b,.4).map((n,i)=>n+(i===1?5.4:0))),
+    l('SPOIL INLET',a,carry),l('SPOIL OUTLET',b,carry),
+    l('CONVEYOR',[70,46,22],carry),l('CARRYING BELT',[90,50,22.2],carry),l('RETURN BELT',[70,50,17.5],carry),
+    l('REAR END ROLLER',[18,53,19.5],carry),l('FRONT END ROLLER',[124,53,19.5],carry),
+    l('SUPPORT ROLLERS',[88,53,19.5],carry),l('CONVEYOR FRAME',[55,54,17]),l('FRAME FEET',[52,54,15]),
+    l('TUNNEL CROWN',[h-10,46,65]),l('TUNNEL SIDEWALL',[h-10,74,37]),l('TUNNEL INVERT',[h-10,46,9]),
+    l('WORKFACE',[h+4,46,62],cut),l('TUNNEL LINING',[70,69,37]),
+    l('LINING RING',[100,46,62]),l('RING JOINT',[104,46,62]),
+    l('LINING INNER FACE',[80,46,61]),l('LINING OUTER FACE',[85,46,65])
+  ];
+}
+function moleAction(st,ui,action){
+  if(st.phase!=='idle')return ui.flash('Finish the current teaching action first');
+  if(action==='bore'){
+    if(st.spoil.length)return ui.flash('Remove the loosened spoil first');
+    if(st.lined<st.advance)return ui.flash('Place the supporting lining ring first');
+    if(st.advance===3)return ui.flash('The finite ground specimen is finished');
+    st.phase='bore';st.progress=0;
+    ui.flash('External feed advances the model while its cutter rotates',2200);
+  }else if(action==='remove'){
+    if(!st.spoil.length)return ui.flash('Bore first to loosen material at the workface');
+    st.phase='remove';st.progress=0;
+  }else{
+    if(st.spoil.length)return ui.flash('Remove spoil before placing a lining ring');
+    if(st.lined===st.advance)return ui.flash('Bore first to open a new tunnel interval');
+    st.phase='line';st.progress=0;st.ringLift=34;
+    ui.flash('External teaching placement lowers a ring behind the head',2200);
+  }
+  ui.animate(dt=>{
+    st.progress+=dt;
+    if(st.phase==='bore'){
+      const k=Math.min(1,st.progress/2.4);
+      st.head=150+18*(st.advance+k);st.angle+=dt*5;
+      const count=Math.floor(k*moleBatch);
+      while(st.spoil.length<count)st.spoil.push({id:st.advance*moleBatch+st.spoil.length,route:0});
+      if(k===1){st.advance++;st.phase='idle';return false;}
+    }else if(st.phase==='remove'){
+      st.screw+=dt*2*Math.PI*6/(4.6*.48);st.belt-=dt*(moleAuger(st).b[0]-16)/(4.6*.32);
+      for(const p of st.spoil)p.route=Math.max(0,Math.min(1,(st.progress-(p.id%moleBatch)*.055)/4.6));
+      const done=st.spoil.filter(p=>p.route>=1);st.removed.push(...done.map(p=>p.id));
+      st.spoil=st.spoil.filter(p=>p.route<1);
+      if(!st.spoil.length){st.phase='idle';return false;}
+    }else if(st.phase==='line'){
+      const k=Math.min(1,st.progress/1.8);st.ringLift=34*(1-ease(k));
+      if(k===1){st.lined++;st.phase='idle';return false;}
+    }
+    return true;
+  });
+}
+const moleUI=mountFigure({
+  fig:'67',title:'Mechanical mole',turn:'full',size:[242,92,104],center:[121,46],palette:'mustard',state:moleState,scene:moleScene,
+  stats:st=>[{label:'Model advance',value:Math.round(st.head-150)+' mm'},{label:'Spoil removed',value:st.removed.length+' / '+(st.advance*18+(st.phase==='bore'?st.spoil.length:0)),small:true},{label:'New lining rings',value:String(st.lined),small:true}],
+  buttons:[{label:'Bore',onClick:(st,ui)=>moleAction(st,ui,'bore')},{label:'Remove spoil',onClick:(st,ui)=>moleAction(st,ui,'remove')},{label:'Line tunnel',onClick:(st,ui)=>moleAction(st,ui,'line')}],
+  params:(st,q)=>{
+    const n=Number(q.get('advance')||0),r=Number(q.get('removed')||0),l=Number(q.get('lined')||0);
+    st.advance=Number.isFinite(n)?Math.max(0,Math.min(3,Math.floor(n))):0;st.head=150+18*st.advance;
+    const removed=Number.isFinite(r)?Math.max(0,Math.min(st.advance*18,Math.floor(r))):0;
+    st.removed=Array.from({length:removed},(_,id)=>id);
+    st.spoil=Array.from({length:st.advance*18-removed},(_,i)=>({id:i+removed,route:0}));
+    st.lined=Number.isFinite(l)?Math.max(0,Math.min(st.advance,Math.floor(l))):0;
+  }
+});
+xrMount(()=>moleUI,()=> '');
+</script></body></html>
