@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Manual typewriter</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Source is the 1998 book, printed pages 26 and 27, saved OCR indices 29 and 30.
+   A key drives linked levers. Small fingertip travel becomes a long swing of the type bar.
+   Two raised faces share one type head. The lower face prints a at the fixed printing point.
+   Shift lowers the type-bar assembly by six model units, so the upper face prints A there.
+   Type presses and holds. Release returns the action, then raises the shifted assembly.
+   Ribbon stays between type and paper. Paper stays against the platen. Impressions accumulate
+   at one point because no carriage, escapement, feed or carriage-return action is reconstructed.
+   Parts. Controls are key cap and key lever on its pin. Mechanism is three relay levers on
+   pins, four connecting links with end pins, type bar on its pin, type head and two raised faces.
+   Printing materials are a stationary ink ribbon, paper, rubber platen and its axle.
+   Fixtures are the board, split supports under every pivot, platen brackets, ribbon clips and
+   translating action support. These are teaching fixtures, not book-proved machine anatomy.
+   The schematic five-lever chain uses fixed-length parallelogram links and a final crank.
+   Its dimensions and support arrangement are an explanatory adaptation, not a measured replica.
+   The shift control stages lowering with the complete isolated action on a translating fixture.
+   It does not claim to reconstruct the original shift linkage. 1988 remains inaccessible and
+   unverified. 2016 is not individually verified. No edition-union claim.
+*/
+const twRad = Math.PI / 180;
+const twPivots = [[90,18],[83,33],[75,44],[66,30.81346995139364]];
+const twFinalLength = 8.335876842296656;
+const twSteel = matOf('#83909b'), twBrass = matOf('#d9a84d'), twPaper = matOf('#fffaf0');
+const twState = {phase:'rest', travel:0, shift:0, marks:[], motion:null};
+
+function twGeometry(st){
+  const a = -8 * st.travel * twRad;
+  const pivots = twPivots.map(([x,z]) => [x,35,z + 6 - st.shift*6]);
+  const tips = pivots.map(([x,y,z]) => [x-24*Math.cos(a),y,z-24*Math.sin(a)]);
+  const pivot = [38,45,32-st.shift*6], driver = tips[3];
+  const vx = driver[0]-pivot[0], vz = driver[2]-pivot[2], distance = Math.hypot(vx,vz);
+  const cosine = (2.5**2 + distance**2 - twFinalLength**2) / (5*distance);
+  if (Math.abs(cosine)>1+1e-8) throw new Error('Disconnected type-bar link');
+  const beta = Math.atan2(vz,vx)-Math.acos(Math.max(-1,Math.min(1,cosine)));
+  const angle = beta + Math.PI/2;
+  const point = (length, normal=0, y=45) => [pivot[0]+length*Math.cos(angle)-normal*Math.sin(angle),y,pivot[2]+length*Math.sin(angle)+normal*Math.cos(angle)];
+  const finger = [pivots[0][0]+22*Math.cos(a),35,pivots[0][2]+22*Math.sin(a)];
+  return {pivots,tips,pivot,crank:point(0,-2.5),point,angle,finger,lower:point(43,1.72),upper:point(49,1.72)};
+}
+
+function twScene(st,m){
+  const g=twGeometry(st), parts=[], labels=[], k=ease(st.xr||0), active=st.phase!=='rest';
+  let internal=false;
+  const put=(pts,r,svg)=>parts.push({internal,box:[[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))-r),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i]))+r)],svg});
+  const beam=(a,b,r,material=twSteel)=>put([a,b],r,rod(a,b,r,material,toneI,.8));
+  const solid=(a,b,material,extra='')=>put([a,b],0,box(...a,...b,material,toneI,.85)+extra);
+  const label=(at,text,on=false)=>labels.push({at,text,on});
+  let svg=board(0,0,124,74,3,5,WOOD);
+  svg+=castShadow([[10,9,3],[116,9,3],[116,65,3],[28,65,98],[13,9,77]],3,boardTop(0,0,124,74,3,5));
+  for(const y of [12,58]){
+    solid([20,y,3],[32,y+4,75],m);
+    beam([28,y,75],[28,y+4,75],2,METAL);
+  }
+  beam([28,12,75],[28,62,75],1.8,METAL);
+  put([[28,16,75],[28,58,75]],8,rod([28,16,75],[28,58,75],8,DARK,toneI,1.5,8,32));
+  label([28,50,83],'PLATEN'); label([28,60,75],'PLATEN AXLE');
+  for(let i=0;i<18;i++){
+    const a=(-90+i*10)*twRad,b=a+10*twRad;
+    const profile=[[28+8*Math.cos(a),75+8*Math.sin(a)],[28+8*Math.cos(b),75+8*Math.sin(b)],
+      [28+8.12*Math.cos(b),75+8.12*Math.sin(b)],[28+8.12*Math.cos(a),75+8.12*Math.sin(a)]];
+    const front=profile.map(([x,z])=>[x,21,z]),back=profile.map(([x,z])=>[x,53,z]);
+    put([...front,...back],0,loft(front,back,n=>toneI(n,twPaper))+shape(vis([0,1,0])?back:front,twPaper.m,.25));
+  }
+  solid([27.9,21,83],[28.1,53,98],twPaper);
+  if(st.marks.length)put([[36.13,42,72],[36.13,48,78]],0,vis([1,0,0])?st.marks.map(mark=>tx(36.13,45,73.4,mark,5.2,INK,800)).join(''):'');
+  label([28.1,47,93],'PAPER');
+  solid([36.14,22,74.3],[36.28,52,75.7],matOf('#494058'));
+  label([36.28,44,75],'INK RIBBON',st.travel>.95);
+  for(const y of [21,52]){
+    solid([35,y,3],[37,y+1,74.3],twSteel);
+    solid([35,y,74.3],[38,y+1,75.7],twBrass);
+  }
+  internal=true;
+  for(let i=0;i<g.pivots.length;i++){
+    const p=g.pivots[i],t=g.tips[i];
+    for(const y of [31,38]) solid([p[0]-2,y,3],[p[0]+2,y+1,twPivots[i][1]+8],m);
+    beam([p[0],31,p[2]],[p[0],39,p[2]],1.4,twBrass);
+    beam(p,t,1.15, i===0?twBrass:twSteel);
+    beam([t[0],33.4,t[2]],[t[0],36.6,t[2]],1.15,twBrass);
+    if(i<2){label(p,i===0?'KEY PIVOT':'RELAY PIVOTS',active);
+      label(p.map((v,j)=>(v+t[j])/2),i===0?'KEY LEVER':'RELAY LEVERS',active);}
+    if(i<3){beam(t,g.tips[i+1],.55,twBrass);if(i===1)label(t.map((v,j)=>(v+g.tips[i+1][j])/2),'CONNECTING LINKS',active);}
+  }
+  beam(g.pivots[0],g.finger,1.15,twBrass);
+  internal=false;
+  const frontRatio=(101-g.pivots[0][0])/(g.finger[0]-g.pivots[0][0]);
+  const frontExit=g.pivots[0].map((v,i)=>v+(g.finger[i]-v)*frontRatio);
+  if(k===0)beam(frontExit,g.finger,1.15,twBrass);
+  const cap=g.finger;
+  solid([cap[0]-4,30,cap[2]],[cap[0]+4,40,cap[2]+3],CERAMIC,
+    `<text transform="${txM(P(cap[0],35,cap[2]+3.1),Dv(1,0,0),Dv(0,1,0))}" text-anchor="middle" font-size="4" fill="${INK}" font-weight="800">A</text>`);
+  label([cap[0],35,cap[2]+3],'KEY CAP',active);
+  const linkRatio=(41-g.tips[3][0])/(g.crank[0]-g.tips[3][0]);
+  const linkExit=g.tips[3].map((v,i)=>v+(g.crank[i]-v)*linkRatio);
+  beam(k>0?g.tips[3]:linkExit,g.crank,.55,twBrass);
+  label(g.tips[3].map((v,j)=>(v+g.crank[j])/2),'TYPE-BAR LINK',active);
+  for(const y of [41,48])solid([36,y,3],[40,y+1,34],m);
+  beam([38,41,g.pivot[2]],[38,49,g.pivot[2]],1.7,twBrass);
+  label(g.pivot,'TYPE-BAR PIVOT',active);
+  beam(g.crank,g.pivot,1.1,twSteel);
+  for(let i=0;i<6;i++)beam(g.point(i*7),g.point((i+1)*7),.95,twSteel);
+  label(g.point(23),'TYPE BAR',active);
+  const headA=[g.point(40,-.7,42),g.point(52,-.7,42),g.point(52,1.4,42),g.point(40,1.4,42)];
+  const headB=headA.map(p=>[p[0],48,p[2]]);
+  put([...headA,...headB],0,loft(headA,headB,n=>toneI(n,twSteel))+shape(vis([0,1,0])?headB:headA,twSteel.m,.8)+hullInk([...headA,...headB],1.1));
+  label(g.point(51),'TYPE HEAD',active);
+  for(const [len,name,char] of [[43,'LOWER-CASE FACE','a'],[49,'UPPER-CASE FACE','A']]){
+    const a=[g.point(len-1.7,1.4,42.8),g.point(len+1.7,1.4,42.8),g.point(len+1.7,1.72,42.8),g.point(len-1.7,1.72,42.8)];
+    const b=a.map(p=>[p[0],47.2,p[2]]);
+    const facePoints=[g.point(len-1.7,1.72,42.8),g.point(len-1.7,1.72,47.2),g.point(len+1.7,1.72,47.2),g.point(len+1.7,1.72,42.8)];
+    const n=[-Math.sin(g.angle),0,Math.cos(g.angle)];
+    const glyph=vis(n)?`<text transform="${txM(P(...g.point(len-.9,1.73)),Dv(0,-1,0),Dv(-Math.cos(g.angle),0,-Math.sin(g.angle)))}" font-size="3" text-anchor="middle" fill="${INK}" font-weight="800">${char}</text>`:'';
+    put([...a,...b],0,loft(a,b,nr=>toneI(nr,twBrass))+shape(vis([0,1,0])?b:a,twBrass.m,.5)+(vis(n)?shape(facePoints,twBrass.l,.5)+glyph:'')+hullInk([...a,...b],.7));
+    label(g.point(len,1.72),name,st.travel>.9&&((len===49)===(st.shift>.5)));
+  }
+  const mechanism=byDepth(parts);
+  const coverProfile=rrUV(27,9,41,58,3);
+  const cover=extrude(coverProfile,41,101,m)+shape(on(PX(vis([1,0,0])?101:41),coverProfile),tone(vis([1,0,0])?[1,0,0]:[-1,0,0],m),1)+hullInk([...on(PX(41),coverProfile),...on(PX(101),coverProfile)],1.8);
+  if(k>0) svg+=xrGhost(cover,'',k,coverProfile,41,101,m)+mechanism;
+  else {
+    parts.push({box:[[41,27,9],[101,41,58]],svg:cover});
+    svg+=byDepth(parts.filter(part=>!part.internal));
+  }
+  if(k>.6)svg+=xrCallouts(labels,[10,116,12,62,3,98]);
+  return svg;
+}
+
+function twMove(st,ui,phase,shift,travel){
+  st.phase=phase;
+  st.motion={from:[st.shift,st.travel],to:[shift,travel],t:0};
+  if(st.looping)return;
+  st.looping=true;
+  ui.animate(dt=>{
+    const motion=st.motion; motion.t=Math.min(1,motion.t+dt/.65);
+    const k=ease(motion.t);
+    st.shift=motion.from[0]+(motion.to[0]-motion.from[0])*k;
+    st.travel=motion.from[1]+(motion.to[1]-motion.from[1])*k;
+    if(motion.t<1)return true;
+    if(st.phase==='shifting'){twMove(st,ui,'pressing',1,1);return true;}
+    if(st.phase==='pressing'){st.marks.push(st.shift>.5?'A':'a');st.phase='held';}
+    else if(st.phase==='releasing'&&st.shift>0){twMove(st,ui,'unshifting',0,0);return true;}
+    else st.phase='rest';
+    st.motion=null;st.looping=false;return false;
+  });
+}
+function twType(st,ui,shift){
+  if(st.phase!=='rest')return ui.flash('Release the key before another strike');
+  if(shift)twMove(st,ui,'shifting',1,0);
+  else twMove(st,ui,'pressing',0,1);
+}
+const twUI=mountFigure({fig:'26',turn:'full',title:'Manual typewriter',size:[124,74,98],palette:'mint',state:twState,
+  scene:twScene,
+  stats:st=>[{label:'Impressions',value:String(st.marks.length)},{label:'Case',value:st.shift>.5?'UPPER':'lower',small:true}],
+  buttons:[{label:'Type',onClick:(st,ui)=>twType(st,ui,false)},
+    {label:'Shift and type',onClick:(st,ui)=>twType(st,ui,true)},
+    {label:'Release',onClick:(st,ui)=>st.phase==='rest'?ui.flash('The key is already at rest'):twMove(st,ui,'releasing',st.shift,0)}],
+  params:(st,q)=>{
+    if(q.get('shift')==='1')st.shift=1;
+    if(q.get('held')==='1'){st.travel=1;st.phase='held';st.marks=[st.shift?'A':'a'];}
+  }
+});
+xrMount(()=>twUI,()=> '');
+</script></body></html>
