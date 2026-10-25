@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Screws</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. Pages 62 and 63 in the saved 1998 and 2016 scans explain the
+   wrapped inclined plane, short axial travel, increased force, and friction.
+   The 1988 edition is inaccessible and unverified. This is a principle teaching
+   adaptation, not a book illustration or an edition union.
+   Turn rotates an axially held single-start screw. The nut cannot rotate because
+   its carriage rides two fixed guides. One revolution raises it by one pitch.
+   Reverse lowers it. The weight stays on its platform until the fixed rests carry
+   it at home. Compare returns home, pauses unloaded, exchanges the COMPLETE screw
+   and mating nut with the pair on the rack, then turns the replacement once.
+   The discrete exchange is a teaching reset performed by the operator, not a
+   self-changing mechanism. Pitch never changes while a pair is engaged in motion.
+   Both pairs receive 0.10 Nm. Ideal F = 2*pi*T/p, neglecting friction. No actual
+   friction coefficient or load capacity is claimed. Motion is slowed for study.
+   Anatomy. Screw shank, thread root, crest, flank, nut body, internal thread.
+   Fixtures. Board holds bearing pedestals, guides and weight rests. Bearings hold
+   the screw axially through its shoulders. Nut bolts to crossbar; guide sleeves prevent rotation. Arms
+   join crossbar to weight platform. Rack supports the spare complete pair.
+   Power and controls. Operator turns the crank attached to the screw shank.
+   Overlays. Travel and force arrows, and the unwrapped/wrapped plane diagram.
+   These overlays, the weight and teaching fixtures do not pad the six anatomy labels.
+*/
+const screwPairs = [{pitch:4,name:'Fine',colour:'#83bca9'},{pitch:8,name:'Coarse',colour:'#dc8c68'}];
+const screwState = {pair:0,turns:0,phase:'idle',elapsed:0,from:0,goal:0,exchangeCount:0};
+const screwBrass = matOf('#d9ac56'), screwSteel = matOf('#bac7cb');
+const screwTravel = st => screwPairs[st.pair].pitch*st.turns;
+const screwMeasures = st => ({pitch:screwPairs[st.pair].pitch,travel:screwTravel(st),torque:.1,idealForce:2*Math.PI*.1/(screwPairs[st.pair].pitch/1000)});
+function screwStep(st,dt){
+  if(st.phase==='idle')return false;
+  st.elapsed+=dt;
+  if(st.phase==='exchange'){
+    if(st.elapsed>=.9){st.pair=1-st.pair;st.turns=0;st.exchangeCount++;st.phase='compare';st.elapsed=0;st.from=0;st.goal=1;}
+  }else{
+    const k=Math.min(1,st.elapsed/1.5);st.turns=st.from+(st.goal-st.from)*ease(k);
+    if(k===1){st.turns=st.goal;st.phase=st.phase==='unload'?'exchange':'idle';st.elapsed=0;}
+  }
+  return st.phase!=='idle';
+}
+function screwAction(st,ui,kind){
+  if(st.phase!=='idle')return ui.flash('Finish the current motion first.');
+  if(kind==='exchange'){
+    st.phase='unload';st.goal=0;
+    ui.flash('Lower the load onto its rests. Exchange the whole screw and nut pair.',4700);
+  }else{
+    const next=st.turns+(kind==='turn'?1:-1),max=24/screwPairs[st.pair].pitch;
+    if(next<0)return ui.flash('The load is already on its fixed rests.');
+    if(next>max)return ui.flash('End of the teaching stroke. Reverse to lower the load.');
+    st.phase='turn';st.goal=next;
+  }
+  st.elapsed=0;st.from=st.turns;ui.animate(dt=>screwStep(st,dt));
+}
+const screwBounds = pts => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i])))];
+function screwThreads(parts,cx,cy,z0,z1,pitch,turns,root,crest,material,female=false){
+  const start=16,theta=turns*2*Math.PI,step=pitch/24;
+  for(let z=z0;z<z1-.001;z+=step){
+    const ring=zz=>{
+      const a=2*Math.PI*(zz-start)/pitch-theta+(female?Math.PI:0);
+      return [[root,-.40],[crest,-.09],[crest,.09],[root,.40]].map(([r,d])=>[cx+r*Math.cos(a),cy+r*Math.sin(a),Math.max(z0,Math.min(z1,zz+d*pitch))]);
+    };
+    const ra=ring(z),rb=ring(Math.min(z1,z+step));
+    for(let j=0;j<3;j++){
+      const pts=[ra[j],rb[j],rb[j+1],ra[j+1]],nr=cross(sub(pts[1],pts[0]),sub(pts[3],pts[0]));
+      if(vis(female?nr.map(v=>-v):nr))parts.push({box:screwBounds(pts),svg:shape(pts,toneI(norm(nr),material),j===1?.36:.2)});
+    }
+  }
+}
+function screwRing(parts,cx,cy,z0,z1,outer,inner,mat,opacity=1){
+  for(let i=0;i<24;i++){
+    const a=i/24*2*Math.PI,b=(i+1)/24*2*Math.PI;
+    const points=(r,z)=>[[cx+r*Math.cos(a),cy+r*Math.sin(a),z],[cx+r*Math.cos(b),cy+r*Math.sin(b),z]];
+    const lo=points(outer,z0),hi=points(outer,z1),il=points(inner,z0),ih=points(inner,z1);
+    const faces=[{p:[lo[0],lo[1],hi[1],hi[0]],n:[Math.cos((a+b)/2),Math.sin((a+b)/2),0]},
+      {p:[hi[0],hi[1],ih[1],ih[0]],n:[0,0,1]},
+      {p:[il[1],il[0],ih[0],ih[1]],n:[-Math.cos((a+b)/2),-Math.sin((a+b)/2),0]}];
+    for(const fc of faces)if(vis(fc.n))parts.push({box:screwBounds(fc.p),svg:`<g opacity="${f(opacity)}">${shape(fc.p,toneI(fc.n,mat),.55)}</g>`});
+  }
+}
+function screwNut(parts,cx,cy,nz,pitch,turns,k){
+  screwRing(parts,cx,cy,nz-5,nz+5,8,5.5,screwBrass,1-.79*k);
+  if(k>.01)screwThreads(parts,cx,cy,nz-4.9,nz+4.9,pitch,turns,5.5,3.96,screwBrass,true);
+}
+function screwScene(st,m){
+  const parts=[],k=ease(st.xr||0),p=screwPairs[st.pair].pitch,nz=30+screwTravel(st),active=st.phase!=='idle';
+  const put=(b,svg)=>parts.push({box:b,svg});
+  const bx=(x0,y0,z0,x1,y1,z1,mat,opacity=1)=>put([[x0,y0,z0],[x1,y1,z1]],`<g opacity="${f(opacity)}">${box(x0,y0,z0,x1,y1,z1,mat,toneI,.8)}</g>`);
+  const rr=(a,b,r,mat)=>put(screwBounds([a.map(v=>v-r),a.map(v=>v+r),b.map(v=>v-r),b.map(v=>v+r)]),rod(a,b,r,mat,toneI,.8));
+  let svg=castShadow([[4,8,0],[102,8,0],[102,76,0],[4,76,0],[35,36,98]])+board(0,0,112,80,3,5,WOOD);
+  svg+=castShadow([[12,28,3],[58,44,3],[35,36,98],[35,65,76]],3,boardTop(0,0,112,80,3,5));
+  for(const x of [18,52]){
+    bx(x-3,31,3,x+3,41,9,m);
+    rr([x,36,9],[x,36,86],1.25,METAL);
+    bx(x-3,31,86,x+3,41,90,m);
+    bx(x-2.5,33.5,nz+3,x+2.5,38.5,nz+8,screwBrass);
+  }
+  bx(15,30,7,55,42,11,m);
+  for(const x of [15,39])bx(x,30,84,x+16,42,88,m);
+  for(const z of [11,80]){
+    screwRing(parts,35,36,z,z+4,6,3.9,DARK,1-.72*k);
+    if(k>.01)screwRing(parts,35,36,z+1,z+3,5.2,3.9,screwBrass);
+  }
+  for(let z=11;z<89;z+=2)put([[31.2,32.2,z],[38.8,39.8,z+2]],cyl(35,36,z,z+2,3.8,screwSteel,toneI,.35,16));
+  screwThreads(parts,35,36,16,78.5,p,st.turns,3.8,5.2,screwSteel);
+  for(const z of [15,79])put([[29.5,30.5,z],[40.5,41.5,z+1]],cyl(35,36,z,z+1,5.5,screwSteel,toneI,.7));
+  screwNut(parts,35,36,nz,p,st.turns,k);
+  for(const x of [14,40.5])bx(x,32,nz+3,x+15.5,40,nz+6,m,1-.65*k);
+  for(const x of [22,48])bx(x-2,38,nz+5,x+2,52,nz+8,m,1-.55*k);
+  bx(24,51,nz+8,46,69,nz+10,m,1-.55*k);
+  for(const x of [22,48])bx(x-1,56,3,x+1,65,40,BOARD,1-.55*k);
+  bx(22,53,nz+10,48,67,nz+24,matOf('#606d84'));
+  const a=-st.turns*2*Math.PI,tip=[35+11*Math.cos(a),36+11*Math.sin(a),91];
+  rr([35,36,88],[35,36,91],2.2,METAL);rr([35,36,91],tip,1.25,screwBrass);rr(tip,[tip[0],tip[1],98],1.7,DARK);
+  const spare=1-st.pair,sp=screwPairs[spare].pitch;
+  bx(77,28,3,99,44,8,matOf(screwPairs[spare].colour));
+  rr([88,36,8],[88,36,82],3.8,screwSteel);
+  screwThreads(parts,88,36,13,76,sp,0,3.8,5.2,screwSteel);
+  screwNut(parts,88,36,30,sp,0,k);
+  svg+=byDepth(parts);
+  if(k>.6){
+    const ang=YAW*Math.PI/180,at=(r,z)=>[35+r*Math.cos(ang),36+r*Math.sin(ang),z];
+    const innerZ=16+p*(Math.round((nz-16)/p-ang/(2*Math.PI)-st.turns-.5)+ang/(2*Math.PI)+st.turns+.5);
+    const crestZ=16+p*(Math.round((65-16)/p-ang/(2*Math.PI)-st.turns)+ang/(2*Math.PI)+st.turns);
+    svg+=xrCallouts([
+      {at:tip,text:'CRANK',on:active},
+      {at:[35,36,13],text:'SCREW SHANK',on:active},
+      {at:at(3.8,crestZ+p*.5),text:'THREAD ROOT',on:active},
+      {at:at(5.2,crestZ),text:'THREAD CREST',on:active},
+      {at:at(4.5,crestZ+p*.25),text:'THREAD FLANK',on:active},
+      {at:at(8,nz+2),text:'NUT BODY',on:active},
+      {at:at(4.0,innerZ),text:'INTERNAL THREAD',on:active},
+      {at:[35,36,82],text:'AXIAL BEARINGS - FIXTURE',on:active},
+      {at:[52,36,nz+5],text:'GUIDES - FIXTURE',on:active},
+      {at:[48,48,nz+6],text:'CARRIAGE - FIXTURE',on:active},
+      {at:[40,60,nz+24],text:'PHYSICAL LOAD',on:active},
+      {at:[88,36,58],text:'SPARE PAIR - FIXTURE',on:st.phase==='exchange'},
+      {at:[78,68,5+p],text:'PLANE - OVERLAY',on:false},
+      {at:[57,61,41+p],text:'TRAVEL - OVERLAY',on:active},
+      {at:[30,60,nz+38],text:'FORCE - OVERLAY',on:active}
+    ],[14,99,28,69,3,98]);
+    const arrow=(from,to,col)=>{const aa=P(...from),bb=P(...to),dx=aa[0]-bb[0],dy=aa[1]-bb[1],len=Math.hypot(dx,dy)||1;return `<path d="M${f(aa[0])} ${f(aa[1])}L${f(bb[0])} ${f(bb[1])}" stroke="${col}" stroke-width="1.8" fill="none"/><path d="M${f(bb[0])} ${f(bb[1])}l${f(dx/len*3-dy/len*1.5)} ${f(dy/len*3+dx/len*1.5)}l${f(dy/len*3)} ${f(-dx/len*3)}Z" fill="${col}"/>`;};
+    svg+=`<g data-overlay="force-and-travel">${arrow([57,61,41],[57,61,41+p],'#288777')}${arrow([30,60,nz+26],[30,60,nz+38],'#cf5038')}</g>`;
+    const plane=[[69,63,4],[98,63,4],[98,63,4+p]];
+    const wrapped=Array.from({length:49},(_,i)=>{const a=i/48*2*Math.PI;return [78+4*Math.cos(a),68+4*Math.sin(a),5+p*i/48];});
+    svg+=`<g data-overlay="inclined-plane">${shape(plane,'#e9c56c',.6)}${line([[69,63,4],[98,63,4+p]],1.2)}${line(wrapped,1.2)}</g>`;
+  }
+  return svg;
+}
+const screwUI=mountFigure({fig:'64',turn:'full',title:'Screws',size:[112,80,105],palette:'mint',state:screwState,scene:screwScene,
+  buttons:[{label:'Turn',onClick:(st,ui)=>screwAction(st,ui,'turn')},{label:'Reverse',onClick:(st,ui)=>screwAction(st,ui,'reverse')},{label:'Compare pitch',onClick:(st,ui)=>screwAction(st,ui,'exchange')}],
+  stats:st=>{const v=screwMeasures(st);return [{label:screwPairs[st.pair].name+' pitch / turn',value:v.pitch+' mm',small:true},{label:'Input torque',value:'0.10 Nm',small:true},{label:'Ideal force, no friction',value:v.idealForce.toFixed(1)+' N',small:true},{label:'Load travel',value:v.travel.toFixed(1)+' mm',small:true},{label:'Friction reduces force',value:st.phase==='exchange'?'Unloaded exchange':'Same torque',small:true}];},
+  params:(st,q)=>{if(q.get('pair')==='coarse')st.pair=1;const v=Number(q.get('turns')||0);st.turns=Number.isFinite(v)?Math.max(0,Math.min(24/screwPairs[st.pair].pitch,v)):0;}
+});
+xrMount(()=>screwUI,()=> '');
+const screwStyle=document.createElement('style');
+screwStyle.textContent='@media(min-width:561px){.stage{display:flex;flex-direction:column}#stats{position:static!important;order:2;display:flex;flex-direction:row;justify-content:space-between;align-items:flex-start;gap:12px;margin:6px 0 14px}.zwrap{order:1}.stat{max-width:145px}.stat .k{font-size:10px}.stat.small .v{font-size:18px}}';
+document.head.appendChild(screwStyle);
+</script></body></html>
