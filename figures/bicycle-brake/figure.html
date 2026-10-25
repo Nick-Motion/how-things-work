@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bicycle brake</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Source inspected in 2016 printed pages 28 and 29, saved in evidence/source.
+   The first-class side-pull arm crosses the common pivot to the opposite block.
+   Its cable clamp is below the housing stop on the third-class arm. Cable tension
+   pulls the clamp up and the housing pushes its stop down. Both blocks meet the rim.
+   The handle has its cable nipple between the pivot and finger effort, a second-class lever.
+   Spin supplies a manual wheel impulse. Squeeze takes up cable, pivots all three levers,
+   closes both pad gaps, and friction removes wheel speed. Release clears both blocks.
+   Parts and support.
+   Wheel: tyre on rim, spokes between rim and hub, hub turning on the fixed axle.
+   Caliper: two curved arms on one bolt held by the crown, pad studs in each arm,
+   rubber blocks on their studs, inner cable clamped on the first-class arm,
+   housing ferrule on the third-class arm, return spring between crown and arm.
+   Control: handle pivot in bracket clamped to handlebar, nipple seated in handle,
+   housing in bracket socket, grip on bar. Housing follows a continuous flexible route.
+   Bench board, two axle uprights, crown upright and handlebar upright are teaching fixtures.
+   They are not claimed as the book apparatus and do not count toward anatomy.
+   The model is scaled for visibility. Motion and friction are illustrative, not calibrated.
+   The two pad faces are set parallel to the rim at full squeeze, as adjusted brake shoes are.
+   No hydraulic, disc or symmetric V-brake mechanism is used. The 1988 edition is unverified.
+*/
+const brPivot = [35,47,79], brWheel = [35,47,37], brHandle = [76,17,84];
+const brSweep = .075, brPadTargets = [[35,43,63.75],[35,51,63.75]];
+const brSteel = matOf('#d3d9d7'), brRubber = matOf('#454e53'), brCableMat = matOf('#e8b43f');
+const brBounds = (pts,r=0) => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))-r),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i]))+r)];
+const brRotate = (p,pivot,a) => { const y=p[1]-pivot[1],z=p[2]-pivot[2];return [p[0],pivot[1]+y*Math.cos(a)-z*Math.sin(a),pivot[2]+y*Math.sin(a)+z*Math.cos(a)]; };
+const brRestPads = brPadTargets.map((p,i)=>brRotate(p,brPivot,i===0?-brSweep:brSweep));
+function brGeometry(q){
+  const a=q*brSweep;
+  const first=p=>brRotate(p,brPivot,a),third=p=>brRotate(p,brPivot,-a);
+  const clamp=first([40.5,61,69]),stop=third([40.5,60,75]);
+  const restLength=Math.hypot(1,6),cableLength=Math.hypot(...sub(stop,clamp));
+  const pull=restLength-cableLength;
+  const exit=[76,11,79], nippleAt=b=>brRotate([76,26,79],brHandle,b);
+  const initial=Math.hypot(...sub(nippleAt(0),exit));
+  let lo=0,hi=.85;
+  for(let i=0;i<32;i++){const mid=(lo+hi)/2;if(Math.hypot(...sub(nippleAt(mid),exit))-initial<pull)lo=mid;else hi=mid;}
+  const beta=(lo+hi)/2;
+  return {first,third,clamp,stop,pull,cableLength,beta,exit,nipple:nippleAt(beta),
+    effort:brRotate([76,43,79],brHandle,beta),
+    pads:brRestPads.map((p,i)=>(i===0?first:third)(p)),padAngles:[a-brSweep,brSweep-a]};
+}
+function brCurve(a,b,c,d,n=30){return Array.from({length:n+1},(_,i)=>{const t=i/n,u=1-t;return [0,1,2].map(k=>u*u*u*a[k]+3*u*u*t*b[k]+3*u*t*t*c[k]+t*t*t*d[k]);});}
+function brArrow(a,b,col){
+  const v=norm(sub(b,a)),n=norm(cross(v,Math.abs(v[2])>.8?[1,0,0]:[0,0,1]));
+  const p=b.map((x,i)=>x-2.2*v[i]);
+  return `<g stroke="${col}" stroke-width="1.6" fill="${col}" stroke-linejoin="round"><path d="${pd([a,b],false)}" fill="none"/><path d="${pd([b,p.map((x,i)=>x+1.1*n[i]),p.map((x,i)=>x-1.1*n[i])])}"/></g>`;
+}
+function brScene(st,m){
+  const g=brGeometry(st.squeeze),kx=ease(st.xr||0),parts=[];
+  const put=(pts,r,svg)=>parts.push({box:brBounds(pts,r),svg});
+  const bar=(a,b,r,mat,w=1)=>put([a,b],r,rod(a,b,r,mat,tone,w,r,12));
+  const slab=(p,q,mat,opacity=1)=>put([p,q],0,`<g opacity="${opacity}">${box(...p,...q,mat,tone,1)}</g>`);
+  let out=board(0,0,89,84,3,4,WOOD);
+  out+=castShadow([[35,30,3],[35,30,79],[35,47,79],[76,17,94],[7,47,37],[65,47,37]],3,boardTop(0,0,89,84,3,4));
+  const fixture=svg=>`<g opacity="${1-.78*kx}">${svg}</g>`;
+  for(const y of [30,64]){
+    slab([29,y-4,3],[41,y+4,6],m);
+    for(const [z0,z1] of [[6,22],[22,37]])put([[35,y,z0],[35,y,z1]],1.6,fixture(rod([35,y,z0],[35,y,z1],1.6,m,tone,1.2)));
+  }
+  for(const [z0,z1] of [[37,58],[58,79]])put([[35,30,z0],[35,30,z1]],1.6,fixture(rod([35,30,z0],[35,30,z1],1.6,m,tone,1.2)));
+  put([[35,30,79],[35,47,79]],1.7,fixture(rod([35,30,79],[35,47,79],1.7,m,tone,1.2)));
+  slab([70,11,3],[82,23,6],m);
+  for(const [z0,z1] of [[6,38],[38,66],[66,99]])bar([76,17,z0],[76,17,z1],1.4,m);
+  bar([35,27,37],[35,67,37],.8,brSteel);
+  bar([35,42,37],[35,52,37],2.6,brSteel);
+  for(const y of [30,64])bar([35,y-1,37],[35,y+1,37],2.4,brSteel);
+  const wheelPoint=(r,a,y)=>[35+r*Math.cos(a),47+y,37+r*Math.sin(a)];
+  const ring=(profile,mat,fade)=>{
+    for(let j=0;j<48;j++){
+      const a=j*Math.PI/24,b=(j+1)*Math.PI/24;
+      const A=profile.map(([r,y])=>wheelPoint(r,a,y)),B=profile.map(([r,y])=>wheelPoint(r,b,y));
+      let svg=loft(A,B,n=>tone(n,mat));
+      for(const k of [0,2])svg+=ink(pd([A[k],B[k]],false),.65);
+      put(A.concat(B),0,`<g opacity="${fade}">${svg}</g>`);
+    }
+  };
+  ring([[25.5,-2.5],[28,-2.5],[28,2.5],[25.5,2.5]],brSteel,1);
+  ring([[28,-2.2],[28.6,-3.2],[30,-3.2],[31,-1.5],[31,1.5],[30,3.2],[28.6,3.2],[28,2.2]],brRubber,1-.77*kx);
+  for(let i=0;i<18;i++){
+    const a=i*Math.PI/9+st.angle,side=i%2?1.6:-1.6;
+    bar(wheelPoint(2,a+.25,side),wheelPoint(25.5,a,side),.18,brSteel,.55);
+  }
+  const marker=wheelPoint(29.6,st.angle,3.3);
+  bar(wheelPoint(28.8,st.angle,3.3),wheelPoint(30.6,st.angle,3.3),.65,m);
+  bar([32,47,79],[43,47,79],1.1,brSteel);
+  for(const x of [33,40.8])bar([x,47,79],[x+.8,47,79],2.2,brSteel);
+  const firstPath=[[40,61,69],[40,57,69],[40,55,74],[40,52,79],[40,47,79],[40,39,78],[40,33,73],[40,31,68],[40,brRestPads[0][1]-2,brRestPads[0][2]+2],[40,brRestPads[0][1],brRestPads[0][2]]].map(g.first);
+  const thirdPath=[[37,47,79],[37,53,78],[37,57,75],[37,60,75]].map(g.third);
+  const thirdLeg=[[37,54,77.5],[37,58,73],[37,58,69],[37,brRestPads[1][1]+2,brRestPads[1][2]+2],[37,brRestPads[1][1],brRestPads[1][2]]].map(g.third);
+  for(const [path,mat] of [[firstPath,m],[thirdPath,brSteel],[thirdLeg,brSteel]]){
+    for(let i=0;i<path.length-1;i++)bar(path[i],path[i+1],1.45,mat,1.25);
+  }
+  bar(g.third([37,60,75]),g.stop,1.4,brSteel);
+  bar(g.first([40,61,69]),g.clamp,1.5,brSteel);
+  for(let i=0;i<2;i++){
+    const p=g.pads[i],angle=g.padAngles[i],armX=i===0?40:37;
+    bar([armX,p[1],p[2]],[35,p[1],p[2]],.7,brSteel);
+    const corners=[];
+    for(const x of [-3,3])for(const y of [-1.5,1.5])for(const z of [-1,1])corners.push(brRotate([p[0]+x,p[1]+y,p[2]+z],p,angle));
+    const faces=[[0,1,3,2],[4,6,7,5],[0,4,5,1],[2,3,7,6],[0,2,6,4],[1,5,7,3]];
+    let svg='';
+    for(const ids of faces){const q=ids.map(j=>corners[j]),n=norm(cross(sub(q[1],q[0]),sub(q[2],q[0])));if(vis(n))svg+=shape(q,tone(n,brRubber),1.1);}
+    put(corners,0,svg);
+  }
+  const spring=Array.from({length:45},(_,i)=>{const a=i/44*Math.PI*5;return [34.1+i/44*1.8,47+2.8*Math.cos(a),79+2.8*Math.sin(a)];});
+  for(let i=0;i<spring.length-1;i++)bar(spring[i],spring[i+1],.14,brSteel,.55);
+  bar([34.1,49.8,79],[35,47,79],.16,brSteel,.5);
+  bar(spring[spring.length-1],g.third([37,50,78.5]),.16,brSteel,.5);
+  const route=brCurve(g.exit,[25,0,99],[2,72,105],g.stop);
+  for(let i=0;i<route.length-1;i++){
+    put([route[i],route[i+1]],.95,`<g opacity="${1-.83*kx}">${rod(route[i],route[i+1],.95,brCableMat,tone,1,.95,8)}</g>`);
+    if(kx>.01)bar(route[i],route[i+1],.22,brSteel,.55);
+  }
+  bar(g.stop,g.clamp,.26,brSteel,.7);
+  bar(g.exit,g.nipple,.25,brSteel,.65);
+  for(const p of [g.stop,g.clamp])bar([p[0]-.9,p[1],p[2]],[p[0]+.9,p[1],p[2]],1.1,brSteel,.8);
+  bar([76,14,99],[76,47,99],1.8,brSteel,1.2);
+  bar([76,30,99],[76,47,99],2.3,brRubber,1.2);
+  put([[73,10,78],[79,21,86]],0,fixture(box(73,10,78,79,21,86,m,tone,1.2)));
+  bar([76,10,79],[76,12,79],1.4,brSteel);
+  const handlePath=[[76,17,84],[76,20,79],[76,28,79],[76,43,79]].map(p=>brRotate(p,brHandle,g.beta));
+  for(let i=0;i<handlePath.length-1;i++)bar(handlePath[i],handlePath[i+1],1.25,brSteel,1.2);
+  bar([72,17,84],[80,17,84],1.1,brSteel);
+  bar([g.nipple[0]-1,g.nipple[1],g.nipple[2]],[g.nipple[0]+1,g.nipple[1],g.nipple[2]],.9,brSteel);
+  out+=byDepth(parts);
+  if(kx>.6){
+    const active=st.squeeze>.95;
+    out+=brArrow(g.effort.map((v,i)=>v+(i===2?-7:0)),g.effort,'#d55336');
+    out+=brArrow(g.clamp,g.clamp.map((v,i)=>v+(i===2?4:0)),'#d55336');
+    out+=brArrow(g.stop,g.stop.map((v,i)=>v-(i===2?4:0)),'#d55336');
+    if(active)for(const [i,p] of g.pads.entries())out+=brArrow([p[0]+5,p[1],p[2]],[p[0]+5,p[1]+(i===0?4:-4),p[2]],'#d55336');
+    out+=xrCallouts([
+      {at:brRotate([76,34,79],brHandle,g.beta),text:'HANDLE - SECOND CLASS',on:st.target===1},
+      {at:brHandle,text:'HANDLE PIVOT',on:st.target===1},
+      {at:g.nipple,text:'CABLE NIPPLE',on:st.target===1},
+      {at:route[14],text:'CABLE HOUSING',on:active},
+      {at:g.clamp.map((v,i)=>(v+g.stop[i])/2),text:'INNER CABLE',on:active},
+      {at:g.stop,text:'HOUSING STOP',on:active},
+      {at:g.clamp,text:'CABLE CLAMP',on:active},
+      {at:g.first([40,33,73]),text:'ARM - FIRST CLASS',on:active},
+      {at:g.third([37,58,71]),text:'ARM - THIRD CLASS',on:active},
+      {at:[42,47,79],text:'CALIPER PIVOT',on:active},
+      {at:g.pads[0],text:'LEFT BRAKE BLOCK',on:active},
+      {at:g.pads[1],text:'RIGHT BRAKE BLOCK',on:active},
+      {at:wheelPoint(26.7,1.3,2.5),text:'WHEEL RIM',on:active&&st.speed>0},
+      {at:marker,text:'TYRE',on:st.speed>0},
+      {at:wheelPoint(17,3.5+st.angle,1.6),text:'SPOKES',on:st.speed>0},
+      {at:[35,50,37],text:'HUB',on:st.speed>0},
+      {at:[35,66,37],text:'AXLE',on:false},
+      {at:[35,49.8,79],text:'RETURN SPRING',on:st.target===0&&st.squeeze>0},
+      {at:[76,40,99],text:'HANDLEBAR GRIP',on:false}
+    ],[12,80,11,70,8,97]);
+  }
+  return out;
+}
+let brUI,brRunning=false;
+function brTick(st,dt){
+  st.squeeze+=Math.sign(st.target-st.squeeze)*Math.min(Math.abs(st.target-st.squeeze),dt/.65);
+  // shortcut: friction is illustrative, add measured wheel inertia and pad forces for quantitative experiments.
+  st.speed=Math.max(0,st.speed-dt*(.025+(st.squeeze>=.999?2.6:0)));
+  st.angle=(st.angle+st.speed*dt)%(2*Math.PI);
+}
+function brRun(){
+  if(brRunning)return;brRunning=true;
+  brUI.animate(dt=>{brTick(brUI.st,dt);const more=brUI.st.speed>0||brUI.st.squeeze!==brUI.st.target;if(!more)brRunning=false;return more;});
+}
+brUI=mountFigure({fig:'28',title:'Bicycle brake',turn:'full',size:[89,84,105],palette:'tomato',
+  state:{squeeze:0,target:0,speed:0,angle:0},scene:brScene,
+  stats:st=>[{label:'Wheel',value:(st.speed*60/(2*Math.PI)).toFixed(0)+' rpm',small:true},
+    {label:'Blocks',value:st.squeeze>=.999?'On rim':'Clear',small:true},
+    {label:'Model pull',value:brGeometry(st.squeeze).pull.toFixed(1)+' mm',small:true}],
+  buttons:[
+    {label:'Spin',onClick:st=>{if(st.squeeze>=.999){brUI.flash('Release the brake before spinning');return;}st.speed=5;brRun();}},
+    {label:'Squeeze',onClick:st=>{st.target=1;brRun();}},
+    {label:'Release',onClick:st=>{st.target=0;brRun();}}
+  ],
+  params:(st,q)=>{if(q.get('squeeze')==='1')st.squeeze=st.target=1;const a=Number(q.get('angle'));if(Number.isFinite(a))st.angle=a;}
+});
+xrMount(()=>brUI,()=>'');
+</script></body></html>
