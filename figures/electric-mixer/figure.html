@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Electric mixer</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first.
+   Page 46, 2016 primary scan and saved 1998 page text establish a motor-shaft worm,
+   two counter-rotating driven beater gears, a speed switch and a shaft cooling fan.
+   Start supplies the motor. One motor angle drives worm and fan directly and both
+   24-tooth wheels at opposite signed angles / 24. Change speed moves the switch
+   and changes motor speed without changing that ratio. Stop removes power.
+   This is a teaching adaptation, not a reconstruction. Dimensions, a single-start
+   24:1 ratio, example rpm, bearing/mount layout and a 10x motion slowdown are chosen
+   for visibility. The bowl is an external fixture. There is no eject mechanism or
+   internal speed-control circuit. 1988 remains inaccessible and unverified.
+   Parts and attachments.
+   CASE. Upper/lower shells, seam, nose, rear vents and front vents. Handle grip
+   joins the front and rear handle supports, which join the shell. Cord enters
+   the rear strain relief. Speed-switch cap slides in a slot on the grip.
+   STRUCTURE. Motor saddle and front gearbox bracket attach to the lower shell.
+   Rear/front motor-shaft bearings sit in these supports. Beater bearing sleeves
+   sit in the bracket and lower shell. Collar and hub share each beater shaft.
+   MECHANISM. Motor, continuous horizontal shaft, shaft fan hub and blades, worm,
+   left/right driven gears and hubs. Each beater shaft joins its gear hub to the
+   wire-loop crown and rounded foot. Wires join crown to foot at both ends.
+   FIXTURE. Bowl foot rests on the board, bowl wall rises to the rolled rim.
+   Geometry. Worm axis x, y=34,z=88.5. Wheels x=67,y=21.5/46.5, radius10.5.
+   Worm radius2 touches opposite wheel rims at y=32/36. Shafts are vertical.
+   Each wheel pitch radius10 and 24 teeth gives worm lead 2*pi*10/24.
+   Bowl radius29 around x=67,y=34. Both wire cages radius6.3 clear each other
+   by 12.4 and clear the bowl inner wall. No material teleports or resets. */
+const mxTau = 2*Math.PI;
+const mxSpeeds = [1800,3600,5400];
+const mxHousing = rrUV(12,72,56,102,10);
+const mxBrass = matOf('#d4a746');
+const mxSteel = matOf('#9aa7ae');
+const mxState = {running:false,speed:0,angle:0};
+let ui, mxLoop = false;
+const mxBounds = pts => [[0,1,2].map(k=>Math.min(...pts.map(p=>p[k]))),[0,1,2].map(k=>Math.max(...pts.map(p=>p[k])))];
+function mxSolid(profile,x0,x1,m){
+  const a=on(PX(x0),profile), b=on(PX(x1),profile), cap=vis([1,0,0])?b:a;
+  return extrude(profile,x0,x1,m)+shape(cap,tone(vis([1,0,0])?[1,0,0]:[-1,0,0],m),.9)+hullInk([...a,...b],2.8);
+}
+function mxGear(y,phase){
+  const out=[];
+  out.push({box:[[58.2,y-8.8,86.5],[75.8,y+8.8,90.5]],svg:cyl(67,y,86.5,90.5,8.8,mxBrass,toneI,1,32)});
+  for(let i=0;i<24;i++){
+    const a=phase+i*mxTau/24;
+    const ring=z=>[[8.5,-.075],[10.5,-.065],[10.5,.065],[8.5,.075]].map(([r,d])=>[67+r*Math.cos(a+d),y+r*Math.sin(a+d),z]);
+    const b=ring(86.5),t=ring(90.5);
+    out.push({box:mxBounds([...b,...t]),svg:loft(b,t,n=>toneI(n,mxBrass))+shape(t,mxBrass.l,.35)});
+  }
+  const hub=cyl(67,y,90.5,93,2.5,mxSteel,toneI,.7)+line([[67,y,93.05],[67+2*Math.cos(phase),y+2*Math.sin(phase),93.05]],1);
+  return [{box:[[56.5,y-10.5,86.5],[77.5,y+10.5,93]],svg:byDepth(out)+hub}];
+}
+function mxBeater(y,phase,z0,z1){
+  const out=[{box:[[66.2,y-.8,z0],[67.8,y+.8,z1]],svg:rod([67,y,z0],[67,y,z1],.8,METAL,toneI,.7)}];
+  if(z0<42){
+    for(let i=0;i<4;i++){
+      const a=phase+i*Math.PI/2, pts=[];
+      for(let j=0;j<=16;j++){
+        const t=j/16, r=6.3*Math.sin(Math.PI*t);
+        pts.push([67+r*Math.cos(a),y+r*Math.sin(a),23+19*t]);
+      }
+      for(let j=0;j<pts.length-1;j++)out.push({box:mxBounds([pts[j],pts[j+1]]),svg:rod(pts[j],pts[j+1],.55,METAL,toneI,.6)});
+    }
+    out.push({box:[[65.5,y-1.5,22.5],[68.5,y+1.5,24]],svg:cyl(67,y,22.5,24,1.5,METAL,toneI,.6)});
+    out.push({box:[[65.5,y-1.5,41.2],[68.5,y+1.5,43]],svg:cyl(67,y,41.2,43,1.5,METAL,toneI,.6)});
+  }
+  return out;
+}
+function mxOuter(st,m){
+  const parts=[];
+  const put=(b,s)=>parts.push({box:b,svg:s});
+  put([[14,12,72],[88,56,102]],mxSolid(mxHousing,14,88,m));
+  for(const y of [11.9,56.1])if(vis([0,y<34?-1:1,0])){
+    put([[20,y,78],[82,y,78.2]],line([[20,y,78],[82,y,78]],.8));
+    for(let x=22;x<=34;x+=3)put([[x,y,83],[x+1,y,94]],shape(on(PY(y),rrUV(x,83,x+1,94,.4)),DARK.m,.4));
+    for(let x=75;x<=81;x+=3)put([[x,y,83],[x+1,y,94]],shape(on(PY(y),rrUV(x,83,x+1,94,.4)),DARK.m,.4));
+  }
+  put([[24,27,112],[74,41,120]],mxSolid(rrUV(27,112,41,120,3),24,74,m));
+  put([[17,27,97],[29,41,115]],mxSolid(rrUV(27,97,41,115,3),17,29,m));
+  put([[70,27,97],[82,41,115]],mxSolid(rrUV(27,97,41,115,3),70,82,m));
+  const sx=st.running?50+6*st.speed:42;
+  put([[40,29,120],[67,39,120.6]],box(40,29,120,67,39,120.6,DARK,toneI,.7));
+  put([[sx,30,120.6],[sx+7,38,123]],act('speed',box(sx,30,120.6,sx+7,38,123,CERAMIC,toneI,.8)));
+  put([[10,31,82],[15,37,87]],cylX(10,15,34,84.5,2.5,DARK,toneI,.7));
+  const cord=[[10,34,84.5],[5,34,83],[2,34,74],[2,34,54],[2,34,34],[2,34,14],[6,34,5],[16,34,4.5]];
+  for(let i=0;i<cord.length-1;i++)put(mxBounds([cord[i],cord[i+1]]),rod(cord[i],cord[i+1],1,DARK,toneI,.7));
+  return byDepth(parts);
+}
+function mxInside(st){
+  const parts=[], put=(b,s)=>parts.push({box:b,svg:s});
+  put([[17,23,76],[43,45,80]],box(17,23,76,43,45,80,mxSteel,toneI,.8));
+  put([[53,16,76],[82,52,78]],box(53,16,76,82,52,78,mxSteel,toneI,.8));
+  for(const x of [19,55,79]){
+    put([[x,31,78],[x+2,37,88.5]],box(x,31,78,x+2,37,88.5,mxSteel,toneI,.6));
+    put([[x,31,85.5],[x+2,37,91.5]],cylX(x,x+2,34,88.5,3,METAL,toneI,.7));
+  }
+  put([[21,25,79.5],[43,43,97.5]],cylX(21,43,34,88.5,9,mxSteel,toneI,1.3));
+  for(const z of [83,94])put([[22,29,z],[42,39,z+.7]],box(22,29,z,42,39,z+.7,matOf('#b57943'),toneI,.5));
+  for(const [x0,x1] of [[18,21],[43,58],[58,77],[77,81]])
+    put([[x0,33,87.5],[x1,35,89.5]],cylX(x0,x1,34,88.5,1,METAL,toneI,.6));
+  const fan=[];
+  for(let i=0;i<8;i++){
+    const a=st.angle+i*mxTau/8;
+    const prof=[[2,-.16],[9.5,-.1],[8.5,.3],[2,.22]].map(([r,d])=>[34+r*Math.cos(a+d),88.5+r*Math.sin(a+d)]);
+    const b=on(PX(46),prof),t=on(PX(47),prof);
+    fan.push({box:mxBounds([...b,...t]),svg:loft(b,t,n=>toneI(n,CERAMIC))+shape(vis([1,0,0])?t:b,CERAMIC.l,.6)});
+  }
+  fan.push({box:[[45,31.5,86],[48,36.5,91]],svg:cylX(45,48,34,88.5,2.5,CERAMIC,toneI,.7)});
+  parts.push(...fan);
+  let worm=cylX(58,77,34,88.5,1.7,mxBrass,toneI,.7);
+  const pitch=mxTau*10/24, helix=[];
+  for(let i=0;i<=180;i++){
+    const x=58+19*i/180,a=(x-58)*mxTau/pitch+st.angle;
+    helix.push([x,34+2*Math.cos(a),88.5+2*Math.sin(a)]);
+  }
+  for(let i=0;i<helix.length-1;i++){
+    const mid=avg([helix[i],helix[i+1]]);
+    if(vis([0,mid[1]-34,mid[2]-88.5]))worm+=rod(helix[i],helix[i+1],.3,mxBrass,toneI,.35);
+  }
+  put([[58,31.7,86.2],[77,36.3,90.8]],worm);
+  for(const [y,sign] of [[21.5,1],[46.5,-1]]){
+    for(const [z0,z1] of [[72,77],[77,85.8]])
+      put([[64.8,y-2.2,z0],[69.2,y+2.2,z1]],cyl(67,y,z0,z1,2.2,mxSteel,toneI,.7));
+    parts.push(...mxBeater(y,sign*st.angle/24,72,93),...mxGear(y,sign*st.angle/24));
+  }
+  return byDepth(parts);
+}
+function mxLabels(st){
+  const a=[];const label=(text,at,on=false)=>a.push({text,at,on});
+  label('UPPER HOUSING',[82,56,96]);label('LOWER HOUSING',[78,56,74]);label('CASE SEAM',[45,56,78]);
+  label('HAND GRIP',[48,34,117]);label('REAR HANDLE SUPPORT',[23,34,106]);label('FRONT HANDLE SUPPORT',[76,34,106]);
+  label('SPEED SWITCH',[st.running?53+6*st.speed:45,34,123],st.running);label('SWITCH SLOT',[64,34,120]);
+  label('REAR AIR VENTS',[28,56,90],st.running);label('FRONT AIR VENTS',[78,56,90],st.running);
+  label('POWER CORD',[2,34,57],st.running);label('CORD STRAIN RELIEF',[12,34,84.5]);
+  label('ELECTRIC MOTOR',[32,34,97.5],st.running);label('MOTOR SADDLE',[29,44,78]);
+  label('MOTOR SHAFT',[51,34,88.5],st.running);label('REAR SHAFT BEARING',[20,34,91]);label('FRONT SHAFT BEARING',[80,34,91]);
+  label('GEAR SUPPORT BRACKET',[77,50,77]);label('WORM',[68,34,90.5],st.running);
+  label('COOLING FAN',[46.5,34+7*Math.cos(st.angle),88.5+7*Math.sin(st.angle)],st.running);label('FAN HUB',[48,34,88.5],st.running);
+  for(const [y,name,sign] of [[21.5,'LEFT',1],[46.5,'RIGHT',-1]]){
+    label(name+' DRIVEN GEAR',[67,y,90.5],st.running);label(name+' GEAR HUB',[67,y,93],st.running);
+    label(name+' BEATER BEARING',[67,y,81]);label(name+' SHAFT COLLAR',[67,y,72]);
+    label(name+' BEATER SHAFT',[67,y,57],st.running);label(name+' WIRE CAGE',[67+6.3*Math.cos(sign*st.angle/24),y+6.3*Math.sin(sign*st.angle/24),32.5],st.running);
+    label(name+' CAGE CROWN',[67,y,42],st.running);
+  }
+  label('BOWL - FIXTURE',[84,49,25]);label('ROLLED BOWL RIM',[94,34,35]);label('BOWL FOOT - FIXTURE',[67,34,7]);
+  return a;
+}
+function mxScene(st,m){
+  const k=ease(st.xr||0),low=[];
+  for(const [y,sg] of [[21.5,1],[46.5,-1]])low.push(...mxBeater(y,sg*st.angle/24,23,72));
+  const bowlA=on(PZ(8),ellUV(67,34,13,13,40)), bowlB=on(PZ(35),ellUV(67,34,29,29,40));
+  let s=board(0,1,104,68,3,4,WOOD);
+  s+=castShadow([[14,12,72],[88,12,72],[88,56,102],[14,56,102],[24,27,120],[74,41,120],[67,34,4]],3,boardTop(0,1,104,68,3,4));
+  s+=cyl(67,34,3,8,13,CERAMIC,toneI,1);
+  const contents=cyl(67,34,8,9,13,CERAMIC,toneI,.6)+byDepth(low);
+  s+=openShell(bowlA,bowlB,n=>toneI(n,CERAMIC),contents)+ink(pd(bowlB),1.8);
+  s+=`<g opacity="${1-.86*k}">${mxOuter(st,m)}</g>`;
+  if(k>0)s+=`<g opacity="${k}">${mxInside(st)}</g>`;
+  if(k>.6)s+=mxCallouts(mxLabels(st));
+  return s;
+}
+function mxCallouts(items){
+  const vb=document.getElementById('fig').viewBox.baseVal;
+  const sorted=items.map(it=>({...it,p:P(...it.at)})).sort((a,b)=>a.p[0]-b.p[0]);
+  const split=Math.ceil(sorted.length/2), mobile=innerWidth<=560;
+  return [sorted.slice(0,split),sorted.slice(split)].map((col,side)=>col.sort((a,b)=>a.p[1]-b.p[1]).map((it,i)=>{
+    const x=vb.width*(side?(mobile?.94:.88):(mobile?.06:.14));
+    const y=vb.height*(.27+.64*i/Math.max(1,col.length-1));
+    return tag(it.at,(x-it.p[0])/INK_K,(y-it.p[1])/INK_K,it.text,it.on);
+  }).join('')).join('');
+}
+function mxStart(st,u){
+  st.running=true;
+  if(mxLoop)return;
+  mxLoop=true;
+  u.animate(dt=>{if(!st.running){mxLoop=false;return false;}st.angle+=dt*mxSpeeds[st.speed]*mxTau/600;return true;});
+}
+function mxSpeed(st){st.speed=(st.speed+1)%3;}
+ui=mountFigure({fig:'46',title:'Electric mixer',turn:'full',size:[104,68,123],palette:'tomato',state:mxState,scene:mxScene,
+  buttons:[{label:'Start',onClick:mxStart},{label:'Change speed',onClick:mxSpeed},{label:'Stop',onClick:st=>{st.running=false;}}],
+  acts:{speed:mxSpeed},
+  stats:st=>[{label:'Motor rpm - model',value:st.running?String(mxSpeeds[st.speed]):'0'},
+    {label:'Beater rpm - model',value:st.running?String(mxSpeeds[st.speed]/24):'0'},{label:'Reduction',value:'24 : 1'}],
+  params:(st,q)=>{const speed=Number(q.get('speed'));if(Number.isInteger(speed)&&speed>=0&&speed<3)st.speed=speed;
+    const angle=Number(q.get('angle'));if(Number.isFinite(angle))st.angle=angle;}
+});
+xrMount(()=>ui,()=> '');
+const mxStyle=document.createElement('style');
+mxStyle.textContent='.tag{pointer-events:none}.stats{flex-direction:row;gap:12px}.stat .v{font-size:20px}.stat .k{font-size:8px}@media(max-width:560px){.stats{gap:8px}}';
+document.head.appendChild(mxStyle);
+</script></body></html>
