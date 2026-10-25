@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en" data-errors=""><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Excavator</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Truth first. A scale teaching adaptation of the tracked excavator on printed page 23.
+   Primary evidence read in saved 1998 OCR and the 2016 page image and OCR. 1988 is inaccessible and unverified.
+   Dig lowers the boom, draws the dipper inward and curls the bucket through the tray sand, then lifts.
+   One visible scoop leaves the digging bed and stays in the bucket. Swing turns the whole upper assembly
+   on the slew ring while the tracks stay still. Empty uncurls the bucket and the scoop falls onto the spoil pile.
+   The return swing and reset of the sand tray are teaching controls, not self-repair hardware.
+   The boom effort lies between root pivot and dipper load. The dipper effort is on its extension above its
+   pivot, opposite the bucket load. The bucket ram acts on a horn opposite the cutting edge across its pivot.
+   All ram eyes are pinned to these rigid links. Rods telescope inside barrels. No pump or valve circuit is claimed.
+   Parts. Structure held by chassis: two track frames, shoes, rollers, idlers, sprockets, slew ring.
+   Upper deck on slew ring: counterweight, cab floor, posts, roof, glazing, seat and boom-root brackets.
+   Links held by transverse pins: boom, dipper and bucket with cheek plates, back, floor, cutting edge and teeth.
+   Each of the three rams has a barrel, piston, rod, gland, base eye and rod eye, pinned to the supporting links.
+   Overlays show effort, resisting load and pivot positions. They are excluded from the anatomy count.
+   shortcut: the source does not specify a production excavator linkage or hydraulic circuit, use direct pin-ended
+   teaching rams here and replace this model only with a separately sourced production-machine brief. */
+const exRad = a => a*Math.PI/180;
+const exAdd = (a,b) => a.map((v,i)=>v+b[i]);
+const exMul = (a,t) => a.map(v=>v*t);
+const exMix = (a,b,t) => a.map((v,i)=>v+(b[i]-v)*t);
+const exDir = a => [Math.cos(exRad(a)),0,Math.sin(exRad(a))];
+const exBounds = (pts,r=0) => [[0,1,2].map(i=>Math.min(...pts.map(p=>p[i]))-r),[0,1,2].map(i=>Math.max(...pts.map(p=>p[i]))+r)];
+const exHome = [55,-65,-95,0], exLoaded = [60,-85,-20,0], exSwung=[50,-55,-20,80], exDumped=[50,-55,-100,80];
+const exState = {angles:exHome.slice(),phase:'idle',load:0,dug:0,spoil:0,drop:null};
+function exGeo(st){
+ const [boom,dipper,bucket,slew]=st.angles, o=[0,0,33], bd=exDir(boom), dd=exDir(dipper), kd=exDir(bucket);
+ const j=exAdd(o,exMul(bd,48)), k=exAdd(j,exMul(dd,42));
+ const bEff=exAdd(o,exMul(bd,22)), dEff=exAdd(j,exMul(dd,-10)), kEff=exAdd(k,exMul(exDir(bucket+250),9));
+ // The bucket base eye leaves room for both end fittings throughout dump and return.
+ const rams=[{name:'BOOM',a:[9,0,24],b:bEff,barrel:17,rod:15.3},{name:'DIPPER',a:exAdd(o,exMul(bd,28)),b:dEff,barrel:20,rod:18},{name:'BUCKET',a:exAdd(j,exMul(dd,13)),b:kEff,barrel:18.5,rod:18.8}];
+ const tr=p=>{const c=Math.cos(exRad(slew)),s=Math.sin(exRad(slew));return [55+p[0]*c-p[1]*s,55+p[0]*s+p[1]*c,p[2]];};
+ const kp=(u,v,y=0)=>exAdd(k,[kd[0]*u-kd[2]*v,y,kd[2]*u+kd[0]*v]);
+ return {o,j,k,bd,dd,kd,bEff,dEff,kEff,rams,tr,kp,lip:kp(14,0)};
+}
+function exMove(st,ui,targets,done){
+ if(st.phase!=='idle')return ui.flash('Wait for the current movement');
+ let index=0,t=0,from=st.angles.slice();st.phase='moving';
+ ui.animate(dt=>{t=Math.min(1,t+dt/.8);st.angles=exMix(from,targets[index],ease(t));
+  if(t===1){index++;if(index===targets.length){st.phase='idle';if(done)done();return false;}from=st.angles.slice();t=0;}
+  return true;
+ });
+}
+function exDig(st,ui){
+ if(st.phase!=='idle')return ui.flash('Wait for the current movement');
+ if(st.load)return ui.flash('Swing and empty the bucket first');
+ if(st.dug>=3)return ui.flash('The three tray scoops are used. Reset the tray');
+ if(st.angles[3]!==0)return ui.flash('Swing back to the digging bed first');
+ const targets=[[35,-55,-80,0],[32,-82,-20,0],exLoaded];
+ let index=0,t=0,from=st.angles.slice();st.phase='digging';
+ ui.animate(dt=>{t=Math.min(1,t+dt/.85);st.angles=exMix(from,targets[index],ease(t));
+  if(t===1){if(index===1){st.load=1;st.dug++;}index++;if(index===3){st.phase='idle';return false;}from=st.angles.slice();t=0;}return true;
+ });
+}
+function exSwing(st,ui){
+ const target=st.angles[3]===0?80:0;
+ if(target===80&&!st.load)return ui.flash('Dig a scoop before swinging to the spoil pile');
+ exMove(st,ui,[target===80?exSwung:[...st.angles.slice(0,3),0]]);
+}
+function exEmpty(st,ui){
+ if(st.phase!=='idle')return ui.flash('Wait for the current movement');
+ if(!st.load)return ui.flash('The bucket is empty. Dig first');
+ if(st.angles[3]!==80)return ui.flash('Swing to the spoil pile first');
+ exMove(st,ui,[exDumped],()=>{
+  const p=exGeo(st).tr(exGeo(st).kp(8,-2));st.load=0;st.phase='emptying';st.drop={at:p.slice(),start:p.slice(),t:0};
+  ui.animate(dt=>{st.drop.t+=dt;st.drop.at[2]=st.drop.start[2]-45*st.drop.t*st.drop.t;
+   if(st.drop.at[2]<=7+st.spoil*2){st.spoil++;st.drop=null;st.phase='idle';return false;}return true;});
+ });
+}
+function exReset(st,ui){
+ if(st.phase!=='idle')return ui.flash('Wait for the current movement');
+ exMove(st,ui,[exHome],()=>{st.load=st.dug=st.spoil=0;st.drop=null;});
+}
+function exArrow(a,b,col){
+ const A=P(...a),B=P(...b),d=norm([B[0]-A[0],B[1]-A[1],0]),n=[-d[1],d[0]];
+ return `<path d="M${A[0]} ${A[1]}L${B[0]} ${B[1]}" stroke="${col}" stroke-width="2" fill="none"/><path d="M${B[0]} ${B[1]}L${B[0]-d[0]*3+n[0]*1.5} ${B[1]-d[1]*3+n[1]*1.5}L${B[0]-d[0]*3-n[0]*1.5} ${B[1]-d[1]*3-n[1]*1.5}Z" fill="${col}"/>`;
+}
+function exLabels(items){
+ const svg=document.getElementById('fig'),vb=svg.viewBox.baseVal,k=INK_K;
+ const ordered=items.map(it=>({...it,q:P(...it.at)})).sort((a,b)=>a.q[0]-b.q[0]),mid=Math.ceil(items.length/2);
+ const phone=window.LBL_U&&LBL_U(),top=phone?10*phone:vb.height*.31,bottom=vb.height-22*k;
+ return [ordered.slice(0,mid),ordered.slice(mid)].map((column,side)=>column.sort((a,b)=>a.q[1]-b.q[1]).map((it,i)=>{
+  const fs=phone?8*phone:7*k,h=phone?14*phone:12.6*k;
+  const n=((window.__ln||(window.__ln={}))[it.text]||(__ln[it.text]=Object.keys(__ln).length+1));
+  const w=phone?18*phone:it.text.length*fs*.62+fs*1.5,x=side?vb.width-85*k:85*k,y=top+(bottom-top)*i/Math.max(1,column.length-1);
+  return `<g class="tag${it.on?' on':''}" data-n="${n}" data-t="${it.text}"><path d="M${it.q[0]} ${it.q[1]}L${x} ${y}" fill="none" stroke="${INK}" stroke-width=".7"/><rect x="${x-w/2}" y="${y-h/2}" width="${w}" height="${h}" rx="${h/2}" fill="${it.on?'var(--accent)':'#fff4d6'}" stroke="${INK}" stroke-width="1"/><text x="${x}" y="${y+fs*.35}" font-size="${fs}" text-anchor="middle" font-family="monospace" font-weight="700">${phone?n:it.text}</text></g>`;
+ }).join('')).join('');
+}
+function exScene(st,m){
+ const g=exGeo(st),xr=ease(st.xr||0),parts=[],labels=[];
+ const put=(pts,svg,r=0)=>parts.push({box:exBounds(pts,r),svg});
+ const label=(p,text,on=false)=>labels.push({at:p,text,on});
+ const solid=(a,b,material,name,transform=false,ghost=false)=>{
+  const q=[a,[b[0],a[1],a[2]],[b[0],b[1],a[2]],[a[0],b[1],a[2]]],A=transform?q.map(g.tr):q,B=A.map(p=>[p[0],p[1],b[2]]);
+  const normals=[norm(cross(sub(A[1],A[0]),[0,0,1])),norm(cross(sub(A[2],A[1]),[0,0,1])),norm(cross(sub(A[3],A[2]),[0,0,1])),norm(cross(sub(A[0],A[3]),[0,0,1]))];
+  let s=loft(A,B,n=>tone(n,material))+(vis([0,0,1])?shape(B,tone([0,0,1],material),.7):'')+hullInk([...A,...B],2.4);
+  put([...A,...B],ghost?`<g opacity="${1-.82*xr}">${s}</g>`:s);if(name)label(avg(B),name);
+ };
+ const beam=(a,b,r,material,name,local=true)=>{const A=local?g.tr(a):a,B=local?g.tr(b):b;put([A,B],rod(A,B,r,material,tone,1.3),r);if(name)label(exMix(A,B,.5),name,st.phase==='digging');};
+ const pin=(p,r,name)=>beam(exAdd(p,[0,-5,0]),exAdd(p,[0,5,0]),r,METAL,name);
+ const sand=matOf('#d7b274'),steel=matOf('#718288');
+ let out=board(0,0,150,135,3,4,WOOD);
+ out+=castShadow([[30,30,3],[80,80,3],g.tr(g.j),g.tr(g.k)],3,boardTop(0,0,150,135,3,4));
+ solid([2,2,3],[148,133,5],sand);
+ for(const [a,b]of [[[0,0,3],[150,2,9]],[[0,133,3],[150,135,9]],[[0,2,3],[2,133,9]],[[148,2,3],[150,133,9]]])solid(a,b,WOOD);
+ for(let i=0;i<3;i++){
+  const x=102-i*8;
+  if(i<st.dug){put([[x-4,51,5.1],[x+4,59,5.1]],shape(on(PZ(5.15),ellUV(x,55,4,4,16)),'#98774d',.5));}
+  else {const A=on(PZ(5),ellUV(x,55,5,6,16)),B=on(PZ(9),ellUV(x,55,2.5,3,16));put([...A,...B],loft(A,B,n=>tone(n,sand))+shape(B,sand.l,.6));}
+ }
+ for(let i=0;i<st.spoil;i++){
+  const dump=exGeo({angles:exDumped}),p=dump.tr(dump.kp(8,-2)),A=on(PZ(5),ellUV(p[0],p[1],7,7,20)),B=on(PZ(7+i*2),ellUV(p[0],p[1],2,2,20));put([...A,...B],loft(A,B,n=>tone(n,sand))+shape(B,sand.l,.6));
+ }
+ solid([29,38,12],[78,72,17],steel,'CHASSIS');
+ for(const [y,side]of [[30,'LEFT'],[70,'RIGHT']]){
+  solid([28,y,9],[80,y+10,13],steel,y===30?'TRACK FRAMES':null);
+  for(const [x,r,name]of [[30,6,'IDLER'],[41,4,'ROLLER'],[53,4,null],[65,4,null],[78,6,'SPROCKET']]){
+   beam([x,y,11],[x,y+10,11],r,steel,name&&y===30?name:null,false);
+  }
+  const prof=rrUV(23,5,85,18,6,5),A=prof.map(([x,z])=>[x,y-1,z]),B=prof.map(([x,z])=>[x,y+11,z]);
+  let track=loft(A,B,n=>tone(n,DARK))+hullInk([...A,...B],1.7);
+  put([...A,...B],`<g opacity="${1-.85*xr}">${track}</g>`);
+  label([56,y+11,7],side+' CRAWLER TRACK');
+  for(let x=28;x<84;x+=5){solid([x,y-1,17],[x+3.8,y+11,18.4],DARK);}
+ }
+ label([33,34,18],'TRACK SHOES');
+ put([[43,43,17],[67,67,22]],cyl(55,55,17,22,12,METAL,tone,1.5));label([55,66,20],'SLEW RING',st.phase==='moving');
+ solid([-24,-18,22],[15,18,26],m,'UPPER DECK',true);
+ solid([-24,-17,26],[-12,17,37],m,'COUNTERWEIGHT',true,true);
+ solid([-14,6,26],[9,19,29],m,'CAB FLOOR',true);
+ solid([-10,10,29],[-5,16,34],DARK,'SEAT',true);
+ solid([-11,10,34],[-9,16,42],DARK,null,true);
+ for(const x of [-14,9])for(const y of [6,19])beam([x,y,29],[x,y,49],.8,m);
+ label(g.tr([9,19,42]),'CAB POSTS');
+ solid([-15,5,49],[10,20,51],m,'CAB ROOF',true,true);
+ const glass=[[-14,19,31],[9,19,31],[9,19,48],[-14,19,48]].map(g.tr);
+ put(glass,`<g opacity="${.25*(1-xr)}">${shape(glass,'#a5d6e6',.6)}</g>`);label(g.tr([0,19,44]),'CAB GLAZING');
+ for(const y of [-4,3])solid([-3,y,26],[4,y+1,36],steel,null,true);
+ label(g.tr([0,4,33]),'BOOM BRACKETS');
+ beam(g.o,g.j,3.5,m,'BOOM THIRD CLASS');
+ beam(g.dEff,g.k,2.7,m,'DIPPER FIRST CLASS');
+ pin(g.o,2.5,'BOOM ROOT PIN');pin(g.j,2.5,'DIPPER PIVOT');pin(g.k,2,'BUCKET PIVOT');
+ beam(g.kEff,g.k,1.5,steel,'BUCKET HORN');
+ const bucketProfile=[[0,0],[3,-5],[10,-5],[14,0]],bp=(u,v,y)=>g.tr(g.kp(u,v,y));
+ for(const y of [-7,7]){
+  const q=bucketProfile.map(([u,v])=>bp(u,v,y));put(q,shape(q,tone([0,y>0?1:-1,0],m),1.1));
+ }label(bp(7,-3,7),'BUCKET CHEEK PLATES');
+ for(let i=0;i<3;i++){
+  const [a,b]=[bucketProfile[i],bucketProfile[i+1]],q=[bp(...a,-7),bp(...a,7),bp(...b,7),bp(...b,-7)];
+  put(q,shape(q,tone([0,0,1],steel),.8));
+ }label(bp(6,-5,0),'BUCKET FLOOR');label(bp(2,-3,0),'BUCKET BACK');
+ beam(g.kp(14,0,-7),g.kp(14,0,7),.8,steel,'CUTTING EDGE');
+ for(const y of [-5,0,5])beam(g.kp(14,0,y),g.kp(16,0,y),.7,METAL);
+ label(bp(16,0,0),'BUCKET TEETH');label(bp(8,-2,0),'BUCKET FIRST CLASS');
+ for(const r of g.rams){
+  const d=norm(sub(r.b,r.a)),len=Math.hypot(...sub(r.b,r.a)),gland=exAdd(r.a,exMul(d,r.barrel)),piston=exAdd(r.a,exMul(d,len-r.rod));
+  const a=g.tr(r.a),b=g.tr(r.b),c=g.tr(gland),p=g.tr(piston);
+  put([a,c],`<g opacity="${1-.8*xr}">${rod(a,c,1.8,m,tone,1)}</g>`,1.8);label(exMix(a,c,.4),r.name+' RAM BARREL',st.phase==='digging');
+  beam(piston,r.b,.7,METAL,r.name+' RAM ROD');
+  if(xr>.01)put([p],`<g opacity="${xr}">${rod(exAdd(p,exMul(norm(sub(b,a)),-.5)),exAdd(p,exMul(norm(sub(b,a)),.5)),1.4,steel,tone,1)}</g>`,1.4);
+  label(p,r.name+' RAM PISTON',st.phase==='digging');
+  beam(exAdd(gland,exMul(d,-.5)),exAdd(gland,exMul(d,.5)),1.9,steel);
+  pin(r.a,1.6,r.name+' RAM EYES');pin(r.b,1.6);
+ }
+ if(st.load){const q=[bp(3,-2,-5),bp(12,-2,-5),bp(12,-2,5),bp(3,-2,5)],top=q.map(p=>[p[0],p[1],p[2]+2]);put([...q,...top],loft(q,top,n=>tone(n,sand))+shape(top,sand.l,.5));}
+ if(st.drop){const p=st.drop.at;put([p],cyl(p[0],p[1],p[2]-1,p[2]+1,3,sand,tone,.6),3);}
+ out+=byDepth(parts);
+ if(xr>.6){
+  let arrows='';for(const [pivot,eff,load,r]of [[g.o,g.bEff,g.j,g.rams[0]],[g.j,g.dEff,g.k,g.rams[1]],[g.k,g.kEff,g.lip,g.rams[2]]]){
+   const A=g.tr(eff),d=norm(sub(r.b,r.a)),sign=r.name==='BUCKET'&&st.angles[2]<-20&&st.angles[3]===80?-1:1;arrows+=exArrow(exAdd(A,exMul([d[0]*Math.cos(exRad(st.angles[3])),d[0]*Math.sin(exRad(st.angles[3])),d[2]],-9*sign)),A,'#c83d28');
+   const B=g.tr(load);arrows+=exArrow(B,exAdd(B,[0,0,-8]),'#306baf');const p=P(...g.tr(pivot));arrows+=`<circle cx="${p[0]}" cy="${p[1]}" r="2" fill="#ce4c33"/>`;
+  }
+  const vb=document.getElementById('fig').viewBox.baseVal;
+  out+=`<g data-overlay="EFFORT RED LOAD BLUE PIVOT DOT">${arrows}<text x="${vb.width/2}" y="${vb.height-4*INK_K}" text-anchor="middle" font-size="${7*INK_K}" fill="${INK}">EFFORT RED / LOAD BLUE / PIVOT DOT</text></g>`;
+  out+=exLabels(labels);
+ }
+ return out;
+}
+const exUI=mountFigure({fig:'23',title:'Excavator',turn:'full',size:[150,135,90],palette:'mustard',state:exState,scene:exScene,
+ stats:st=>[{label:'Bucket',value:st.load+' scoop'},{label:'Spoil',value:st.spoil+' scoops'},{label:'Slew',value:Math.round(st.angles[3])+' deg'}],
+ buttons:[{label:'Dig',onClick:exDig},{label:'Swing',onClick:exSwing},{label:'Empty',onClick:exEmpty},{label:'Reset tray',onClick:exReset}],
+ params:(st,q)=>{const poses={loaded:exLoaded,swung:exSwung,empty:exDumped};if(poses[q.get('pose')]){st.angles=poses[q.get('pose')].slice();st.dug=1;if(q.get('pose')==='empty')st.spoil=1;else st.load=1;}}
+});
+xrMount(()=>exUI,()=> '');
+const exStyle=document.createElement('style');exStyle.textContent='.stats{flex-direction:row;gap:12px}.stat .v{font-size:16px!important}.stat .k{font-size:9px}';document.head.appendChild(exStyle);
+</script></body></html>
